@@ -1,9 +1,10 @@
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
+import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
 
 type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
 interface D1Database { prepare(query: string): D1Statement; batch(statements: D1Statement[]): Promise<D1Result[]>; }
-export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; DB?: D1Database; }
+export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; DB?: D1Database; }
 
 type Role = "admin" | "operator";
 type Principal = { userId: string; role: Role; expiresAt: number };
@@ -250,6 +251,52 @@ async function attendanceExport(request: Request, env: Env): Promise<Response> {
   const csv = [headers.join(","), ...(result.results ?? []).map((row) => headers.map((header) => csvCell(row[header])).join(","))].join("\r\n") + "\r\n";
   return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-attendance-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
 }
+type IntegrationProvider = "google" | "resend" | "discord";
+const integrationProviders = new Set<IntegrationProvider>(["google", "resend", "discord"]);
+function providerFrom(pathname: string): IntegrationProvider {
+  const provider = pathname.split("/")[3] as IntegrationProvider;
+  if (!integrationProviders.has(provider)) throw new HttpError(404, "Integration provider not found");
+  return provider;
+}
+function validateIntegration(provider: IntegrationProvider, input: Record<string, unknown>): Record<string, string> {
+  const fields = provider === "google" ? ["clientId", "clientSecret"] : provider === "resend" ? ["apiKey", "fromEmail"] : ["botToken", "guildId", "channelId"];
+  const output: Record<string, string> = {};
+  for (const field of fields) { const value = input[field]; if (typeof value !== "string" || !value.trim() || value.length > 500) throw new HttpError(400, `${field} is required`); output[field] = value.trim(); }
+  if (provider === "resend" && !validEmail(output.fromEmail)) throw new HttpError(400, "fromEmail must be a valid email address");
+  return output;
+}
+async function integrationRecord(env: Env, provider: IntegrationProvider): Promise<{ id: string; ciphertext: string; iv: string; updatedAt: string } | null> {
+  return requireDatabase(env).prepare("SELECT id, ciphertext, iv, updated_at AS updatedAt FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider).first();
+}
+async function integrationsStatus(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin"]);
+  const result = await requireDatabase(env).prepare("SELECT provider, updated_at AS updatedAt FROM encrypted_integrations WHERE installation_id = 'primary' ORDER BY provider").all<{ provider: IntegrationProvider; updatedAt: string }>();
+  const configured = new Map((result.results ?? []).map((item) => [item.provider, item.updatedAt]));
+  return response({ integrations: [...integrationProviders].map((provider) => ({ provider, configured: configured.has(provider), updatedAt: configured.get(provider) })) });
+}
+async function integrationConfiguration(request: Request, env: Env, provider: IntegrationProvider): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (request.method === "DELETE") {
+    await db.prepare("DELETE FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider).run();
+    await writeAudit(db, principal, "integration.removed", "integration", provider); return response({ configured: false, provider });
+  }
+  if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
+  const secret = validateIntegration(provider, await parseJson<Record<string, unknown>>(request)); const encrypted = await encryptIntegration(secret, env.INTEGRATION_KEY); const now = new Date().toISOString();
+  await db.prepare("INSERT INTO encrypted_integrations (id, installation_id, provider, ciphertext, iv, updated_at) VALUES (?, 'primary', ?, ?, ?, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET ciphertext = excluded.ciphertext, iv = excluded.iv, key_version = key_version + 1, updated_at = excluded.updated_at")
+    .bind(crypto.randomUUID(), provider, encrypted.ciphertext, encrypted.iv, now).run();
+  await writeAudit(db, principal, "integration.rotated", "integration", provider); return response({ configured: true, provider, updatedAt: now });
+}
+async function testIntegration(request: Request, env: Env, provider: IntegrationProvider): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
+  const record = await integrationRecord(env, provider); if (!record) throw new HttpError(404, "Integration is not configured");
+  const secret = await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY); let result: globalThis.Response;
+  if (provider === "google") result = await fetch("https://accounts.google.com/.well-known/openid-configuration", { headers: { accept: "application/json" } });
+  else if (provider === "resend") result = await fetch("https://api.resend.com/domains", { headers: { authorization: `Bearer ${secret.apiKey}`, accept: "application/json" } });
+  else result = await fetch("https://discord.com/api/v10/users/@me", { headers: { authorization: `Bot ${secret.botToken}`, accept: "application/json" } });
+  const ok = result.ok; await writeAudit(requireDatabase(env), principal, "integration.tested", "integration", provider, { ok, status: result.status });
+  if (!ok) throw new HttpError(502, `${provider} rejected the saved configuration`);
+  return response({ provider, ok: true, testedAt: new Date().toISOString() });
+}
 
 const worker = { async fetch(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url); let result: Response;
@@ -270,6 +317,9 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     else if (url.pathname === "/attendance" && ["GET", "POST"].includes(request.method)) result = await attendance(request, env);
     else if (url.pathname === "/attendance/corrections" && request.method === "POST") result = await correction(request, env);
     else if (url.pathname === "/exports/attendance.csv" && request.method === "GET") result = await attendanceExport(request, env);
+    else if (url.pathname === "/admin/integrations" && request.method === "GET") result = await integrationsStatus(request, env);
+    else if (/^\/admin\/integrations\/(google|resend|discord)$/.test(url.pathname) && ["PUT", "DELETE"].includes(request.method)) result = await integrationConfiguration(request, env, providerFrom(url.pathname));
+    else if (/^\/admin\/integrations\/(google|resend|discord)\/test$/.test(url.pathname) && request.method === "POST") result = await testIntegration(request, env, providerFrom(url.pathname));
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env);
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AttendanceWorkspace } from "./attendance-workspace";
+import { IntegrationSettings } from "./integration-settings";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string).replace(/\/$/, "");
 const steps = [
@@ -84,5 +85,6 @@ export function SetupWorkspace({ organizationName, onSignedOut }: { organization
       </div>
     </>}
     <AttendanceWorkspace embedded />
+    <IntegrationSettings />
   </div>;
 }

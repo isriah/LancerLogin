@@ -88,17 +88,23 @@ jobs:
         shell: bash
         run: |
           SESSION_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
+          INTEGRATION_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
           echo "::add-mask::$SESSION_KEY"
+          echo "::add-mask::$INTEGRATION_KEY"
           echo "SESSION_KEY=$SESSION_KEY" >> "$GITHUB_ENV"
+          echo "INTEGRATION_KEY=$INTEGRATION_KEY" >> "$GITHUB_ENV"
       - name: Deploy Worker API
         id: deploy-api
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           command: deploy --config .provision/wrangler.json
-          secrets: SESSION_KEY
+          secrets: |
+            SESSION_KEY
+            INTEGRATION_KEY
         env:
           SESSION_KEY: ${{ env.SESSION_KEY }}
+          INTEGRATION_KEY: ${{ env.INTEGRATION_KEY }}
       - name: Build dashboard for the new API
         env:
           VITE_API_BASE_URL: ${{ steps.deploy-api.outputs.deployment-url }}

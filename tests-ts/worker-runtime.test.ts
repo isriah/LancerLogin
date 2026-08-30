@@ -146,3 +146,16 @@ test("attendance export is an authenticated CSV download", async () => {
   assert.match(result.headers.get("content-type") ?? "", /text\/csv/);
   assert.match(await result.text(), /"Studio, weekly"/);
 });
+
+test("integration rotation encrypts secrets and returns only redacted status", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/integrations/resend", { apiKey: "re_super_secret", fromEmail: "attendance@example.test" }, { method: "PUT", cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 200);
+  const text = await result.text();
+  assert.equal(text.includes("re_super_secret"), false);
+  const saved = database.calls.find((call) => call.sql.includes("INSERT INTO encrypted_integrations"));
+  assert.ok(saved);
+  assert.equal(saved.values.some((value) => String(value).includes("re_super_secret")), false);
+  assert.ok(database.calls.some((call) => call.values.includes("integration.rotated")));
+});

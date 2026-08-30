@@ -20,6 +20,8 @@ const validTimeZone = (value: string) => { try { new Intl.DateTimeFormat("en-US"
 const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const validColor = (value: string) => /^#[0-9a-f]{6}$/i.test(value);
 const validLogoData = (value: string) => value.length <= 180_000 && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value);
+let dummyPasswordHash: Promise<string> | undefined;
+const timingEqualizerHash = () => dummyPasswordHash ??= hashPassword("LancerLogin timing equalizer", new Uint8Array(16));
 
 function response(body: unknown, status = 200, extraHeaders?: HeadersInit): Response {
   const headers = new Headers(baseHeaders);
@@ -39,7 +41,9 @@ class HttpError extends Error {
 }
 async function parseJson<T>(request: Request): Promise<T> {
   if (Number(request.headers.get("content-length") ?? 0) > 262_144) throw new HttpError(413, "Request body is too large");
-  try { return await request.json() as T; } catch { throw new HttpError(400, "Request body must be valid JSON"); }
+  const text = await request.text();
+  if (new TextEncoder().encode(text).byteLength > 262_144) throw new HttpError(413, "Request body is too large");
+  try { return JSON.parse(text) as T; } catch { throw new HttpError(400, "Request body must be valid JSON"); }
 }
 function requireDatabase(env: Env): D1Database { if (!env.DB) throw new HttpError(503, "D1 is not linked"); return env.DB; }
 function cookie(request: Request, name: string): string | undefined { return request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1); }
@@ -113,8 +117,14 @@ async function localLogin(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); if (!env.SESSION_KEY) throw new HttpError(503, "Local authentication is not configured");
   const input = await parseJson<{ username?: string; password?: string }>(request);
   if (!input.username || !input.password) throw new HttpError(400, "Username and password are required");
-  const user = await db.prepare("SELECT id, role, password_hash AS passwordHash FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; passwordHash: string | null }>();
-  if (!user?.passwordHash || !await verifyPassword(input.password, user.passwordHash)) throw new HttpError(401, "Invalid username or password");
+  const user = await db.prepare("SELECT id, role, password_hash AS passwordHash, failed_login_count AS failedLoginCount, locked_until AS lockedUntil FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; passwordHash: string | null; failedLoginCount: number; lockedUntil?: string }>();
+  const passwordValid = await verifyPassword(input.password, user?.passwordHash ?? await timingEqualizerHash());
+  const locked = Boolean(user?.lockedUntil && Date.parse(user.lockedUntil) > Date.now());
+  if (!user?.passwordHash || !passwordValid || locked) {
+    if (user && !locked) { const failures = Number(user.failedLoginCount ?? 0) + 1; const lockedUntil = failures >= 5 ? new Date(Date.now() + 15 * 60_000).toISOString() : null; await db.prepare("UPDATE users SET failed_login_count = ?, locked_until = ? WHERE installation_id = 'primary' AND id = ?").bind(failures, lockedUntil, user.id).run(); }
+    throw new HttpError(401, "Invalid username or password");
+  }
+  if (user.failedLoginCount || user.lockedUntil) await db.prepare("UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE installation_id = 'primary' AND id = ?").bind(user.id).run();
   const token = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role });
   return response({ ok: true, user: { id: user.id, role: user.role } }, 200, { "set-cookie": `lancerlogin_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800` });
 }

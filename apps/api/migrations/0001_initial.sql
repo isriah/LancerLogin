@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT,
   local_username TEXT,
   password_hash TEXT,
+  failed_login_count INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT,
   role TEXT NOT NULL CHECK (role IN ('admin', 'operator')),
   active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
   created_at TEXT NOT NULL,

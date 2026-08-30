@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { type Env } from "../apps/api/src/index.ts";
-import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
+import { createSessionCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 
 class FakeStatement {
@@ -18,7 +18,7 @@ class FakeStatement {
 class FakeDatabase {
   calls: FakeStatement[] = [];
   batches: FakeStatement[][] = [];
-  user?: { id: string; role: "admin" | "operator"; passwordHash: string | null };
+  user?: { id: string; role: "admin" | "operator"; passwordHash: string | null; failedLoginCount?: number; lockedUntil?: string };
   rows = new Map<string, unknown>();
   lists = new Map<string, unknown[]>();
   prepare(sql: string) { return new FakeStatement(sql, this); }
@@ -47,6 +47,15 @@ test("Worker bootstrap validates input before writing D1", async () => {
   assert.equal(database.batches.length, 0);
 });
 
+test("Worker rejects an oversized body even without a content-length header", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env;
+  const oversized = new Request("https://api.example.test/setup/bootstrap", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ organizationName: "x".repeat(262_145) }) });
+  assert.equal(oversized.headers.has("content-length"), false);
+  assert.equal((await worker.fetch(oversized, env)).status, 413);
+  assert.equal(database.batches.length, 0);
+});
+
 test("local Worker bootstrap creates the first Admin with a salted password hash", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env;
@@ -57,6 +66,34 @@ test("local Worker bootstrap creates the first Admin with a salted password hash
   const userInsert = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO users"));
   assert.match(String(userInsert?.values[4]), /^scrypt\$/);
   assert.equal((await result.json() as { telemetryAccepted: boolean }).telemetryAccepted, false);
+});
+
+test("local login applies generic constant-work failure and temporary account locking", async () => {
+  const database = new FakeDatabase();
+  database.user = { id: "admin-1", role: "admin", passwordHash: await hashPassword("correct horse battery staple"), failedLoginCount: 4 };
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const failed = await worker.fetch(request("/auth/local", { username: "director", password: "incorrect password" }), env);
+  assert.equal(failed.status, 401);
+  assert.equal((await failed.json() as { error: string }).error, "Invalid username or password");
+  const lock = database.calls.find((call) => call.sql.includes("UPDATE users SET failed_login_count"));
+  assert.ok(lock);
+  assert.equal(lock.values[0], 5);
+  assert.ok(Date.parse(String(lock.values[1])) > Date.now());
+
+  const unknownDatabase = new FakeDatabase();
+  const unknown = await worker.fetch(request("/auth/local", { username: "unknown", password: "incorrect password" }), { ...env, DB: unknownDatabase } as unknown as Env);
+  assert.equal(unknown.status, 401);
+  assert.equal(unknownDatabase.calls.some((call) => call.sql.includes("UPDATE users SET failed_login_count")), false);
+});
+
+test("successful local login clears prior failed-login state", async () => {
+  const database = new FakeDatabase();
+  database.user = { id: "admin-1", role: "admin", passwordHash: await hashPassword("correct horse battery staple"), failedLoginCount: 2 };
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/auth/local", { username: "director", password: "correct horse battery staple" }), env);
+  assert.equal(result.status, 200);
+  assert.match(result.headers.get("set-cookie") ?? "", /lancerlogin_session=/);
+  assert.ok(database.calls.some((call) => call.sql.includes("failed_login_count = 0")));
 });
 
 test("Google-only bootstrap encrypts OAuth credentials before the first sign-in", async () => {

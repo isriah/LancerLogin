@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { scryptAsync } from "@noble/hashes/scrypt.js";
+import { selectCloudflareAccount } from "./select-cloudflare-account.mjs";
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, value, index, all) => value.startsWith("--") ? [...pairs, [value.slice(2), all[index + 1]]] : pairs, []));
 const database = args.database; const username = args.username?.toLowerCase();
@@ -8,6 +9,14 @@ if (!database || !/^[a-z][a-z0-9-]{2,62}$/.test(database) || !username || !/^[a-
   console.error("Usage: npm run reset-password -- --database <installation-slug-data> --username <local-username>"); process.exit(2);
 }
 if (!process.stdin.isTTY) { console.error("Password reset requires an interactive terminal."); process.exit(2); }
+const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+if (!apiToken) { console.error("Set CLOUDFLARE_API_TOKEN to a token restricted to exactly one adopter-owned account."); process.exit(2); }
+
+const accountResponse = await fetch("https://api.cloudflare.com/client/v4/accounts", { headers: { authorization: `Bearer ${apiToken}`, accept: "application/json" } });
+const accountDocument = await accountResponse.json().catch(() => undefined);
+if (!accountResponse.ok) { console.error("Cloudflare account discovery failed. Check the scoped token and try again."); process.exit(2); }
+let accountId;
+try { accountId = selectCloudflareAccount(accountDocument); } catch (error) { console.error(error.message); process.exit(2); }
 
 function readHidden(prompt) {
   return new Promise((resolve) => {
@@ -23,7 +32,7 @@ if (password !== confirmation || password.length < 12) { console.error("Password
 const salt = crypto.getRandomValues(new Uint8Array(16)); const options = { N: 32_768, r: 8, p: 1, dkLen: 32, maxmem: 64 * 1024 * 1024, asyncTick: 5 };
 const encoded = (value) => Buffer.from(value).toString("base64url");
 const hash = `scrypt$${options.N}$${options.r}$${options.p}$${encoded(salt)}$${encoded(await scryptAsync(password, salt, options))}`;
-const command = `UPDATE users SET password_hash = '${hash}' WHERE installation_id = 'primary' AND local_username = '${username}'; SELECT changes() AS passwords_reset;`;
+const command = `UPDATE users SET password_hash = '${hash}', failed_login_count = 0, locked_until = NULL WHERE installation_id = 'primary' AND local_username = '${username}'; SELECT changes() AS passwords_reset;`;
 const executable = process.platform === "win32" ? "npx.cmd" : "npx";
-const child = spawn(executable, ["wrangler", "d1", "execute", database, "--remote", "--command", command], { stdio: "inherit", shell: false, env: process.env });
+const child = spawn(executable, ["wrangler", "d1", "execute", database, "--remote", "--command", command], { stdio: "inherit", shell: false, env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId } });
 child.on("exit", (code) => process.exit(code ?? 1));

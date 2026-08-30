@@ -12,6 +12,9 @@ test("foundation documents state standalone constraints", async () => {
   assert.match(checklist, /Community release requirement checklist/);
   assert.match(checklist, /endpoint\/operator\/retention decision pending/);
   assert.match(checklist, /physical acceptance pending/);
+  const license = await readFile("LICENSE", "utf8");
+  assert.match(license, /Apache License\s+Version 2\.0/);
+  assert.match(license, /APPENDIX: How to apply the Apache License/);
 });
 
 test("operator permissions match the approved role boundary", () => {
@@ -36,6 +39,8 @@ test("initial schema preserves the biometric and secret boundary", async () => {
   assert.doesNotMatch(schema, /fingerprint_template/i);
   assert.doesNotMatch(schema, /raw_fingerprint/i);
   assert.match(schema, /logo_data TEXT/);
+  assert.match(schema, /failed_login_count INTEGER NOT NULL DEFAULT 0/);
+  assert.match(schema, /locked_until TEXT/);
   assert.doesNotMatch(schema, /logo_url/i);
   assert.match(schema, /UNIQUE INDEX IF NOT EXISTS idx_one_active_kiosk ON kiosks\(installation_id\) WHERE active = 1/);
 });

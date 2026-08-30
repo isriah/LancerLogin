@@ -39,7 +39,10 @@ fi
 [[ "$MODE" == "--install" ]] || { echo "Use --dry-run to preview or --install to proceed." >&2; exit 2; }
 [[ "${EUID}" -eq 0 ]] || { echo "Run the installer as root with sudo." >&2; exit 2; }
 check_hardware
-for command in curl sha256sum tar systemctl node; do command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 2; }; done
+for command in curl sha256sum tar systemctl runuser; do command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 2; }; done
+[[ -x /usr/bin/node ]] || { echo "Node.js 18 or newer must be installed at /usr/bin/node." >&2; exit 2; }
+node_major="$(/usr/bin/node -p 'process.versions.node.split(".")[0]')"
+[[ "$node_major" -ge 18 ]] || { echo "Node.js 18 or newer is required." >&2; exit 2; }
 
 arch="$(architecture)"
 archive="lancerlogin-kiosk-${VERSION}-linux-${arch}.tar.gz"
@@ -61,7 +64,7 @@ read -r -p "Kiosk name [Main kiosk]: " kiosk_name
 kiosk_name="${kiosk_name:-Main kiosk}"
 read -r -s -p "One-time pairing code from the dashboard: " pairing_code
 echo
-sudo -u lancerlogin node /opt/lancerlogin/src/pair-cli.mjs "$api_url" "$pairing_code" "$kiosk_name"
+runuser --user lancerlogin -- /usr/bin/node /opt/lancerlogin/src/pair-cli.mjs "$api_url" "$pairing_code" "$kiosk_name"
 unset pairing_code
 
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-kiosk.service /etc/systemd/system/lancerlogin-kiosk.service

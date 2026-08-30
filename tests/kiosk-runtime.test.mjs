@@ -43,6 +43,9 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.match(installer, /sha256sum --check/);
   assert.match(installer, /releases\/download\/v\$\{VERSION\}/);
   assert.match(installer, /Environment=LANCERLOGIN_VERSION=%s/);
+  assert.match(installer, /runuser --user lancerlogin -- \/usr\/bin\/node/);
+  assert.match(installer, /node_major.*-ge 18/s);
+  assert.doesNotMatch(installer, /sudo -u/);
   assert.doesNotMatch(installer, /git clone/i);
 });
 

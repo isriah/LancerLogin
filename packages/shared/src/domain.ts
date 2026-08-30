@@ -13,7 +13,7 @@ export type SetupStep =
 export interface OrganizationBranding {
   organizationName: string;
   subtitle?: string;
-  logoUrl?: string;
+  logoData?: string;
   primaryColor: string;
   secondaryColor: string;
   appearance: "system" | "light" | "dark";

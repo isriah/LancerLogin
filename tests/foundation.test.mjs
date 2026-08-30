@@ -31,6 +31,8 @@ test("initial schema preserves the biometric and secret boundary", async () => {
   assert.match(schema, /encrypted_integrations/);
   assert.doesNotMatch(schema, /fingerprint_template/i);
   assert.doesNotMatch(schema, /raw_fingerprint/i);
+  assert.match(schema, /logo_data TEXT/);
+  assert.doesNotMatch(schema, /logo_url/i);
 });
 
 test("provisioning workflow is adopter-gated and account-neutral", async () => {

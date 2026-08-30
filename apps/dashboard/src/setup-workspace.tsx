@@ -15,7 +15,7 @@ const steps = [
   ["confirm-attendance", "Confirm attendance", "Verify the dashboard received the expected test attendance."],
 ] as const;
 type StepId = typeof steps[number][0];
-type Branding = { organizationName: string; subtitle?: string; logoUrl?: string; primaryColor: string; secondaryColor: string; appearance: "system" | "light" | "dark" };
+export type Branding = { organizationName: string; subtitle?: string; logoData?: string; primaryColor: string; secondaryColor: string; appearance: "system" | "light" | "dark" };
 type Member = { memberId: string; firstName: string; lastName: string; email?: string };
 type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; pairedAt: string };
 
@@ -26,9 +26,9 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
-export function SetupWorkspace({ organizationName, onSignedOut }: { organizationName: string; onSignedOut: () => void }) {
+export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut }: { initialBranding: Branding; onBrandingChanged: (branding: Branding) => void; onSignedOut: () => void }) {
   const [completed, setCompleted] = useState<Set<StepId>>(new Set());
-  const [branding, setBranding] = useState<Branding>({ organizationName, subtitle: "", logoUrl: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "system" });
+  const [branding, setBranding] = useState<Branding>(initialBranding);
   const [members, setMembers] = useState<Member[]>([]);
   const [rosterText, setRosterText] = useState("memberId,firstName,lastName,email,discordUserId\n");
   const [kioskName, setKioskName] = useState("Main kiosk");
@@ -45,10 +45,11 @@ export function SetupWorkspace({ organizationName, onSignedOut }: { organization
       api<{ settings: Branding }>("/admin/branding"),
       api<{ completedSteps: { step: StepId }[] }>("/admin/setup/progress"),
       api<{ members: Member[] }>("/admin/members"),
-      api<{ kiosks: Kiosk[] }>("/kiosks"),
+      api<{ kiosks: Kiosk[] }>("/admin/kiosks"),
     ]).then(([brand, setup, roster, kioskStatus]) => {
-      setBranding({ ...brand.settings, subtitle: brand.settings.subtitle ?? "", logoUrl: brand.settings.logoUrl ?? "" });
+      setBranding({ ...brand.settings, subtitle: brand.settings.subtitle ?? "", logoData: brand.settings.logoData ?? "" });
       setCompleted(new Set(setup.completedSteps.map((item) => item.step)));
+      setShowChecklist(setup.completedSteps.length < steps.length);
       setMembers(roster.members);
       setActiveKiosk(kioskStatus.kiosks.find((kiosk) => kiosk.active === 1));
       setNotice("Setup is synchronized for every Admin.");
@@ -62,7 +63,14 @@ export function SetupWorkspace({ organizationName, onSignedOut }: { organization
   }
   async function saveBranding(event: FormEvent) {
     event.preventDefault(); setNotice("Saving branding…");
-    try { await api("/admin/branding", { method: "PATCH", body: JSON.stringify(branding) }); if (!completed.has("branding")) await toggle("branding"); setNotice("Branding saved."); } catch (error) { setNotice((error as Error).message); }
+    try { await api("/admin/branding", { method: "PATCH", body: JSON.stringify(branding) }); onBrandingChanged(branding); if (!completed.has("branding")) await toggle("branding"); setNotice("Branding saved."); } catch (error) { setNotice((error as Error).message); }
+  }
+  async function chooseLogo(file?: File) {
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 131_072) { setNotice("Choose a PNG, JPEG, or WebP logo no larger than 128 KiB."); return; }
+    const logoData = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error("Logo could not be read")); reader.readAsDataURL(file); });
+    setBranding((current) => ({ ...current, logoData }));
+    setNotice("Logo selected. Save branding to store it in D1.");
   }
   async function importRoster(event: FormEvent) {
     event.preventDefault(); setNotice("Importing roster…");
@@ -87,7 +95,7 @@ export function SetupWorkspace({ organizationName, onSignedOut }: { organization
     {complete && !showChecklist ? <section className="completion-card"><span aria-hidden="true">✓</span><div><h2>Your kiosk-ready foundation is complete</h2><p>The checklist remains available from Setup whenever you need to revisit a step.</p></div><button type="button" onClick={() => setShowChecklist(true)}>Open Setup</button></section> : <>
       <section className="checklist-card" aria-labelledby="checklist-title"><div><p className="kicker">Resumable onboarding</p><h2 id="checklist-title">Setup checklist</h2><p>Progress is shared across Admin accounts. Optional integrations never block completion.</p></div><ol>{steps.map(([id, title, detail], index) => <li key={id} className={completed.has(id) ? "done" : ""}><button type="button" onClick={() => toggle(id)} aria-label={`${completed.has(id) ? "Reopen" : "Complete"} ${title}`}>{completed.has(id) ? "✓" : index + 1}</button><div><strong>{title}</strong><span>{detail}</span></div></li>)}</ol>{complete && <button className="quiet-button" type="button" onClick={() => setShowChecklist(false)}>Hide completed checklist</button>}</section>
       <div className="workspace-grid">
-        <form className="task-card" onSubmit={saveBranding}><p className="kicker">Branding</p><h2>Make it yours</h2><label>Organization name<input required maxLength={100} value={branding.organizationName} onChange={(event) => setBranding({ ...branding, organizationName: event.target.value })} /></label><label>Subtitle <span>(optional)</span><input maxLength={140} value={branding.subtitle ?? ""} onChange={(event) => setBranding({ ...branding, subtitle: event.target.value })} /></label><label>Logo HTTPS URL <span>(optional)</span><input type="url" value={branding.logoUrl ?? ""} onChange={(event) => setBranding({ ...branding, logoUrl: event.target.value })} /></label><div className="color-grid"><label>Primary<input type="color" value={branding.primaryColor} onChange={(event) => setBranding({ ...branding, primaryColor: event.target.value })} /></label><label>Secondary<input type="color" value={branding.secondaryColor} onChange={(event) => setBranding({ ...branding, secondaryColor: event.target.value })} /></label></div><label>Appearance<select value={branding.appearance} onChange={(event) => setBranding({ ...branding, appearance: event.target.value as Branding["appearance"] })}><option value="system">Follow device</option><option value="light">Light</option><option value="dark">Dark</option></select></label><button className="primary-button" type="submit">Save branding</button></form>
+        <form className="task-card" onSubmit={saveBranding}><p className="kicker">Branding</p><h2>Make it yours</h2><label>Organization name<input required maxLength={100} value={branding.organizationName} onChange={(event) => setBranding({ ...branding, organizationName: event.target.value })} /></label><label>Subtitle <span>(optional)</span><input maxLength={140} value={branding.subtitle ?? ""} onChange={(event) => setBranding({ ...branding, subtitle: event.target.value })} /></label><label>Logo image <span>(optional, stored in D1)</span><input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void chooseLogo(event.target.files?.[0])} /></label>{branding.logoData && <div className="logo-preview"><img src={branding.logoData} alt="Current organization logo preview" /><button type="button" onClick={() => setBranding({ ...branding, logoData: "" })}>Remove logo</button></div>}<div className="color-grid"><label>Primary<input type="color" value={branding.primaryColor} onChange={(event) => setBranding({ ...branding, primaryColor: event.target.value })} /></label><label>Secondary<input type="color" value={branding.secondaryColor} onChange={(event) => setBranding({ ...branding, secondaryColor: event.target.value })} /></label></div><label>Appearance<select value={branding.appearance} onChange={(event) => setBranding({ ...branding, appearance: event.target.value as Branding["appearance"] })}><option value="system">Follow device</option><option value="light">Light</option><option value="dark">Dark</option></select></label><button className="primary-button" type="submit">Save branding</button></form>
         <form className="task-card" onSubmit={importRoster}><p className="kicker">Roster</p><h2>Import members</h2><p>Paste CSV with the required headers. Matching member IDs are safely updated. Add an optional Discord user ID to link a member for pings and contests.</p><label>Roster CSV<textarea rows={9} value={rosterText} onChange={(event) => setRosterText(event.target.value)} /></label><button className="primary-button" type="submit">Validate and import</button><p className="record-count">{members.length} active roster record{members.length === 1 ? "" : "s"}</p></form>
         <section className="task-card pairing-card"><p className="kicker">Kiosk pairing</p><h2>{activeKiosk ? "Replace the paired kiosk" : "Create a one-time code"}</h2><p>The code expires in 10 minutes and can be redeemed once. It never contains a fingerprint template or Cloudflare credential.</p>{activeKiosk && <div className="replacement-notice"><strong>{activeKiosk.name} is active.</strong><span>LancerLogin supports one kiosk. It remains active until the replacement code is redeemed.</span><label><input type="checkbox" checked={replaceKiosk} onChange={(event) => setReplaceKiosk(event.target.checked)} /> I understand redeeming this code disables {activeKiosk.name}.</label></div>}<label>Kiosk name<input maxLength={80} value={kioskName} onChange={(event) => setKioskName(event.target.value)} /></label><button className="primary-button" type="button" disabled={Boolean(activeKiosk) && !replaceKiosk} onClick={createPairingCode}>{activeKiosk ? "Create replacement code" : "Create pairing code"}</button>{pairing && <div className="pairing-code" aria-live="polite"><span>Enter in the Pi installer</span><strong>{pairing.code}</strong><small>Expires {new Date(pairing.expiresAt).toLocaleTimeString()}</small></div>}</section>
       </div>

@@ -47,7 +47,7 @@ test("Worker bootstrap validates input before writing D1", async () => {
   assert.equal(database.batches.length, 0);
 });
 
-test("Worker bootstrap creates one Admin and four audited records", async () => {
+test("local Worker bootstrap creates the first Admin with a salted password hash", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env;
   const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Arts Club", timeZone: "America/New_York", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple", telemetryAccepted: false }), env);
@@ -59,11 +59,48 @@ test("Worker bootstrap creates one Admin and four audited records", async () => 
   assert.equal((await result.json() as { telemetryAccepted: boolean }).telemetryAccepted, false);
 });
 
+test("Google-only bootstrap encrypts OAuth credentials before the first sign-in", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Classroom", timeZone: "America/New_York", authMode: "google", adminEmail: "teacher@example.test", googleClientId: "google-client-id", googleClientSecret: "google-client-secret", telemetryAccepted: false }), env);
+  assert.equal(result.status, 201);
+  const integration = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO encrypted_integrations"));
+  assert.ok(integration);
+  assert.equal(integration.values.some((value) => String(value).includes("google-client-secret")), false);
+  assert.ok(database.batches[0].some((statement) => statement.sql.includes("integration.configured")));
+  assert.equal((await result.text()).includes("google-client-secret"), false);
+});
+
+test("Google bootstrap fails before writes when encryption or credentials are unavailable", async () => {
+  const database = new FakeDatabase();
+  const base = { organizationName: "Example Classroom", timeZone: "America/New_York", authMode: "google", adminEmail: "teacher@example.test", googleClientId: "google-client-id", googleClientSecret: "google-client-secret" };
+  const missingKey = await worker.fetch(request("/setup/bootstrap", base), { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env);
+  assert.equal(missingKey.status, 503);
+  const missingCredentials = await worker.fetch(request("/setup/bootstrap", { ...base, googleClientSecret: "" }), { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env);
+  assert.equal(missingCredentials.status, 400);
+  assert.equal(database.batches.length, 0);
+});
+
 test("protected setup routes reject anonymous and Operator access", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   assert.equal((await worker.fetch(request("/admin/branding"), env)).status, 401);
   assert.equal((await worker.fetch(request("/admin/branding", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
+});
+
+test("branding stores a bounded image asset in D1 and rejects remote logo URLs", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("admin");
+  const base = { organizationName: "Example Arts Club", subtitle: "Create together", primaryColor: "#123456", secondaryColor: "#abcdef", appearance: "dark" };
+  const remote = await worker.fetch(request("/admin/branding", { ...base, logoData: "https://example.test/logo.png" }, { method: "PATCH", cookie }), env);
+  assert.equal(remote.status, 400);
+  const logoData = `data:image/png;base64,${Buffer.from("small-logo").toString("base64")}`;
+  const saved = await worker.fetch(request("/admin/branding", { ...base, logoData }, { method: "PATCH", cookie }), env);
+  assert.equal(saved.status, 200);
+  const update = database.calls.find((call) => call.sql.includes("UPDATE organization_settings SET"));
+  assert.ok(update?.sql.includes("logo_data"));
+  assert.ok(update?.values.includes(logoData));
 });
 
 test("Admin can persist shared checklist progress with an audit record", async () => {
@@ -280,10 +317,25 @@ test("Discord missing-member workflow mentions only linked absent members and op
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("Operators can list and resolve Discord attendance contests", async () => {
+  const database = new FakeDatabase();
+  database.lists.set("FROM discord_attendance_contests c", [{ meetingId: "meeting-1", memberId: "member-1", externalId: "A-1", firstName: "Avery", lastName: "Stone", status: "open", createdAt: "2026-08-30T00:00:00Z" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("operator");
+  const listed = await worker.fetch(request("/discord/contests?meetingId=meeting-1", undefined, { cookie }), env);
+  assert.equal(listed.status, 200);
+  assert.equal((await listed.json() as { contests: unknown[] }).contests.length, 1);
+  const resolved = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved" }, { cookie }), env);
+  assert.equal(resolved.status, 200);
+  assert.ok(database.calls.some((call) => call.sql.includes("UPDATE discord_attendance_contests")));
+  assert.ok(database.calls.some((call) => call.values.includes("discord.contest_resolved")));
+});
+
 test("telemetry transmits only after acceptance and strictly allowlists its payload", async () => {
   const database = new FakeDatabase();
   database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "opaque-install-id" });
   database.rows.set("COUNT(*) AS count", { count: 1 });
+  database.rows.set("FROM telemetry_diagnostics", { errorCategory: "worker-internal" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, TELEMETRY_ENDPOINT: "https://telemetry.example.test/v1", RELEASE_VERSION: "0.1.0", DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; let payload: Record<string, unknown> | undefined;
   globalThis.fetch = async (_input, init) => { payload = JSON.parse(String(init?.body)); return new Response(null, { status: 202 }); };
@@ -292,10 +344,29 @@ test("telemetry transmits only after acceptance and strictly allowlists its payl
     Object.defineProperty(telemetryRequest, "cf", { value: { city: "Example Metro", ip: "192.0.2.1" } });
     const result = await worker.fetch(telemetryRequest, env);
     assert.equal(result.status, 200);
-    assert.deepEqual(payload, { installId: "opaque-install-id", releaseVersion: "0.1.0", activeKioskCount: 1, metro: "Example Metro" });
+    assert.deepEqual(payload, { installId: "opaque-install-id", releaseVersion: "0.1.0", activeKioskCount: 1, metro: "Example Metro", errorCategory: "worker-internal" });
     assert.equal(JSON.stringify(payload).includes("192.0.2.1"), false);
     assert.equal(JSON.stringify(payload).includes("organization"), false);
+    assert.ok(database.calls.some((call) => call.sql.includes("DELETE FROM telemetry_diagnostics")));
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("scrubbed diagnostics are recorded only after telemetry consent", async () => {
+  const encrypted = await encryptIntegration({ clientId: "client-id", clientSecret: "client-secret" }, sessionSecret);
+  const accepted = new FakeDatabase();
+  accepted.rows.set("auth_mode AS authMode", { authMode: "google" });
+  accepted.rows.set("FROM encrypted_integrations", { id: "google-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  accepted.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z" });
+  const acceptedEnv = { APP_MODE: "configured", ALLOWED_ORIGIN: "not-a-valid-origin", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: accepted } as unknown as Env;
+  assert.equal((await worker.fetch(request("/auth/google/start"), acceptedEnv)).status, 500);
+  assert.ok(accepted.calls.some((call) => call.sql.includes("INSERT INTO telemetry_diagnostics") && call.values.includes("worker-internal")));
+
+  const declined = new FakeDatabase();
+  declined.rows.set("auth_mode AS authMode", { authMode: "google" });
+  declined.rows.set("FROM encrypted_integrations", { id: "google-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  const declinedEnv = { APP_MODE: "configured", ALLOWED_ORIGIN: "not-a-valid-origin", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: declined } as unknown as Env;
+  assert.equal((await worker.fetch(request("/auth/google/start"), declinedEnv)).status, 500);
+  assert.equal(declined.calls.some((call) => call.sql.includes("INSERT INTO telemetry_diagnostics")), false);
 });
 
 test("destructive data operations require exact confirmation and FK-safe ordering", async () => {

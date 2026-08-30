@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { checklistFor, navigationFor, renderDashboard } from "../apps/dashboard/src/shell.mjs";
 
 const branding = { organizationName: "Example Club", subtitle: "Welcome", primaryColor: "#111111", secondaryColor: "#eeeeee", appearance: "dark" };
@@ -28,4 +29,39 @@ test("dashboard shell includes baseline accessibility and escapes branding", () 
   assert.match(html, /aria-label="Primary"/);
   assert.match(html, /A &lt; B/);
   assert.doesNotMatch(html, /People/);
+});
+
+test("live Admin workspace uses the authorized kiosk route and hides a completed checklist", async () => {
+  const source = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
+  assert.match(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/admin\/kiosks"\)/);
+  assert.match(source, /setShowChecklist\(setup\.completedSteps\.length < steps\.length\)/);
+  assert.doesNotMatch(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/kiosks"\)/);
+});
+
+test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", async () => {
+  const source = await readFile("apps/dashboard/src/main.tsx", "utf8");
+  assert.match(source, /Google OAuth bootstrap/);
+  assert.match(source, /googleClientId: usesGoogle/);
+  assert.match(source, /googleClientSecret: usesGoogle/);
+  assert.match(source, /\/api\/auth\/google\/callback/);
+});
+
+test("live branding stores an image locally and applies organization colors and appearance", async () => {
+  const workspace = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
+  const entry = await readFile("apps/dashboard/src/main.tsx", "utf8");
+  assert.match(workspace, /accept="image\/png,image\/jpeg,image\/webp"/);
+  assert.match(workspace, /file\.size > 131_072/);
+  assert.match(workspace, /stored in D1/);
+  assert.match(entry, /"--primary": branding\.primaryColor/);
+  assert.match(entry, /"--secondary": branding\.secondaryColor/);
+  assert.match(entry, /data-theme=\{appearance\}/);
+});
+
+test("Operator workspace exposes kiosk monitoring and the complete Discord attendance workflow", async () => {
+  const source = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
+  assert.match(source, /\/admin\/kiosks/);
+  assert.match(source, /Status refreshes every 30 seconds/);
+  assert.match(source, /\/discord\/link/);
+  assert.match(source, /\/discord\/contests\?meetingId=/);
+  assert.match(source, /\/discord\/contests\/resolve/);
 });

@@ -13,7 +13,7 @@
   <p>Choose local username/password, Google OAuth, or both. Local passwords require at least 12 characters and are stored as salted scrypt hashes. The dashboard and API use one Pages origin through a generated proxy, so strict session cookies are not third-party cookies.</p>
   <p>For Google, create a Web OAuth client and add this exact authorized redirect URI:</p>
   <p class="ui-path">Your Pages dashboard URL <span>›</span> <code>/api/auth/google/callback</code></p>
-  <p>Save the client ID and secret under <strong>Optional integrations → Google OAuth</strong>. Saving again rotates the encrypted configuration; saved values are never displayed.</p>
+  <p>Enter the client ID and secret in the first-Admin setup form when Google or both methods are selected. This avoids a first-login dependency: the secret is encrypted before storage and is never displayed again. After signing in, an Admin can test, rotate, or remove it under <strong>Optional integrations → Google OAuth</strong>.</p>
   <h2>3. Finish the shared checklist</h2>
   <ol><li>Branding</li><li>Roster (optional email and Discord user ID columns)</li><li>Pair kiosk</li><li>Fingerprint test</li><li>Test meeting</li><li>Attendance confirmation</li></ol>
   <p>Any Admin can resume the checklist. Once complete it hides, but remains reachable from Setup. Google, Resend, and Discord are separate and skippable.</p>

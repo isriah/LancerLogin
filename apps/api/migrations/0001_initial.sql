@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS organization_settings (
   installation_id TEXT PRIMARY KEY REFERENCES installations(id) ON DELETE CASCADE,
   organization_name TEXT NOT NULL DEFAULT 'LancerLogin',
   subtitle TEXT,
-  logo_url TEXT,
+  logo_data TEXT,
   primary_color TEXT NOT NULL DEFAULT '#7c3aed',
   secondary_color TEXT NOT NULL DEFAULT '#0f766e',
   appearance TEXT NOT NULL DEFAULT 'system' CHECK (appearance IN ('system', 'light', 'dark')),
@@ -164,6 +164,12 @@ CREATE TABLE IF NOT EXISTS audit_log (
   target_id TEXT,
   metadata_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS telemetry_diagnostics (
+  installation_id TEXT PRIMARY KEY REFERENCES installations(id) ON DELETE CASCADE,
+  error_category TEXT NOT NULL CHECK (error_category IN ('worker-internal', 'integration-upstream')),
+  last_seen_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_attendance_member_meeting ON attendance_events(member_id, meeting_id);

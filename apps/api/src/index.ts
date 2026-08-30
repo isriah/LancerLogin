@@ -10,8 +10,8 @@ type Role = "admin" | "operator";
 type Principal = { userId: string; role: Role; expiresAt: number };
 type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "test-meeting" | "confirm-attendance";
-type BootstrapInput = { organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; telemetryAccepted?: boolean };
-type BrandingInput = { organizationName?: string; subtitle?: string | null; logoUrl?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "light" | "dark" };
+type BootstrapInput = { organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
+type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "light" | "dark" };
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null };
 
 const baseHeaders = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
@@ -19,6 +19,7 @@ const setupSteps = new Set<SetupStep>(["branding", "roster", "pair-kiosk", "fing
 const validTimeZone = (value: string) => { try { new Intl.DateTimeFormat("en-US", { timeZone: value }); return true; } catch { return false; } };
 const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const validColor = (value: string) => /^#[0-9a-f]{6}$/i.test(value);
+const validLogoData = (value: string) => value.length <= 180_000 && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value);
 
 function response(body: unknown, status = 200, extraHeaders?: HeadersInit): Response {
   const headers = new Headers(baseHeaders);
@@ -68,7 +69,7 @@ async function setupStatus(env: Env): Promise<Response> {
   const db = requireDatabase(env);
   const installation = await db.prepare("SELECT id, auth_mode AS authMode, telemetry_accepted_at AS telemetryAcceptedAt FROM installations WHERE id = ?").bind("primary").first<{ id: string; authMode: AuthMode; telemetryAcceptedAt?: string }>();
   if (!installation) return response({ configured: false });
-  const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_url AS logoUrl, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone FROM organization_settings WHERE installation_id = ?").bind(installation.id).first();
+  const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone FROM organization_settings WHERE installation_id = ?").bind(installation.id).first();
   return response({ configured: true, installation: { ...installation, telemetryAccepted: Boolean(installation.telemetryAcceptedAt) }, settings });
 }
 function validateBootstrap(input: BootstrapInput): string[] {
@@ -77,6 +78,7 @@ function validateBootstrap(input: BootstrapInput): string[] {
   if (!input.timeZone || !validTimeZone(input.timeZone)) errors.push("A valid IANA time zone is required");
   if (!input.authMode || !["google", "local", "both"].includes(input.authMode)) errors.push("Authentication mode must be google, local, or both");
   if ((input.authMode === "google" || input.authMode === "both") && (!input.adminEmail || !validEmail(input.adminEmail))) errors.push("A valid first-Admin email is required for Google sign-in");
+  if ((input.authMode === "google" || input.authMode === "both") && (!input.googleClientId?.trim() || !input.googleClientSecret?.trim() || input.googleClientId.length > 500 || input.googleClientSecret.length > 500)) errors.push("Google sign-in requires an OAuth client ID and client secret");
   if ((input.authMode === "local" || input.authMode === "both") && (!input.localUsername?.trim() || (input.localPassword?.length ?? 0) < 12)) errors.push("Local sign-in requires a username and a password of at least 12 characters");
   return errors;
 }
@@ -86,15 +88,24 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   const input = await parseJson<BootstrapInput>(request);
   const errors = validateBootstrap(input);
   if (errors.length) throw new HttpError(400, "Invalid setup", errors);
+  if ((input.authMode === "google" || input.authMode === "both") && !env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const now = new Date().toISOString(); const adminId = crypto.randomUUID(); const mode = input.authMode!;
   const passwordHash = mode === "local" || mode === "both" ? await hashPassword(input.localPassword!) : null;
   const telemetryAcceptedAt = input.telemetryAccepted ? now : null;
-  await db.batch([
+  const statements = [
     db.prepare("INSERT INTO installations (id, created_at, auth_mode, telemetry_accepted_at, telemetry_install_id) VALUES (?, ?, ?, ?, ?)").bind("primary", now, mode, telemetryAcceptedAt, input.telemetryAccepted ? crypto.randomUUID() : null),
     db.prepare("INSERT INTO organization_settings (installation_id, organization_name, time_zone) VALUES (?, ?, ?)").bind("primary", input.organizationName!.trim(), input.timeZone),
     db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, 'admin', ?)").bind(adminId, "primary", input.adminEmail?.toLowerCase() ?? null, input.localUsername?.trim().toLowerCase() ?? null, passwordHash, now),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), "primary", adminId, "installation.created", "installation", "primary", now),
-  ]);
+  ];
+  if (mode === "google" || mode === "both") {
+    const encrypted = await encryptIntegration({ clientId: input.googleClientId!.trim(), clientSecret: input.googleClientSecret!.trim() }, env.INTEGRATION_KEY!);
+    statements.push(
+      db.prepare("INSERT INTO encrypted_integrations (id, installation_id, provider, ciphertext, iv, updated_at) VALUES (?, 'primary', 'google', ?, ?, ?)").bind(crypto.randomUUID(), encrypted.ciphertext, encrypted.iv, now),
+      db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, 'primary', ?, 'integration.configured', 'integration', 'google', ?)").bind(crypto.randomUUID(), adminId, now),
+    );
+  }
+  await db.batch(statements);
   if (telemetryAcceptedAt) { const cf = (request as Request & { cf?: { city?: string; metroCode?: string } }).cf; try { await transmitTelemetry(env, cf?.city || cf?.metroCode); } catch { /* Setup must survive best-effort telemetry failure. */ } }
   return response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, telemetryAccepted: Boolean(telemetryAcceptedAt) }, 201);
 }
@@ -117,18 +128,18 @@ async function authSession(request: Request, env: Env): Promise<Response> {
 async function branding(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") {
-    const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_url AS logoUrl, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first();
+    const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first();
     return response({ settings });
   }
   const input = await parseJson<BrandingInput>(request); const errors: string[] = [];
   if (!input.organizationName?.trim() || input.organizationName.trim().length > 100) errors.push("Organization name is required and must be at most 100 characters");
   if (input.subtitle && input.subtitle.length > 140) errors.push("Subtitle must be at most 140 characters");
-  if (input.logoUrl && (!input.logoUrl.startsWith("https://") || input.logoUrl.length > 500)) errors.push("Logo URL must be a secure HTTPS URL");
+  if (input.logoData && !validLogoData(input.logoData)) errors.push("Logo must be a PNG, JPEG, or WebP image no larger than 128 KiB");
   if (!input.primaryColor || !validColor(input.primaryColor) || !input.secondaryColor || !validColor(input.secondaryColor)) errors.push("Brand colors must use six-digit hex values");
   if (!input.appearance || !["system", "light", "dark"].includes(input.appearance)) errors.push("Appearance must be system, light, or dark");
   if (errors.length) throw new HttpError(400, "Invalid branding", errors);
-  await db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_url = ?, primary_color = ?, secondary_color = ?, appearance = ? WHERE installation_id = 'primary'")
-    .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoUrl?.trim() || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance).run();
+  await db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_data = ?, primary_color = ?, secondary_color = ?, appearance = ? WHERE installation_id = 'primary'")
+    .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoData || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance).run();
   await writeAudit(db, principal, "branding.updated", "organization_settings", "primary"); return response({ ok: true });
 }
 async function setupProgress(request: Request, env: Env): Promise<Response> {
@@ -231,7 +242,7 @@ async function attendance(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const url = new URL(request.url);
   if (request.method === "GET") {
     const meetingId = url.searchParams.get("meetingId"); if (!meetingId) throw new HttpError(400, "meetingId is required");
-    const rows = await db.prepare("SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ?) THEN 'present' ELSE 'absent' END) AS disposition, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ?) AS occurredAt, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 ORDER BY m.last_name, m.first_name").bind(meetingId, meetingId, meetingId, meetingId).all();
+    const rows = await db.prepare("SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ?) THEN 'present' ELSE 'absent' END) AS disposition, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ?) AS occurredAt, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 ORDER BY m.last_name, m.first_name").bind(meetingId, meetingId, meetingId, meetingId).all();
     return response({ attendance: rows.results ?? [] });
   }
   return recordAttendance(db, await parseJson(request), "manual", principal.userId);
@@ -434,6 +445,12 @@ async function discordMissing(request: Request, env: Env): Promise<Response> {
   await writeAudit(db, principal, "discord.missing_notified", "meeting", meeting.id, { linkedMissingCount: members.length, messageId });
   return response({ posted: true, linkedMissingCount: members.length, messageId }, 202);
 }
+async function discordContests(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin", "operator"]); const meetingId = new URL(request.url).searchParams.get("meetingId");
+  if (!meetingId) throw new HttpError(400, "Meeting is required");
+  const result = await requireDatabase(env).prepare("SELECT c.meeting_id AS meetingId, c.member_id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, c.status, c.created_at AS createdAt, c.resolved_at AS resolvedAt FROM discord_attendance_contests c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id WHERE c.installation_id = 'primary' AND c.meeting_id = ? ORDER BY m.last_name, m.first_name").bind(meetingId).all();
+  return response({ contests: result.results ?? [] });
+}
 async function resolveDiscordContest(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; memberId?: string; resolution?: "approved" | "rejected" | "reviewed" }>(request);
   if (!input.meetingId || !input.memberId || !input.resolution || !["approved", "rejected", "reviewed"].includes(input.resolution)) throw new HttpError(400, "Meeting, member, and a valid resolution are required");
@@ -467,9 +484,21 @@ async function transmitTelemetry(env: Env, metro?: string): Promise<boolean> {
   const installation = await env.DB.prepare("SELECT telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installId FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string; installId?: string }>();
   if (!installation?.acceptedAt || !installation.installId) return false;
   const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM kiosks WHERE installation_id = 'primary' AND active = 1").first<{ count: number }>();
+  const diagnostic = await env.DB.prepare("SELECT error_category AS errorCategory FROM telemetry_diagnostics WHERE installation_id = 'primary'").first<{ errorCategory?: "worker-internal" | "integration-upstream" }>();
   const payload: Record<string, unknown> = { installId: installation.installId, releaseVersion: env.RELEASE_VERSION, activeKioskCount: Number(count?.count ?? 0) };
   if (metro) payload.metro = String(metro).slice(0, 100);
-  return (await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })).ok;
+  if (diagnostic?.errorCategory) payload.errorCategory = diagnostic.errorCategory;
+  const sent = (await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })).ok;
+  if (sent && diagnostic?.errorCategory) await env.DB.prepare("DELETE FROM telemetry_diagnostics WHERE installation_id = 'primary' AND error_category = ?").bind(diagnostic.errorCategory).run();
+  return sent;
+}
+async function recordTelemetryDiagnostic(env: Env, errorCategory: "worker-internal" | "integration-upstream"): Promise<void> {
+  if (!env.DB) return;
+  try {
+    const consent = await env.DB.prepare("SELECT telemetry_accepted_at AS acceptedAt FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string }>();
+    if (!consent?.acceptedAt) return;
+    await env.DB.prepare("INSERT INTO telemetry_diagnostics (installation_id, error_category, last_seen_at) VALUES ('primary', ?, ?) ON CONFLICT(installation_id) DO UPDATE SET error_category = excluded.error_category, last_seen_at = excluded.last_seen_at").bind(errorCategory, new Date().toISOString()).run();
+  } catch { /* Diagnostics are best-effort and never alter the request response. */ }
 }
 async function privacySettings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -525,6 +554,7 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     else if (url.pathname === "/communications/email" && request.method === "POST") result = await sendAttendanceEmail(request, env);
     else if (url.pathname === "/discord/link" && request.method === "POST") result = await linkDiscordMember(request, env);
     else if (url.pathname === "/discord/missing" && request.method === "POST") result = await discordMissing(request, env);
+    else if (url.pathname === "/discord/contests" && request.method === "GET") result = await discordContests(request, env);
     else if (url.pathname === "/discord/contests/resolve" && request.method === "POST") result = await resolveDiscordContest(request, env);
     else if (url.pathname === "/discord/calendar" && request.method === "POST") result = await discordCalendar(request, env);
     else if (url.pathname === "/discord/kiosk-status" && request.method === "POST") result = await discordKioskStatus(request, env);
@@ -536,6 +566,7 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     else result = response({ error: "Not found" }, 404);
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
+    if (status === 500 || status === 502) await recordTelemetryDiagnostic(env, status === 502 ? "integration-upstream" : "worker-internal");
     const detail = error instanceof HttpError ? error.details : env.APP_MODE === "unconfigured" && error instanceof Error ? [error.message] : undefined;
     result = response({ error: error instanceof HttpError ? error.message : "Request failed", details: detail }, status);
   }

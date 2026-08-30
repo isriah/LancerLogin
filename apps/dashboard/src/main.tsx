@@ -1,7 +1,7 @@
 import { FormEvent, StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
-import { SetupWorkspace } from "./setup-workspace";
+import { SetupWorkspace, type Branding } from "./setup-workspace";
 import { AttendanceWorkspace } from "./attendance-workspace";
 
 type CloudflareStep = { id: string; title: string; detail: string; action?: { label: string; href: string } };
@@ -16,7 +16,7 @@ const cloudflareSteps: CloudflareStep[] = [
 const installationSteps = ["Branding", "Roster", "Pair kiosk", "Fingerprint test", "Test meeting", "Confirm attendance"];
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
-type SetupStatus = { configured: boolean; installation?: { authMode: "google" | "local" | "both" }; settings?: { organizationName?: string } };
+type SetupStatus = { configured: boolean; installation?: { authMode: "google" | "local" | "both" }; settings?: Branding };
 
 function App() {
   const [completed, setCompleted] = useState<string[]>([]);
@@ -93,7 +93,10 @@ function App() {
 function ProvisionedEntry({ status, onConfigured, theme, onTheme }: { status: SetupStatus | "loading" | "unavailable"; onConfigured: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: () => void }) {
   if (status === "loading") return <CenteredState theme={theme} title="Checking your installation…" detail="LancerLogin is securely reading setup status." />;
   if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
-  return <div className="app" data-theme={theme}><main className="provisioned-main"><header className="setup-header"><div className="brand-mark" aria-hidden="true">L</div><div><strong>LancerLogin</strong><span>Community Edition</span></div><button className="theme-button" type="button" onClick={onTheme}>{theme === "light" ? "Dark" : "Light"} mode</button></header>{status.configured ? <ConfiguredInstallation status={status} /> : <FirstAdminSetup onConfigured={onConfigured} />}</main></div>;
+  const branding = status.configured ? status.settings : undefined;
+  const appearance = branding?.appearance ?? theme;
+  const style = branding ? { "--primary": branding.primaryColor, "--secondary": branding.secondaryColor, "--gold": branding.secondaryColor } as React.CSSProperties : undefined;
+  return <div className="app" data-theme={appearance} style={style}><main className="provisioned-main"><header className="setup-header">{branding?.logoData ? <img className="brand-logo" src={branding.logoData} alt="" /> : <div className="brand-mark" aria-hidden="true">L</div>}<div><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></div><button className="theme-button" type="button" onClick={onTheme}>{theme === "light" ? "Dark" : "Light"} mode</button></header>{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} /> : <FirstAdminSetup onConfigured={onConfigured} />}</main></div>;
 }
 
 function CenteredState({ theme, title, detail }: { theme: "light" | "dark"; title: string; detail: string }) {
@@ -105,6 +108,8 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
   const [organizationName, setOrganizationName] = useState("");
   const [timeZone, setTimeZone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
   const [adminEmail, setAdminEmail] = useState("");
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [googleClientSecret, setGoogleClientSecret] = useState("");
   const [localUsername, setLocalUsername] = useState("");
   const [localPassword, setLocalPassword] = useState("");
   const [telemetryAccepted, setTelemetryAccepted] = useState(false);
@@ -114,28 +119,28 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setResult({ busy: true });
-    const response = await fetch(`${apiBaseUrl}/setup/bootstrap`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ organizationName, timeZone, authMode, adminEmail: usesGoogle ? adminEmail : undefined, localUsername: usesLocal ? localUsername : undefined, localPassword: usesLocal ? localPassword : undefined, telemetryAccepted }) });
+    const response = await fetch(`${apiBaseUrl}/setup/bootstrap`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ organizationName, timeZone, authMode, adminEmail: usesGoogle ? adminEmail : undefined, googleClientId: usesGoogle ? googleClientId : undefined, googleClientSecret: usesGoogle ? googleClientSecret : undefined, localUsername: usesLocal ? localUsername : undefined, localPassword: usesLocal ? localPassword : undefined, telemetryAccepted }) });
     const body = await response.json() as { error?: string; details?: string[] };
     if (!response.ok) { setResult({ error: body.details?.join(" ") ?? body.error ?? "Setup failed" }); return; }
-    onConfigured({ configured: true, installation: { authMode }, settings: { organizationName } });
+    onConfigured({ configured: true, installation: { authMode }, settings: { organizationName, subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "system" } });
   }
 
   return <section className="first-admin-card" aria-labelledby="first-admin-title"><div className="form-intro"><p className="kicker">First-time setup</p><h1 id="first-admin-title">Create your installation</h1><p>This creates the first Admin in your organization’s new database. You can change branding and add more users afterward.</p></div><form onSubmit={submit}>
     <div className="form-grid"><label>Organization name<input required maxLength={100} value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} autoComplete="organization" /></label><label>Time zone<input required value={timeZone} onChange={(event) => setTimeZone(event.target.value)} /></label></div>
     <fieldset><legend>Dashboard sign-in</legend><div className="choice-grid">{(["local", "google", "both"] as const).map((mode) => <label className={authMode === mode ? "choice selected" : "choice"} key={mode}><input type="radio" name="auth-mode" value={mode} checked={authMode === mode} onChange={() => setAuthMode(mode)} /><strong>{mode === "local" ? "Username and password" : mode === "google" ? "Google OAuth" : "Both methods"}</strong><span>{mode === "local" ? "Works without an identity provider." : mode === "google" ? "Use your organization’s Google accounts." : "Let each Admin use either method."}</span></label>)}</div></fieldset>
-    {usesGoogle && <label>First Admin Google email<input type="email" required value={adminEmail} onChange={(event) => setAdminEmail(event.target.value)} autoComplete="email" /></label>}
+    {usesGoogle && <fieldset><legend>Google OAuth bootstrap</legend><p className="field-help">Create a Web application OAuth client and register <code>{window.location.origin}/api/auth/google/callback</code> as its authorized redirect URI. The client secret is encrypted before it is stored and is never displayed again.</p><label>First Admin Google email<input type="email" required value={adminEmail} onChange={(event) => setAdminEmail(event.target.value)} autoComplete="email" /></label><div className="form-grid"><label>OAuth client ID<input required maxLength={500} value={googleClientId} onChange={(event) => setGoogleClientId(event.target.value)} autoComplete="off" /></label><label>OAuth client secret<input required maxLength={500} type="password" value={googleClientSecret} onChange={(event) => setGoogleClientSecret(event.target.value)} autoComplete="off" /></label></div></fieldset>}
     {usesLocal && <div className="form-grid"><label>Admin username<input required value={localUsername} onChange={(event) => setLocalUsername(event.target.value)} autoComplete="username" /></label><label>Admin password<input type="password" minLength={12} required value={localPassword} onChange={(event) => setLocalPassword(event.target.value)} autoComplete="new-password" /><span className="field-help">At least 12 characters. Recovery uses the local setup tool.</span></label></div>}
     <label className="telemetry-choice"><input type="checkbox" checked={telemetryAccepted} onChange={(event) => setTelemetryAccepted(event.target.checked)} /><span><strong>Share privacy-preserving telemetry</strong><small>Optional. Sends a random install ID, release version, active kiosk count, scrubbed errors, and approximate metro only. Never sends organization, roster, attendance, fingerprint, or raw IP data.</small></span></label>
     {result.error && <p className="form-error" role="alert">{result.error}</p>}<button className="primary-button" disabled={result.busy} type="submit">{result.busy ? "Creating installation…" : "Create first Admin"}</button>
   </form></section>;
 }
 
-function ConfiguredInstallation({ status }: { status: SetupStatus }) {
+function ConfiguredInstallation({ status, onStatusChange }: { status: SetupStatus; onStatusChange: (status: SetupStatus) => void }) {
   const [session, setSession] = useState<{ role: "admin" | "operator" }>();
   const [checking, setChecking] = useState(true);
   useEffect(() => { fetch(`${apiBaseUrl}/auth/session`, { credentials: "include" }).then(async (result) => { if (result.ok) setSession((await result.json() as { user: { role: "admin" | "operator" } }).user); }).finally(() => setChecking(false)); }, []);
   if (checking) return <p className="auth-check" role="status">Checking your session…</p>;
-  if (session?.role === "admin") return <SetupWorkspace organizationName={status.settings?.organizationName ?? "LancerLogin"} onSignedOut={() => setSession(undefined)} />;
+  if (session?.role === "admin") return <SetupWorkspace initialBranding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "system" }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => setSession(undefined)} />;
   if (session?.role === "operator") return <AttendanceWorkspace onSignedOut={() => setSession(undefined)} />;
   return <LocalLogin status={status} onSignedIn={(role) => setSession({ role })} />;
 }

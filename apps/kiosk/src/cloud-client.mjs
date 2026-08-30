@@ -32,4 +32,13 @@ export async function sendHeartbeat(config, { readerOnline = false, releaseVersi
   return parseResponse(response);
 }
 
+export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/attendance`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
+    body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, meetingId: event.meetingId, occurredAt: event.occurredAt }),
+  });
+  return parseResponse(response);
+}
+
 export { normalizeApiUrl };

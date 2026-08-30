@@ -1,8 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createOfflineQueue, createSensorAdapter, issuePairingCode, redeemPairingCode } from "../apps/kiosk/src/local-runtime.mjs";
-import { normalizeApiUrl, pairInstallation, sendHeartbeat } from "../apps/kiosk/src/cloud-client.mjs";
+import { normalizeApiUrl, pairInstallation, sendAttendance, sendHeartbeat } from "../apps/kiosk/src/cloud-client.mjs";
+import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
+import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
 
 test("pairing code is hashed, single-use, and expires", () => {
   const issued = issuePairingCode({ now: () => 0, random: () => Buffer.from("123456") });
@@ -54,4 +58,24 @@ test("heartbeat authenticates with the kiosk token and reports only operational 
   await sendHeartbeat({ apiUrl: "https://api.example.test", kioskToken: "secret", kioskId: "kiosk-1" }, { readerOnline: true, releaseVersion: "1.0.0", fetchImpl: async (_url, init) => { request = init; return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }); } });
   assert.equal(request.headers.authorization, "Bearer secret");
   assert.deepEqual(JSON.parse(request.body), { readerOnline: true, releaseVersion: "1.0.0" });
+});
+
+test("file queue survives restart, preserves order, and removes only delivered events", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-queue-")); const path = join(directory, "queue.json");
+  try {
+    const first = createFileQueue(path); await first.enqueue({ eventId: "one", memberId: "m1" }); await first.enqueue({ eventId: "two", memberId: "m2" });
+    const restarted = createFileQueue(path); let calls = 0; assert.deepEqual(await restarted.flush(async () => { calls += 1; if (calls === 2) throw new Error("offline"); }), ["one"]);
+    assert.deepEqual((await createFileQueue(path).pending()).map((event) => event.eventId), ["two"]);
+  } finally { await rm(directory, { recursive: true }); }
+});
+
+test("slot mappings remain local and reject malformed records", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-mapping-")); const path = join(directory, "mappings.json");
+  try { const store = createMappingStore(path); await store.replace({ "12": "member-1" }); assert.equal(await createMappingStore(path).memberForSlot(12), "member-1"); await assert.rejects(() => store.replace({ invalid: "member-2" }), /Invalid/); } finally { await rm(directory, { recursive: true }); }
+});
+
+test("attendance client sends only identifiers and operational timestamps", async () => {
+  let sent;
+  await sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z", fingerprint: "must-not-send" }, { fetchImpl: async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ accepted: true }), { headers: { "content-type": "application/json" } }); } });
+  assert.deepEqual(sent, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z" });
 });

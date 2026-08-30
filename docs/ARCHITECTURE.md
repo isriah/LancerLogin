@@ -17,6 +17,8 @@ The dashboard is a static Pages application. The Worker owns authorization, onbo
 
 Worker persistence adapters scope every query and write to an installation ID. Their test double captures bound parameters so cross-installation access is rejected by contract before a real D1 binding is used.
 
+The Worker request boundary allows unauthenticated health and CORS preflight only. Every administrative route authenticates a principal and maps the request to an approved role capability before it invokes a repository or integration.
+
 ## Data boundaries
 
 | Location | May store | Must not store |

@@ -1,11 +1,36 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { can } from "../packages/shared/src/policy.mjs";
+import { createApiHarness } from "../apps/api/src/test-harness.mjs";
 
 test("foundation documents state standalone constraints", async () => {
   const readme = await readFile("README.md", "utf8");
   assert.match(readme, /standalone/i);
   assert.match(readme, /sensor/i);
+});
+
+test("operator permissions match the approved role boundary", () => {
+  assert.equal(can("operator", "manage-meetings"), true);
+  assert.equal(can("operator", "manage-attendance"), true);
+  assert.equal(can("operator", "manage-branding"), false);
+  assert.equal(can("operator", "manage-integrations"), false);
+  assert.equal(can("operator", "destructive-configuration"), false);
+});
+
+test("API harness rejects protected operations for operators", () => {
+  const api = createApiHarness();
+  const operator = { userId: "u-1", role: "operator" };
+  assert.deepEqual(api.request(operator, "createMeeting"), { ok: true });
+  assert.throws(() => api.request(operator, "configureIntegration"), { message: "Forbidden", status: 403 });
+  assert.throws(() => api.request(operator, "deleteInstallation"), { message: "Forbidden", status: 403 });
+});
+
+test("initial schema preserves the biometric and secret boundary", async () => {
+  const schema = await readFile("apps/api/migrations/0001_initial.sql", "utf8");
+  assert.match(schema, /encrypted_integrations/);
+  assert.doesNotMatch(schema, /fingerprint_template/i);
+  assert.doesNotMatch(schema, /raw_fingerprint/i);
 });
 
 test("provisioning workflow remains mock-only", async () => {

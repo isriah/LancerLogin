@@ -12,8 +12,8 @@ jobs:
   verify-and-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -26,7 +26,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           mkdir -p release/kiosk/src release/kiosk/systemd release/artifacts
-          cp apps/kiosk/src/service.mjs apps/kiosk/src/cloud-client.mjs apps/kiosk/src/file-queue.mjs apps/kiosk/src/mapping-store.mjs apps/kiosk/src/r503.mjs apps/kiosk/src/serial-transport.mjs apps/kiosk/src/pair-cli.mjs release/kiosk/src/
+          cp apps/kiosk/src/service.mjs apps/kiosk/src/ui.mjs apps/kiosk/src/cloud-client.mjs apps/kiosk/src/file-queue.mjs apps/kiosk/src/mapping-store.mjs apps/kiosk/src/r503.mjs apps/kiosk/src/serial-transport.mjs apps/kiosk/src/pair-cli.mjs release/kiosk/src/
           cp apps/kiosk/systemd/lancerlogin-kiosk.service release/kiosk/systemd/
           for arch in arm64 armv7; do
             archive="lancerlogin-kiosk-${version}-linux-${arch}.tar.gz"

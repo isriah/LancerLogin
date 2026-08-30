@@ -45,6 +45,22 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.doesNotMatch(installer, /git clone/i);
 });
 
+test("tagged release archive includes every kiosk runtime module", async () => {
+  const workflow = await readFile(".github/workflows/release.yml", "utf8");
+  for (const module of [
+    "service.mjs",
+    "ui.mjs",
+    "cloud-client.mjs",
+    "file-queue.mjs",
+    "mapping-store.mjs",
+    "r503.mjs",
+    "serial-transport.mjs",
+    "pair-cli.mjs",
+  ]) {
+    assert.match(workflow, new RegExp(`apps/kiosk/src/${module.replace(".", "\\.")}`));
+  }
+});
+
 test("pairing client requires HTTPS and does not persist the one-time code", async () => {
   assert.throws(() => normalizeApiUrl("http://example.test"), /HTTPS/);
   let sent;

@@ -9,8 +9,8 @@
 
 ## Verification pending
 
-Implement and verify Unit 8 after Unit 7 is committed.
+Unit 8 is ready for future conversion from a mock plan to a real adopter-owned target only after fresh target information is explicitly supplied.
 
 ## Recommended next task
 
-Implement Unit 8: template provisioning contract and public task-oriented docs/screenshot plan using mocks only.
+Before an actual release: build production Worker/Pages bindings and UI, then perform mock acceptance. Do not run real provisioning, deployment, or Pi installation until the adopter supplies a fresh LancerLogin-specific account and target.

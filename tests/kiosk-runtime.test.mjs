@@ -7,6 +7,7 @@ import { createOfflineQueue, createSensorAdapter, issuePairingCode, redeemPairin
 import { normalizeApiUrl, pairInstallation, sendAttendance, sendHeartbeat } from "../apps/kiosk/src/cloud-client.mjs";
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
+import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/src/r503.mjs";
 
 test("pairing code is hashed, single-use, and expires", () => {
   const issued = issuePairingCode({ now: () => 0, random: () => Buffer.from("123456") });
@@ -78,4 +79,25 @@ test("attendance client sends only identifiers and operational timestamps", asyn
   let sent;
   await sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z", fingerprint: "must-not-send" }, { fetchImpl: async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ accepted: true }), { headers: { "content-type": "application/json" } }); } });
   assert.deepEqual(sent, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z" });
+});
+
+function acknowledgement(confirmation, parameters = []) {
+  const length = parameters.length + 3; const content = [0x07, length >> 8, length & 0xff, confirmation, ...parameters]; const checksum = content.reduce((sum, value) => (sum + value) & 0xffff, 0);
+  return Uint8Array.from([0xef, 0x01, 0xff, 0xff, 0xff, 0xff, ...content, checksum >> 8, checksum & 0xff]);
+}
+
+test("R503 packets are checksummed and expose only slot matches", async () => {
+  assert.deepEqual([...commandPacket(0x1d)], [0xef, 0x01, 0xff, 0xff, 0xff, 0xff, 0x01, 0x00, 0x03, 0x1d, 0x00, 0x21]);
+  assert.deepEqual(parseAcknowledgement(acknowledgement(0, [0, 3])).parameters, Uint8Array.from([0, 3]));
+  const replies = [acknowledgement(0), acknowledgement(0, [0, 3]), acknowledgement(0), acknowledgement(0), acknowledgement(0, [0, 12, 0, 80])];
+  const sensor = createR503(async () => replies.shift());
+  assert.deepEqual(await sensor.status(), { connected: true, templateCount: 3 });
+  const match = await sensor.match();
+  assert.deepEqual(match, { slot: 12, score: 80 });
+  assert.equal(JSON.stringify(match).includes("template"), false);
+});
+
+test("R503 no-finger response is a normal unmatched scan", async () => {
+  const sensor = createR503(async () => acknowledgement(0x02));
+  assert.equal(await sensor.match(), undefined);
 });

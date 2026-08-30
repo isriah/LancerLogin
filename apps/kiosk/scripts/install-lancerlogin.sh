@@ -49,6 +49,8 @@ curl --fail --location --proto '=https' --tlsv1.2 "$RELEASE_ROOT/$archive.sha256
 (cd "$temporary" && sha256sum --check "$archive.sha256")
 
 id lancerlogin >/dev/null 2>&1 || useradd --system --home /var/lib/lancerlogin --shell /usr/sbin/nologin lancerlogin
+usermod --append --groups dialout lancerlogin
+if [[ -e /dev/serial0 ]]; then stty -F /dev/serial0 57600 cs8 -cstopb -parenb raw -echo; else echo "Warning: /dev/serial0 is unavailable. Enable the Pi UART before the fingerprint test."; fi
 install -d -m 0755 -o root -g root /opt/lancerlogin
 install -d -m 0700 -o lancerlogin -g lancerlogin /var/lib/lancerlogin
 tar --extract --gzip --file "$temporary/$archive" --directory /opt/lancerlogin --no-same-owner

@@ -1,6 +1,6 @@
 # Data retention, export, backup, and restore
 
-LancerLogin retains roster, meetings, attendance, audit data, settings, and encrypted integration settings until an Admin deletes or exports them. CSV is the supported export format. PDF and spreadsheet exports are not included.
+LancerLogin retains roster, meetings, attendance, audit data, settings, and encrypted integration settings until an Admin deletes them. Exporting creates a copy and does not delete the stored records. CSV is the supported report export format. PDF and spreadsheet exports are not included.
 
 ## D1 backup
 

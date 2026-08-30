@@ -229,7 +229,7 @@ async function meetings(request: Request, env: Env): Promise<Response> {
 async function updateMeeting(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const input = await parseJson<{ title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null }>(request);
-  if (!input.title?.trim() || input.title.length > 120 || !validTimestamp(input.startsAt) || (input.endsAt && !validTimestamp(input.endsAt)) || (input.endsAt && Date.parse(input.endsAt) <= Date.parse(input.startsAt!))) throw new HttpError(400, "Meeting needs a title, valid start, and an optional end after its start");
+  if (!input.title?.trim() || input.title.length > 120 || (input.notes?.length ?? 0) > 2_000 || !validTimestamp(input.startsAt) || (input.endsAt && !validTimestamp(input.endsAt)) || (input.endsAt && Date.parse(input.endsAt) <= Date.parse(input.startsAt!))) throw new HttpError(400, "Meeting needs a title, valid start, optional notes under 2,000 characters, and an optional end after its start");
   const updated = await db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ? WHERE installation_id = 'primary' AND id = ?").bind(input.title.trim(), input.startsAt, input.endsAt || null, input.required === false ? 0 : 1, input.notes?.trim() || null, meetingId).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
   await writeAudit(db, principal, "meeting.updated", "meeting", meetingId);
@@ -238,12 +238,12 @@ async function updateMeeting(request: Request, env: Env, meetingId: string): Pro
 async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string }, source: "kiosk" | "manual", actorId?: string): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !input.meetingId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, meetingId, and a valid occurredAt timestamp are required");
   const [member, meeting] = await Promise.all([
-    db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.memberId).first(),
+    db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND (id = ? OR external_id = ?) AND active = 1").bind(input.memberId, input.memberId).first<{ id: string }>(),
     db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first(),
   ]);
   if (!member || !meeting) throw new HttpError(404, "Member or meeting was not found in this installation");
   const id = crypto.randomUUID();
-  const result = await db.prepare("INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, input.memberId, input.meetingId, source, input.occurredAt, input.eventId.trim(), actorId ?? null).run();
+  const result = await db.prepare("INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, member.id, input.meetingId, source, input.occurredAt, input.eventId.trim(), actorId ?? null).run();
   return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId }, 202);
 }
 async function kioskAttendance(request: Request, env: Env): Promise<Response> { await kioskFor(request, env); return recordAttendance(requireDatabase(env), await parseJson(request), "kiosk"); }

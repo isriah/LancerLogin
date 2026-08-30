@@ -65,6 +65,9 @@ sudo -u lancerlogin node /opt/lancerlogin/src/pair-cli.mjs "$api_url" "$pairing_
 unset pairing_code
 
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-kiosk.service /etc/systemd/system/lancerlogin-kiosk.service
+install -d -m 0755 /etc/systemd/system/lancerlogin-kiosk.service.d
+printf '[Service]\nEnvironment=LANCERLOGIN_VERSION=%s\n' "$VERSION" > /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
+chmod 0644 /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
 systemctl daemon-reload
 systemctl enable --now lancerlogin-kiosk.service
 browser_path="$(command -v chromium || command -v chromium-browser || true)"

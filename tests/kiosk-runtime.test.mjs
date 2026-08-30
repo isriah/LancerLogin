@@ -42,6 +42,7 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.match(installer, /--install/);
   assert.match(installer, /sha256sum --check/);
   assert.match(installer, /releases\/download\/v\$\{VERSION\}/);
+  assert.match(installer, /Environment=LANCERLOGIN_VERSION=%s/);
   assert.doesNotMatch(installer, /git clone/i);
 });
 
@@ -61,6 +62,8 @@ test("tagged release archive includes every kiosk runtime module", async () => {
   }
   assert.match(workflow, /LANCERLOGIN_VERSION:-\$\{version\}/);
   assert.match(workflow, /release\/artifacts\/install-lancerlogin\.sh/);
+  assert.match(workflow, /package_version=.*package\.json.*version/);
+  assert.match(workflow, /GITHUB_REF_NAME.*v\$package_version/);
 });
 
 test("pairing client requires HTTPS and does not persist the one-time code", async () => {
@@ -135,6 +138,8 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskHtml, /<main id="main">/);
   assert.match(kioskHtml, /role="status" aria-live="polite"/);
   assert.match(kioskHtml, /Fingerprint images and templates stay inside the R503 sensor/);
+  assert.match(kioskHtml, /Roster member ID/);
+  assert.match(kioskApp, /roster ID/);
   assert.match(kioskStyles, /min-height:88px/);
   assert.match(kioskApp, /\/enroll/);
   assert.doesNotMatch(kioskHtml, /https?:\/\//);

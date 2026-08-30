@@ -13,10 +13,12 @@ test("token-only setup selects exactly one scoped Cloudflare account", () => {
 });
 
 test("generated Worker configuration is account-neutral until D1 discovery", () => {
-  const missing = buildProvisionConfig("example-club");
+  const missing = buildProvisionConfig("example-club", [], "1.2.3");
   assert.equal(missing.state, "missing");
   assert.equal("d1_databases" in missing.config, false);
   assert.equal(missing.config.vars.ALLOWED_ORIGIN, "https://example-club-dashboard.pages.dev");
+  assert.equal(missing.config.vars.RELEASE_VERSION, "1.2.3");
+  assert.throws(() => buildProvisionConfig("example-club", [], "latest"), /Invalid release version/);
 });
 
 test("existing adopter D1 is bound after discovery", () => {

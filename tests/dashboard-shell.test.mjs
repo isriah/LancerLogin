@@ -69,4 +69,14 @@ test("Operator workspace exposes kiosk monitoring and the complete Discord atten
   assert.match(source, /\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}/);
   assert.match(source, /Kiosk meeting ID/);
   assert.match(source, /Copy ID/);
+  assert.match(source, /Meeting notes \(optional, up to 2,000 characters\)/);
+  assert.match(source, /Require attendance\? Enter yes or no/);
+});
+
+test("destructive data controls require backup acknowledgement before typed confirmation", async () => {
+  const source = await readFile("apps/dashboard/src/data-settings.tsx", "utf8");
+  const backupPrompt = source.indexOf("Have you exported the data you need");
+  const typedPrompt = source.indexOf("Type ${details[scope].confirmation} exactly");
+  assert.ok(backupPrompt >= 0 && typedPrompt > backupPrompt);
+  assert.match(source, /Exporting creates a copy and does not remove/);
 });

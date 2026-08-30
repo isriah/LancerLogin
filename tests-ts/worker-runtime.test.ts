@@ -182,10 +182,11 @@ test("Operator can create meetings and reasoned attendance corrections", async (
 test("Operator can update meeting details without destructive access", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/meetings/meeting-1", { title: "Updated rehearsal", startsAt: "2026-09-02T20:00:00.000Z", required: true }, { method: "PATCH", cookie: await sessionCookie("operator") }), env);
+  const result = await worker.fetch(request("/meetings/meeting-1", { title: "Updated rehearsal", startsAt: "2026-09-02T20:00:00.000Z", required: true, notes: "Bring supplies" }, { method: "PATCH", cookie: await sessionCookie("operator") }), env);
   assert.equal(result.status, 200);
-  assert.ok(database.calls.some((call) => call.sql.includes("UPDATE meetings SET") && call.values.includes("meeting-1")));
+  assert.ok(database.calls.some((call) => call.sql.includes("UPDATE meetings SET") && call.values.includes("meeting-1") && call.values.includes("Bring supplies")));
   assert.ok(database.calls.some((call) => call.values.includes("meeting.updated")));
+  assert.equal((await worker.fetch(request("/meetings/meeting-1", { title: "Too much", startsAt: "2026-09-02T20:00:00.000Z", notes: "x".repeat(2_001) }, { method: "PATCH", cookie: await sessionCookie("operator") }), env)).status, 400);
   assert.equal((await worker.fetch(request("/admin/data", { scope: "attendance", confirmation: "DELETE ATTENDANCE" }, { method: "DELETE", cookie: await sessionCookie("operator") }), env)).status, 403);
 });
 
@@ -195,12 +196,15 @@ test("kiosk attendance is installation-scoped and idempotent by event ID", async
   database.rows.set("FROM members", { id: "member-1" });
   database.rows.set("FROM meetings", { id: "meeting-1" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const attendanceRequest = new Request("https://api.example.test/kiosk/attendance", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ eventId: "offline-event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:02:00.000Z" }) });
+  const attendanceRequest = new Request("https://api.example.test/kiosk/attendance", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ eventId: "offline-event-1", memberId: "ROSTER-001", meetingId: "meeting-1", occurredAt: "2026-09-01T20:02:00.000Z" }) });
   const result = await worker.fetch(attendanceRequest, env);
   assert.equal(result.status, 202);
   const insert = database.calls.find((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events"));
   assert.ok(insert);
   assert.ok(insert.sql.includes("installation_id"));
+  assert.ok(database.calls.some((call) => call.sql.includes("external_id = ?") && call.values.filter((value) => value === "ROSTER-001").length === 2));
+  assert.ok(insert.values.includes("member-1"));
+  assert.equal(insert.values.includes("ROSTER-001"), false);
   assert.ok(insert.values.includes("offline-event-1"));
 });
 

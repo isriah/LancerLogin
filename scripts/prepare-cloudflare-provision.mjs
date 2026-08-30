@@ -2,12 +2,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 const slugPattern = /^[a-z][a-z0-9-]{2,40}$/;
 
-export function buildProvisionConfig(slug, databases = []) {
+export function buildProvisionConfig(slug, databases = [], releaseVersion = "0.1.0") {
   if (!slugPattern.test(slug)) throw new Error("Invalid installation slug");
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(releaseVersion)) throw new Error("Invalid release version");
   const databaseName = `${slug}-data`;
   const database = databases.find((entry) => entry.name === databaseName);
   const databaseId = database?.uuid ?? database?.database_id ?? database?.id;
-  const config = { name: `${slug}-api`, main: "../apps/api/src/index.ts", compatibility_date: "2026-08-01", workers_dev: true, vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `https://${slug}-dashboard.pages.dev`, RELEASE_VERSION: "0.1.0" }, triggers: { crons: ["0 3 * * *"] } };
+  const config = { name: `${slug}-api`, main: "../apps/api/src/index.ts", compatibility_date: "2026-08-01", workers_dev: true, vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `https://${slug}-dashboard.pages.dev`, RELEASE_VERSION: releaseVersion }, triggers: { crons: ["0 3 * * *"] } };
   if (databaseId) config.d1_databases = [{ binding: "DB", database_name: databaseName, database_id: databaseId, migrations_dir: "../apps/api/migrations" }];
   return { state: databaseId ? "exists" : "missing", config };
 }
@@ -17,7 +18,8 @@ async function main() {
   if (!slug) throw new Error("Usage: prepare-cloudflare-provision.mjs <slug> [d1-list.json]");
   let databases = [];
   if (listPath) { const parsed = JSON.parse(await readFile(listPath, "utf8")); databases = Array.isArray(parsed) ? parsed : parsed.result ?? []; }
-  const result = buildProvisionConfig(slug, databases);
+  const packageDocument = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const result = buildProvisionConfig(slug, databases, packageDocument.version);
   await mkdir(".provision", { recursive: true });
   await writeFile(".provision/wrangler.json", `${JSON.stringify(result.config, null, 2)}\n`, { mode: 0o600 });
   process.stdout.write(result.state);

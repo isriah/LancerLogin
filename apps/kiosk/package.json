@@ -1,0 +1,11 @@
+{
+  "name": "@lancerlogin/kiosk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/service.mjs",
+    "build": "node --check src/service.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "lancerlogin-api-placeholder",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "vars": {
+    "APP_MODE": "unconfigured",
+    "ALLOWED_ORIGIN": "http://localhost:5173"
+  }
+}

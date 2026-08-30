@@ -6,7 +6,18 @@ LancerLogin is a new, standalone project. It has no migration or connection path
 
 ## Current stage
 
-This repository contains the sanitized foundation and an implementation roadmap. It is deliberately mock-first: no Cloudflare account, GitHub repository, Raspberry Pi, tokens, or external service is configured or contacted.
+This repository contains runnable Worker, dashboard, and kiosk workspace packages backed by a mock-first implementation roadmap. No Cloudflare account, Raspberry Pi, tokens, or external service is configured or contacted by local builds.
+
+## Local development
+
+```powershell
+npm.cmd install
+npm.cmd run typecheck
+npm.cmd test
+npm.cmd run build
+```
+
+Start an individual package with `npm run dev:api`, `npm run dev:dashboard`, or `npm run dev:kiosk`. The Worker starts unconfigured and cannot deploy or modify cloud resources through these commands.
 
 Read [the quick start design](docs/BOOTSTRAPPING.md), [architecture](docs/ARCHITECTURE.md), and [implementation roadmap](docs/ROADMAP.md).
 

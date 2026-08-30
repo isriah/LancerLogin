@@ -7,8 +7,11 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "test": "node --test tests/**/*.test.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "build": "node scripts/verify-template-config.mjs"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present && node scripts/verify-template-config.mjs",
+    "dev:api": "npm --workspace @lancerlogin/api run dev",
+    "dev:dashboard": "npm --workspace @lancerlogin/dashboard run dev",
+    "dev:kiosk": "npm --workspace @lancerlogin/kiosk run dev"
   },
   "devDependencies": { "typescript": "^5.7.3" }
 }

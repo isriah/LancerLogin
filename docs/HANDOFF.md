@@ -9,8 +9,8 @@
 
 ## Verification pending
 
-Implement and verify Unit 4 after Unit 3 is committed.
+Implement and verify Unit 5 after Unit 4 is committed.
 
 ## Recommended next task
 
-Implement Unit 4: guided Pi installer, sensor adapter, offline queue, and pairing protocol using only mocks.
+Implement Unit 5: Google/local authentication design, reset tool interface, encrypted secrets, and integrations configuration boundaries.

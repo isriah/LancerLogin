@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
+import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 
 class FakeStatement {
   values: unknown[] = [];
@@ -158,4 +159,35 @@ test("integration rotation encrypts secrets and returns only redacted status", a
   assert.ok(saved);
   assert.equal(saved.values.some((value) => String(value).includes("re_super_secret")), false);
   assert.ok(database.calls.some((call) => call.values.includes("integration.rotated")));
+});
+
+test("Google OAuth uses signed state and validates identity before issuing a session", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ clientId: "client-id", clientSecret: "client-secret" }, sessionSecret);
+  database.rows.set("FROM installations", { authMode: "google" });
+  database.rows.set("FROM encrypted_integrations", { id: "google-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  database.user = { id: "admin-1", role: "admin", passwordHash: null };
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const started = await worker.fetch(request("/auth/google/start"), env);
+  assert.equal(started.status, 302);
+  const location = new URL(started.headers.get("location")!);
+  const state = location.searchParams.get("state")!;
+  assert.equal(location.searchParams.get("client_id"), "client-id");
+  assert.equal(location.toString().includes("client-secret"), false);
+  const oauthCookie = started.headers.get("set-cookie")!.split(";")[0];
+  assert.ok(await createSessionCodec(sessionSecret).verify(state));
+
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) return new Response(JSON.stringify({ id_token: "google-token" }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ aud: "client-id", email: "admin@example.test", email_verified: "true", iss: "https://accounts.google.com" }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    const callback = await worker.fetch(request(`/auth/google/callback?code=one-time&state=${encodeURIComponent(state)}`, undefined, { cookie: oauthCookie }), env);
+    assert.equal(callback.status, 302);
+    assert.equal(callback.headers.get("location"), "https://dashboard.example.test");
+    assert.match(callback.headers.get("set-cookie") ?? "", /lancerlogin_session=/);
+  } finally { globalThis.fetch = originalFetch; }
 });

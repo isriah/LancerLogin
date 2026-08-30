@@ -2,7 +2,7 @@
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body { margin: 0; min-width: 320px; }
-button, input { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
 .app { --bg: #f3f5f2; --surface: #fff; --surface-soft: #eef3ef; --ink: #16211d; --muted: #69756f; --line: #dce4df; --primary: #146c5b; --gold: #dba72d; min-height: 100vh; color: var(--ink); background: var(--bg); }
 .app[data-theme="dark"] { --bg: #111714; --surface: #18211d; --surface-soft: #202c27; --ink: #edf5f1; --muted: #9eaea6; --line: #314039; --primary: #55bea7; --gold: #e6ba55; }
@@ -100,3 +100,40 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .centered-state { min-height: 100vh; display: grid; place-content: center; justify-items: start; max-width: 42rem; margin: auto; padding: 2rem; }
 .centered-state .brand-mark { margin-bottom: 1.5rem; }
 @media (max-width: 720px) { .provisioned-main { padding: 1rem; }.setup-header { margin-bottom: 1.5rem; }.form-grid,.choice-grid { grid-template-columns: 1fr; }.choice { min-height: auto; }.first-admin-card { padding: 1.25rem; } }
+.auth-check { width: min(72rem,100%); margin: 8rem auto; text-align: center; }
+.workspace-shell { width: min(76rem,100%); margin: 0 auto; }
+.workspace-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin: 1rem 0 1.5rem; }
+.workspace-header h1 { font-size: clamp(2rem,4vw,3rem); }
+.setup-status { display: flex; justify-content: space-between; gap: 1rem; padding: .8rem 1rem; margin-bottom: 1rem; border: 1px solid var(--line); color: var(--muted); background: var(--surface); border-radius: .7rem; font-size: .82rem; }
+.setup-status strong { color: var(--primary); white-space: nowrap; }
+.checklist-card,.completion-card { padding: 1.4rem; border: 1px solid var(--line); background: var(--surface); border-radius: 1rem; box-shadow: 0 .6rem 1.8rem rgba(22,55,43,.05); }
+.checklist-card > div:first-child { max-width: 40rem; }
+.checklist-card ol { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .7rem; padding: 0; margin: 1.2rem 0 0; list-style: none; }
+.checklist-card li { display: grid; grid-template-columns: auto 1fr; gap: .7rem; align-items: start; min-height: 7rem; padding: .85rem; border: 1px solid var(--line); border-radius: .7rem; }
+.checklist-card li.done { background: var(--surface-soft); }
+.checklist-card li button { width: 2rem; height: 2rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: 50%; font-weight: 800; cursor: pointer; }
+.checklist-card li.done button { border-color: var(--primary); color: #fff; background: var(--primary); }
+.checklist-card li div { display: grid; gap: .3rem; }
+.checklist-card li strong { font-size: .86rem; }
+.checklist-card li span { color: var(--muted); font-size: .74rem; line-height: 1.4; }
+.quiet-button { margin-top: 1rem; padding: .6rem .8rem; border: 1px solid var(--line); color: var(--ink); background: transparent; border-radius: .55rem; cursor: pointer; }
+.completion-card { display: grid; grid-template-columns: auto 1fr auto; gap: 1rem; align-items: center; }
+.completion-card > span { width: 2.5rem; height: 2.5rem; display: grid; place-items: center; color: #fff; background: var(--primary); border-radius: 50%; font-weight: 800; }
+.completion-card h2,.completion-card p { margin-bottom: .2rem; }
+.completion-card button { padding: .65rem .8rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .6rem; cursor: pointer; }
+.workspace-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; margin-top: 1rem; align-items: start; }
+.task-card { padding: 1.35rem; border: 1px solid var(--line); background: var(--surface); border-radius: 1rem; }
+.task-card h2 { margin-bottom: .25rem; }
+.task-card label span { color: var(--muted); font-weight: 500; }
+.task-card input,.task-card select,.task-card textarea { width: 100%; margin-top: .4rem; padding: .75rem; border: 1px solid var(--line); color: var(--ink); background: var(--bg); border-radius: .6rem; }
+.task-card textarea { resize: vertical; font-family: ui-monospace,SFMono-Regular,Consolas,monospace; font-size: .78rem; line-height: 1.5; }
+.task-card input:focus,.task-card select:focus,.task-card textarea:focus { border-color: var(--primary); outline: 3px solid color-mix(in srgb,var(--primary) 15%,transparent); }
+.color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.color-grid input { min-height: 3rem; padding: .3rem; cursor: pointer; }
+.record-count { margin: .7rem 0 0; text-align: center; font-size: .76rem; }
+.pairing-card { grid-column: 1 / -1; }
+.pairing-code { display: grid; justify-items: center; gap: .35rem; padding: 1.2rem; margin-top: 1rem; color: var(--ink); background: var(--surface-soft); border-radius: .7rem; }
+.pairing-code span,.pairing-code small { color: var(--muted); font-size: .74rem; }
+.pairing-code strong { font-family: ui-monospace,SFMono-Regular,Consolas,monospace; font-size: clamp(1.8rem,5vw,3rem); letter-spacing: .1em; }
+@media (max-width: 900px) { .checklist-card ol { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 650px) { .workspace-grid,.checklist-card ol { grid-template-columns: 1fr; }.setup-status,.workspace-header { display: grid; }.completion-card { grid-template-columns: auto 1fr; }.completion-card button { grid-column: 1 / -1; }.pairing-card { grid-column: auto; } }

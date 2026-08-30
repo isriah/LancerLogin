@@ -1,6 +1,7 @@
 import { FormEvent, StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
+import { SetupWorkspace } from "./setup-workspace";
 
 type CloudflareStep = { id: string; title: string; detail: string; action?: { label: string; href: string } };
 
@@ -91,7 +92,7 @@ function App() {
 function ProvisionedEntry({ status, onConfigured, theme, onTheme }: { status: SetupStatus | "loading" | "unavailable"; onConfigured: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: () => void }) {
   if (status === "loading") return <CenteredState theme={theme} title="Checking your installation…" detail="LancerLogin is securely reading setup status." />;
   if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
-  return <div className="app" data-theme={theme}><main className="provisioned-main"><header className="setup-header"><div className="brand-mark" aria-hidden="true">L</div><div><strong>LancerLogin</strong><span>Community Edition</span></div><button className="theme-button" type="button" onClick={onTheme}>{theme === "light" ? "Dark" : "Light"} mode</button></header>{status.configured ? <LocalLogin status={status} /> : <FirstAdminSetup onConfigured={onConfigured} />}</main></div>;
+  return <div className="app" data-theme={theme}><main className="provisioned-main"><header className="setup-header"><div className="brand-mark" aria-hidden="true">L</div><div><strong>LancerLogin</strong><span>Community Edition</span></div><button className="theme-button" type="button" onClick={onTheme}>{theme === "light" ? "Dark" : "Light"} mode</button></header>{status.configured ? <ConfiguredInstallation status={status} /> : <FirstAdminSetup onConfigured={onConfigured} />}</main></div>;
 }
 
 function CenteredState({ theme, title, detail }: { theme: "light" | "dark"; title: string; detail: string }) {
@@ -128,10 +129,19 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
   </form></section>;
 }
 
-function LocalLogin({ status }: { status: SetupStatus }) {
+function ConfiguredInstallation({ status }: { status: SetupStatus }) {
+  const [signedIn, setSignedIn] = useState(false);
+  const [checking, setChecking] = useState(true);
+  useEffect(() => { fetch(`${apiBaseUrl}/auth/session`, { credentials: "include" }).then((result) => setSignedIn(result.ok)).finally(() => setChecking(false)); }, []);
+  if (checking) return <p className="auth-check" role="status">Checking your session…</p>;
+  if (signedIn) return <SetupWorkspace organizationName={status.settings?.organizationName ?? "LancerLogin"} onSignedOut={() => setSignedIn(false)} />;
+  return <LocalLogin status={status} onSignedIn={() => setSignedIn(true)} />;
+}
+
+function LocalLogin({ status, onSignedIn }: { status: SetupStatus; onSignedIn: () => void }) {
   const mode = status.installation?.authMode ?? "local";
   const [username, setUsername] = useState(""); const [password, setPassword] = useState(""); const [message, setMessage] = useState("");
-  async function submit(event: FormEvent) { event.preventDefault(); setMessage(""); const response = await fetch(`${apiBaseUrl}/auth/local`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ username, password }) }); setMessage(response.ok ? "Signed in. Loading your dashboard…" : "Invalid username or password."); }
+  async function submit(event: FormEvent) { event.preventDefault(); setMessage(""); const response = await fetch(`${apiBaseUrl}/auth/local`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ username, password }) }); if (response.ok) onSignedIn(); else setMessage("Invalid username or password."); }
   return <section className="login-card"><p className="kicker">{status.settings?.organizationName ?? "LancerLogin"}</p><h1>Welcome back</h1><p>Sign in to manage attendance and finish setup.</p>{mode !== "google" && <form onSubmit={submit}><label>Username<input required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>Password<input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label><button className="primary-button" type="submit">Sign in</button></form>}{mode !== "local" && <button className="google-button" type="button">Continue with Google</button>}{message && <p role="status">{message}</p>}</section>;
 }
 

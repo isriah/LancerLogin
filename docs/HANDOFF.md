@@ -9,8 +9,8 @@
 
 ## Verification pending
 
-Implement and verify Unit 2 after Unit 1 is committed.
+Implement and verify Unit 3 after Unit 2 is committed.
 
 ## Recommended next task
 
-Implement Unit 2: dashboard shell, accessible setup checklist, and theme support.
+Implement Unit 3: roster, meetings, attendance, corrections/excuses, exports, and audit trails.

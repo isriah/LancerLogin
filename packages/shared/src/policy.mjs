@@ -1,4 +1,5 @@
 export const capabilities = Object.freeze({
+  "view-dashboard": ["admin", "operator"],
   "manage-meetings": ["admin", "operator"],
   "manage-attendance": ["admin", "operator"],
   "manage-corrections": ["admin", "operator"],

@@ -14,6 +14,8 @@ test("foundation documents state standalone constraints", async () => {
   assert.match(checklist, /physical acceptance pending/);
   const license = await readFile("LICENSE", "utf8");
   assert.match(license, /Apache License\s+Version 2\.0/);
+  assert.match(license, /You may add Your own copyright statement to Your modifications/);
+  assert.match(license, /nothing herein shall supersede or modify/);
   assert.match(license, /APPENDIX: How to apply the Apache License/);
 });
 

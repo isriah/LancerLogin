@@ -145,7 +145,7 @@ async function members(request: Request, env: Env): Promise<Response> {
   const input = await parseJson<{ members?: MemberInput[] }>(request);
   if (!Array.isArray(input.members) || !input.members.length || input.members.length > 500) throw new HttpError(400, "Provide between 1 and 500 roster members");
   const seen = new Set<string>(); const errors: string[] = [];
-  input.members.forEach((member, index) => { const prefix = `Member ${index + 1}`; if (!member.memberId?.trim() || !member.firstName?.trim() || !member.lastName?.trim()) errors.push(`${prefix} requires memberId, firstName, and lastName`); if (member.memberId && seen.has(member.memberId.trim())) errors.push(`${prefix} duplicates memberId ${member.memberId.trim()}`); if (member.memberId) seen.add(member.memberId.trim()); if (member.email && !validEmail(member.email)) errors.push(`${prefix} has an invalid email`); });
+  input.members.forEach((member, index) => { const prefix = `Member ${index + 1}`; if (!member.memberId?.trim() || !member.firstName?.trim() || !member.lastName?.trim()) errors.push(`${prefix} requires memberId, firstName, and lastName`); if (member.memberId && seen.has(member.memberId.trim())) errors.push(`${prefix} duplicates memberId ${member.memberId.trim()}`); if (member.memberId) seen.add(member.memberId.trim()); if (member.email && !validEmail(member.email)) errors.push(`${prefix} has an invalid email`); if (member.discordUserId && !/^\d{10,24}$/.test(member.discordUserId)) errors.push(`${prefix} has an invalid Discord user ID`); });
   if (errors.length) throw new HttpError(400, "Invalid roster", errors);
   const now = new Date().toISOString();
   const statements = input.members.map((member) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = 1").bind(crypto.randomUUID(), member.memberId!.trim(), member.firstName!.trim(), member.lastName!.trim(), member.email?.trim().toLowerCase() || null, member.discordUserId?.trim() || null, now));
@@ -395,6 +395,62 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
   if (!delivery.ok) throw new HttpError(502, "Resend rejected the email");
   return response({ sent: true, kind: input.kind, memberId: member.id }, 202);
 }
+async function discordConfiguration(env: Env): Promise<Record<string, string>> {
+  if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
+  const record = await integrationRecord(env, "discord"); if (!record) throw new HttpError(503, "Discord is not configured");
+  return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
+}
+async function discordRequest(config: Record<string, string>, path: string, init: RequestInit): Promise<{ response: globalThis.Response; body: Record<string, unknown> }> {
+  const result = await fetch(`https://discord.com/api/v10${path}`, { ...init, headers: { authorization: `Bot ${config.botToken}`, "content-type": "application/json", ...init.headers } });
+  const body = await result.json().catch(() => ({})) as Record<string, unknown>;
+  if (!result.ok) throw new HttpError(502, `Discord rejected the request (${result.status})`);
+  return { response: result, body };
+}
+async function linkDiscordMember(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ memberId?: string; discordUserId?: string | null }>(request);
+  if (!input.memberId || (input.discordUserId !== null && !/^\d{10,24}$/.test(input.discordUserId ?? ""))) throw new HttpError(400, "Member and a valid Discord user ID are required");
+  await db.prepare("UPDATE members SET discord_user_id = ? WHERE installation_id = 'primary' AND id = ?").bind(input.discordUserId, input.memberId).run();
+  await writeAudit(db, principal, input.discordUserId ? "discord.member_linked" : "discord.member_unlinked", "member", input.memberId);
+  return response({ linked: Boolean(input.discordUserId), memberId: input.memberId });
+}
+async function discordMissing(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string }>(request);
+  if (!input.meetingId) throw new HttpError(400, "Meeting is required"); const config = await discordConfiguration(env);
+  const meeting = await db.prepare("SELECT id, title FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string; title: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
+  const missing = await db.prepare("SELECT m.id, m.discord_user_id AS discordUserId FROM members m LEFT JOIN attendance_events e ON e.member_id = m.id AND e.meeting_id = ? LEFT JOIN attendance_corrections c ON c.member_id = m.id AND c.meeting_id = ? WHERE m.installation_id = 'primary' AND m.active = 1 AND m.discord_user_id IS NOT NULL AND e.id IS NULL AND COALESCE(c.disposition, 'absent') = 'absent'").bind(meeting.id, meeting.id).all<{ id: string; discordUserId: string }>();
+  const members = missing.results ?? []; const mentions = members.map((member) => `<@${member.discordUserId}>`).join(" ");
+  const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify({ content: members.length ? `Missing from **${meeting.title}**: ${mentions}\nReply to your organization if this attendance should be reviewed.` : `Everyone with a linked Discord account is accounted for at **${meeting.title}**.`, allowed_mentions: { users: members.map((member) => member.discordUserId) } }) });
+  const messageId = String(body.id ?? ""); const now = new Date().toISOString();
+  if (members.length) await db.batch(members.map((member) => db.prepare("INSERT INTO discord_attendance_contests (installation_id, meeting_id, member_id, message_id, status, created_at) VALUES ('primary', ?, ?, ?, 'open', ?) ON CONFLICT(installation_id, meeting_id, member_id) DO UPDATE SET message_id = excluded.message_id, status = 'open', resolved_by = NULL, resolved_at = NULL, created_at = excluded.created_at").bind(meeting.id, member.id, messageId, now)));
+  await writeAudit(db, principal, "discord.missing_notified", "meeting", meeting.id, { linkedMissingCount: members.length, messageId });
+  return response({ posted: true, linkedMissingCount: members.length, messageId }, 202);
+}
+async function resolveDiscordContest(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; memberId?: string; resolution?: "approved" | "rejected" | "reviewed" }>(request);
+  if (!input.meetingId || !input.memberId || !input.resolution || !["approved", "rejected", "reviewed"].includes(input.resolution)) throw new HttpError(400, "Meeting, member, and a valid resolution are required");
+  const result = await db.prepare("UPDATE discord_attendance_contests SET status = ?, resolved_by = ?, resolved_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ? AND status = 'open'").bind(input.resolution, principal.userId, new Date().toISOString(), input.meetingId, input.memberId).run();
+  if ((result.meta?.changes ?? 1) < 1) throw new HttpError(404, "Open contest not found");
+  await writeAudit(db, principal, "discord.contest_resolved", "member", input.memberId, { meetingId: input.meetingId, resolution: input.resolution }); return response({ resolved: true });
+}
+async function discordCalendar(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string }>(request); if (!input.meetingId) throw new HttpError(400, "Meeting is required");
+  const config = await discordConfiguration(env); const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, notes FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string; title: string; startsAt: string; endsAt?: string; notes?: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
+  const stateKey = `calendar:${meeting.id}`; const existing = await db.prepare("SELECT external_id AS externalId FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?").bind(stateKey).first<{ externalId?: string }>();
+  const payload = { name: meeting.title, description: meeting.notes || "LancerLogin meeting", privacy_level: 2, entity_type: 3, scheduled_start_time: meeting.startsAt, scheduled_end_time: meeting.endsAt || new Date(Date.parse(meeting.startsAt) + 3_600_000).toISOString(), entity_metadata: { location: "LancerLogin" } };
+  const path = existing?.externalId ? `/guilds/${config.guildId}/scheduled-events/${existing.externalId}` : `/guilds/${config.guildId}/scheduled-events`; const { body } = await discordRequest(config, path, { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify(payload) }); const eventId = String(body.id ?? existing?.externalId ?? ""); const now = new Date().toISOString();
+  await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, updated_at) VALUES ('primary', 'discord', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, updated_at = excluded.updated_at").bind(stateKey, eventId, now).run();
+  await writeAudit(db, principal, "discord.calendar_synced", "meeting", meeting.id, { eventId }); return response({ synced: true, eventId });
+}
+async function discordKioskStatus(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const config = await discordConfiguration(env);
+  const kiosk = await db.prepare("SELECT id, name, last_seen_at AS lastSeenAt FROM kiosks WHERE installation_id = 'primary' AND active = 1 ORDER BY created_at DESC LIMIT 1").first<{ id: string; name: string; lastSeenAt?: string }>();
+  const online = Boolean(kiosk?.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < 2 * 60_000); const content = kiosk ? `**${kiosk.name}** · ${online ? "online" : "offline"} · last seen ${kiosk.lastSeenAt ?? "never"}` : "No kiosk is paired."; const contentHash = await sha256(content);
+  const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'kiosk-status'").first<{ externalId?: string; contentHash?: string }>();
+  if (existing?.externalId && existing.contentHash === contentHash) return response({ changed: false, messageId: existing.externalId });
+  const path = existing?.externalId ? `/channels/${config.channelId}/messages/${existing.externalId}` : `/channels/${config.channelId}/messages`; const { body } = await discordRequest(config, path, { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify({ content }) }); const messageId = String(body.id ?? existing?.externalId ?? ""); const now = new Date().toISOString();
+  await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', 'kiosk-status', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(messageId, contentHash, now).run();
+  await writeAudit(db, principal, "discord.kiosk_status_updated", "kiosk", kiosk?.id ?? null, { online, messageId }); return response({ changed: true, messageId, online });
+}
 
 const worker = { async fetch(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url); let result: Response;
@@ -423,6 +479,11 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     else if (url.pathname === "/admin/users" && ["GET", "POST"].includes(request.method)) result = await users(request, env);
     else if (/^\/admin\/users\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateUser(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/communications/email" && request.method === "POST") result = await sendAttendanceEmail(request, env);
+    else if (url.pathname === "/discord/link" && request.method === "POST") result = await linkDiscordMember(request, env);
+    else if (url.pathname === "/discord/missing" && request.method === "POST") result = await discordMissing(request, env);
+    else if (url.pathname === "/discord/contests/resolve" && request.method === "POST") result = await resolveDiscordContest(request, env);
+    else if (url.pathname === "/discord/calendar" && request.method === "POST") result = await discordCalendar(request, env);
+    else if (url.pathname === "/discord/kiosk-status" && request.method === "POST") result = await discordKioskStatus(request, env);
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env);
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);

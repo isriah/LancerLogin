@@ -143,6 +143,18 @@ CREATE TABLE IF NOT EXISTS integration_state (
   PRIMARY KEY (installation_id, provider, state_key)
 );
 
+CREATE TABLE IF NOT EXISTS discord_attendance_contests (
+  installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,
+  meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('open', 'approved', 'rejected', 'reviewed')),
+  resolved_by TEXT REFERENCES users(id),
+  resolved_at TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, meeting_id, member_id)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id TEXT PRIMARY KEY,
   installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,

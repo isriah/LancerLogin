@@ -140,6 +140,10 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .attendance-workspace { width: min(76rem,100%); margin: 0 auto; }
 .attendance-workspace.embedded { margin-top: 1rem; }
 .text-button { padding: 0; border: 0; color: var(--primary); background: transparent; font-weight: 800; cursor: pointer; }
+.toolbar-actions,.meeting-actions { display: flex; gap: .7rem; align-items: center; }
+.meeting-actions { margin-top: .8rem; }
+.meeting-actions button { flex: 1; padding: .55rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .5rem; cursor: pointer; }
+.meeting-actions button:disabled { opacity: .5; cursor: not-allowed; }
 .attendance-layout { display: grid; grid-template-columns: minmax(17rem,.6fr) minmax(0,1.4fr); gap: 1rem; align-items: start; }
 .attendance-card { overflow: hidden; border: 1px solid var(--line); background: var(--surface); border-radius: 1rem; }
 .attendance-card .panel-heading { padding: 1.35rem; }

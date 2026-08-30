@@ -233,3 +233,23 @@ test("missed-meeting email is D1-sourced, escaped, and idempotency keyed", async
     assert.ok(database.calls.some((call) => call.sql.includes("integration_deliveries")));
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("Discord missing-member workflow mentions only linked absent members and opens contests", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  database.rows.set("FROM meetings", { id: "meeting-1", title: "Studio" });
+  database.lists.set("FROM members m LEFT JOIN attendance_events", [{ id: "member-1", discordUserId: "323456789012345678" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let outbound: RequestInit | undefined;
+  globalThis.fetch = async (_input, init) => { outbound = init; return new Response(JSON.stringify({ id: "message-1" }), { headers: { "content-type": "application/json" } }); };
+  try {
+    const result = await worker.fetch(request("/discord/missing", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(result.status, 202);
+    const payload = JSON.parse(String(outbound?.body));
+    assert.match(payload.content, /<@323456789012345678>/);
+    assert.deepEqual(payload.allowed_mentions.users, ["323456789012345678"]);
+    assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("discord_attendance_contests")));
+    assert.equal(JSON.stringify(await result.json()).includes("discord-secret"), false);
+  } finally { globalThis.fetch = originalFetch; }
+});

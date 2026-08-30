@@ -172,5 +172,6 @@ CREATE TABLE IF NOT EXISTS telemetry_diagnostics (
   last_seen_at TEXT NOT NULL
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_kiosk ON kiosks(installation_id) WHERE active = 1;
 CREATE INDEX IF NOT EXISTS idx_attendance_member_meeting ON attendance_events(member_id, meeting_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_installation_starts ON meetings(installation_id, starts_at);

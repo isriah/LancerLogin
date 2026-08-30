@@ -8,7 +8,7 @@
 - Local salted-scrypt and Google OAuth authentication; Admin/Operator enforcement; user administration; interactive local recovery.
 - Shared onboarding, branding, roster, explicit one-kiosk replacement, R503 in-sensor enrollment and slot-only matching, an 800×480 touch UI, atomic offline queue, meetings, attendance, reasoned corrections/excuses, CSV, typed-confirmation deletion, and D1 backup/restore.
 - Encrypted Google/Resend/Discord administration plus mocked/tested provider workflows. Consent-gated telemetry allowlists its payload and never reads raw IP into it.
-- Accessible, task-first static documentation with an annotated, browser-verified dashboard screenshot and community support contact.
+- Accessible, task-first static documentation with browser-verified annotated dashboard, GitHub, Cloudflare, OAuth, kiosk, and integration visuals plus the community support contact.
 
 ## Verification boundary
 

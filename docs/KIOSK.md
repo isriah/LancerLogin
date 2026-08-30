@@ -2,7 +2,7 @@
 
 Supported hardware: Raspberry Pi 3B+, 4, or 5 with at least 1 GB RAM; Waveshare 7-inch DSI LCD (E); R503 fingerprint reader; Wi-Fi or Ethernet.
 
-The public release installer is launched from the dashboard and guides a local operator through OS prerequisites, display/UART checks, sensor test, and kiosk pairing. It downloads a fixed-version GitHub release artifact, verifies its SHA-256 checksum, and does not require a repository checkout or manual source changes. Run it with `--dry-run` first to preview every operation. `--install` requires root because it creates a dedicated `lancerlogin` system account, installs into `/opt/lancerlogin`, writes pairing state under `/var/lib/lancerlogin`, and enables the sandboxed systemd service.
+The public release installer is linked from the dashboard and guides a local operator through OS prerequisites, display/UART checks, sensor test, and kiosk pairing. Each tagged release stamps its own version into that installer, which then downloads only the matching immutable GitHub release artifact and verifies its SHA-256 checksum. It does not require a repository checkout or manual source changes. Run it with `--dry-run` first to preview every operation. `--install` requires root because it creates a dedicated `lancerlogin` system account, installs into `/opt/lancerlogin`, writes pairing state under `/var/lib/lancerlogin`, and enables the sandboxed systemd service.
 
 The Pi needs a 32-bit or 64-bit Raspberry Pi OS environment with Node.js 18 or newer available as `/usr/bin/node`. The release publishes separate `armv7` and `arm64` artifact names, though the JavaScript service payload is architecture-neutral. The installer does not configure a captive portal; connect Wi-Fi or Ethernet manually before setup.
 

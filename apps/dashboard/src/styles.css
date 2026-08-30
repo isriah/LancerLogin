@@ -140,6 +140,7 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .pairing-code { display: grid; justify-items: center; gap: .35rem; padding: 1.2rem; margin-top: 1rem; color: var(--ink); background: var(--surface-soft); border-radius: .7rem; }
 .pairing-code span,.pairing-code small { color: var(--muted); font-size: .74rem; }
 .pairing-code strong { font-family: ui-monospace,SFMono-Regular,Consolas,monospace; font-size: clamp(1.8rem,5vw,3rem); letter-spacing: .1em; }
+.installer-link { display: inline-block; margin: 0 0 .6rem; color: var(--primary); font-weight: 800; }
 .replacement-notice { display: grid; gap: .45rem; padding: 1rem; margin: .75rem 0; border: 1px solid color-mix(in srgb,var(--danger) 45%,transparent); border-radius: .7rem; background: color-mix(in srgb,var(--danger) 8%,var(--surface)); }
 .replacement-notice span { color: var(--muted); }
 .replacement-notice label { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: .6rem; }

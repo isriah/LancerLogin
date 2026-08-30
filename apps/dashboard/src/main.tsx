@@ -8,7 +8,7 @@ type CloudflareStep = { id: string; title: string; detail: string; action?: { la
 
 const cloudflareSteps: CloudflareStep[] = [
   { id: "account", title: "Create or sign in to Cloudflare", detail: "Use an account owned by your organization—not a developer’s personal deployment.", action: { label: "Open Cloudflare", href: "https://dash.cloudflare.com/sign-up" } },
-  { id: "token", title: "Create a scoped API token", detail: "Allow only Workers Scripts, D1, and Pages for the account you chose.", action: { label: "Create token", href: "https://dash.cloudflare.com/profile/api-tokens" } },
+  { id: "token", title: "Create a scoped API token", detail: "Allow Account Settings read plus Workers Scripts, D1, and Pages edit for exactly one account.", action: { label: "Create token", href: "https://dash.cloudflare.com/profile/api-tokens" } },
   { id: "secret", title: "Link the token through GitHub", detail: "Save it as CLOUDFLARE_API_TOKEN in this repository’s Actions secrets. LancerLogin never receives or displays it." },
   { id: "provision", title: "Run the setup workflow", detail: "GitHub Actions previews the new resource names before it creates anything." },
 ];

@@ -19,7 +19,7 @@ npm.cmd run build
 
 Start an individual package with `npm run dev:api`, `npm run dev:dashboard`, or `npm run dev:kiosk`. The Worker starts unconfigured and cannot deploy or modify cloud resources through these commands.
 
-Read [the browser-led quick start](docs/BOOTSTRAPPING.md), [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY.md), and [public task guides](docs-site/index.html).
+Read [the browser-led quick start](docs/BOOTSTRAPPING.md), [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY.md), [release requirement checklist](docs/RELEASE-CHECKLIST.md), and [public task guides](docs-site/index.html).
 
 ## Support
 

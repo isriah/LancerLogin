@@ -36,6 +36,8 @@ test("live Admin workspace uses the authorized kiosk route and hides a completed
   assert.match(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/admin\/kiosks"\)/);
   assert.match(source, /setShowChecklist\(setup\.completedSteps\.length < steps\.length\)/);
   assert.doesNotMatch(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/kiosks"\)/);
+  assert.match(source, /releases\/latest\/download\/install-lancerlogin\.sh/);
+  assert.match(source, /Download guided Pi installer/);
 });
 
 test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", async () => {

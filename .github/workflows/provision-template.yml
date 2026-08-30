@@ -47,11 +47,19 @@ jobs:
           test "${{ inputs.confirmation }}" = "$expected ${{ inputs.installation_slug }}"
           test -n "$CLOUDFLARE_API_TOKEN"
       - run: npm ci
-      - name: Verify token and discover D1
+      - name: Discover the token-scoped Cloudflare account
         shell: bash
         run: |
-          npx wrangler whoami
           mkdir -p .provision
+          curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            https://api.cloudflare.com/client/v4/accounts > .provision/accounts.json
+          account_id=$(node scripts/select-cloudflare-account.mjs .provision/accounts.json)
+          echo "::add-mask::$account_id"
+          echo "CLOUDFLARE_ACCOUNT_ID=$account_id" >> "$GITHUB_ENV"
+      - name: Discover D1 resources in that account
+        shell: bash
+        run: |
           npx wrangler d1 list --json > .provision/d1-list.json
       - name: Prepare account-neutral Worker configuration
         id: d1
@@ -100,6 +108,7 @@ jobs:
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config .provision/wrangler.json
           secrets: |
             SESSION_KEY
@@ -113,6 +122,7 @@ jobs:
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --config .provision/wrangler.json
       - name: Select Worker deployment URL
         id: deploy-api
@@ -138,6 +148,7 @@ jobs:
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy apps/dashboard/dist --project-name=${{ inputs.installation_slug }}-dashboard --branch=main --commit-hash=${{ github.sha }}
       - name: Publish setup links
         shell: bash

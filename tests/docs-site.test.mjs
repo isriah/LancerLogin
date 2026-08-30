@@ -43,6 +43,7 @@ test("setup and integration guides include sanitized annotated visual callouts",
   assert.match(setup, /github-template-setup\.png/);
   assert.match(setup, /cloudflare-token-setup\.png/);
   assert.match(setup, /google-oauth-setup\.png/);
+  assert.match(setup, /Account Settings read/);
   assert.match(setup, /Store one scoped secret/);
   assert.match(setup, /Copy the exact callback/);
 

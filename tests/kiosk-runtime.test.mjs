@@ -59,6 +59,8 @@ test("tagged release archive includes every kiosk runtime module", async () => {
   ]) {
     assert.match(workflow, new RegExp(`apps/kiosk/src/${module.replace(".", "\\.")}`));
   }
+  assert.match(workflow, /LANCERLOGIN_VERSION:-\$\{version\}/);
+  assert.match(workflow, /release\/artifacts\/install-lancerlogin\.sh/);
 });
 
 test("pairing client requires HTTPS and does not persist the one-time code", async () => {

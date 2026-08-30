@@ -2,6 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildProvisionConfig } from "../scripts/prepare-cloudflare-provision.mjs";
 import { resourceExists } from "../scripts/cloudflare-resource-state.mjs";
+import { selectCloudflareAccount } from "../scripts/select-cloudflare-account.mjs";
+
+test("token-only setup selects exactly one scoped Cloudflare account", () => {
+  const accountId = "0123456789abcdef0123456789abcdef";
+  assert.equal(selectCloudflareAccount({ success: true, result: [{ id: accountId, name: "Adopter account" }] }), accountId);
+  assert.throws(() => selectCloudflareAccount({ success: true, result: [] }), /exactly one/);
+  assert.throws(() => selectCloudflareAccount({ success: true, result: [{ id: accountId }, { id: "f".repeat(32) }] }), /exactly one/);
+  assert.throws(() => selectCloudflareAccount({ success: false, result: [] }), /discovery failed/);
+});
 
 test("generated Worker configuration is account-neutral until D1 discovery", () => {
   const missing = buildProvisionConfig("example-club");

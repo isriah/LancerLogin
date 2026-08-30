@@ -8,6 +8,10 @@ test("foundation documents state standalone constraints", async () => {
   const readme = await readFile("README.md", "utf8");
   assert.match(readme, /standalone/i);
   assert.match(readme, /sensor/i);
+  const checklist = await readFile("docs/RELEASE-CHECKLIST.md", "utf8");
+  assert.match(checklist, /Community release requirement checklist/);
+  assert.match(checklist, /endpoint\/operator\/retention decision pending/);
+  assert.match(checklist, /physical acceptance pending/);
 });
 
 test("operator permissions match the approved role boundary", () => {
@@ -33,6 +37,7 @@ test("initial schema preserves the biometric and secret boundary", async () => {
   assert.doesNotMatch(schema, /raw_fingerprint/i);
   assert.match(schema, /logo_data TEXT/);
   assert.doesNotMatch(schema, /logo_url/i);
+  assert.match(schema, /UNIQUE INDEX IF NOT EXISTS idx_one_active_kiosk ON kiosks\(installation_id\) WHERE active = 1/);
 });
 
 test("provisioning workflow is adopter-gated and account-neutral", async () => {
@@ -48,12 +53,16 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /VITE_API_BASE_URL: \/api/);
   assert.match(workflow, /prepare-pages-proxy\.mjs/);
   assert.equal((workflow.match(/secrets:\s*\|/g) ?? []).length, 1);
-  assert.doesNotMatch(workflow, /accountId|account_id\s*[:=]/i);
+  assert.match(workflow, /api\.cloudflare\.com\/client\/v4\/accounts/);
+  assert.match(workflow, /select-cloudflare-account\.mjs/);
+  assert.equal((workflow.match(/accountId: \$\{\{ env\.CLOUDFLARE_ACCOUNT_ID \}\}/g) ?? []).length, 3);
+  assert.doesNotMatch(workflow, /accountId:\s*[a-f0-9]{32}|account_id\s*[:=]\s*[a-f0-9]{32}/i);
 });
 
 test("Cloudflare setup is adopter-guided and does not require a target account", async () => {
   const guide = await readFile("docs/CLOUDFLARE-LINKING.md", "utf8");
   assert.match(guide, /adopter's own Cloudflare account/i);
   assert.match(guide, /CLOUDFLARE_API_TOKEN/);
+  assert.match(guide, /Account Settings Read/);
   assert.doesNotMatch(guide, /account_id\s*=|database_id\s*=/i);
 });

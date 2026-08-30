@@ -3,6 +3,7 @@ import { AttendanceWorkspace } from "./attendance-workspace";
 import { IntegrationSettings } from "./integration-settings";
 import { UserSettings } from "./user-settings";
 import { PrivacySettings } from "./privacy-settings";
+import { DataSettings } from "./data-settings";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 const steps = [
@@ -90,5 +91,6 @@ export function SetupWorkspace({ organizationName, onSignedOut }: { organization
     <IntegrationSettings />
     <UserSettings />
     <PrivacySettings />
+    <DataSettings />
   </div>;
 }

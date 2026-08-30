@@ -271,3 +271,17 @@ test("telemetry transmits only after acceptance and strictly allowlists its payl
     assert.equal(JSON.stringify(payload).includes("organization"), false);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("destructive data operations require exact confirmation and FK-safe ordering", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const admin = await sessionCookie("admin");
+  assert.equal((await worker.fetch(request("/admin/data", { scope: "roster", confirmation: "delete roster" }, { method: "DELETE", cookie: admin }), env)).status, 400);
+  const result = await worker.fetch(request("/admin/data", { scope: "roster", confirmation: "DELETE ROSTER" }, { method: "DELETE", cookie: admin }), env);
+  assert.equal(result.status, 200);
+  const statements = database.batches.at(-1) ?? [];
+  const meetingDelete = statements.findIndex((call) => call.sql.includes("DELETE FROM meetings"));
+  const rosterDelete = statements.findIndex((call) => call.sql.includes("DELETE FROM members"));
+  assert.ok(meetingDelete >= 0 && rosterDelete > meetingDelete);
+  assert.ok(statements.some((call) => call.sql.includes("data.roster_deleted")));
+});

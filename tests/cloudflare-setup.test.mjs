@@ -8,7 +8,7 @@ test("Cloudflare setup is a clear four-step adopter flow", () => {
   assert.equal(setupProgress({ "cloudflare-account": true })[1].complete, false);
 });
 
-test("preflight remains dry-run and rejects invalid installation slugs", () => {
+test("preflight previews guarded Create and rejects invalid installation slugs", () => {
   assert.deepEqual(previewProvision({ installationSlug: "arts-club" }).plannedResources, ["arts-club-api", "arts-club-data", "arts-club-dashboard"]);
   assert.equal(previewProvision({ installationSlug: "BAD" }).ok, false);
 });

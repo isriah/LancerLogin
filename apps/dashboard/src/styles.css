@@ -193,3 +193,9 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .privacy-section > div small { color: var(--muted); }
 .privacy-section .telemetry-choice { margin: 0 !important; }
 @media (max-width: 720px) { .privacy-section { grid-template-columns: 1fr; } }
+.data-section { margin-top: 1rem; padding: 1.35rem; border: 1px solid #d9aaa5; background: var(--surface); border-radius: 1rem; }
+.destructive-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .7rem; margin-top: 1rem; }
+.destructive-grid article { padding: 1rem; border: 1px solid var(--line); border-radius: .65rem; }
+.destructive-grid p { font-size: .75rem; }
+.destructive-grid button { padding: .55rem .65rem; border: 1px solid #b34a40; color: #8f3028; background: transparent; border-radius: .5rem; font-weight: 750; cursor: pointer; }
+@media (max-width: 820px) { .destructive-grid { grid-template-columns: 1fr; } }

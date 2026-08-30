@@ -12,14 +12,14 @@ export function setupProgress(state = {}) {
 }
 
 export function previewProvision(input) {
-  try { return { ok: true, ...validateProvisionPlan({ ...input, dryRun: true }) }; }
+  try { return { ok: true, ...validateProvisionPlan({ ...input, operation: "create", confirmation: `CREATE ${input.installationSlug}` }) }; }
   catch (error) { return { ok: false, message: error.message }; }
 }
 
 export function renderCloudflareSetup({ state = {}, installationSlug = "" }) {
   const steps = setupProgress(state).map((step) => `<li data-complete="${step.complete}"><strong>${step.complete ? "✓" : "○"} ${step.title}</strong><p>${step.detail}</p>${step.href ? `<a href="${step.href}" target="_blank" rel="noreferrer">Open ${step.title}</a>` : ""}</li>`).join("");
   const preview = previewProvision({ installationSlug });
-  const preflight = preview.ok ? `<p role="status">Dry-run ready. Planned resources: ${preview.plannedResources.join(", ")}.</p>` : `<p role="alert">${preview.message}</p>`;
+  const preflight = preview.ok ? `<p role="status">Create preview ready. Planned resources: ${preview.plannedResources.join(", ")}.</p>` : `<p role="alert">${preview.message}</p>`;
   return `<section aria-labelledby="cloudflare-heading"><h2 id="cloudflare-heading">Connect Cloudflare</h2><p>LancerLogin deploys only to your organization’s account. This screen never asks for, sends, or stores your API token.</p><ol>${steps}</ol><label for="installation-slug">Installation slug</label><input id="installation-slug" value="${escapeAttribute(installationSlug)}" autocomplete="off">${preflight}<a href="#cloudflare-help">Cloudflare setup help</a></section>`;
 }
 

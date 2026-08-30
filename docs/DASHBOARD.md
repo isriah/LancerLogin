@@ -6,7 +6,7 @@ The Setup checklist is a persisted installation-level record, not per-user state
 
 Each completed item records the Admin and time that completed it. Admins can reopen a required item when a configuration needs review; optional integrations use their own status and do not affect the required checklist.
 
-Operators can work with meetings, attendance, corrections/excuses, reports, and kiosk status. They cannot see or access People, Branding, Integrations, Security, or destructive configuration.
+Operators can create and edit meetings, copy a selected meeting ID to the kiosk, manage attendance and reasoned corrections/excuses, export reports, and monitor kiosk status. They cannot see or access People, Branding, Integrations, Security, or destructive configuration.
 
 Branding stores an optional bounded PNG, JPEG, or WebP logo directly in D1, never as an externally fetched URL. Organization name, subtitle, primary/secondary colors, and light, dark, or device appearance are applied to authenticated Admin and Operator views. The unbranded default remains LancerLogin.
 

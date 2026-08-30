@@ -64,4 +64,7 @@ test("Operator workspace exposes kiosk monitoring and the complete Discord atten
   assert.match(source, /\/discord\/link/);
   assert.match(source, /\/discord\/contests\?meetingId=/);
   assert.match(source, /\/discord\/contests\/resolve/);
+  assert.match(source, /\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}/);
+  assert.match(source, /Kiosk meeting ID/);
+  assert.match(source, /Copy ID/);
 });

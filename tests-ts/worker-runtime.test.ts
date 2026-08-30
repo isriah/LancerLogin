@@ -179,6 +179,16 @@ test("Operator can create meetings and reasoned attendance corrections", async (
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("attendance.corrected")));
 });
 
+test("Operator can update meeting details without destructive access", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/meetings/meeting-1", { title: "Updated rehearsal", startsAt: "2026-09-02T20:00:00.000Z", required: true }, { method: "PATCH", cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 200);
+  assert.ok(database.calls.some((call) => call.sql.includes("UPDATE meetings SET") && call.values.includes("meeting-1")));
+  assert.ok(database.calls.some((call) => call.values.includes("meeting.updated")));
+  assert.equal((await worker.fetch(request("/admin/data", { scope: "attendance", confirmation: "DELETE ATTENDANCE" }, { method: "DELETE", cookie: await sessionCookie("operator") }), env)).status, 403);
+});
+
 test("kiosk attendance is installation-scoped and idempotent by event ID", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });

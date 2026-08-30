@@ -28,6 +28,30 @@ test("annotated dashboard screenshot is a real non-empty asset with text alterna
   assert.match(setup, /class="pin one"/);
 });
 
+test("setup and integration guides include sanitized annotated visual callouts", async () => {
+  const expectedAssets = [
+    "github-template-setup.png",
+    "cloudflare-token-setup.png",
+    "google-oauth-setup.png",
+    "integration-controls.png",
+  ];
+  for (const asset of expectedAssets) {
+    assert.ok((await stat(`docs-site/assets/${asset}`)).size > 50_000, `${asset} should be a rendered image`);
+  }
+
+  const setup = await readFile("docs-site/setup.html", "utf8");
+  assert.match(setup, /github-template-setup\.png/);
+  assert.match(setup, /cloudflare-token-setup\.png/);
+  assert.match(setup, /google-oauth-setup\.png/);
+  assert.match(setup, /Store one scoped secret/);
+  assert.match(setup, /Copy the exact callback/);
+
+  const operations = await readFile("docs-site/operations.html", "utf8");
+  assert.match(operations, /integration-controls\.png/);
+  assert.match(operations, /Check status, not secrets/);
+  assert.match(operations, /Rotate in place/);
+});
+
 test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", async () => {
   assert.ok((await stat("docs-site/assets/kiosk-touch-ui.png")).size > 20_000);
   const kiosk = await readFile("docs-site/kiosk.html", "utf8");

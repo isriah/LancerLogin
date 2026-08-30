@@ -4,7 +4,7 @@ import { IntegrationSettings } from "./integration-settings";
 import { UserSettings } from "./user-settings";
 import { PrivacySettings } from "./privacy-settings";
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string).replace(/\/$/, "");
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 const steps = [
   ["branding", "Brand your installation", "Set the organization name, optional subtitle/logo, colors, and appearance."],
   ["roster", "Import your roster", "Add the people who can attend. You can update matching member IDs later."],

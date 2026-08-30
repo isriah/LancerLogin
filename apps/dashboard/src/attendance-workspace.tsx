@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string).replace(/\/$/, "");
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 type Meeting = { id: string; title: string; startsAt: string; endsAt?: string; required: boolean | number };
 type AttendanceRow = { memberId: string; externalId: string; firstName: string; lastName: string; disposition: "present" | "absent" | "excused"; occurredAt?: string; reason?: string };
 async function api<T>(path: string, init?: RequestInit): Promise<T> { const result = await fetch(`${apiBaseUrl}${path}`, { credentials: "include", ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers } }); const body = await result.json() as T & { error?: string; details?: string[] }; if (!result.ok) throw new Error(body.details?.join(" ") ?? body.error ?? "Request failed"); return body; }

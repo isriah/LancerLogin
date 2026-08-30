@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string).replace(/\/$/, "");
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 type Provider = "google" | "resend" | "discord";
 type Status = { provider: Provider; configured: boolean; updatedAt?: string };
 const metadata: Record<Provider, { title: string; detail: string; fields: { key: string; label: string; type?: string }[] }> = {

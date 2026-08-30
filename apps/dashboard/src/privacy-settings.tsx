@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string).replace(/\/$/, "");
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 async function api<T>(path: string, init?: RequestInit): Promise<T> { const result = await fetch(`${apiBaseUrl}${path}`, { credentials: "include", ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers } }); const body = await result.json() as T & { error?: string }; if (!result.ok) throw new Error(body.error ?? "Request failed"); return body; }
 
 export function PrivacySettings() {

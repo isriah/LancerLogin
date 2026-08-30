@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string).replace(/\/$/, "");
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 type User = { id: string; email?: string; localUsername?: string; role: "admin" | "operator"; active: boolean | number; createdAt: string };
 async function api<T>(path: string, init?: RequestInit): Promise<T> { const result = await fetch(`${apiBaseUrl}${path}`, { credentials: "include", ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers } }); const body = await result.json() as T & { error?: string; details?: string[] }; if (!result.ok) throw new Error(body.details?.join(" ") ?? body.error ?? "Request failed"); return body; }
 

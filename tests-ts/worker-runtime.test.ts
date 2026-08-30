@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { type Env } from "../apps/api/src/index.ts";
+import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 
 class FakeStatement {
   values: unknown[] = [];
@@ -9,23 +10,33 @@ class FakeStatement {
   constructor(sql: string, database: FakeDatabase) { this.sql = sql; this.database = database; }
   bind(...values: unknown[]) { this.values = values; return this; }
   async first<T>() { this.database.calls.push(this); return (this.database.firstResult(this.sql, this.values) ?? null) as T | null; }
-  async all<T>() { this.database.calls.push(this); return { results: [] as T[] }; }
-  async run() { this.database.calls.push(this); return { success: true }; }
+  async all<T>() { this.database.calls.push(this); return { results: (this.database.allResult(this.sql, this.values) ?? []) as T[] }; }
+  async run() { this.database.calls.push(this); return { success: true, meta: { changes: 1 } }; }
 }
 
 class FakeDatabase {
   calls: FakeStatement[] = [];
   batches: FakeStatement[][] = [];
   user?: { id: string; role: "admin" | "operator"; passwordHash: string | null };
+  rows = new Map<string, unknown>();
+  lists = new Map<string, unknown[]>();
   prepare(sql: string) { return new FakeStatement(sql, this); }
   async batch(statements: FakeStatement[]) { this.batches.push(statements); return statements.map(() => ({ success: true })); }
   firstResult(sql: string, _values: unknown[]) {
     if (sql.includes("FROM users")) return this.user;
+    for (const [fragment, value] of this.rows) if (sql.includes(fragment)) return value;
     return undefined;
   }
+  allResult(sql: string, _values: unknown[]) { for (const [fragment, value] of this.lists) if (sql.includes(fragment)) return value; return undefined; }
 }
 
-const request = (path: string, body?: unknown) => new Request(`https://api.example.test${path}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined);
+const request = (path: string, body?: unknown, options: { method?: string; cookie?: string } = {}) => new Request(`https://api.example.test${path}`, {
+  method: options.method ?? (body ? "POST" : "GET"),
+  headers: { ...(body ? { "content-type": "application/json" } : {}), ...(options.cookie ? { cookie: options.cookie } : {}) },
+  body: body ? JSON.stringify(body) : undefined,
+});
+const sessionSecret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const sessionCookie = async (role: "admin" | "operator") => `lancerlogin_session=${await createSessionCodec(sessionSecret).issue({ userId: `${role}-1`, role })}`;
 
 test("Worker bootstrap validates input before writing D1", async () => {
   const database = new FakeDatabase();
@@ -45,4 +56,42 @@ test("Worker bootstrap creates one Admin and four audited records", async () => 
   const userInsert = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO users"));
   assert.match(String(userInsert?.values[4]), /^scrypt\$/);
   assert.equal((await result.json() as { telemetryAccepted: boolean }).telemetryAccepted, false);
+});
+
+test("protected setup routes reject anonymous and Operator access", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  assert.equal((await worker.fetch(request("/admin/branding"), env)).status, 401);
+  assert.equal((await worker.fetch(request("/admin/branding", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
+});
+
+test("Admin can persist shared checklist progress with an audit record", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/setup/progress", { step: "branding", completed: true }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 200);
+  assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO setup_progress")));
+  assert.ok(database.calls.some((call) => call.values.includes("setup.step_completed")));
+});
+
+test("Admin roster import is bounded, installation-scoped, and audited", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/members", { members: [{ memberId: "A-1", firstName: "Avery", lastName: "Stone", email: "avery@example.test" }] }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 201);
+  assert.equal(database.batches.at(-1)?.length, 2);
+  assert.ok(database.batches.at(-1)?.[0].sql.includes("installation_id"));
+  assert.ok(database.batches.at(-1)?.[1].sql.includes("roster.imported"));
+});
+
+test("pairing returns a one-time code while D1 receives only its hash", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/pairing-codes", { kioskName: "Front desk" }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 201);
+  const body = await result.json() as { code: string };
+  const insert = database.batches.at(-1)?.find((statement) => statement.sql.includes("INSERT INTO pairing_codes"));
+  assert.ok(insert);
+  assert.notEqual(insert.values[1], body.code);
+  assert.match(String(insert.values[1]), /^[A-Za-z0-9_-]{43}$/);
 });

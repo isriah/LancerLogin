@@ -99,6 +99,17 @@ CREATE TABLE IF NOT EXISTS pairing_codes (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS kiosks (
+  id TEXT PRIMARY KEY,
+  installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,
+  pairing_code_id TEXT NOT NULL UNIQUE REFERENCES pairing_codes(id),
+  name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  last_seen_at TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS encrypted_integrations (
   id TEXT PRIMARY KEY,
   installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,

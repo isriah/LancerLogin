@@ -7,7 +7,7 @@ export function buildProvisionConfig(slug, databases = []) {
   const databaseName = `${slug}-data`;
   const database = databases.find((entry) => entry.name === databaseName);
   const databaseId = database?.uuid ?? database?.database_id ?? database?.id;
-  const config = { name: `${slug}-api`, main: "../apps/api/src/index.ts", compatibility_date: "2026-08-01", workers_dev: true, vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `https://${slug}-dashboard.pages.dev` } };
+  const config = { name: `${slug}-api`, main: "../apps/api/src/index.ts", compatibility_date: "2026-08-01", workers_dev: true, vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `https://${slug}-dashboard.pages.dev`, RELEASE_VERSION: "0.1.0" }, triggers: { crons: ["0 3 * * *"] } };
   if (databaseId) config.d1_databases = [{ binding: "DB", database_name: databaseName, database_id: databaseId, migrations_dir: "../apps/api/migrations" }];
   return { state: databaseId ? "exists" : "missing", config };
 }

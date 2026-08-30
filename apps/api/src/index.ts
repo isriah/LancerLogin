@@ -4,7 +4,7 @@ import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts"
 type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
 interface D1Database { prepare(query: string): D1Statement; batch(statements: D1Statement[]): Promise<D1Result[]>; }
-export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; DB?: D1Database; }
+export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; TELEMETRY_ENDPOINT?: string; RELEASE_VERSION?: string; DB?: D1Database; }
 
 type Role = "admin" | "operator";
 type Principal = { userId: string; role: Role; expiresAt: number };
@@ -95,6 +95,7 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, 'admin', ?)").bind(adminId, "primary", input.adminEmail?.toLowerCase() ?? null, input.localUsername?.trim().toLowerCase() ?? null, passwordHash, now),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), "primary", adminId, "installation.created", "installation", "primary", now),
   ]);
+  if (telemetryAcceptedAt) { const cf = (request as Request & { cf?: { city?: string; metroCode?: string } }).cf; try { await transmitTelemetry(env, cf?.city || cf?.metroCode); } catch { /* Setup must survive best-effort telemetry failure. */ } }
   return response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, telemetryAccepted: Boolean(telemetryAcceptedAt) }, 201);
 }
 async function localLogin(request: Request, env: Env): Promise<Response> {
@@ -452,6 +453,26 @@ async function discordKioskStatus(request: Request, env: Env): Promise<Response>
   await writeAudit(db, principal, "discord.kiosk_status_updated", "kiosk", kiosk?.id ?? null, { online, messageId }); return response({ changed: true, messageId, online });
 }
 
+async function transmitTelemetry(env: Env, metro?: string): Promise<boolean> {
+  if (!env.TELEMETRY_ENDPOINT || !env.RELEASE_VERSION || !env.DB) return false;
+  const endpoint = new URL(env.TELEMETRY_ENDPOINT); if (endpoint.protocol !== "https:") return false;
+  const installation = await env.DB.prepare("SELECT telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installId FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string; installId?: string }>();
+  if (!installation?.acceptedAt || !installation.installId) return false;
+  const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM kiosks WHERE installation_id = 'primary' AND active = 1").first<{ count: number }>();
+  const payload: Record<string, unknown> = { installId: installation.installId, releaseVersion: env.RELEASE_VERSION, activeKioskCount: Number(count?.count ?? 0) };
+  if (metro) payload.metro = String(metro).slice(0, 100);
+  return (await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })).ok;
+}
+async function privacySettings(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (request.method === "GET") { const installation = await db.prepare("SELECT telemetry_accepted_at AS acceptedAt FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string }>(); return response({ telemetryAccepted: Boolean(installation?.acceptedAt), acceptedAt: installation?.acceptedAt, notice: "Telemetry sends only a random installation ID, release version, active kiosk count, scrubbed diagnostics, and best-effort metro. It never sends organization, roster, attendance, fingerprint, or raw IP data." }); }
+  const input = await parseJson<{ telemetryAccepted?: boolean }>(request); if (typeof input.telemetryAccepted !== "boolean") throw new HttpError(400, "telemetryAccepted must be true or false"); const now = new Date().toISOString();
+  await db.prepare("UPDATE installations SET telemetry_accepted_at = ?, telemetry_install_id = ? WHERE id = 'primary'").bind(input.telemetryAccepted ? now : null, input.telemetryAccepted ? crypto.randomUUID() : null).run();
+  await writeAudit(db, principal, input.telemetryAccepted ? "telemetry.accepted" : "telemetry.declined", "installation", "primary");
+  if (input.telemetryAccepted) { const cf = (request as Request & { cf?: { city?: string; metroCode?: string } }).cf; try { await transmitTelemetry(env, cf?.city || cf?.metroCode); } catch { /* Consent remains saved if reporting is unavailable. */ } }
+  return response({ telemetryAccepted: input.telemetryAccepted, acceptedAt: input.telemetryAccepted ? now : null });
+}
+
 const worker = { async fetch(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url); let result: Response;
   try {
@@ -484,6 +505,7 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     else if (url.pathname === "/discord/contests/resolve" && request.method === "POST") result = await resolveDiscordContest(request, env);
     else if (url.pathname === "/discord/calendar" && request.method === "POST") result = await discordCalendar(request, env);
     else if (url.pathname === "/discord/kiosk-status" && request.method === "POST") result = await discordKioskStatus(request, env);
+    else if (url.pathname === "/admin/privacy" && ["GET", "PATCH"].includes(request.method)) result = await privacySettings(request, env);
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env);
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);
@@ -494,5 +516,5 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     result = response({ error: error instanceof HttpError ? error.message : "Request failed", details: detail }, status);
   }
   return withCors(result, request, env);
-} };
+}, async scheduled(_controller: unknown, env: Env): Promise<void> { try { await transmitTelemetry(env); } catch { /* Telemetry is best-effort and cannot affect attendance. */ } } };
 export default worker;

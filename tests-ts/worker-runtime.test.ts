@@ -253,3 +253,21 @@ test("Discord missing-member workflow mentions only linked absent members and op
     assert.equal(JSON.stringify(await result.json()).includes("discord-secret"), false);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("telemetry transmits only after acceptance and strictly allowlists its payload", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "opaque-install-id" });
+  database.rows.set("COUNT(*) AS count", { count: 1 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, TELEMETRY_ENDPOINT: "https://telemetry.example.test/v1", RELEASE_VERSION: "0.1.0", DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let payload: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => { payload = JSON.parse(String(init?.body)); return new Response(null, { status: 202 }); };
+  try {
+    const telemetryRequest = request("/admin/privacy", { telemetryAccepted: true }, { method: "PATCH", cookie: await sessionCookie("admin") });
+    Object.defineProperty(telemetryRequest, "cf", { value: { city: "Example Metro", ip: "192.0.2.1" } });
+    const result = await worker.fetch(telemetryRequest, env);
+    assert.equal(result.status, 200);
+    assert.deepEqual(payload, { installId: "opaque-install-id", releaseVersion: "0.1.0", activeKioskCount: 1, metro: "Example Metro" });
+    assert.equal(JSON.stringify(payload).includes("192.0.2.1"), false);
+    assert.equal(JSON.stringify(payload).includes("organization"), false);
+  } finally { globalThis.fetch = originalFetch; }
+});

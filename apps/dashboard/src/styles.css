@@ -188,3 +188,8 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .user-list select,.user-list button { padding: .5rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .45rem; }
 .user-list button { cursor: pointer; }
 @media (max-width: 800px) { .user-layout { grid-template-columns: 1fr; }.user-list article { grid-template-columns: 1fr auto; }.user-list select { grid-row: 2; } }
+.privacy-section { display: grid; grid-template-columns: 1fr minmax(18rem,.8fr); gap: 1rem; align-items: center; margin-top: 1rem; padding: 1.35rem; border: 1px solid var(--line); background: var(--surface); border-radius: 1rem; }
+.privacy-section p { margin-bottom: .3rem; font-size: .83rem; }
+.privacy-section > div small { color: var(--muted); }
+.privacy-section .telemetry-choice { margin: 0 !important; }
+@media (max-width: 720px) { .privacy-section { grid-template-columns: 1fr; } }

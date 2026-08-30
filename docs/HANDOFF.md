@@ -9,8 +9,8 @@
 
 ## Verification pending
 
-Implement and verify Unit 5 after Unit 4 is committed.
+Implement and verify Unit 6 after Unit 5 is committed.
 
 ## Recommended next task
 
-Implement Unit 5: Google/local authentication design, reset tool interface, encrypted secrets, and integrations configuration boundaries.
+Implement Unit 6: mocked Resend and Discord delivery workflows, calendar sync abstraction, and persistent kiosk status behavior.

@@ -108,3 +108,41 @@ test("kiosk heartbeat hashes bearer credentials before D1 lookup", async () => {
   assert.notEqual(lookup.values[0], "very-secret");
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET last_seen_at")));
 });
+
+test("Operator can create meetings and reasoned attendance corrections", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const operator = await sessionCookie("operator");
+  const meeting = await worker.fetch(request("/meetings", { title: "Rehearsal", startsAt: "2026-09-01T20:00:00.000Z", required: true }, { cookie: operator }), env);
+  assert.equal(meeting.status, 201);
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("meeting.created")));
+  const corrected = await worker.fetch(request("/attendance/corrections", { memberId: "member-1", meetingId: "meeting-1", disposition: "excused", reason: "School event" }, { cookie: operator }), env);
+  assert.equal(corrected.status, 201);
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("attendance.corrected")));
+});
+
+test("kiosk attendance is installation-scoped and idempotent by event ID", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
+  database.rows.set("FROM members", { id: "member-1" });
+  database.rows.set("FROM meetings", { id: "meeting-1" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const attendanceRequest = new Request("https://api.example.test/kiosk/attendance", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ eventId: "offline-event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:02:00.000Z" }) });
+  const result = await worker.fetch(attendanceRequest, env);
+  assert.equal(result.status, 202);
+  const insert = database.calls.find((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events"));
+  assert.ok(insert);
+  assert.ok(insert.sql.includes("installation_id"));
+  assert.ok(insert.values.includes("offline-event-1"));
+});
+
+test("attendance export is an authenticated CSV download", async () => {
+  const database = new FakeDatabase();
+  database.lists.set("FROM meetings mt", [{ meeting: "Studio, weekly", meetingStart: "2026-09-01T20:00:00Z", memberId: "A-1", firstName: "Avery", lastName: "Stone", disposition: "present", occurredAt: "2026-09-01T20:02:00Z", reason: null }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  assert.equal((await worker.fetch(request("/exports/attendance.csv"), env)).status, 401);
+  const result = await worker.fetch(request("/exports/attendance.csv", undefined, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 200);
+  assert.match(result.headers.get("content-type") ?? "", /text\/csv/);
+  assert.match(await result.text(), /"Studio, weekly"/);
+});

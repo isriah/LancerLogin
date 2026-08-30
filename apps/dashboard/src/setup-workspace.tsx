@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { AttendanceWorkspace } from "./attendance-workspace";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string).replace(/\/$/, "");
 const steps = [
@@ -82,5 +83,6 @@ export function SetupWorkspace({ organizationName, onSignedOut }: { organization
         <section className="task-card pairing-card"><p className="kicker">Kiosk pairing</p><h2>Create a one-time code</h2><p>The code expires in 10 minutes and can be redeemed once. It never contains a fingerprint template or Cloudflare credential.</p><label>Kiosk name<input maxLength={80} value={kioskName} onChange={(event) => setKioskName(event.target.value)} /></label><button className="primary-button" type="button" onClick={createPairingCode}>Create pairing code</button>{pairing && <div className="pairing-code" aria-live="polite"><span>Enter in the Pi installer</span><strong>{pairing.code}</strong><small>Expires {new Date(pairing.expiresAt).toLocaleTimeString()}</small></div>}</section>
       </div>
     </>}
+    <AttendanceWorkspace embedded />
   </div>;
 }

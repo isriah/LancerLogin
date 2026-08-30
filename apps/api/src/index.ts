@@ -197,6 +197,59 @@ async function kioskStatus(request: Request, env: Env): Promise<Response> {
   const result = await requireDatabase(env).prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
   return response({ kiosks: result.results ?? [] });
 }
+function validTimestamp(value: string | undefined): value is string { return Boolean(value && Number.isFinite(Date.parse(value))); }
+async function meetings(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
+  if (request.method === "GET") { const result = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes FROM meetings WHERE installation_id = 'primary' ORDER BY starts_at DESC LIMIT 250").all(); return response({ meetings: result.results ?? [] }); }
+  const input = await parseJson<{ title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null }>(request);
+  if (!input.title?.trim() || input.title.length > 120 || !validTimestamp(input.startsAt) || (input.endsAt && !validTimestamp(input.endsAt)) || (input.endsAt && Date.parse(input.endsAt) <= Date.parse(input.startsAt!))) throw new HttpError(400, "Meeting needs a title, valid start, and an optional end after its start");
+  const id = crypto.randomUUID(); const now = new Date().toISOString();
+  await db.batch([
+    db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, input.title.trim(), input.startsAt, input.endsAt || null, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, 'primary', ?, 'meeting.created', 'meeting', ?, ?)").bind(crypto.randomUUID(), principal.userId, id, now),
+  ]);
+  return response({ meeting: { id, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt || null, required: input.required !== false } }, 201);
+}
+async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string }, source: "kiosk" | "manual", actorId?: string): Promise<Response> {
+  if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !input.meetingId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, meetingId, and a valid occurredAt timestamp are required");
+  const [member, meeting] = await Promise.all([
+    db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.memberId).first(),
+    db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first(),
+  ]);
+  if (!member || !meeting) throw new HttpError(404, "Member or meeting was not found in this installation");
+  const id = crypto.randomUUID();
+  const result = await db.prepare("INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, input.memberId, input.meetingId, source, input.occurredAt, input.eventId.trim(), actorId ?? null).run();
+  return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId }, 202);
+}
+async function kioskAttendance(request: Request, env: Env): Promise<Response> { await kioskFor(request, env); return recordAttendance(requireDatabase(env), await parseJson(request), "kiosk"); }
+async function attendance(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const url = new URL(request.url);
+  if (request.method === "GET") {
+    const meetingId = url.searchParams.get("meetingId"); if (!meetingId) throw new HttpError(400, "meetingId is required");
+    const rows = await db.prepare("SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, COALESCE(c.disposition, CASE WHEN e.id IS NOT NULL THEN 'present' ELSE 'absent' END) AS disposition, e.occurred_at AS occurredAt, c.reason FROM members m LEFT JOIN attendance_events e ON e.member_id = m.id AND e.meeting_id = ? LEFT JOIN attendance_corrections c ON c.member_id = m.id AND c.meeting_id = ? WHERE m.installation_id = 'primary' AND m.active = 1 ORDER BY m.last_name, m.first_name").bind(meetingId, meetingId).all();
+    return response({ attendance: rows.results ?? [] });
+  }
+  return recordAttendance(db, await parseJson(request), "manual", principal.userId);
+}
+async function correction(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
+  const input = await parseJson<{ memberId?: string; meetingId?: string; disposition?: "present" | "absent" | "excused"; reason?: string }>(request);
+  if (!input.memberId || !input.meetingId || !input.disposition || !["present", "absent", "excused"].includes(input.disposition) || !input.reason?.trim() || input.reason.length > 300) throw new HttpError(400, "Member, meeting, disposition, and a correction reason are required");
+  const id = crypto.randomUUID(); const now = new Date().toISOString();
+  await db.batch([
+    db.prepare("INSERT INTO attendance_corrections (id, installation_id, member_id, meeting_id, disposition, reason, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, input.memberId, input.meetingId, input.disposition, input.reason.trim(), principal.userId, now),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'attendance.corrected', 'attendance_correction', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ memberId: input.memberId, meetingId: input.meetingId, disposition: input.disposition }), now),
+  ]);
+  return response({ correction: { id, ...input, reason: input.reason.trim(), createdAt: now } }, 201);
+}
+function csvCell(value: unknown): string { const text = value == null ? "" : String(value); return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text; }
+async function attendanceExport(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
+  const result = await db.prepare("SELECT mt.title AS meeting, mt.starts_at AS meetingStart, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, COALESCE(c.disposition, CASE WHEN e.id IS NOT NULL THEN 'present' ELSE 'absent' END) AS disposition, e.occurred_at AS occurredAt, c.reason FROM meetings mt CROSS JOIN members m LEFT JOIN attendance_events e ON e.member_id = m.id AND e.meeting_id = mt.id LEFT JOIN attendance_corrections c ON c.member_id = m.id AND c.meeting_id = mt.id WHERE mt.installation_id = 'primary' AND m.installation_id = 'primary' AND m.active = 1 ORDER BY mt.starts_at, m.last_name, m.first_name").all<Record<string, unknown>>();
+  const headers = ["meeting", "meetingStart", "memberId", "firstName", "lastName", "disposition", "occurredAt", "reason"];
+  const csv = [headers.join(","), ...(result.results ?? []).map((row) => headers.map((header) => csvCell(row[header])).join(","))].join("\r\n") + "\r\n";
+  return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-attendance-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
+}
 
 const worker = { async fetch(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url); let result: Response;
@@ -213,8 +266,13 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     else if (url.pathname === "/admin/members" && ["GET", "POST"].includes(request.method)) result = await members(request, env);
     else if (url.pathname === "/admin/pairing-codes" && ["GET", "POST"].includes(request.method)) result = await pairingCodes(request, env);
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
+    else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
+    else if (url.pathname === "/attendance" && ["GET", "POST"].includes(request.method)) result = await attendance(request, env);
+    else if (url.pathname === "/attendance/corrections" && request.method === "POST") result = await correction(request, env);
+    else if (url.pathname === "/exports/attendance.csv" && request.method === "GET") result = await attendanceExport(request, env);
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env);
+    else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);
     else result = response({ error: "Not found" }, 404);
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;

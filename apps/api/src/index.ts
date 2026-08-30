@@ -306,21 +306,26 @@ async function googleCredentials(env: Env): Promise<Record<string, string>> {
   const record = await integrationRecord(env, "google"); if (!record) throw new HttpError(503, "Google OAuth is not configured");
   return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
 }
-async function googleStart(request: Request, env: Env): Promise<Response> {
+function googleRedirectUri(env: Env): string {
+  const origin = new URL(env.ALLOWED_ORIGIN);
+  if (origin.protocol !== "https:" || origin.origin !== env.ALLOWED_ORIGIN) throw new HttpError(503, "Public dashboard origin is invalid");
+  return `${origin.origin}/api/auth/google/callback`;
+}
+async function googleStart(_request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
   const installation = await requireDatabase(env).prepare("SELECT auth_mode AS authMode FROM installations WHERE id = 'primary'").first<{ authMode: AuthMode }>();
   if (!installation || !["google", "both"].includes(installation.authMode)) throw new HttpError(404, "Google sign-in is not enabled");
-  const credentials = await googleCredentials(env); const url = new URL(request.url); const redirectUri = `${url.origin}/auth/google/callback`;
+  const credentials = await googleCredentials(env); const redirectUri = googleRedirectUri(env);
   const state = await createSessionCodec(env.SESSION_KEY).issue({ userId: crypto.randomUUID(), role: "operator" }, 10 * 60_000);
   const target = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   target.search = new URLSearchParams({ client_id: credentials.clientId, redirect_uri: redirectUri, response_type: "code", scope: "openid email profile", state, prompt: "select_account" }).toString();
-  return new Response(null, { status: 302, headers: { location: target.toString(), "cache-control": "no-store", "set-cookie": `lancerlogin_oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/auth/google/callback; Max-Age=600` } });
+  return new Response(null, { status: 302, headers: { location: target.toString(), "cache-control": "no-store", "set-cookie": `lancerlogin_oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600` } });
 }
 async function googleCallback(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
   const url = new URL(request.url); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_oauth_state");
   if (!code || !state || state !== savedState || !await createSessionCodec(env.SESSION_KEY).verify(state)) throw new HttpError(400, "Google sign-in state is invalid or expired");
-  const credentials = await googleCredentials(env); const redirectUri = `${url.origin}/auth/google/callback`;
+  const credentials = await googleCredentials(env); const redirectUri = googleRedirectUri(env);
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: credentials.clientId, client_secret: credentials.clientSecret, redirect_uri: redirectUri, grant_type: "authorization_code" }) });
   const tokens = await tokenResponse.json() as { id_token?: string }; if (!tokenResponse.ok || !tokens.id_token) throw new HttpError(401, "Google did not accept the sign-in response");
   const validationResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokens.id_token)}`, { headers: { accept: "application/json" } });
@@ -331,7 +336,7 @@ async function googleCallback(request: Request, env: Env): Promise<Response> {
   const session = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role });
   const headers = new Headers({ location: env.ALLOWED_ORIGIN, "cache-control": "no-store" });
   headers.append("set-cookie", `lancerlogin_session=${session}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`);
-  headers.append("set-cookie", "lancerlogin_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/auth/google/callback; Max-Age=0");
+  headers.append("set-cookie", "lancerlogin_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
   return new Response(null, { status: 302, headers });
 }
 async function users(request: Request, env: Env): Promise<Response> {

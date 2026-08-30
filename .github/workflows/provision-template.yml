@@ -85,6 +85,7 @@ jobs:
       - name: Apply D1 migrations
         run: npx wrangler d1 migrations apply "${{ inputs.installation_slug }}-data" --remote --config .provision/wrangler.json
       - name: Generate installation session key
+        if: steps.resources.outputs.worker == 'missing'
         shell: bash
         run: |
           SESSION_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
@@ -93,8 +94,9 @@ jobs:
           echo "::add-mask::$INTEGRATION_KEY"
           echo "SESSION_KEY=$SESSION_KEY" >> "$GITHUB_ENV"
           echo "INTEGRATION_KEY=$INTEGRATION_KEY" >> "$GITHUB_ENV"
-      - name: Deploy Worker API
-        id: deploy-api
+      - name: Deploy new Worker API with generated secrets
+        if: steps.resources.outputs.worker == 'missing'
+        id: deploy-api-new
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -105,10 +107,29 @@ jobs:
         env:
           SESSION_KEY: ${{ env.SESSION_KEY }}
           INTEGRATION_KEY: ${{ env.INTEGRATION_KEY }}
+      - name: Deploy existing Worker API without rotating secrets
+        if: steps.resources.outputs.worker == 'exists'
+        id: deploy-api-existing
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: deploy --config .provision/wrangler.json
+      - name: Select Worker deployment URL
+        id: deploy-api
+        shell: bash
+        env:
+          NEW_API_URL: ${{ steps.deploy-api-new.outputs.deployment-url }}
+          EXISTING_API_URL: ${{ steps.deploy-api-existing.outputs.deployment-url }}
+        run: |
+          api_url="${NEW_API_URL:-$EXISTING_API_URL}"
+          test -n "$api_url"
+          echo "deployment-url=$api_url" >> "$GITHUB_OUTPUT"
       - name: Build dashboard for the new API
         env:
-          VITE_API_BASE_URL: ${{ steps.deploy-api.outputs.deployment-url }}
+          VITE_API_BASE_URL: /api
         run: npm --workspace @lancerlogin/dashboard run build
+      - name: Add same-origin Pages API proxy
+        run: node scripts/prepare-pages-proxy.mjs "${{ steps.deploy-api.outputs.deployment-url }}"
       - name: Create Pages project
         if: steps.resources.outputs.pages == 'missing'
         run: npx wrangler pages project create "${{ inputs.installation_slug }}-dashboard" --production-branch main

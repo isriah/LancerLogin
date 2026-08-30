@@ -14,6 +14,7 @@ LancerLogin deploys only into the adopter's own Cloudflare account. The setup ne
 
 - The workflow accepts a new installation slug only; it rejects existing installation IDs and resource identifiers.
 - Generated secrets are stored in the adopter's deployment environment, never committed to Git.
+- Resume generates secrets only if the Worker does not yet exist. If it exists, the workflow redeploys code without rotating its session or integration-encryption keys.
 - The Actions log must redact token values and show only resource names generated from the chosen slug.
 - If a user revokes the token, provisioning stops without modifying a different account.
 

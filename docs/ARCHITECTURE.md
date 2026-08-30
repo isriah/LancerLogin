@@ -3,17 +3,17 @@
 ## Components
 
 ```text
-Admin browser ── Pages dashboard ── Worker API ── D1
-                                      │   │
-                                      │   └─ encrypted integration credentials
-                                      └──── Resend / Discord / Google OAuth
+Admin browser ── Pages dashboard + /api proxy ── Worker API ── D1
+                                                    │   │
+                                                    │   └─ encrypted integration credentials
+                                                    └──── Resend / Discord / Google OAuth
 
 Raspberry Pi kiosk ── local service ── R503 fingerprint sensor
        │                       │
        └── pairing code / HTTPS┴── Worker API
 ```
 
-The dashboard is a static Pages application. The Worker owns authorization, onboarding state, data validation, encrypted secret handling, exports, and integration calls. D1 contains all organization-level data but no fingerprint templates. The Pi service owns sensor I/O, encrypted local pairing material, local slot-to-member mappings, offline scan queue, and kiosk display state.
+The dashboard is a static Pages application with an advanced-mode `_worker.js` proxy for `/api/*`. Browser sessions therefore remain first-party on the adopter's Pages origin while API work is forwarded to the separate Worker. The Worker owns authorization, onboarding state, data validation, encrypted secret handling, exports, and integration calls. D1 contains all organization-level data but no fingerprint templates. The Pi service owns sensor I/O, encrypted local pairing material, local slot-to-member mappings, offline scan queue, and kiosk display state.
 
 Worker persistence adapters scope every query and write to an installation ID. Their test double captures bound parameters so cross-installation access is rejected by contract before a real D1 binding is used.
 
@@ -31,7 +31,7 @@ The Worker request boundary allows unauthenticated health and CORS preflight onl
 ## Security controls
 
 - Pairing codes are single-use, time-limited, hashed at rest, and bound to one installation.
-- Worker session tokens use secure, HTTP-only cookies for local auth; OAuth ID tokens are verified server-side.
+- Worker session tokens use Secure, HTTP-only, SameSite=Strict cookies through the same-origin Pages proxy; OAuth ID tokens are verified server-side.
 - Every permission-sensitive API path checks Admin or Operator capability explicitly.
 - Destructive actions require an explicit confirmation phrase and immutable audit record.
 - Secret encryption uses AES-GCM with per-record random IVs and an installation-specific Worker secret.

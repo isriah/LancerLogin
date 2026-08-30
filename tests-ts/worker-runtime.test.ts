@@ -196,15 +196,17 @@ test("Google OAuth uses signed state and validates identity before issuing a ses
   const location = new URL(started.headers.get("location")!);
   const state = location.searchParams.get("state")!;
   assert.equal(location.searchParams.get("client_id"), "client-id");
+  assert.equal(location.searchParams.get("redirect_uri"), "https://dashboard.example.test/api/auth/google/callback");
   assert.equal(location.toString().includes("client-secret"), false);
+  assert.match(started.headers.get("set-cookie") ?? "", /Path=\/;/);
   const oauthCookie = started.headers.get("set-cookie")!.split(";")[0];
   assert.ok(await createSessionCodec(sessionSecret).verify(state));
 
   const originalFetch = globalThis.fetch;
-  let calls = 0;
-  globalThis.fetch = async () => {
+  let calls = 0; let tokenRequestBody = "";
+  globalThis.fetch = async (_input, init) => {
     calls += 1;
-    if (calls === 1) return new Response(JSON.stringify({ id_token: "google-token" }), { headers: { "content-type": "application/json" } });
+    if (calls === 1) { tokenRequestBody = String(init?.body); return new Response(JSON.stringify({ id_token: "google-token" }), { headers: { "content-type": "application/json" } }); }
     return new Response(JSON.stringify({ aud: "client-id", email: "admin@example.test", email_verified: "true", iss: "https://accounts.google.com" }), { headers: { "content-type": "application/json" } });
   };
   try {
@@ -212,6 +214,7 @@ test("Google OAuth uses signed state and validates identity before issuing a ses
     assert.equal(callback.status, 302);
     assert.equal(callback.headers.get("location"), "https://dashboard.example.test");
     assert.match(callback.headers.get("set-cookie") ?? "", /lancerlogin_session=/);
+    assert.equal(new URLSearchParams(tokenRequestBody).get("redirect_uri"), "https://dashboard.example.test/api/auth/google/callback");
   } finally { globalThis.fetch = originalFetch; }
 });
 

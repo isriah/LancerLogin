@@ -6,11 +6,11 @@ LancerLogin supports exactly one paired kiosk per installation. The Raspberry Pi
 
 ## ADR-002: Adopter-owned cloud account
 
-Each adopter deploys to their own Cloudflare account from a GitHub template. A narrowly scoped Cloudflare token is supplied as a GitHub Actions secret. The action will create only resources named from a user-selected installation slug: Worker, D1 database, Pages project, and deployment secrets. This repository ships only a dry-run validator until an adopter supplies a fresh target.
+Each adopter deploys to their own Cloudflare account from a GitHub template. A narrowly scoped Cloudflare token is supplied as a GitHub Actions secret. The guarded action creates only resources named from a user-selected installation slug: Worker, D1 database, Pages project, and deployment secrets. Create refuses name collisions; Resume reuses existing resources and never rotates an existing Worker's session or integration-encryption secret.
 
 ## ADR-003: Authentication and authorization
 
-Setup selects Google OAuth, local username/password, or both. Local credentials use a modern memory-hard salted password hash (Argon2id) and never recover a password; the local setup tool resets credentials. Admins have full access. Operators manage meetings, attendance, corrections, excuses, reports, and kiosk status, but cannot manage users, security, integrations, branding, or destructive configuration.
+Setup selects Google OAuth, local username/password, or both. Local credentials use salted scrypt (N=32768, r=8, p=1) and never recover a password; the local setup tool resets credentials. Admins have full access. Operators manage meetings, attendance, corrections, excuses, reports, and kiosk status, but cannot manage users, security, integrations, branding, or destructive configuration.
 
 ## ADR-004: Secret and privacy model
 
@@ -19,4 +19,3 @@ Integration credentials are encrypted with a per-installation key held as a Work
 ## ADR-005: Retention and recovery
 
 Data remains until an admin exports or deletes it. CSV exports and documented D1 backup/restore are supported. There is no migration from other systems and no PDF or spreadsheet integration.
-

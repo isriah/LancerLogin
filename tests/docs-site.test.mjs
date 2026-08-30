@@ -27,3 +27,11 @@ test("annotated dashboard screenshot is a real non-empty asset with text alterna
   assert.match(setup, /alt="[^"]{30,}"/);
   assert.match(setup, /class="pin one"/);
 });
+
+test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", async () => {
+  assert.ok((await stat("docs-site/assets/kiosk-touch-ui.png")).size > 20_000);
+  const kiosk = await readFile("docs-site/kiosk.html", "utf8");
+  assert.match(kiosk, /kiosk-touch-ui\.png/);
+  assert.match(kiosk, /800 by 480 pixels/);
+  assert.match(kiosk, /class="annotated kiosk-shot"/);
+});

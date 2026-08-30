@@ -40,6 +40,12 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /expected=.*inputs\.operation/);
   assert.match(workflow, /inputs\.confirmation.*expected.*inputs\.installation_slug/);
   assert.match(workflow, /RESUME|resume/);
+  assert.match(workflow, /Generate installation session key\s+if: steps\.resources\.outputs\.worker == 'missing'/);
+  assert.match(workflow, /Deploy existing Worker API without rotating secrets/);
+  assert.match(workflow, /if: steps\.resources\.outputs\.worker == 'exists'/);
+  assert.match(workflow, /VITE_API_BASE_URL: \/api/);
+  assert.match(workflow, /prepare-pages-proxy\.mjs/);
+  assert.equal((workflow.match(/secrets:\s*\|/g) ?? []).length, 1);
   assert.doesNotMatch(workflow, /accountId|account_id\s*[:=]/i);
 });
 

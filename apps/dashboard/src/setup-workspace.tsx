@@ -17,6 +17,7 @@ const steps = [
 type StepId = typeof steps[number][0];
 type Branding = { organizationName: string; subtitle?: string; logoUrl?: string; primaryColor: string; secondaryColor: string; appearance: "system" | "light" | "dark" };
 type Member = { memberId: string; firstName: string; lastName: string; email?: string };
+type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; pairedAt: string };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const result = await fetch(`${apiBaseUrl}${path}`, { credentials: "include", ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers } });
@@ -31,6 +32,8 @@ export function SetupWorkspace({ organizationName, onSignedOut }: { organization
   const [members, setMembers] = useState<Member[]>([]);
   const [rosterText, setRosterText] = useState("memberId,firstName,lastName,email,discordUserId\n");
   const [kioskName, setKioskName] = useState("Main kiosk");
+  const [activeKiosk, setActiveKiosk] = useState<Kiosk>();
+  const [replaceKiosk, setReplaceKiosk] = useState(false);
   const [pairing, setPairing] = useState<{ code: string; expiresAt: string }>();
   const [notice, setNotice] = useState("Loading shared setup…");
   const [showChecklist, setShowChecklist] = useState(true);
@@ -42,10 +45,12 @@ export function SetupWorkspace({ organizationName, onSignedOut }: { organization
       api<{ settings: Branding }>("/admin/branding"),
       api<{ completedSteps: { step: StepId }[] }>("/admin/setup/progress"),
       api<{ members: Member[] }>("/admin/members"),
-    ]).then(([brand, setup, roster]) => {
+      api<{ kiosks: Kiosk[] }>("/kiosks"),
+    ]).then(([brand, setup, roster, kioskStatus]) => {
       setBranding({ ...brand.settings, subtitle: brand.settings.subtitle ?? "", logoUrl: brand.settings.logoUrl ?? "" });
       setCompleted(new Set(setup.completedSteps.map((item) => item.step)));
       setMembers(roster.members);
+      setActiveKiosk(kioskStatus.kiosks.find((kiosk) => kiosk.active === 1));
       setNotice("Setup is synchronized for every Admin.");
     }).catch((error: Error) => setNotice(error.message));
   }, []);
@@ -71,7 +76,7 @@ export function SetupWorkspace({ organizationName, onSignedOut }: { organization
   }
   async function createPairingCode() {
     setNotice("Creating one-time pairing code…");
-    try { const result = await api<{ code: string; expiresAt: string }>("/admin/pairing-codes", { method: "POST", body: JSON.stringify({ kioskName }) }); setPairing(result); setNotice("Pairing code created. Enter it only in the local kiosk installer."); } catch (error) { setNotice((error as Error).message); }
+    try { const result = await api<{ code: string; expiresAt: string }>("/admin/pairing-codes", { method: "POST", body: JSON.stringify({ kioskName, replaceExisting: replaceKiosk }) }); setPairing(result); setNotice(activeKiosk ? "Replacement code created. The current kiosk stays active until this code is redeemed." : "Pairing code created. Enter it only in the local kiosk installer."); } catch (error) { setNotice((error as Error).message); }
   }
   async function signOut() { await api("/auth/logout", { method: "POST" }); onSignedOut(); }
 
@@ -84,7 +89,7 @@ export function SetupWorkspace({ organizationName, onSignedOut }: { organization
       <div className="workspace-grid">
         <form className="task-card" onSubmit={saveBranding}><p className="kicker">Branding</p><h2>Make it yours</h2><label>Organization name<input required maxLength={100} value={branding.organizationName} onChange={(event) => setBranding({ ...branding, organizationName: event.target.value })} /></label><label>Subtitle <span>(optional)</span><input maxLength={140} value={branding.subtitle ?? ""} onChange={(event) => setBranding({ ...branding, subtitle: event.target.value })} /></label><label>Logo HTTPS URL <span>(optional)</span><input type="url" value={branding.logoUrl ?? ""} onChange={(event) => setBranding({ ...branding, logoUrl: event.target.value })} /></label><div className="color-grid"><label>Primary<input type="color" value={branding.primaryColor} onChange={(event) => setBranding({ ...branding, primaryColor: event.target.value })} /></label><label>Secondary<input type="color" value={branding.secondaryColor} onChange={(event) => setBranding({ ...branding, secondaryColor: event.target.value })} /></label></div><label>Appearance<select value={branding.appearance} onChange={(event) => setBranding({ ...branding, appearance: event.target.value as Branding["appearance"] })}><option value="system">Follow device</option><option value="light">Light</option><option value="dark">Dark</option></select></label><button className="primary-button" type="submit">Save branding</button></form>
         <form className="task-card" onSubmit={importRoster}><p className="kicker">Roster</p><h2>Import members</h2><p>Paste CSV with the required headers. Matching member IDs are safely updated. Add an optional Discord user ID to link a member for pings and contests.</p><label>Roster CSV<textarea rows={9} value={rosterText} onChange={(event) => setRosterText(event.target.value)} /></label><button className="primary-button" type="submit">Validate and import</button><p className="record-count">{members.length} active roster record{members.length === 1 ? "" : "s"}</p></form>
-        <section className="task-card pairing-card"><p className="kicker">Kiosk pairing</p><h2>Create a one-time code</h2><p>The code expires in 10 minutes and can be redeemed once. It never contains a fingerprint template or Cloudflare credential.</p><label>Kiosk name<input maxLength={80} value={kioskName} onChange={(event) => setKioskName(event.target.value)} /></label><button className="primary-button" type="button" onClick={createPairingCode}>Create pairing code</button>{pairing && <div className="pairing-code" aria-live="polite"><span>Enter in the Pi installer</span><strong>{pairing.code}</strong><small>Expires {new Date(pairing.expiresAt).toLocaleTimeString()}</small></div>}</section>
+        <section className="task-card pairing-card"><p className="kicker">Kiosk pairing</p><h2>{activeKiosk ? "Replace the paired kiosk" : "Create a one-time code"}</h2><p>The code expires in 10 minutes and can be redeemed once. It never contains a fingerprint template or Cloudflare credential.</p>{activeKiosk && <div className="replacement-notice"><strong>{activeKiosk.name} is active.</strong><span>LancerLogin supports one kiosk. It remains active until the replacement code is redeemed.</span><label><input type="checkbox" checked={replaceKiosk} onChange={(event) => setReplaceKiosk(event.target.checked)} /> I understand redeeming this code disables {activeKiosk.name}.</label></div>}<label>Kiosk name<input maxLength={80} value={kioskName} onChange={(event) => setKioskName(event.target.value)} /></label><button className="primary-button" type="button" disabled={Boolean(activeKiosk) && !replaceKiosk} onClick={createPairingCode}>{activeKiosk ? "Create replacement code" : "Create pairing code"}</button>{pairing && <div className="pairing-code" aria-live="polite"><span>Enter in the Pi installer</span><strong>{pairing.code}</strong><small>Expires {new Date(pairing.expiresAt).toLocaleTimeString()}</small></div>}</section>
       </div>
     </>}
     <AttendanceWorkspace embedded />

@@ -135,6 +135,9 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .pairing-code { display: grid; justify-items: center; gap: .35rem; padding: 1.2rem; margin-top: 1rem; color: var(--ink); background: var(--surface-soft); border-radius: .7rem; }
 .pairing-code span,.pairing-code small { color: var(--muted); font-size: .74rem; }
 .pairing-code strong { font-family: ui-monospace,SFMono-Regular,Consolas,monospace; font-size: clamp(1.8rem,5vw,3rem); letter-spacing: .1em; }
+.replacement-notice { display: grid; gap: .45rem; padding: 1rem; margin: .75rem 0; border: 1px solid color-mix(in srgb,var(--danger) 45%,transparent); border-radius: .7rem; background: color-mix(in srgb,var(--danger) 8%,var(--surface)); }
+.replacement-notice span { color: var(--muted); }
+.replacement-notice label { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: .6rem; }
 @media (max-width: 900px) { .checklist-card ol { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 650px) { .workspace-grid,.checklist-card ol { grid-template-columns: 1fr; }.setup-status,.workspace-header { display: grid; }.completion-card { grid-template-columns: auto 1fr; }.completion-card button { grid-column: 1 / -1; }.pairing-card { grid-column: auto; } }
 .attendance-workspace { width: min(76rem,100%); margin: 0 auto; }

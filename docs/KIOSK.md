@@ -10,6 +10,8 @@ The dashboard creates a time-limited, one-time pairing code. The installer sends
 
 Only an Admin can generate a pairing code. Generating a new one supersedes the prior code; expiration and successful redemption both make it unusable. The API exposes code status but never returns a code after the creation response.
 
+LancerLogin deliberately supports one active kiosk. When a kiosk is already paired, the dashboard requires an Admin to explicitly confirm replacement before it will issue another code. The existing kiosk continues working while the code is pending; successful redemption disables its credential before activating the replacement.
+
 The local service listens only on `127.0.0.1:8788`. Its `/health` response reports pairing, reader, and cloud connectivity without exposing credentials or biometric data. Once per minute it sends the Worker only operational status and the release version. R503 templates and raw scans remain exclusively within the sensor; the kiosk service handles slot numbers and member mappings only.
 
 Normal operation is offline-first: the Pi writes scans to a local queue and retries in order. The reader adapter exposes only online status and slot match results, never templates. Captive portals are manual Wi-Fi/offline-first operation; advanced compatibility is documented but unsupported.

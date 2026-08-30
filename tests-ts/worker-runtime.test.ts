@@ -97,6 +97,26 @@ test("pairing returns a one-time code while D1 receives only its hash", async ()
   assert.match(String(insert.values[1]), /^[A-Za-z0-9_-]{43}$/);
 });
 
+test("single-kiosk pairing requires explicit replacement and disables the prior credential on redemption", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM kiosks WHERE installation_id", { id: "kiosk-old", name: "Existing kiosk" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const blocked = await worker.fetch(request("/admin/pairing-codes", { kioskName: "Replacement" }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(blocked.status, 409);
+  const approved = await worker.fetch(request("/admin/pairing-codes", { kioskName: "Replacement", replaceExisting: true }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(approved.status, 201);
+
+  const code = (await approved.json() as { code: string }).code;
+  database.rows.delete("FROM kiosks WHERE installation_id");
+  database.rows.set("FROM pairing_codes", { id: "pairing-1" });
+  const redeemed = await worker.fetch(request("/kiosk/pair", { code, kioskName: "Replacement" }), env);
+  assert.equal(redeemed.status, 201);
+  const batch = database.batches.at(-1) ?? [];
+  const deactivateIndex = batch.findIndex((statement) => statement.sql.includes("UPDATE kiosks SET active = 0"));
+  const insertIndex = batch.findIndex((statement) => statement.sql.includes("INSERT INTO kiosks"));
+  assert.ok(deactivateIndex >= 0 && insertIndex > deactivateIndex);
+});
+
 test("kiosk heartbeat hashes bearer credentials before D1 lookup", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
@@ -146,6 +166,9 @@ test("attendance export is an authenticated CSV download", async () => {
   assert.equal(result.status, 200);
   assert.match(result.headers.get("content-type") ?? "", /text\/csv/);
   assert.match(await result.text(), /"Studio, weekly"/);
+  const exportQuery = database.calls.find((call) => call.sql.includes("FROM meetings mt"));
+  assert.match(exportQuery?.sql ?? "", /ORDER BY c\.created_at DESC/);
+  assert.match(exportQuery?.sql ?? "", /MIN\(e\.occurred_at\)/);
 });
 
 test("integration rotation encrypts secrets and returns only redacted status", async () => {
@@ -239,7 +262,7 @@ test("Discord missing-member workflow mentions only linked absent members and op
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
   database.rows.set("FROM meetings", { id: "meeting-1", title: "Studio" });
-  database.lists.set("FROM members m LEFT JOIN attendance_events", [{ id: "member-1", discordUserId: "323456789012345678" }]);
+  database.lists.set("FROM members m WHERE", [{ id: "member-1", discordUserId: "323456789012345678" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; let outbound: RequestInit | undefined;
   globalThis.fetch = async (_input, init) => { outbound = init; return new Response(JSON.stringify({ id: "message-1" }), { headers: { "content-type": "application/json" } }); };

@@ -9,8 +9,8 @@
 
 ## Verification pending
 
-Implement and verify Unit 3 after Unit 2 is committed.
+Implement and verify Unit 4 after Unit 3 is committed.
 
 ## Recommended next task
 
-Implement Unit 3: roster, meetings, attendance, corrections/excuses, exports, and audit trails.
+Implement Unit 4: guided Pi installer, sensor adapter, offline queue, and pairing protocol using only mocks.

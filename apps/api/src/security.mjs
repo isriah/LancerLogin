@@ -1,4 +1,4 @@
-import { randomBytes, scrypt as nodeScrypt, timingSafeEqual, createCipheriv, createDecipheriv } from "node:crypto";
+import { randomBytes, scrypt as nodeScrypt, timingSafeEqual, createCipheriv, createDecipheriv, createHmac } from "node:crypto";
 import { promisify } from "node:util";
 
 const scrypt = promisify(nodeScrypt);
@@ -42,5 +42,25 @@ export function createSecretVault(key) {
       return JSON.parse(Buffer.concat([decipher.update(Buffer.from(record.ciphertext, "base64url")), decipher.final()]).toString("utf8"));
     },
     remove(provider) { return records.delete(provider); },
+  };
+}
+
+export function createSessionSigner(key, { now = () => Date.now(), ttlMs = 8 * 60 * 60_000 } = {}) {
+  if (!Buffer.isBuffer(key) || key.length < 32) throw new Error("Session signing key must be at least 32 bytes");
+  const sign = (payload) => createHmac("sha256", key).update(payload).digest("base64url");
+  return {
+    issue({ userId, role }) {
+      if (!userId || !["admin", "operator"].includes(role)) throw new Error("Invalid session principal");
+      const payload = Buffer.from(JSON.stringify({ userId, role, expiresAt: now() + ttlMs })).toString("base64url");
+      return `${payload}.${sign(payload)}`;
+    },
+    verify(token) {
+      const [payload, signature] = String(token).split(".");
+      if (!payload || !signature) return undefined;
+      const expected = Buffer.from(sign(payload)); const actual = Buffer.from(signature);
+      if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return undefined;
+      try { const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")); return session.expiresAt > now() ? { userId: session.userId, role: session.role } : undefined; }
+      catch { return undefined; }
+    },
   };
 }

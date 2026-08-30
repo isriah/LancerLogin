@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSecretVault, hashLocalPassword, resetLocalPassword, verifyLocalPassword } from "../apps/api/src/security.mjs";
+import { createSecretVault, createSessionSigner, hashLocalPassword, resetLocalPassword, verifyLocalPassword } from "../apps/api/src/security.mjs";
 
 test("local password hashes are salted, verified, and reset only through the local tool", async () => {
   const a = await hashLocalPassword("correct horse battery staple", () => Buffer.alloc(16, 1));
@@ -9,6 +9,15 @@ test("local password hashes are salted, verified, and reset only through the loc
   assert.equal(await verifyLocalPassword("correct horse battery staple", a), true);
   assert.equal(await verifyLocalPassword("wrong password", a), false);
   await assert.rejects(() => resetLocalPassword({ adminToolAuthorized: false, password: "correct horse battery staple" }), /authorization/);
+});
+
+test("local sessions are signed, expiring, and reject tampering", () => {
+  let clock = 0; const signer = createSessionSigner(Buffer.alloc(32, 9), { now: () => clock, ttlMs: 100 });
+  const token = signer.issue({ userId: "admin-1", role: "admin" });
+  assert.deepEqual(signer.verify(token), { userId: "admin-1", role: "admin" });
+  assert.equal(signer.verify(`${token}tampered`), undefined);
+  clock = 101;
+  assert.equal(signer.verify(token), undefined);
 });
 
 test("integration secrets are encrypted and status never discloses saved values", () => {

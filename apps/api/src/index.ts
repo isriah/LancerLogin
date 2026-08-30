@@ -364,6 +364,37 @@ async function updateUser(request: Request, env: Env, userId: string): Promise<R
   ]);
   return response({ ok: true });
 }
+function html(value: unknown): string { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
+async function resendConfiguration(env: Env): Promise<Record<string, string>> {
+  if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
+  const record = await integrationRecord(env, "resend"); if (!record) throw new HttpError(503, "Resend is not configured");
+  return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
+}
+async function sendAttendanceEmail(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
+  const input = await parseJson<{ kind?: "missed-meeting" | "individual-report"; memberId?: string; meetingId?: string }>(request);
+  if (!input.kind || !input.memberId || (input.kind === "missed-meeting" && !input.meetingId)) throw new HttpError(400, "Email kind, member, and meeting are required");
+  const member = await db.prepare("SELECT id, first_name AS firstName, last_name AS lastName, email FROM members WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.memberId).first<{ id: string; firstName: string; lastName: string; email?: string }>();
+  if (!member?.email) throw new HttpError(400, "This member does not have an email address");
+  let subject: string; let content: string; let deliveryKey: string;
+  if (input.kind === "missed-meeting") {
+    const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string; title: string; startsAt: string }>();
+    if (!meeting) throw new HttpError(404, "Meeting not found");
+    subject = `Missed meeting: ${meeting.title}`; content = `<p>Hello ${html(member.firstName)},</p><p>Our records show you missed <strong>${html(meeting.title)}</strong> on ${html(new Date(meeting.startsAt).toISOString().slice(0, 10))}.</p><p>Please contact your organization if this should be corrected or excused.</p>`; deliveryKey = `missed:${meeting.id}:${member.id}`;
+  } else {
+    const records = await db.prepare("SELECT mt.title, mt.starts_at AS startsAt, COALESCE(c.disposition, CASE WHEN e.id IS NOT NULL THEN 'present' ELSE 'absent' END) AS disposition FROM meetings mt LEFT JOIN attendance_events e ON e.meeting_id = mt.id AND e.member_id = ? LEFT JOIN attendance_corrections c ON c.meeting_id = mt.id AND c.member_id = ? WHERE mt.installation_id = 'primary' ORDER BY mt.starts_at DESC LIMIT 100").bind(member.id, member.id).all<{ title: string; startsAt: string; disposition: string }>();
+    subject = "Your attendance report"; content = `<p>Hello ${html(member.firstName)},</p><p>Here is your current attendance report.</p><table><thead><tr><th>Meeting</th><th>Date</th><th>Status</th></tr></thead><tbody>${(records.results ?? []).map((row) => `<tr><td>${html(row.title)}</td><td>${html(row.startsAt.slice(0, 10))}</td><td>${html(row.disposition)}</td></tr>`).join("")}</tbody></table>`; deliveryKey = `report:${member.id}:${new Date().toISOString().slice(0, 10)}`;
+  }
+  if (await db.prepare("SELECT id FROM integration_deliveries WHERE installation_id = 'primary' AND provider = 'resend' AND delivery_key = ? AND status IN ('pending', 'delivered')").bind(deliveryKey).first()) throw new HttpError(409, "This email was already sent or is currently sending");
+  const config = await resendConfiguration(env); const id = crypto.randomUUID(); const now = new Date().toISOString();
+  await db.prepare("INSERT INTO integration_deliveries (id, installation_id, provider, delivery_key, status, created_at, updated_at) VALUES (?, 'primary', 'resend', ?, 'pending', ?, ?)").bind(id, deliveryKey, now, now).run();
+  const delivery = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", "idempotency-key": deliveryKey }, body: JSON.stringify({ from: config.fromEmail, to: [member.email], subject, html: content }) });
+  const deliveryBody = await delivery.json().catch(() => ({})) as { id?: string };
+  await db.prepare("UPDATE integration_deliveries SET status = ?, external_id = ?, updated_at = ? WHERE id = ?").bind(delivery.ok ? "delivered" : "failed", deliveryBody.id ?? null, new Date().toISOString(), id).run();
+  await writeAudit(db, principal, "resend.email_sent", "member", member.id, { kind: input.kind, ok: delivery.ok, meetingId: input.meetingId });
+  if (!delivery.ok) throw new HttpError(502, "Resend rejected the email");
+  return response({ sent: true, kind: input.kind, memberId: member.id }, 202);
+}
 
 const worker = { async fetch(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url); let result: Response;
@@ -391,6 +422,7 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     else if (/^\/admin\/integrations\/(google|resend|discord)\/test$/.test(url.pathname) && request.method === "POST") result = await testIntegration(request, env, providerFrom(url.pathname));
     else if (url.pathname === "/admin/users" && ["GET", "POST"].includes(request.method)) result = await users(request, env);
     else if (/^\/admin\/users\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateUser(request, env, decodeURIComponent(url.pathname.split("/")[3]));
+    else if (url.pathname === "/communications/email" && request.method === "POST") result = await sendAttendanceEmail(request, env);
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env);
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);

@@ -13,6 +13,7 @@ test("integration configuration uses authenticated encryption and round-trips", 
 
 test("integration ciphertext rejects tampering", async () => {
   const encrypted = await encryptIntegration({ botToken: "secret" }, key);
-  const changed = `${encrypted.ciphertext.slice(0, -1)}${encrypted.ciphertext.endsWith("A") ? "B" : "A"}`;
+  const index = Math.floor(encrypted.ciphertext.length / 2);
+  const changed = `${encrypted.ciphertext.slice(0, index)}${encrypted.ciphertext[index] === "A" ? "B" : "A"}${encrypted.ciphertext.slice(index + 1)}`;
   await assert.rejects(() => decryptIntegration(changed, encrypted.iv, key));
 });

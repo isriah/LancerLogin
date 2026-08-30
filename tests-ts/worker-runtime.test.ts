@@ -212,3 +212,24 @@ test("Admin cannot deactivate the current account", async () => {
   assert.equal(result.status, 409);
   assert.equal(database.batches.length, 0);
 });
+
+test("missed-meeting email is D1-sourced, escaped, and idempotency keyed", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ apiKey: "resend-secret", fromEmail: "attendance@example.test" }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "resend-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  database.rows.set("FROM members", { id: "member-1", firstName: "<Avery>", lastName: "Stone", email: "avery@example.test" });
+  database.rows.set("FROM meetings", { id: "meeting-1", title: "Studio & Safety", startsAt: "2026-09-01T20:00:00Z" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let outbound: RequestInit | undefined;
+  globalThis.fetch = async (_input, init) => { outbound = init; return new Response(JSON.stringify({ id: "email-1" }), { headers: { "content-type": "application/json" } }); };
+  try {
+    const result = await worker.fetch(request("/communications/email", { kind: "missed-meeting", memberId: "member-1", meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(result.status, 202);
+    assert.equal(JSON.stringify(await result.json()).includes("resend-secret"), false);
+    assert.equal((outbound?.headers as Record<string, string>)["idempotency-key"], "missed:meeting-1:member-1");
+    const body = JSON.parse(String(outbound?.body));
+    assert.match(body.html, /&lt;Avery&gt;/);
+    assert.doesNotMatch(body.html, /<Avery>/);
+    assert.ok(database.calls.some((call) => call.sql.includes("integration_deliveries")));
+  } finally { globalThis.fetch = originalFetch; }
+});

@@ -121,6 +121,28 @@ CREATE TABLE IF NOT EXISTS encrypted_integrations (
   UNIQUE(installation_id, provider)
 );
 
+CREATE TABLE IF NOT EXISTS integration_deliveries (
+  id TEXT PRIMARY KEY,
+  installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('resend', 'discord')),
+  delivery_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'delivered', 'failed')),
+  external_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(installation_id, provider, delivery_key)
+);
+
+CREATE TABLE IF NOT EXISTS integration_state (
+  installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('discord')),
+  state_key TEXT NOT NULL,
+  external_id TEXT,
+  content_hash TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, provider, state_key)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id TEXT PRIMARY KEY,
   installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE,

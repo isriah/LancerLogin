@@ -1,0 +1,2 @@
+# Generate a fresh value for local development. Do not commit the real key.
+SESSION_KEY=replace-with-base64url-encoded-32-random-bytes

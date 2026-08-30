@@ -3,7 +3,8 @@ dist/
 .wrangler/
 .dev.vars
 .env
+!.dev.vars.example
+!.env.example
 *.sqlite
 *.sqlite-*
 coverage/
-

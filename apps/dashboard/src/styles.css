@@ -71,3 +71,32 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--gold); outline-
 @media (max-width: 960px) { .sidebar { position: static; width: 100%; grid-template-columns: 3.1rem 1fr auto; grid-template-rows: auto; }.sidebar nav,.sidebar-footer { display: none; }.main { margin-left: 0; }.content-grid { grid-template-columns: 1fr; }.preview-panel { position: static; }.after-setup { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .main { padding: 1.5rem 1rem 3rem; }.topbar { align-items: flex-start; }.theme-button { white-space: nowrap; }.notice { grid-template-columns: 1fr; }.after-setup ol { grid-template-columns: 1fr; }.resource-list div { display: grid; gap: .2rem; } }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+.provisioned-main { min-height: 100vh; padding: 2rem; background: radial-gradient(circle at 15% 5%, color-mix(in srgb, var(--primary) 11%, transparent), transparent 32%), var(--bg); }
+.setup-header { width: min(72rem, 100%); display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .8rem; margin: 0 auto 2.5rem; }
+.setup-header > div:nth-child(2) { display: flex; flex-direction: column; }
+.setup-header span { color: var(--muted); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
+.first-admin-card { width: min(58rem, 100%); margin: 0 auto; padding: clamp(1.5rem, 4vw, 3rem); border: 1px solid var(--line); background: var(--surface); border-radius: 1.15rem; box-shadow: 0 1.5rem 4rem rgba(15,60,45,.09); }
+.form-intro { max-width: 42rem; padding-bottom: 1.4rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--line); }
+.form-intro h1, .login-card h1, .centered-state h1 { margin-bottom: .75rem; font-size: clamp(2.1rem, 5vw, 3.5rem); }
+.form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
+.first-admin-card label, .login-card label { margin-top: .8rem; }
+.first-admin-card label > input:not([type="radio"]):not([type="checkbox"]), .login-card label > input { margin-top: .45rem; }
+fieldset { padding: 0; margin: 1.6rem 0 1rem; border: 0; }
+legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
+.choice-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .7rem; }
+.choice { position: relative; display: grid; gap: .3rem; min-height: 7.5rem; padding: 1rem; margin: 0 !important; border: 1px solid var(--line); background: var(--bg); border-radius: .75rem; cursor: pointer; }
+.choice.selected { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.choice strong { align-self: end; font-size: .88rem; }
+.choice span { color: var(--muted); font-size: .76rem; line-height: 1.4; }
+.telemetry-choice { display: grid !important; grid-template-columns: auto 1fr; gap: .75rem; align-items: start; padding: 1rem; margin: 1.5rem 0 !important; background: var(--surface-soft); border-radius: .75rem; cursor: pointer; }
+.telemetry-choice input { width: 1.05rem; height: 1.05rem; margin-top: .15rem; accent-color: var(--primary); }
+.telemetry-choice span { display: grid; gap: .2rem; }
+.telemetry-choice small { color: var(--muted); font-size: .77rem; line-height: 1.45; }
+.form-error { padding: .8rem; color: #8f3028; background: #fff0ee; border-radius: .55rem; font-size: .84rem; }
+.login-card { width: min(29rem, 100%); margin: 10vh auto 0; padding: 2rem; border: 1px solid var(--line); background: var(--surface); border-radius: 1rem; box-shadow: 0 1.3rem 3rem rgba(15,60,45,.09); }
+.login-card form { display: grid; gap: .5rem; }
+.google-button { width: 100%; margin-top: 1rem; padding: .8rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .7rem; font-weight: 750; cursor: pointer; }
+.centered-state { min-height: 100vh; display: grid; place-content: center; justify-items: start; max-width: 42rem; margin: auto; padding: 2rem; }
+.centered-state .brand-mark { margin-bottom: 1.5rem; }
+@media (max-width: 720px) { .provisioned-main { padding: 1rem; }.setup-header { margin-bottom: 1.5rem; }.form-grid,.choice-grid { grid-template-columns: 1fr; }.choice { min-height: auto; }.first-admin-card { padding: 1.25rem; } }

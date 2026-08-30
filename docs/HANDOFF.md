@@ -9,8 +9,8 @@
 
 ## Verification pending
 
-Implement and verify Unit 6 after Unit 5 is committed.
+Implement and verify Unit 7 after Unit 6 is committed.
 
 ## Recommended next task
 
-Implement Unit 6: mocked Resend and Discord delivery workflows, calendar sync abstraction, and persistent kiosk status behavior.
+Implement Unit 7: consent-gated telemetry allowlist plus D1 backup/restore and retention documentation.

@@ -95,3 +95,16 @@ test("pairing returns a one-time code while D1 receives only its hash", async ()
   assert.notEqual(insert.values[1], body.code);
   assert.match(String(insert.values[1]), /^[A-Za-z0-9_-]{43}$/);
 });
+
+test("kiosk heartbeat hashes bearer credentials before D1 lookup", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const heartbeat = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "0.1.0" }) });
+  const result = await worker.fetch(heartbeat, env);
+  assert.equal(result.status, 200);
+  const lookup = database.calls.find((call) => call.sql.includes("FROM kiosks"));
+  assert.ok(lookup);
+  assert.notEqual(lookup.values[0], "very-secret");
+  assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET last_seen_at")));
+});

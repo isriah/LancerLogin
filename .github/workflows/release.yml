@@ -1,0 +1,40 @@
+name: Build community release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Package architecture-neutral kiosk service
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p release/kiosk/src release/kiosk/systemd release/artifacts
+          cp apps/kiosk/src/service.mjs apps/kiosk/src/cloud-client.mjs apps/kiosk/src/pair-cli.mjs release/kiosk/src/
+          cp apps/kiosk/systemd/lancerlogin-kiosk.service release/kiosk/systemd/
+          for arch in arm64 armv7; do
+            archive="lancerlogin-kiosk-${version}-linux-${arch}.tar.gz"
+            tar --create --gzip --file "release/artifacts/$archive" --directory release/kiosk .
+            (cd release/artifacts && sha256sum "$archive" > "$archive.sha256")
+          done
+          cp apps/kiosk/scripts/install-lancerlogin.sh release/artifacts/
+      - name: Publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/artifacts/* --verify-tag --generate-notes --title "LancerLogin $GITHUB_REF_NAME"

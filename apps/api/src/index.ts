@@ -178,6 +178,25 @@ async function redeemPairingCode(request: Request, env: Env): Promise<Response> 
   if ((results[1]?.meta?.changes ?? 1) < 1) throw new HttpError(409, "Pairing code was already used");
   return response({ kioskId, kioskToken, name: kioskName }, 201);
 }
+async function kioskFor(request: Request, env: Env): Promise<{ id: string; name: string }> {
+  const authorization = request.headers.get("authorization");
+  if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
+  const kiosk = await requireDatabase(env).prepare("SELECT id, name FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1").bind(await sha256(authorization.slice(7))).first<{ id: string; name: string }>();
+  if (!kiosk) throw new HttpError(401, "Kiosk credential is invalid");
+  return kiosk;
+}
+async function kioskHeartbeat(request: Request, env: Env): Promise<Response> {
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; releaseVersion?: string }>(request);
+  if (typeof input.readerOnline !== "boolean" || !input.releaseVersion || input.releaseVersion.length > 40) throw new HttpError(400, "Reader status and release version are required");
+  const now = new Date().toISOString();
+  await requireDatabase(env).prepare("UPDATE kiosks SET last_seen_at = ? WHERE id = ?").bind(now, kiosk.id).run();
+  return response({ ok: true, kioskId: kiosk.id, receivedAt: now });
+}
+async function kioskStatus(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin", "operator"]);
+  const result = await requireDatabase(env).prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
+  return response({ kiosks: result.results ?? [] });
+}
 
 const worker = { async fetch(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url); let result: Response;
@@ -193,7 +212,9 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     else if (url.pathname === "/admin/setup/progress" && ["GET", "PATCH"].includes(request.method)) result = await setupProgress(request, env);
     else if (url.pathname === "/admin/members" && ["GET", "POST"].includes(request.method)) result = await members(request, env);
     else if (url.pathname === "/admin/pairing-codes" && ["GET", "POST"].includes(request.method)) result = await pairingCodes(request, env);
+    else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
+    else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env);
     else result = response({ error: "Not found" }, 404);
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;

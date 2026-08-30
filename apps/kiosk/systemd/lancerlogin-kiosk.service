@@ -1,0 +1,23 @@
+[Unit]
+Description=LancerLogin local kiosk service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lancerlogin
+Group=lancerlogin
+WorkingDirectory=/opt/lancerlogin
+Environment=NODE_ENV=production
+Environment=LANCERLOGIN_CONFIG=/var/lib/lancerlogin/pairing.json
+ExecStart=/usr/bin/node /opt/lancerlogin/src/service.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/lancerlogin
+
+[Install]
+WantedBy=multi-user.target

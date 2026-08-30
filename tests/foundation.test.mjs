@@ -33,10 +33,14 @@ test("initial schema preserves the biometric and secret boundary", async () => {
   assert.doesNotMatch(schema, /raw_fingerprint/i);
 });
 
-test("provisioning workflow remains mock-only", async () => {
+test("provisioning workflow is adopter-gated and account-neutral", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
-  assert.match(workflow, /dry-run/);
-  assert.doesNotMatch(workflow, /cloudflare\.com/i);
+  assert.match(workflow, /workflow_dispatch/);
+  assert.match(workflow, /CLOUDFLARE_API_TOKEN/);
+  assert.match(workflow, /expected=.*inputs\.operation/);
+  assert.match(workflow, /inputs\.confirmation.*expected.*inputs\.installation_slug/);
+  assert.match(workflow, /RESUME|resume/);
+  assert.doesNotMatch(workflow, /accountId|account_id\s*[:=]/i);
 });
 
 test("Cloudflare setup is adopter-guided and does not require a target account", async () => {

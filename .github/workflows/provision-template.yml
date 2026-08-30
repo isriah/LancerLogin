@@ -1,17 +1,128 @@
-name: Provision adopter installation (dry-run)
+name: Provision adopter installation
+
 on:
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: This foundation intentionally accepts only dry-run.
+      operation:
+        description: Create a fresh installation or resume an interrupted setup
         required: true
-        default: "true"
-        type: boolean
+        default: create
+        type: choice
+        options:
+          - create
+          - resume
+      installation_slug:
+        description: Lowercase installation slug, for example example-club
+        required: true
+        type: string
+      confirmation:
+        description: Type CREATE followed by a space and the installation slug
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provision-${{ inputs.installation_slug }}
+  cancel-in-progress: false
+
 jobs:
-  validate-template:
-    if: inputs.dry_run == true
+  provision:
     runs-on: ubuntu-latest
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      WRANGLER_SEND_METRICS: "false"
     steps:
       - uses: actions/checkout@v4
-      - name: Confirm no account operation will run
-        run: echo "Mock provisioning only. A later release will require an adopter-provided, narrowly scoped secret."
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Validate explicit confirmation and secret
+        shell: bash
+        run: |
+          expected=$(echo "${{ inputs.operation }}" | tr '[:lower:]' '[:upper:]')
+          test "${{ inputs.confirmation }}" = "$expected ${{ inputs.installation_slug }}"
+          test -n "$CLOUDFLARE_API_TOKEN"
+      - run: npm ci
+      - name: Verify token and discover D1
+        shell: bash
+        run: |
+          npx wrangler whoami
+          mkdir -p .provision
+          npx wrangler d1 list --json > .provision/d1-list.json
+      - name: Prepare account-neutral Worker configuration
+        id: d1
+        shell: bash
+        run: |
+          state=$(node scripts/prepare-cloudflare-provision.mjs "${{ inputs.installation_slug }}" .provision/d1-list.json)
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+      - name: Check for resource collisions
+        id: resources
+        shell: bash
+        run: |
+          npx wrangler pages project list --json > .provision/pages-list.json
+          pages=$(node scripts/cloudflare-resource-state.mjs pages "${{ inputs.installation_slug }}-dashboard" .provision/pages-list.json)
+          if npx wrangler deployments list --name "${{ inputs.installation_slug }}-api" --json > .provision/worker-deployments.json 2>/dev/null; then worker=exists; else worker=missing; fi
+          echo "pages=$pages" >> "$GITHUB_OUTPUT"
+          echo "worker=$worker" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.operation }}" = "create" ]; then
+            test "${{ steps.d1.outputs.state }}" = "missing"
+            test "$pages" = "missing"
+            test "$worker" = "missing"
+          else
+            test "${{ steps.d1.outputs.state }}" = "exists"
+          fi
+      - name: Create D1 database
+        if: inputs.operation == 'create'
+        shell: bash
+        run: |
+          npx wrangler d1 create "${{ inputs.installation_slug }}-data" --binding DB --update-config --config .provision/wrangler.json
+          npx wrangler d1 list --json > .provision/d1-list.json
+          test "$(node scripts/prepare-cloudflare-provision.mjs "${{ inputs.installation_slug }}" .provision/d1-list.json)" = "exists"
+      - name: Apply D1 migrations
+        run: npx wrangler d1 migrations apply "${{ inputs.installation_slug }}-data" --remote --config .provision/wrangler.json
+      - name: Generate installation session key
+        shell: bash
+        run: |
+          SESSION_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
+          echo "::add-mask::$SESSION_KEY"
+          echo "SESSION_KEY=$SESSION_KEY" >> "$GITHUB_ENV"
+      - name: Deploy Worker API
+        id: deploy-api
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: deploy --config .provision/wrangler.json
+          secrets: SESSION_KEY
+        env:
+          SESSION_KEY: ${{ env.SESSION_KEY }}
+      - name: Build dashboard for the new API
+        env:
+          VITE_API_BASE_URL: ${{ steps.deploy-api.outputs.deployment-url }}
+        run: npm --workspace @lancerlogin/dashboard run build
+      - name: Create Pages project
+        if: steps.resources.outputs.pages == 'missing'
+        run: npx wrangler pages project create "${{ inputs.installation_slug }}-dashboard" --production-branch main
+      - name: Deploy Pages dashboard
+        id: deploy-dashboard
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: pages deploy apps/dashboard/dist --project-name=${{ inputs.installation_slug }}-dashboard --branch=main --commit-hash=${{ github.sha }}
+      - name: Publish setup links
+        shell: bash
+        env:
+          API_URL: ${{ steps.deploy-api.outputs.deployment-url }}
+          DASHBOARD_URL: https://${{ inputs.installation_slug }}-dashboard.pages.dev
+        run: |
+          {
+            echo "## LancerLogin installation ready"
+            echo ""
+            echo "- Dashboard: $DASHBOARD_URL"
+            echo "- Worker API: $API_URL"
+            echo ""
+            echo "Open the dashboard to create the first Admin and review the privacy notice."
+          } >> "$GITHUB_STEP_SUMMARY"

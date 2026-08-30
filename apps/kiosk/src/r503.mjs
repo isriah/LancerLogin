@@ -14,6 +14,7 @@ export function parseAcknowledgement(packet) {
 }
 
 const requireSuccess = (acknowledgement, operation) => { if (acknowledgement.confirmation !== 0) throw new Error(`R503 ${operation} failed with code 0x${acknowledgement.confirmation.toString(16).padStart(2, "0")}`); return acknowledgement.parameters; };
+const delay = (milliseconds) => milliseconds > 0 ? new Promise((resolve) => setTimeout(resolve, milliseconds)) : Promise.resolve();
 
 export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
   const send = async (instruction, parameters = []) => parseAcknowledgement(await exchange(commandPacket(instruction, parameters)));
@@ -28,6 +29,30 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
       requireSuccess(await send(0x02, [0x01]), "image conversion");
       const found = await send(0x04, [0x01, 0x00, 0x00, (capacity >> 8) & 0xff, capacity & 0xff]); if (found.confirmation === 0x09) return undefined;
       const result = requireSuccess(found, "template search"); return { slot: ((result[0] ?? 0) << 8) | (result[1] ?? 0), score: ((result[2] ?? 0) << 8) | (result[3] ?? 0) };
+    },
+    async enroll(slot, { attempts = 60, delayMs = 250 } = {}) {
+      if (!Number.isInteger(slot) || slot < 0 || slot >= capacity) throw new Error(`R503 slot must be between 0 and ${capacity - 1}`);
+      const capture = async (buffer) => {
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
+          const image = await send(0x01);
+          if (image.confirmation === 0) { requireSuccess(await send(0x02, [buffer]), `image ${buffer} conversion`); return; }
+          if (image.confirmation !== 0x02) requireSuccess(image, `image ${buffer} capture`);
+          await delay(delayMs);
+        }
+        throw new Error("R503 enrollment timed out waiting for a finger");
+      };
+      await capture(0x01);
+      let removed = false;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const image = await send(0x01);
+        if (image.confirmation === 0x02) { removed = true; break; }
+        requireSuccess(image, "finger removal check"); await delay(delayMs);
+      }
+      if (!removed) throw new Error("R503 enrollment timed out waiting for the finger to be removed");
+      await capture(0x02);
+      requireSuccess(await send(0x05), "template creation");
+      requireSuccess(await send(0x06, [0x01, (slot >> 8) & 0xff, slot & 0xff]), "template storage");
+      return { slot };
     },
   };
 }

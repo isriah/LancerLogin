@@ -12,6 +12,8 @@ Only an Admin can generate a pairing code. Generating a new one supersedes the p
 
 LancerLogin deliberately supports one active kiosk. When a kiosk is already paired, the dashboard requires an Admin to explicitly confirm replacement before it will issue another code. The existing kiosk continues working while the code is pending; successful redemption disables its credential before activating the replacement.
 
-The local service listens only on `127.0.0.1:8788`. Its `/health` response reports pairing, reader, and cloud connectivity without exposing credentials or biometric data. Once per minute it sends the Worker only operational status and the release version. R503 templates and raw scans remain exclusively within the sensor; the kiosk service handles slot numbers and member mappings only.
+The local service listens only on `127.0.0.1:8788`. Its touch-sized local page provides check-in, status, reader testing, enrollment, and slot mapping. When Chromium is installed, the guided installer configures that page to open in kiosk mode at desktop login. Its `/health` response reports pairing, reader, and cloud connectivity without exposing credentials or biometric data. Once per minute it sends the Worker only operational status and the release version.
+
+Enrollment asks for the same finger twice, creates the model inside the R503, and stores it in the selected sensor slot. Only the slot number and roster member ID are written to an owner-only file on the Pi. R503 templates and raw scans remain exclusively within the sensor and never enter application storage, logs, D1, or cloud requests. Replacing an existing local mapping requires an explicit checkbox.
 
 Normal operation is offline-first: the Pi writes scans to a local queue and retries in order. The reader adapter exposes only online status and slot match results, never templates. Captive portals are manual Wi-Fi/offline-first operation; advanced compatibility is documented but unsupported.

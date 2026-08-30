@@ -8,6 +8,7 @@ import { normalizeApiUrl, pairInstallation, sendAttendance, sendHeartbeat } from
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
 import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/src/r503.mjs";
+import { kioskApp, kioskHtml, kioskStyles } from "../apps/kiosk/src/ui.mjs";
 
 test("pairing code is hashed, single-use, and expires", () => {
   const issued = issuePairingCode({ now: () => 0, random: () => Buffer.from("123456") });
@@ -100,4 +101,23 @@ test("R503 packets are checksummed and expose only slot matches", async () => {
 test("R503 no-finger response is a normal unmatched scan", async () => {
   const sensor = createR503(async () => acknowledgement(0x02));
   assert.equal(await sensor.match(), undefined);
+});
+
+test("R503 enrollment creates and stores a template without returning biometric data", async () => {
+  const replies = [acknowledgement(0), acknowledgement(0), acknowledgement(0x02), acknowledgement(0), acknowledgement(0), acknowledgement(0), acknowledgement(0)];
+  const instructions = [];
+  const sensor = createR503(async (packet) => { instructions.push(packet[9]); return replies.shift(); });
+  const enrolled = await sensor.enroll(12, { attempts: 2, delayMs: 0 });
+  assert.deepEqual(enrolled, { slot: 12 });
+  assert.deepEqual(instructions, [0x01, 0x02, 0x01, 0x01, 0x02, 0x05, 0x06]);
+  assert.equal(JSON.stringify(enrolled).includes("template"), false);
+});
+
+test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
+  assert.match(kioskHtml, /<main id="main">/);
+  assert.match(kioskHtml, /role="status" aria-live="polite"/);
+  assert.match(kioskHtml, /Fingerprint images and templates stay inside the R503 sensor/);
+  assert.match(kioskStyles, /min-height:88px/);
+  assert.match(kioskApp, /\/enroll/);
+  assert.doesNotMatch(kioskHtml, /https?:\/\//);
 });

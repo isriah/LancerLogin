@@ -31,6 +31,7 @@ if [[ "$MODE" == "--dry-run" ]]; then
   echo "3. Install into /opt/lancerlogin with a dedicated system user."
   echo "4. Ask for the adopter's Worker API URL and one-time pairing code."
   echo "5. Store the resulting kiosk credential owner-only and start the local service."
+  echo "6. Configure an installed Chromium browser to open the local touch kiosk at desktop login."
   echo "Dry-run complete: no files, services, hardware, accounts, or network were changed."
   exit 0
 fi
@@ -66,4 +67,13 @@ unset pairing_code
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-kiosk.service /etc/systemd/system/lancerlogin-kiosk.service
 systemctl daemon-reload
 systemctl enable --now lancerlogin-kiosk.service
-echo "LancerLogin kiosk installed. Open http://127.0.0.1:8788/health locally to verify service state."
+browser_path="$(command -v chromium || command -v chromium-browser || true)"
+if [[ -n "$browser_path" ]]; then
+  install -d -m 0755 /etc/xdg/autostart
+  printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=LancerLogin Kiosk' "Exec=${browser_path} --kiosk --noerrdialogs --disable-infobars http://127.0.0.1:8788/" 'X-GNOME-Autostart-enabled=true' > /etc/xdg/autostart/lancerlogin-kiosk.desktop
+  chmod 0644 /etc/xdg/autostart/lancerlogin-kiosk.desktop
+  echo "Chromium will open LancerLogin in kiosk mode at the next desktop login."
+else
+  echo "Chromium was not found. Install it with Raspberry Pi OS software management, then open http://127.0.0.1:8788/ locally."
+fi
+echo "LancerLogin kiosk installed. Open http://127.0.0.1:8788/ locally to scan, enroll, and verify service state."

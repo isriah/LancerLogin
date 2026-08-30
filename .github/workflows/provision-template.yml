@@ -1,0 +1,17 @@
+name: Provision adopter installation (dry-run)
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: This foundation intentionally accepts only dry-run.
+        required: true
+        default: "true"
+        type: boolean
+jobs:
+  validate-template:
+    if: inputs.dry_run == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm no account operation will run
+        run: echo "Mock provisioning only. A later release will require an adopter-provided, narrowly scoped secret."

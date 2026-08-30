@@ -13,7 +13,9 @@
     "dev:api": "npm --workspace @lancerlogin/api run dev",
     "dev:dashboard": "npm --workspace @lancerlogin/dashboard run dev",
     "dev:kiosk": "npm --workspace @lancerlogin/kiosk run dev",
-    "reset-password": "node scripts/reset-local-password.mjs"
+    "reset-password": "node scripts/reset-local-password.mjs",
+    "backup-d1": "node scripts/d1-maintenance.mjs backup",
+    "restore-d1": "node scripts/d1-maintenance.mjs restore"
   },
   "devDependencies": { "typescript": "^5.7.3" }
 }

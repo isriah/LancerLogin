@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { scryptAsync } from "@noble/hashes/scrypt.js";
-import { selectCloudflareAccount } from "./select-cloudflare-account.mjs";
+import { discoverCloudflareAccount } from "./select-cloudflare-account.mjs";
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, value, index, all) => value.startsWith("--") ? [...pairs, [value.slice(2), all[index + 1]]] : pairs, []));
 const database = args.database; const username = args.username?.toLowerCase();
@@ -12,11 +12,8 @@ if (!process.stdin.isTTY) { console.error("Password reset requires an interactiv
 const apiToken = process.env.CLOUDFLARE_API_TOKEN;
 if (!apiToken) { console.error("Set CLOUDFLARE_API_TOKEN to a token restricted to exactly one adopter-owned account."); process.exit(2); }
 
-const accountResponse = await fetch("https://api.cloudflare.com/client/v4/accounts", { headers: { authorization: `Bearer ${apiToken}`, accept: "application/json" } });
-const accountDocument = await accountResponse.json().catch(() => undefined);
-if (!accountResponse.ok) { console.error("Cloudflare account discovery failed. Check the scoped token and try again."); process.exit(2); }
 let accountId;
-try { accountId = selectCloudflareAccount(accountDocument); } catch (error) { console.error(error.message); process.exit(2); }
+try { accountId = await discoverCloudflareAccount(apiToken); } catch (error) { console.error(error.message); process.exit(2); }
 
 function readHidden(prompt) {
   return new Promise((resolve) => {

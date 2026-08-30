@@ -8,6 +8,21 @@ export function selectCloudflareAccount(document) {
   return accountId;
 }
 
+export async function discoverCloudflareAccount(apiToken, fetchImpl = fetch) {
+  if (!apiToken) throw new Error("Set CLOUDFLARE_API_TOKEN to a token restricted to exactly one adopter-owned account");
+  let response;
+  try {
+    response = await fetchImpl("https://api.cloudflare.com/client/v4/accounts", {
+      headers: { authorization: `Bearer ${apiToken}`, accept: "application/json" },
+    });
+  } catch {
+    throw new Error("Could not reach Cloudflare to discover the token's account");
+  }
+  const document = await response.json().catch(() => undefined);
+  if (!response.ok) throw new Error("Cloudflare account discovery failed. Check the scoped token and try again");
+  return selectCloudflareAccount(document);
+}
+
 async function main() {
   const [input] = process.argv.slice(2);
   if (!input) throw new Error("Usage: select-cloudflare-account.mjs <accounts-response.json>");

@@ -4,22 +4,22 @@ LancerLogin retains roster, meetings, attendance, audit data, settings, and encr
 
 ## D1 backup
 
-From the adopter-owned repository checkout, create a D1 export before upgrades or bulk deletion. Replace `<slug>` with the installation slug used by the provisioning workflow:
+From the adopter-owned repository checkout, create a D1 export before upgrades or bulk deletion. Create a fresh narrowly scoped token if the setup token is no longer available, then expose it to the process as `CLOUDFLARE_API_TOKEN` without putting it in a command line or repository file. Replace `sample-club` with the installation slug used by the provisioning workflow:
 
 ```sh
-npx wrangler d1 export <slug>-data --remote --output lancerlogin-backup.sql
+npm run backup-d1 -- --database sample-club-data --output lancerlogin-backup.sql
 ```
 
-Store the export securely because it contains personal attendance data and encrypted integration ciphertext. Record the release version and UTC export time alongside it. The command discovers the account through the adopter's scoped Cloudflare token; this repository contains no account identifier.
+The helper refuses to overwrite an existing backup. Store the export securely because it contains personal attendance data and encrypted integration ciphertext. Record the release version and UTC export time alongside it. The command discovers the account through `CLOUDFLARE_API_TOKEN`; the token must be restricted to exactly one adopter-owned account, and the repository contains no account identifier.
 
 ## Restore
 
 Restore only into the same adopter-owned installation after taking a fresh pre-restore export:
 
 ```sh
-npx wrangler d1 execute <slug>-data --remote --file lancerlogin-backup.sql
+npm run restore-d1 -- --database sample-club-data --file lancerlogin-backup.sql --confirm "RESTORE sample-club-data"
 ```
 
-Verify row counts for members, meetings, attendance events, corrections, audit records, and settings before opening the dashboard. Encrypted integration values require the same installation's `INTEGRATION_KEY`; rotate integrations if that secret changed. Re-pair a kiosk only if its pairing record was restored inconsistently. Never restore data into another organization without an explicit privacy and retention review.
+The exact confirmation phrase is required. Verify row counts for members, meetings, attendance events, corrections, audit records, and settings before opening the dashboard. Encrypted integration values require the same installation's `INTEGRATION_KEY`; rotate integrations if that secret changed. Re-pair a kiosk only if its pairing record was restored inconsistently. Never restore data into another organization without an explicit privacy and retention review.
 
 Deleting an installation is destructive configuration and requires Admin confirmation plus a final export prompt. There is no migration path from another attendance installation.

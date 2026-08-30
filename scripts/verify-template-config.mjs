@@ -7,4 +7,4 @@ for (const value of forbidden) {
   if (workflow.includes(value)) throw new Error(`Template configuration contains forbidden deployment value: ${value}`);
 }
 console.log("Template deployment configuration is sanitized and adopter-gated.");
-if (!guide.includes("Start here") || !guide.includes("Screenshot plan")) throw new Error("Public task-oriented guide is incomplete.");
+if (!guide.includes("Start here") || !guide.includes("Screenshot coverage")) throw new Error("Public task-oriented guide is incomplete.");

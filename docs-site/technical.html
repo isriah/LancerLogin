@@ -1,1 +1,35 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LancerLogin technical reference</title><link rel="stylesheet" href="styles.css"></head><body><a class="skip" href="#main">Skip to content</a><header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="technical.html" aria-current="page">Technical</a></nav></header><header class="page-header"><div><p class="eyebrow">Reference</p><h1>Architecture and security</h1></div></header><main id="main" class="page"><h2>Components</h2><div class="task-grid"><article class="task-card"><span>P</span><h3>Cloudflare Pages</h3><p>Static React dashboard. It holds no Cloudflare token and sends credentialed requests only to its paired Worker origin.</p></article><article class="task-card"><span>W</span><h3>Worker + D1</h3><p>Authorization, validation, scrypt auth, AES-GCM integration secrets, audit trails, attendance, exports, and provider calls.</p></article><article class="task-card"><span>π</span><h3>Raspberry Pi + R503</h3><p>Loopback-only service, serial sensor I/O, local mappings, atomic offline queue, and hashed bearer pairing.</p></article></div><h2>Security invariants</h2><ul><li>Every organization query is scoped to installation <code>primary</code>.</li><li>Admin and Operator permissions are enforced by Worker routes, not only hidden in UI.</li><li>Sessions are HMAC-signed, HTTP-only, Secure, SameSite cookies with an eight-hour lifetime.</li><li>Google OAuth uses signed ten-minute state and validates issuer, audience, verified email, and active user membership.</li><li>Local passwords use salted scrypt (N=32768, r=8, p=1).</li><li>Integration credentials use AES-256-GCM with a per-installation Worker secret.</li><li>Pairing codes and kiosk credentials are stored remotely only as SHA-256 hashes.</li></ul><h2>Verification and source reference</h2><p>CI runs workspace typechecks, Node unit tests, Worker runtime tests, production builds, and sanitizer checks. Read <code>docs/ARCHITECTURE.md</code>, <code>docs/DECISIONS.md</code>, <code>docs/SECURITY.md</code>, and <code>docs/BACKUP-RESTORE.md</code> in the repository for durable technical detail.</p></main><footer><div><a href="index.html">Documentation home</a> · Apache-2.0</div></footer></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LancerLogin technical reference</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="technical.html" aria-current="page">Technical</a></nav></header>
+<header class="page-header"><div><p class="eyebrow">Reference</p><h1>Architecture and security</h1></div></header>
+<main id="main" class="page">
+  <h2>Components</h2>
+  <div class="task-grid">
+    <article class="task-card"><span>P</span><h3>Cloudflare Pages</h3><p>Static React dashboard plus a same-origin <code>/api</code> proxy. It holds no Cloudflare token, and browser credentials stay on the adopter’s Pages origin.</p></article>
+    <article class="task-card"><span>W</span><h3>Worker + D1</h3><p>Authorization, validation, scrypt auth, AES-GCM integration secrets, audit trails, attendance, exports, and provider calls.</p></article>
+    <article class="task-card"><span>π</span><h3>Raspberry Pi + R503</h3><p>Loopback-only service, serial sensor I/O, local mappings, atomic offline queue, and hashed bearer pairing.</p></article>
+  </div>
+  <h2>Security invariants</h2>
+  <ul>
+    <li>Every organization query is scoped to installation <code>primary</code>.</li>
+    <li>Admin and Operator permissions are enforced by Worker routes, not only hidden in UI.</li>
+    <li>Sessions are HMAC-signed, HTTP-only, Secure, SameSite cookies with an eight-hour lifetime.</li>
+    <li>Google OAuth uses signed ten-minute state and validates issuer, audience, verified email, and active user membership.</li>
+    <li>Local passwords use salted scrypt (N=32768, r=8, p=1).</li>
+    <li>Integration credentials use AES-256-GCM with a per-installation Worker secret.</li>
+    <li>Pairing codes and kiosk credentials are stored remotely only as SHA-256 hashes.</li>
+  </ul>
+  <h2>Verification and source reference</h2>
+  <p>CI runs workspace typechecks, Node unit tests, Worker runtime tests, production builds, dependency auditing, and sanitizer checks. Read <code>docs/ARCHITECTURE.md</code>, <code>docs/DECISIONS.md</code>, <code>docs/SECURITY.md</code>, and <code>docs/BACKUP-RESTORE.md</code> in the repository for durable technical detail.</p>
+</main>
+<footer><div><a href="index.html">Documentation home</a> · Apache-2.0</div></footer>
+</body>
+</html>

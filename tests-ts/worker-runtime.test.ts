@@ -191,3 +191,24 @@ test("Google OAuth uses signed state and validates identity before issuing a ses
     assert.match(callback.headers.get("set-cookie") ?? "", /lancerlogin_session=/);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("Admin can create a least-privilege local Operator without exposing its hash", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/users", { localUsername: "front-desk", localPassword: "correct horse battery staple", role: "operator" }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 201);
+  assert.equal((await result.text()).includes("scrypt$"), false);
+  const insert = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO users"));
+  assert.match(String(insert?.values[3]), /^scrypt\$/);
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("user.created")));
+});
+
+test("Admin cannot deactivate the current account", async () => {
+  const database = new FakeDatabase();
+  database.user = { id: "admin-1", role: "admin", passwordHash: null };
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const ownCookie = `lancerlogin_session=${await createSessionCodec(sessionSecret).issue({ userId: "admin-1", role: "admin" })}`;
+  const result = await worker.fetch(request("/admin/users/admin-1", { active: false }, { method: "PATCH", cookie: ownCookie }), env);
+  assert.equal(result.status, 409);
+  assert.equal(database.batches.length, 0);
+});

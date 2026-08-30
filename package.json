@@ -12,7 +12,8 @@
     "build": "npm run build --workspaces --if-present && node scripts/verify-template-config.mjs",
     "dev:api": "npm --workspace @lancerlogin/api run dev",
     "dev:dashboard": "npm --workspace @lancerlogin/dashboard run dev",
-    "dev:kiosk": "npm --workspace @lancerlogin/kiosk run dev"
+    "dev:kiosk": "npm --workspace @lancerlogin/kiosk run dev",
+    "reset-password": "node scripts/reset-local-password.mjs"
   },
   "devDependencies": { "typescript": "^5.7.3" }
 }

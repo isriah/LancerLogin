@@ -330,6 +330,40 @@ async function googleCallback(request: Request, env: Env): Promise<Response> {
   headers.append("set-cookie", "lancerlogin_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/auth/google/callback; Max-Age=0");
   return new Response(null, { status: 302, headers });
 }
+async function users(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (request.method === "GET") { const result = await db.prepare("SELECT id, email, local_username AS localUsername, role, active, created_at AS createdAt FROM users WHERE installation_id = 'primary' ORDER BY created_at").all(); return response({ users: result.results ?? [] }); }
+  const input = await parseJson<{ email?: string | null; localUsername?: string | null; localPassword?: string; role?: Role }>(request);
+  const email = input.email?.trim().toLowerCase() || null; const username = input.localUsername?.trim().toLowerCase() || null;
+  if (!email && !username) throw new HttpError(400, "An email or local username is required");
+  if (email && !validEmail(email)) throw new HttpError(400, "Email is invalid");
+  if (username && !/^[a-z0-9._-]{3,64}$/.test(username)) throw new HttpError(400, "Local username must be 3–64 letters, numbers, dots, underscores, or hyphens");
+  if (!input.role || !["admin", "operator"].includes(input.role)) throw new HttpError(400, "Role must be admin or operator");
+  if (username && (input.localPassword?.length ?? 0) < 12) throw new HttpError(400, "A local user needs a password of at least 12 characters");
+  const duplicate = await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND ((email IS NOT NULL AND email = ?) OR (local_username IS NOT NULL AND local_username = ?))").bind(email, username).first();
+  if (duplicate) throw new HttpError(409, "That email or username is already in use");
+  const id = crypto.randomUUID(); const now = new Date().toISOString(); const passwordHash = username ? await hashPassword(input.localPassword!) : null;
+  await db.batch([
+    db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, role, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?)").bind(id, email, username, passwordHash, input.role, now),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.created', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ role: input.role, hasGoogle: Boolean(email), hasLocal: Boolean(username) }), now),
+  ]);
+  return response({ user: { id, email, localUsername: username, role: input.role, active: true, createdAt: now } }, 201);
+}
+async function updateUser(request: Request, env: Env, userId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ role?: Role; active?: boolean; localPassword?: string }>(request);
+  const target = await db.prepare("SELECT id, role, active, local_username AS localUsername FROM users WHERE installation_id = 'primary' AND id = ?").bind(userId).first<{ id: string; role: Role; active: number; localUsername?: string }>();
+  if (!target) throw new HttpError(404, "User not found");
+  if (userId === principal.userId && ((input.role && input.role !== "admin") || input.active === false)) throw new HttpError(409, "You cannot demote or deactivate your current Admin account");
+  if (input.role && !["admin", "operator"].includes(input.role)) throw new HttpError(400, "Role must be admin or operator");
+  if (input.localPassword && (!target.localUsername || input.localPassword.length < 12)) throw new HttpError(400, "Password reset requires a local username and at least 12 characters");
+  if (input.role === undefined && input.active === undefined && input.localPassword === undefined) throw new HttpError(400, "Provide a role, active status, or new local password");
+  const passwordHash = input.localPassword ? await hashPassword(input.localPassword) : null; const now = new Date().toISOString();
+  await db.batch([
+    db.prepare("UPDATE users SET role = COALESCE(?, role), active = COALESCE(?, active), password_hash = COALESCE(?, password_hash) WHERE installation_id = 'primary' AND id = ?").bind(input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0, passwordHash, userId),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.updated', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, userId, JSON.stringify({ role: input.role, active: input.active, passwordReset: Boolean(input.localPassword) }), now),
+  ]);
+  return response({ ok: true });
+}
 
 const worker = { async fetch(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url); let result: Response;
@@ -355,6 +389,8 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     else if (url.pathname === "/admin/integrations" && request.method === "GET") result = await integrationsStatus(request, env);
     else if (/^\/admin\/integrations\/(google|resend|discord)$/.test(url.pathname) && ["PUT", "DELETE"].includes(request.method)) result = await integrationConfiguration(request, env, providerFrom(url.pathname));
     else if (/^\/admin\/integrations\/(google|resend|discord)\/test$/.test(url.pathname) && request.method === "POST") result = await testIntegration(request, env, providerFrom(url.pathname));
+    else if (url.pathname === "/admin/users" && ["GET", "POST"].includes(request.method)) result = await users(request, env);
+    else if (/^\/admin\/users\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateUser(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env);
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);

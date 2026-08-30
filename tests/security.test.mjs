@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { createSecretVault, createSessionSigner, hashLocalPassword, resetLocalPassword, verifyLocalPassword } from "../apps/api/src/security.mjs";
 
 test("local password hashes are salted, verified, and reset only through the local tool", async () => {
@@ -28,4 +29,15 @@ test("integration secrets are encrypted and status never discloses saved values"
   assert.deepEqual(vault.decryptForServer("resend"), { apiKey: "private-value" });
   assert.equal(vault.remove("resend"), true);
   assert.deepEqual(vault.status("resend"), { configured: false });
+});
+
+test("local recovery tool requires hidden interactive input and adopter D1 authorization", async () => {
+  const tool = await readFile("scripts/reset-local-password.mjs", "utf8");
+  const guide = await readFile("docs/LOCAL-RECOVERY.md", "utf8");
+  assert.match(tool, /isTTY/);
+  assert.match(tool, /setRawMode/);
+  assert.match(tool, /wrangler.*d1.*execute/s);
+  assert.doesNotMatch(tool, /--password/);
+  assert.match(guide, /CLOUDFLARE_API_TOKEN/);
+  assert.match(guide, /passwords_reset: 1/);
 });

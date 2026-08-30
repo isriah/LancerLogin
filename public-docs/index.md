@@ -10,6 +10,7 @@
 ## Tasks
 
 - [Set up your installation](../docs/BOOTSTRAPPING.md)
+- [Link your Cloudflare account](../docs/CLOUDFLARE-LINKING.md)
 - [Configure the dashboard](../docs/DASHBOARD.md)
 - [Set up a kiosk](../docs/KIOSK.md)
 - [Manage data and backups](../docs/BACKUP-RESTORE.md)

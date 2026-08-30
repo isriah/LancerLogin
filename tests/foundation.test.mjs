@@ -38,3 +38,10 @@ test("provisioning workflow remains mock-only", async () => {
   assert.match(workflow, /dry-run/);
   assert.doesNotMatch(workflow, /cloudflare\.com/i);
 });
+
+test("Cloudflare setup is adopter-guided and does not require a target account", async () => {
+  const guide = await readFile("docs/CLOUDFLARE-LINKING.md", "utf8");
+  assert.match(guide, /adopter's own Cloudflare account/i);
+  assert.match(guide, /CLOUDFLARE_API_TOKEN/);
+  assert.doesNotMatch(guide, /account_id\s*=|database_id\s*=/i);
+});

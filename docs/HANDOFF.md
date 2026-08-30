@@ -9,8 +9,8 @@
 
 ## Verification pending
 
-Implement and verify Unit 7 after Unit 6 is committed.
+Implement and verify Unit 8 after Unit 7 is committed.
 
 ## Recommended next task
 
-Implement Unit 7: consent-gated telemetry allowlist plus D1 backup/restore and retention documentation.
+Implement Unit 8: template provisioning contract and public task-oriented docs/screenshot plan using mocks only.

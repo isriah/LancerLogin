@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${LANCERLOGIN_VERSION:-0.1.6}"
+VERSION="${LANCERLOGIN_VERSION:-0.1.7}"
 MODE="${1:---dry-run}"
 RELEASE_ROOT="https://github.com/isriah/LancerLogin/releases/download/v${VERSION}"
 

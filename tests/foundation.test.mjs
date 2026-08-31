@@ -78,6 +78,20 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.doesNotMatch(workflow, /accountId:\s*[a-f0-9]{32}|account_id\s*[:=]\s*[a-f0-9]{32}/i);
 });
 
+test("CI and tagged releases apply the complete D1 migration chain locally", async () => {
+  const packageDocument = JSON.parse(await readFile("package.json", "utf8"));
+  assert.equal(packageDocument.scripts["verify:migrations"], "node scripts/verify-d1-migrations.mjs");
+  const verifier = await readFile("scripts/verify-d1-migrations.mjs", "utf8");
+  assert.match(verifier, /d1", "migrations", "apply"/);
+  assert.match(verifier, /"--local"/);
+  assert.match(verifier, /SELECT name FROM d1_migrations/);
+  assert.match(verifier, /fingerprint_template\|raw_fingerprint\|biometric_template/);
+  assert.doesNotMatch(verifier, /--remote|CLOUDFLARE_API_TOKEN/);
+  for (const workflowPath of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
+    assert.match(await readFile(workflowPath, "utf8"), /npm run verify:migrations/);
+  }
+});
+
 test("Cloudflare setup is adopter-guided and does not require a target account", async () => {
   const guide = await readFile("docs/CLOUDFLARE-LINKING.md", "utf8");
   assert.match(guide, /adopter's own Cloudflare account/i);

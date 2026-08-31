@@ -10,3 +10,4 @@ dist/
 coverage/
 .provision/
 .collector/
+.d1-migration-verify-*/

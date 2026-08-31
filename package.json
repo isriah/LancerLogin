@@ -8,6 +8,7 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "test": "node --test tests/**/*.test.mjs && node --experimental-strip-types --test tests-ts/**/*.test.ts",
+    "verify:migrations": "node scripts/verify-d1-migrations.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspaces --if-present && node scripts/verify-template-config.mjs",
     "dev:api": "npm --workspace @lancerlogin/api run dev",

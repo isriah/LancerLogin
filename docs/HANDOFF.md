@@ -12,7 +12,7 @@
 
 ## Verification boundary
 
-All current automated tests, workspace typechecks, sanitizer checks, dependency audit, and production builds pass locally. The complete D1 migration chain was applied to a fresh local emulator. Browser verification covered the no-cloud setup preview, explicit themed branding plus a temporary dark override, retained kiosk health, public documentation, and the local kiosk at the Waveshare-sized 800×480 viewport. Provider calls use mocked responses in tests. The R503 protocol uses an injected mock transport; no physical Pi, sensor, GitHub provisioning run, or Cloudflare deployment was touched. `docs/COMPLETION-AUDIT.md` is the durable requirement-to-evidence matrix.
+All current automated tests, workspace typechecks, sanitizer checks, dependency audit, and production builds pass locally. CI and tagged releases run `npm run verify:migrations`, which applies and inspects the complete migration chain on a fresh isolated local D1 database without credentials or remote access. Browser verification covered the no-cloud setup preview, explicit themed branding plus a temporary dark override, retained kiosk health, public documentation, and the local kiosk at the Waveshare-sized 800×480 viewport. Provider calls use mocked responses in tests. The R503 protocol uses an injected mock transport; no physical Pi, sensor, GitHub provisioning run, or Cloudflare deployment was touched. `docs/COMPLETION-AUDIT.md` is the durable requirement-to-evidence matrix.
 
 ## Remaining acceptance
 

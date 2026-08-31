@@ -26,3 +26,5 @@ This checklist maps the approved Community Release Plan to durable implementatio
 Automated tests use fake D1 bindings, provider responses, Cloudflare resource lists, and R503 transport. No provisioning workflow, provider delivery, Cloudflare mutation, Pi installation, or sensor operation has been performed from this project. Those acceptance steps require a fresh LancerLogin-only adopter target and must never use an existing attendance installation.
 
 The detailed requirement-to-evidence matrix is maintained in `docs/COMPLETION-AUDIT.md`.
+
+Both `.github/workflows/ci.yml` and `.github/workflows/release.yml` run the account-neutral `verify:migrations` gate against a fresh local D1 database before accepting a commit or tag.

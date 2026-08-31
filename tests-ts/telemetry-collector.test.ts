@@ -86,6 +86,20 @@ test("summary is authenticated, aggregate-only, and k-anonymizes metros", async 
   assert.ok(database.calls.some((call) => call.sql.includes("HAVING COUNT(DISTINCT install_hash) >= 5")));
 });
 
+test("maintainers can delete a requested installation without persisting its raw reference", async () => {
+  const database = new FakeDatabase();
+  const token = "deletion-token-".padEnd(40, "x");
+  const env = { DB: database, ADMIN_BEARER_TOKEN: token, INSTALL_ID_PEPPER: "p".repeat(32) } as Env;
+  const url = "https://collector.example.test/v1/admin/delete-installation";
+  const denied = await collector.fetch(new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ installId: report.installId }) }), env);
+  assert.equal(denied.status, 401);
+  const accepted = await collector.fetch(new Request(url, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify({ installId: report.installId }) }), env);
+  assert.equal(accepted.status, 204);
+  assert.equal(database.batches.length, 1);
+  assert.ok(database.batches[0].every((call) => call.sql.includes("DELETE FROM telemetry_")));
+  assert.ok(database.batches[0].every((call) => call.values[0] !== report.installId && /^[a-f0-9]{64}$/.test(String(call.values[0]))));
+});
+
 test("scheduled retention is bounded and deletes orphan install hashes", async () => {
   assert.equal(configuredRetentionDays(undefined), 30);
   assert.throws(() => configuredRetentionDays("366"), /invalid/);

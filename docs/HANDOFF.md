@@ -16,5 +16,5 @@ All current automated tests, workspace typechecks, sanitizer checks, dependency 
 
 ## Remaining acceptance
 
-1. Name and security-review the community telemetry public operator and HTTPS URL, and approve the proposed 30-day report retention plus maintainer-only aggregate access. Until `TELEMETRY_ENDPOINT` is configured in the release template, accepted telemetry is safely a no-op.
-2. When a user explicitly supplies a fresh LancerLogin-only Cloudflare target and Raspberry Pi, run Create provisioning and the hardware smoke checklist. Never use the existing attendance installation or its resources.
+1. Add a token for a fresh collector-only Cloudflare account to the protected GitHub environment, run the guarded Create workflow, review the resulting HTTPS URL, and only then configure `TELEMETRY_ENDPOINT`. The operator, 30-day retention, maintainer-only aggregate access, deletion, and incident policies are approved and published. Until the endpoint is configured, accepted telemetry is safely a no-op.
+2. When a user explicitly supplies a fresh LancerLogin-only adopter Cloudflare target and Raspberry Pi, run Create provisioning and the hardware smoke checklist. Never use the existing attendance installation or its resources.

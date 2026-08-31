@@ -27,6 +27,7 @@ class HttpError extends Error {
 }
 
 const reportKeys = new Set(["installId", "releaseVersion", "activeKioskCount", "errorCategory", "metro"]);
+const deletionKeys = new Set(["installId"]);
 const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const releaseVersion = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,20})?$/;
 const controlCharacters = /[\u0000-\u001f\u007f]/;
@@ -86,6 +87,20 @@ async function readReport(request: Request): Promise<TelemetryReport> {
   catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(400, "Telemetry report must be valid JSON"); }
 }
 
+async function readDeletionRequest(request: Request): Promise<string> {
+  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new HttpError(415, "Content-Type must be application/json");
+  if (Number(request.headers.get("content-length") ?? 0) > 1024) throw new HttpError(413, "Deletion request is too large");
+  const text = await request.text();
+  if (new TextEncoder().encode(text).byteLength > 1024) throw new HttpError(413, "Deletion request is too large");
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { throw new HttpError(400, "Deletion request must be valid JSON"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "Deletion request must be an object");
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !deletionKeys.has(key))) throw new HttpError(400, "Deletion request contains an unsupported field");
+  if (typeof record.installId !== "string" || !uuidV4.test(record.installId)) throw new HttpError(400, "installId must be an opaque UUID");
+  return record.installId.toLowerCase();
+}
+
 function requireDatabase(env: Env): D1Database {
   if (!env.DB) throw new HttpError(503, "Collector database is not configured");
   return env.DB;
@@ -143,6 +158,18 @@ async function summary(request: Request, env: Env): Promise<Response> {
   return json({ retentionDays: days, totals: totals ?? { uniqueInstallations: 0, reports: 0, activeKiosks: 0 }, releases: releases.results ?? [], diagnostics: diagnostics.results ?? [], metros: metros.results ?? [] });
 }
 
+async function deleteInstallation(request: Request, env: Env): Promise<Response> {
+  if (!(await authorized(request, env.ADMIN_BEARER_TOKEN))) throw new HttpError(401, "Collector administrator authorization required");
+  const installId = await readDeletionRequest(request);
+  const installHash = await hashInstallId(installId, env.INSTALL_ID_PEPPER ?? "");
+  const db = requireDatabase(env);
+  await db.batch([
+    db.prepare("DELETE FROM telemetry_reports WHERE install_hash = ?").bind(installHash),
+    db.prepare("DELETE FROM telemetry_installations WHERE install_hash = ?").bind(installHash),
+  ]);
+  return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+}
+
 export async function purgeExpired(env: Env, now = new Date()): Promise<void> {
   const db = requireDatabase(env);
   const cutoff = new Date(now.getTime() - configuredRetentionDays(env.RETENTION_DAYS) * 86_400_000).toISOString();
@@ -157,6 +184,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/health" && request.method === "GET") return json({ ok: true, service: "lancerlogin-telemetry-collector" });
   if (path === "/v1/report" && request.method === "POST") return acceptReport(request, env);
   if (path === "/v1/summary" && request.method === "GET") return summary(request, env);
+  if (path === "/v1/admin/delete-installation" && request.method === "POST") return deleteInstallation(request, env);
   throw new HttpError(404, "Not found");
 }
 

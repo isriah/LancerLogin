@@ -483,6 +483,21 @@ test("telemetry transmits only after acceptance and strictly allowlists its payl
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("privacy settings expose the opaque deletion reference only while telemetry is accepted", async () => {
+  const accepted = new FakeDatabase();
+  accepted.rows.set("telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installationReference", { acceptedAt: "2026-08-30T00:00:00Z", installationReference: "2f1c7d4a-81cb-4cef-934e-4c23181933fd" });
+  const acceptedEnv = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: accepted } as unknown as Env;
+  const acceptedResult = await worker.fetch(request("/admin/privacy", undefined, { cookie: await sessionCookie("admin") }), acceptedEnv);
+  assert.equal(acceptedResult.status, 200);
+  assert.equal((await acceptedResult.json() as { installationReference?: string }).installationReference, "2f1c7d4a-81cb-4cef-934e-4c23181933fd");
+
+  const declined = new FakeDatabase();
+  declined.rows.set("telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installationReference", { installationReference: "must-not-be-returned" });
+  const declinedEnv = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: declined } as unknown as Env;
+  const declinedResult = await worker.fetch(request("/admin/privacy", undefined, { cookie: await sessionCookie("admin") }), declinedEnv);
+  assert.equal("installationReference" in await declinedResult.json(), false);
+});
+
 test("five-minute Discord reconciliation does not increase the daily telemetry cadence", async () => {
   const database = new FakeDatabase();
   database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "2f1c7d4a-81cb-4cef-934e-4c23181933fd" });

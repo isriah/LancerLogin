@@ -62,3 +62,12 @@ test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", as
   assert.match(kiosk, /800 by 480 pixels/);
   assert.match(kiosk, /class="annotated kiosk-shot"/);
 });
+
+test("privacy page publishes the approved collector operator, retention, access, and deletion process", async () => {
+  const privacy = await readFile("docs-site/privacy.html", "utf8");
+  assert.match(privacy, /RoboLancers operates/);
+  assert.match(privacy, /30 days/);
+  assert.match(privacy, /designated maintainers/);
+  assert.match(privacy, /deletion-request reference/);
+  assert.match(privacy, /robolancers@gmail\.com/);
+});

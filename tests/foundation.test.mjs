@@ -73,8 +73,8 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /VITE_API_BASE_URL: \/api/);
   assert.match(workflow, /prepare-pages-proxy\.mjs/);
   assert.equal((workflow.match(/secrets:\s*\|/g) ?? []).length, 1);
-  assert.match(workflow, /user\/tokens\/verify/);
-  assert.match(workflow, /accounts\/\$CLOUDFLARE_ACCOUNT_ID/);
+  assert.match(workflow, /accounts\/\$CLOUDFLARE_ACCOUNT_ID\/tokens\/verify/);
+  assert.doesNotMatch(workflow, /user\/tokens\/verify/);
   assert.equal((workflow.match(/accountId: \$\{\{ env\.CLOUDFLARE_ACCOUNT_ID \}\}/g) ?? []).length, 3);
   assert.doesNotMatch(workflow, /accountId:\s*[a-f0-9]{32}|account_id\s*[:=]\s*[a-f0-9]{32}/i);
 });

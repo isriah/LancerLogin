@@ -56,12 +56,8 @@ jobs:
           echo "::add-mask::$CLOUDFLARE_ACCOUNT_ID"
           curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            https://api.cloudflare.com/client/v4/user/tokens/verify > .provision/token.json
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify" > .provision/token.json
           node -e 'const d=require("./.provision/token.json"); if(d.success!==true||d.result?.status!=="active") process.exit(1)'
-          curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
-            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID" > .provision/account.json
-          node -e 'const d=require("./.provision/account.json"); if(d.success!==true||d.result?.id!==process.env.CLOUDFLARE_ACCOUNT_ID) process.exit(1)'
       - name: Discover D1 resources in that account
         shell: bash
         run: |

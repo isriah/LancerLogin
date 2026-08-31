@@ -56,12 +56,8 @@ jobs:
           echo "::add-mask::$CLOUDFLARE_ACCOUNT_ID"
           curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            https://api.cloudflare.com/client/v4/user/tokens/verify > .collector/token.json
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify" > .collector/token.json
           node -e 'const d=require("./.collector/token.json"); if(d.success!==true||d.result?.status!=="active") process.exit(1)'
-          curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
-            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID" > .collector/account.json
-          node -e 'const d=require("./.collector/account.json"); if(d.success!==true||d.result?.id!==process.env.CLOUDFLARE_ACCOUNT_ID) process.exit(1)'
       - name: Discover dedicated collector resources
         id: resources
         shell: bash

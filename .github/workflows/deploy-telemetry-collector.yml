@@ -95,6 +95,7 @@ jobs:
         with:
           apiToken: ${{ secrets.LANCERLOGIN_TELEMETRY_CLOUDFLARE_API_TOKEN }}
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          preCommands: npx wrangler deploy --config .collector/wrangler.json
           command: deploy --config .collector/wrangler.json
           secrets: |
             INSTALL_ID_PEPPER

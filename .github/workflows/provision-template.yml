@@ -116,6 +116,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          preCommands: npx wrangler deploy --config .provision/wrangler.json
           command: deploy --config .provision/wrangler.json
           secrets: |
             SESSION_KEY

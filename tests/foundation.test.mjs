@@ -70,6 +70,7 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /RESUME|resume/);
   assert.match(workflow, /Generate installation session key\s+if: steps\.resources\.outputs\.worker == 'missing'/);
   assert.match(workflow, /Deploy existing Worker API without rotating secrets/);
+  assert.match(workflow, /preCommands: npx wrangler deploy --config \.provision\/wrangler\.json/);
   assert.match(workflow, /if: steps\.resources\.outputs\.worker == 'exists'/);
   assert.match(workflow, /VITE_API_BASE_URL: \/api/);
   assert.match(workflow, /prepare-pages-proxy\.mjs/);
@@ -117,6 +118,7 @@ test("telemetry deployment is dedicated, collision-safe, and does not activate a
   assert.match(workflow, /test "\$database" = "missing"/);
   assert.match(workflow, /test "\$worker" = "missing"/);
   assert.match(workflow, /Deploy existing collector without rotating secrets/);
+  assert.match(workflow, /preCommands: npx wrangler deploy --config \.collector\/wrangler\.json/);
   assert.match(workflow, /Exercise and remove a mock report/);
   assert.match(workflow, /No adopter release endpoint is changed by this workflow/);
   assert.doesNotMatch(workflow, /TELEMETRY_ENDPOINT=/);

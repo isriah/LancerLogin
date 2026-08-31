@@ -44,7 +44,8 @@ test("setup and integration guides include sanitized annotated visual callouts",
   assert.match(setup, /cloudflare-token-setup\.png/);
   assert.match(setup, /google-oauth-setup\.png/);
   assert.match(setup, /Account Settings read/);
-  assert.match(setup, /Store one scoped secret/);
+  assert.match(setup, /Store protected setup values/);
+  assert.match(setup, /CLOUDFLARE_ACCOUNT_ID/);
   assert.match(setup, /Copy the exact callback/);
 
   const operations = await readFile("docs-site/operations.html", "utf8");

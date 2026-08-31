@@ -5,6 +5,8 @@ type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { change
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
 interface D1Database { prepare(query: string): D1Statement; batch(statements: D1Statement[]): Promise<D1Result[]>; }
 export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; TELEMETRY_ENDPOINT?: string; RELEASE_VERSION?: string; DB?: D1Database; }
+type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
+type ScheduledController = { cron?: string };
 
 type Role = "admin" | "operator";
 type Principal = { userId: string; role: Role; expiresAt: number };
@@ -213,11 +215,13 @@ async function kioskFor(request: Request, env: Env): Promise<{ id: string; name:
   if (!kiosk) throw new HttpError(401, "Kiosk credential is invalid");
   return kiosk;
 }
-async function kioskHeartbeat(request: Request, env: Env): Promise<Response> {
+async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; releaseVersion?: string }>(request);
   if (typeof input.readerOnline !== "boolean" || !input.releaseVersion || input.releaseVersion.length > 40) throw new HttpError(400, "Reader status and release version are required");
   const now = new Date().toISOString();
   await requireDatabase(env).prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, release_version = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.releaseVersion.trim(), kiosk.id).run();
+  const statusUpdate = syncDiscordKioskStatus(env).catch(() => undefined);
+  if (context) context.waitUntil(statusUpdate); else await statusUpdate;
   return response({ ok: true, kioskId: kiosk.id, receivedAt: now });
 }
 async function kioskStatus(request: Request, env: Env): Promise<Response> {
@@ -496,15 +500,25 @@ async function discordCalendar(request: Request, env: Env): Promise<Response> {
   await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, updated_at) VALUES ('primary', 'discord', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, updated_at = excluded.updated_at").bind(stateKey, eventId, now).run();
   await writeAudit(db, principal, "discord.calendar_synced", "meeting", meeting.id, { eventId }); return response({ synced: true, eventId });
 }
-async function discordKioskStatus(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const config = await discordConfiguration(env);
-  const kiosk = await db.prepare("SELECT id, name, last_seen_at AS lastSeenAt FROM kiosks WHERE installation_id = 'primary' AND active = 1 ORDER BY created_at DESC LIMIT 1").first<{ id: string; name: string; lastSeenAt?: string }>();
-  const online = Boolean(kiosk?.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < 2 * 60_000); const content = kiosk ? `**${kiosk.name}** · ${online ? "online" : "offline"} · last seen ${kiosk.lastSeenAt ?? "never"}` : "No kiosk is paired."; const contentHash = await sha256(content);
+async function syncDiscordKioskStatus(env: Env): Promise<{ changed: boolean; messageId?: string; online?: boolean; kioskId?: string }> {
+  const db = requireDatabase(env); const config = await discordConfiguration(env);
+  const kiosk = await db.prepare("SELECT id, name, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion FROM kiosks WHERE installation_id = 'primary' AND active = 1 ORDER BY created_at DESC LIMIT 1").first<{ id: string; name: string; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string }>();
+  const online = Boolean(kiosk?.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < 2 * 60_000);
+  const content = kiosk
+    ? `**${kiosk.name}** · ${online ? "online" : "offline"} · reader ${kiosk.readerOnline ? "online" : "offline"} · release ${kiosk.releaseVersion ?? "unknown"}${online ? "" : ` · last seen ${kiosk.lastSeenAt ?? "never"}`}`
+    : "No kiosk is paired.";
+  const contentHash = await sha256(content);
   const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'kiosk-status'").first<{ externalId?: string; contentHash?: string }>();
-  if (existing?.externalId && existing.contentHash === contentHash) return response({ changed: false, messageId: existing.externalId });
-  const path = existing?.externalId ? `/channels/${config.channelId}/messages/${existing.externalId}` : `/channels/${config.channelId}/messages`; const { body } = await discordRequest(config, path, { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify({ content }) }); const messageId = String(body.id ?? existing?.externalId ?? ""); const now = new Date().toISOString();
+  if (existing?.externalId && existing.contentHash === contentHash) return { changed: false, messageId: existing.externalId, online, kioskId: kiosk?.id };
+  const path = existing?.externalId ? `/channels/${config.channelId}/messages/${existing.externalId}` : `/channels/${config.channelId}/messages`; const { body } = await discordRequest(config, path, { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) }); const messageId = String(body.id ?? existing?.externalId ?? ""); const now = new Date().toISOString();
   await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', 'kiosk-status', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(messageId, contentHash, now).run();
-  await writeAudit(db, principal, "discord.kiosk_status_updated", "kiosk", kiosk?.id ?? null, { online, messageId }); return response({ changed: true, messageId, online });
+  return { changed: true, messageId, online, kioskId: kiosk?.id };
+}
+async function discordKioskStatus(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]);
+  const result = await syncDiscordKioskStatus(env);
+  await writeAudit(requireDatabase(env), principal, "discord.kiosk_status_updated", "kiosk", result.kioskId ?? null, { online: result.online, messageId: result.messageId, changed: result.changed });
+  return response({ changed: result.changed, messageId: result.messageId, online: result.online });
 }
 
 async function transmitTelemetry(env: Env, metro?: string): Promise<boolean> {
@@ -554,7 +568,7 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
   return response({ deleted: true, scope: input.scope });
 }
 
-const worker = { async fetch(request: Request, env: Env): Promise<Response> {
+const worker = { async fetch(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const url = new URL(request.url); let result: Response;
   try {
     if (request.method === "OPTIONS") result = new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "authorization, content-type", "access-control-allow-credentials": "true" } });
@@ -591,7 +605,7 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     else if (url.pathname === "/admin/privacy" && ["GET", "PATCH"].includes(request.method)) result = await privacySettings(request, env);
     else if (url.pathname === "/admin/data" && request.method === "DELETE") result = await deleteData(request, env);
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
-    else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env);
+    else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env, context);
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);
     else result = response({ error: "Not found" }, 404);
   } catch (error) {
@@ -601,5 +615,8 @@ const worker = { async fetch(request: Request, env: Env): Promise<Response> {
     result = response({ error: error instanceof HttpError ? error.message : "Request failed", details: detail }, status);
   }
   return withCors(result, request, env);
-}, async scheduled(_controller: unknown, env: Env): Promise<void> { try { await transmitTelemetry(env); } catch { /* Telemetry is best-effort and cannot affect attendance. */ } } };
+}, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+  if (controller.cron === "0 3 * * *") { try { await transmitTelemetry(env); } catch { /* Telemetry is best-effort and cannot affect attendance. */ } }
+  try { await syncDiscordKioskStatus(env); } catch { /* Discord status is best-effort and cannot affect kiosk operation. */ }
+} };
 export default worker;

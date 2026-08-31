@@ -223,6 +223,41 @@ test("kiosk heartbeat hashes bearer credentials before D1 lookup", async () => {
   assert.deepEqual(healthUpdate?.values.slice(1, 3), [1, "0.1.0"]);
 });
 
+test("kiosk heartbeats maintain one idempotent Discord status message and scheduled reconciliation marks it offline", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: new Date().toISOString(), readerOnline: 1, releaseVersion: "0.1.3" });
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const outbound: Array<{ input: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => { outbound.push({ input: String(input), init }); return new Response(JSON.stringify({ id: "message-1" }), { headers: { "content-type": "application/json" } }); };
+  try {
+    const background: Promise<unknown>[] = [];
+    const heartbeat = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "0.1.3" }) });
+    const result = await worker.fetch(heartbeat, env, { waitUntil: (promise) => background.push(promise) });
+    assert.equal(result.status, 200);
+    assert.equal(background.length, 1);
+    await Promise.all(background);
+    assert.equal(outbound.length, 1);
+    assert.match(outbound[0].input, /channels\/223456789012345678\/messages$/);
+    assert.equal(outbound[0].init?.method, "POST");
+    assert.match(String(outbound[0].init?.body), /Front desk.*online.*reader online.*release 0\.1\.3/);
+    assert.deepEqual(JSON.parse(String(outbound[0].init?.body)).allowed_mentions, { parse: [] });
+    const stateWrite = database.calls.find((call) => call.sql.includes("INSERT INTO integration_state") && call.values.includes("message-1"));
+    assert.ok(stateWrite);
+
+    database.rows.set("FROM integration_state", { externalId: "message-1", contentHash: stateWrite.values[1] });
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    assert.equal(outbound.length, 1, "unchanged online state should not edit Discord");
+
+    database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: "2026-08-29T00:00:00Z", readerOnline: 1, releaseVersion: "0.1.3" });
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    assert.equal(outbound.length, 2);
+    assert.equal(outbound[1].init?.method, "PATCH");
+    assert.match(String(outbound[1].init?.body), /Front desk.*offline.*last seen 2026-08-29/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Operator can create meetings and reasoned attendance corrections", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
@@ -431,6 +466,21 @@ test("telemetry transmits only after acceptance and strictly allowlists its payl
     assert.equal(JSON.stringify(payload).includes("192.0.2.1"), false);
     assert.equal(JSON.stringify(payload).includes("organization"), false);
     assert.ok(database.calls.some((call) => call.sql.includes("DELETE FROM telemetry_diagnostics")));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("five-minute Discord reconciliation does not increase the daily telemetry cadence", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "2f1c7d4a-81cb-4cef-934e-4c23181933fd" });
+  database.rows.set("COUNT(*) AS count", { count: 1 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, TELEMETRY_ENDPOINT: "https://telemetry.example.test/v1/report", RELEASE_VERSION: "0.1.3", DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let reports = 0;
+  globalThis.fetch = async () => { reports += 1; return new Response(null, { status: 204 }); };
+  try {
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    assert.equal(reports, 0);
+    await worker.scheduled({ cron: "0 3 * * *" }, env);
+    assert.equal(reports, 1);
   } finally { globalThis.fetch = originalFetch; }
 });
 

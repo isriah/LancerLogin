@@ -26,7 +26,7 @@
   <div class="task-grid">
     <article class="task-card"><span>R</span><h3>Resend</h3><p>Send one idempotent missed-meeting email or an individual attendance report to the email stored in the roster.</p></article>
     <article class="task-card"><span>D</span><h3>Discord attendance</h3><p>Link or unlink Discord IDs, ping only linked missing members, review contests for the selected meeting, and resolve them with an audit trail.</p></article>
-    <article class="task-card"><span>K</span><h3>Discord status/calendar</h3><p>Upsert meeting calendar events and edit one persistent kiosk-status message only when state changes.</p></article>
+    <article class="task-card"><span>K</span><h3>Discord status/calendar</h3><p>Upsert meeting calendar events. Authenticated heartbeats maintain one persistent kiosk-status message, and a five-minute reconciliation marks stale kiosks offline without blocking attendance.</p></article>
   </div>
   <figure class="annotated">
     <img src="assets/integration-controls.png" alt="Sanitized LancerLogin Admin integrations screen showing encrypted saved values and rotate, test, and remove controls.">

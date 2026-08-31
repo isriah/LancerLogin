@@ -37,11 +37,12 @@ test("local recovery tool requires hidden interactive input and adopter D1 autho
   assert.match(tool, /isTTY/);
   assert.match(tool, /setRawMode/);
   assert.match(tool, /wrangler.*d1.*execute/s);
-  assert.match(tool, /discoverCloudflareAccount/);
+  assert.match(tool, /verifyCloudflareAccountToken/);
   assert.match(tool, /CLOUDFLARE_ACCOUNT_ID: accountId/);
   assert.match(tool, /failed_login_count = 0, locked_until = NULL/);
   assert.doesNotMatch(tool, /--password/);
   assert.match(guide, /CLOUDFLARE_API_TOKEN/);
+  assert.match(guide, /CLOUDFLARE_ACCOUNT_ID/);
   assert.match(guide, /Account Settings read/);
   assert.match(guide, /passwords_reset: 1/);
 });

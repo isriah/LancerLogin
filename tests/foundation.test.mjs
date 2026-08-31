@@ -10,11 +10,11 @@ test("foundation documents state standalone constraints", async () => {
   assert.match(readme, /sensor/i);
   const checklist = await readFile("docs/RELEASE-CHECKLIST.md", "utf8");
   assert.match(checklist, /Community release requirement checklist/);
-  assert.match(checklist, /fresh endpoint deployment pending/);
+  assert.match(checklist, /fresh endpoint active/);
   assert.match(checklist, /physical acceptance pending/);
   const audit = await readFile("docs/COMPLETION-AUDIT.md", "utf8");
   assert.match(audit, /Community release completion audit/);
-  assert.match(audit, /fresh collector endpoint deployment pending/);
+  assert.match(audit, /fresh collector endpoint deployed and active/);
   assert.match(audit, /physical acceptance pending/);
   const license = await readFile("LICENSE", "utf8");
   assert.match(license, /Apache License\s+Version 2\.0/);
@@ -123,7 +123,7 @@ test("telemetry deployment is dedicated, collision-safe, and does not activate a
   assert.match(workflow, /workingDirectory: \.collector/);
   assert.match(workflow, /preCommands: npx wrangler deploy/);
   assert.match(workflow, /Exercise and remove a mock report/);
-  assert.match(workflow, /No adopter release endpoint is changed by this workflow/);
+  assert.match(workflow, /Adopter releases activate the reviewed public endpoint separately/);
   assert.doesNotMatch(workflow, /TELEMETRY_ENDPOINT=/);
 });
 

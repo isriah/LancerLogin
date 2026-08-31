@@ -2,7 +2,7 @@
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { discoverCloudflareAccount } from "./select-cloudflare-account.mjs";
+import { verifyCloudflareAccountToken } from "./select-cloudflare-account.mjs";
 
 export function parseD1MaintenanceArgs(argv) {
   const [operation, ...values] = argv;
@@ -36,7 +36,7 @@ export async function runD1Maintenance(config, dependencies = {}) {
     try { await accessImpl(config.file); }
     catch { throw new Error(`Restore file is not readable: ${config.file}`); }
   }
-  const accountId = await discoverCloudflareAccount(process.env.CLOUDFLARE_API_TOKEN, dependencies.fetchImpl);
+  const accountId = await verifyCloudflareAccountToken(process.env.CLOUDFLARE_API_TOKEN, process.env.CLOUDFLARE_ACCOUNT_ID, dependencies.fetchImpl);
   const executable = process.platform === "win32" ? "npx.cmd" : "npx";
   const spawnImpl = dependencies.spawnImpl ?? spawn;
   return await new Promise((resolveExit, reject) => {

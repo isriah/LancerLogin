@@ -163,5 +163,5 @@ jobs:
             echo "- Adopter report endpoint: $COLLECTOR_URL/v1/report"
             echo "- Retention: 30 days"
             echo ""
-            echo "The create run verified health, submitted one synthetic report, checked authenticated aggregates, and deleted the synthetic report. No adopter release endpoint is changed by this workflow."
+            echo "This deployment verified health, submitted one synthetic report, checked authenticated aggregates, and deleted the synthetic report. Adopter releases activate the reviewed public endpoint separately."
           } >> "$GITHUB_STEP_SUMMARY"

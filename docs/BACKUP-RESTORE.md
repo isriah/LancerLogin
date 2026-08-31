@@ -4,13 +4,13 @@ LancerLogin retains roster, meetings, attendance, audit data, settings, and encr
 
 ## D1 backup
 
-From the adopter-owned repository checkout, create a D1 export before upgrades or bulk deletion. Create a fresh narrowly scoped token if the setup token is no longer available, then expose it to the process as `CLOUDFLARE_API_TOKEN` without putting it in a command line or repository file. Replace `sample-club` with the installation slug used by the provisioning workflow:
+From the adopter-owned repository checkout, create a D1 export before upgrades or bulk deletion. Create a fresh narrowly scoped Account API Token if the setup token is no longer available, then expose it to the process as `CLOUDFLARE_API_TOKEN` and expose the selected account ID as `CLOUDFLARE_ACCOUNT_ID` without putting either value in a command line or repository file. Replace `sample-club` with the installation slug used by the provisioning workflow:
 
 ```sh
 npm run backup-d1 -- --database sample-club-data --output lancerlogin-backup.sql
 ```
 
-The helper refuses to overwrite an existing backup. Store the export securely because it contains personal attendance data and encrypted integration ciphertext. Record the release version and UTC export time alongside it. The command discovers the account through `CLOUDFLARE_API_TOKEN`; the token must be restricted to exactly one adopter-owned account, and the repository contains no account identifier.
+The helper refuses to overwrite an existing backup. Store the export securely because it contains personal attendance data and encrypted integration ciphertext. Record the release version and UTC export time alongside it. The command verifies the account-owned token against the exact `CLOUDFLARE_ACCOUNT_ID`, and the repository contains no adopter account identifier.
 
 ## Restore
 

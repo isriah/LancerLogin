@@ -9,6 +9,6 @@ export function validateProvisionPlan(input) {
   return {
     operation: input.operation,
     plannedResources: [`${input.installationSlug}-api`, `${input.installationSlug}-data`, `${input.installationSlug}-dashboard`],
-    requiredSecretNames: ["CLOUDFLARE_API_TOKEN"],
+    requiredSecretNames: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
   };
 }

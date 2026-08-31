@@ -18,6 +18,7 @@ test("generated Worker configuration is account-neutral until D1 discovery", () 
   assert.equal("d1_databases" in missing.config, false);
   assert.equal(missing.config.vars.ALLOWED_ORIGIN, "https://example-club-dashboard.pages.dev");
   assert.equal(missing.config.vars.RELEASE_VERSION, "1.2.3");
+  assert.equal(missing.config.vars.TELEMETRY_ENDPOINT, "https://lancerlogin-community-telemetry.robolancers.workers.dev/v1/report");
   assert.deepEqual(missing.config.triggers.crons, ["*/5 * * * *", "0 3 * * *"]);
   assert.throws(() => buildProvisionConfig("example-club", [], "latest"), /Invalid release version/);
 });

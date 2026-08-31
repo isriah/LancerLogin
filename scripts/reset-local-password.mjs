@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { scryptAsync } from "@noble/hashes/scrypt.js";
-import { discoverCloudflareAccount } from "./select-cloudflare-account.mjs";
+import { verifyCloudflareAccountToken } from "./select-cloudflare-account.mjs";
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, value, index, all) => value.startsWith("--") ? [...pairs, [value.slice(2), all[index + 1]]] : pairs, []));
 const database = args.database; const username = args.username?.toLowerCase();
@@ -10,10 +10,11 @@ if (!database || !/^[a-z][a-z0-9-]{2,62}$/.test(database) || !username || !/^[a-
 }
 if (!process.stdin.isTTY) { console.error("Password reset requires an interactive terminal."); process.exit(2); }
 const apiToken = process.env.CLOUDFLARE_API_TOKEN;
-if (!apiToken) { console.error("Set CLOUDFLARE_API_TOKEN to a token restricted to exactly one adopter-owned account."); process.exit(2); }
+const configuredAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+if (!apiToken || !configuredAccountId) { console.error("Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID for the selected adopter-owned account."); process.exit(2); }
 
 let accountId;
-try { accountId = await discoverCloudflareAccount(apiToken); } catch (error) { console.error(error.message); process.exit(2); }
+try { accountId = await verifyCloudflareAccountToken(apiToken, configuredAccountId); } catch (error) { console.error(error.message); process.exit(2); }
 
 function readHidden(prompt) {
   return new Promise((resolve) => {

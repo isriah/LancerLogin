@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 const slugPattern = /^[a-z][a-z0-9-]{2,40}$/;
+const telemetryEndpoint = "https://lancerlogin-community-telemetry.robolancers.workers.dev/v1/report";
 
 export function buildProvisionConfig(slug, databases = [], releaseVersion = "0.1.0") {
   if (!slugPattern.test(slug)) throw new Error("Invalid installation slug");
@@ -8,7 +9,7 @@ export function buildProvisionConfig(slug, databases = [], releaseVersion = "0.1
   const databaseName = `${slug}-data`;
   const database = databases.find((entry) => entry.name === databaseName);
   const databaseId = database?.uuid ?? database?.database_id ?? database?.id;
-  const config = { name: `${slug}-api`, main: "../apps/api/src/index.ts", compatibility_date: "2026-08-01", workers_dev: true, vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `https://${slug}-dashboard.pages.dev`, RELEASE_VERSION: releaseVersion }, triggers: { crons: ["*/5 * * * *", "0 3 * * *"] } };
+  const config = { name: `${slug}-api`, main: "../apps/api/src/index.ts", compatibility_date: "2026-08-01", workers_dev: true, vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `https://${slug}-dashboard.pages.dev`, RELEASE_VERSION: releaseVersion, TELEMETRY_ENDPOINT: telemetryEndpoint }, triggers: { crons: ["*/5 * * * *", "0 3 * * *"] } };
   if (databaseId) config.d1_databases = [{ binding: "DB", database_name: databaseName, database_id: databaseId, migrations_dir: "../apps/api/migrations" }];
   return { state: databaseId ? "exists" : "missing", config };
 }

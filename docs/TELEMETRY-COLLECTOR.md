@@ -1,6 +1,6 @@
 # Community telemetry collector
 
-The collector is an isolated, optional maintainer service. It is **not** deployed by an adopter, is not part of the adopter provisioning workflow, and must never share an account, D1 database, Worker, token, or secret with another attendance installation. This repository has not deployed it anywhere.
+The collector is an isolated, optional maintainer service. It is **not** deployed by an adopter, is not part of the adopter provisioning workflow, and must never share an account, D1 database, Worker, token, or secret with another attendance installation. The community service is deployed at `https://lancerlogin-community-telemetry.robolancers.workers.dev`; the public ingestion route is `/v1/report`.
 
 ## Privacy and integrity boundary
 
@@ -23,4 +23,4 @@ The recommended path is the manual **Deploy community telemetry collector** GitH
 5. Generate independent random base64url values of at least 32 characters for the `INSTALL_ID_PEPPER` and `ADMIN_BEARER_TOKEN` Worker secrets. Never commit, display, or reuse them.
 6. Deploy from the generated configuration, verify `/health`, send only a mock UUID payload, inspect the authenticated aggregate response, and verify scheduled deletion in a test database before approving production use.
 
-Do not add `TELEMETRY_ENDPOINT` to the adopter release template until the first fresh deployment succeeds and its HTTPS URL is reviewed. Accepted telemetry remains a safe no-op without that value, and attendance is never dependent on collector availability.
+The reviewed HTTPS `/v1/report` route is configured as `TELEMETRY_ENDPOINT` by the adopter provisioning generator. Sending remains disabled until a first Admin accepts the privacy notice. Collector failures are best-effort and never block attendance.

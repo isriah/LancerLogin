@@ -68,10 +68,12 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /expected=.*inputs\.operation/);
   assert.match(workflow, /inputs\.confirmation.*expected.*inputs\.installation_slug/);
   assert.match(workflow, /RESUME|resume/);
-  assert.match(workflow, /Generate installation session key\s+if: steps\.resources\.outputs\.worker == 'missing'/);
+  assert.match(workflow, /Generate installation session key\s+if: steps\.resources\.outputs\.worker_secrets == 'missing'/);
+  assert.match(workflow, /wrangler secret list/);
   assert.match(workflow, /Deploy existing Worker API without rotating secrets/);
-  assert.match(workflow, /preCommands: npx wrangler deploy --config \.provision\/wrangler\.json/);
-  assert.match(workflow, /if: steps\.resources\.outputs\.worker == 'exists'/);
+  assert.match(workflow, /workingDirectory: \.provision/);
+  assert.match(workflow, /preCommands: npx wrangler deploy/);
+  assert.match(workflow, /if: steps\.resources\.outputs\.worker_secrets == 'exists'/);
   assert.match(workflow, /VITE_API_BASE_URL: \/api/);
   assert.match(workflow, /prepare-pages-proxy\.mjs/);
   assert.equal((workflow.match(/secrets:\s*\|/g) ?? []).length, 1);
@@ -117,8 +119,9 @@ test("telemetry deployment is dedicated, collision-safe, and does not activate a
   assert.match(workflow, /CREATE LANCERLOGIN TELEMETRY/);
   assert.match(workflow, /test "\$database" = "missing"/);
   assert.match(workflow, /test "\$worker" = "missing"/);
-  assert.match(workflow, /Deploy existing collector without rotating secrets/);
-  assert.match(workflow, /preCommands: npx wrangler deploy --config \.collector\/wrangler\.json/);
+  assert.match(workflow, /Deploy existing collector with retained secret values/);
+  assert.match(workflow, /workingDirectory: \.collector/);
+  assert.match(workflow, /preCommands: npx wrangler deploy/);
   assert.match(workflow, /Exercise and remove a mock report/);
   assert.match(workflow, /No adopter release endpoint is changed by this workflow/);
   assert.doesNotMatch(workflow, /TELEMETRY_ENDPOINT=/);

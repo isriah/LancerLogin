@@ -80,9 +80,17 @@ jobs:
         run: |
           npx wrangler pages project list --json > .provision/pages-list.json
           pages=$(node scripts/cloudflare-resource-state.mjs pages "${{ inputs.installation_slug }}-dashboard" .provision/pages-list.json)
-          if npx wrangler deployments list --name "${{ inputs.installation_slug }}-api" --json > .provision/worker-deployments.json 2>/dev/null; then worker=exists; else worker=missing; fi
+          if npx wrangler deployments list --name "${{ inputs.installation_slug }}-api" --json > .provision/worker-deployments.json 2>/dev/null; then
+            worker=exists
+            npx wrangler secret list --json --config .provision/wrangler.json > .provision/worker-secrets.json
+            worker_secrets=$(node -e 'const s=require("./.provision/worker-secrets.json"); const n=new Set(s.map(x=>x.name)); process.stdout.write(n.has("SESSION_KEY")&&n.has("INTEGRATION_KEY")?"exists":"missing")')
+          else
+            worker=missing
+            worker_secrets=missing
+          fi
           echo "pages=$pages" >> "$GITHUB_OUTPUT"
           echo "worker=$worker" >> "$GITHUB_OUTPUT"
+          echo "worker_secrets=$worker_secrets" >> "$GITHUB_OUTPUT"
           if [ "${{ inputs.operation }}" = "create" ]; then
             test "${{ steps.d1.outputs.state }}" = "missing"
             test "$pages" = "missing"
@@ -100,7 +108,7 @@ jobs:
       - name: Apply D1 migrations
         run: npx wrangler d1 migrations apply "${{ inputs.installation_slug }}-data" --remote --config .provision/wrangler.json
       - name: Generate installation session key
-        if: steps.resources.outputs.worker == 'missing'
+        if: steps.resources.outputs.worker_secrets == 'missing'
         shell: bash
         run: |
           SESSION_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
@@ -109,15 +117,16 @@ jobs:
           echo "::add-mask::$INTEGRATION_KEY"
           echo "SESSION_KEY=$SESSION_KEY" >> "$GITHUB_ENV"
           echo "INTEGRATION_KEY=$INTEGRATION_KEY" >> "$GITHUB_ENV"
-      - name: Deploy new Worker API with generated secrets
-        if: steps.resources.outputs.worker == 'missing'
+      - name: Deploy new or incomplete Worker API with generated secrets
+        if: steps.resources.outputs.worker_secrets == 'missing'
         id: deploy-api-new
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
-          preCommands: npx wrangler deploy --config .provision/wrangler.json
-          command: deploy --config .provision/wrangler.json
+          workingDirectory: .provision
+          preCommands: npx wrangler deploy
+          command: deploy
           secrets: |
             SESSION_KEY
             INTEGRATION_KEY
@@ -125,7 +134,7 @@ jobs:
           SESSION_KEY: ${{ env.SESSION_KEY }}
           INTEGRATION_KEY: ${{ env.INTEGRATION_KEY }}
       - name: Deploy existing Worker API without rotating secrets
-        if: steps.resources.outputs.worker == 'exists'
+        if: steps.resources.outputs.worker_secrets == 'exists'
         id: deploy-api-existing
         uses: cloudflare/wrangler-action@v4
         with:

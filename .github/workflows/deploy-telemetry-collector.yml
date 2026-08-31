@@ -95,22 +95,30 @@ jobs:
         with:
           apiToken: ${{ secrets.LANCERLOGIN_TELEMETRY_CLOUDFLARE_API_TOKEN }}
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
-          preCommands: npx wrangler deploy --config .collector/wrangler.json
-          command: deploy --config .collector/wrangler.json
+          workingDirectory: .collector
+          preCommands: npx wrangler deploy
+          command: deploy
           secrets: |
             INSTALL_ID_PEPPER
             ADMIN_BEARER_TOKEN
         env:
           INSTALL_ID_PEPPER: ${{ secrets.LANCERLOGIN_TELEMETRY_INSTALL_PEPPER }}
           ADMIN_BEARER_TOKEN: ${{ secrets.LANCERLOGIN_TELEMETRY_ADMIN_TOKEN }}
-      - name: Deploy existing collector without rotating secrets
+      - name: Deploy existing collector with retained secret values
         if: steps.resources.outputs.worker == 'exists'
         id: deploy-existing
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.LANCERLOGIN_TELEMETRY_CLOUDFLARE_API_TOKEN }}
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --config .collector/wrangler.json
+          workingDirectory: .collector
+          command: deploy
+          secrets: |
+            INSTALL_ID_PEPPER
+            ADMIN_BEARER_TOKEN
+        env:
+          INSTALL_ID_PEPPER: ${{ secrets.LANCERLOGIN_TELEMETRY_INSTALL_PEPPER }}
+          ADMIN_BEARER_TOKEN: ${{ secrets.LANCERLOGIN_TELEMETRY_ADMIN_TOKEN }}
       - name: Select and verify collector URL
         id: collector
         shell: bash
@@ -124,7 +132,6 @@ jobs:
           node -e 'const body=JSON.parse(process.argv[1]); if(body.ok!==true||body.service!=="lancerlogin-telemetry-collector") process.exit(1)' "$health"
           echo "base-url=$base_url" >> "$GITHUB_OUTPUT"
       - name: Exercise and remove a mock report
-        if: steps.resources.outputs.worker == 'missing'
         shell: bash
         env:
           COLLECTOR_URL: ${{ steps.collector.outputs.base-url }}

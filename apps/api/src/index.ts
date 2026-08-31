@@ -42,6 +42,7 @@ class HttpError extends Error {
   constructor(status: number, message: string, details?: string[]) { super(message); this.status = status; this.details = details; }
 }
 async function parseJson<T>(request: Request): Promise<T> {
+  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new HttpError(415, "Content-Type must be application/json");
   if (Number(request.headers.get("content-length") ?? 0) > 262_144) throw new HttpError(413, "Request body is too large");
   const text = await request.text();
   if (new TextEncoder().encode(text).byteLength > 262_144) throw new HttpError(413, "Request body is too large");

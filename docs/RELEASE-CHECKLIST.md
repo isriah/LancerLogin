@@ -10,7 +10,7 @@ This checklist maps the approved Community Release Plan to durable implementatio
 | Fingerprint templates remain exclusively in the R503 | Implemented with mocked serial transport | R503 protocol, local slot mapping, schema/sanitizer tests; physical acceptance pending |
 | Browser-led GitHub template and adopter-owned Cloudflare setup | Implemented without a target account | Manual guarded workflow derives exactly one token-scoped account at runtime, creates Worker/D1/Pages, and outputs the Pages URL |
 | Guided Pi setup without clone or manual source edits; short-lived one-time pairing | Implemented | Dashboard installer link, version-matched checksummed installer, hashed ten-minute code, owner-only kiosk credential |
-| Local, Google, or both authentication modes | Implemented | First-Admin bootstrap, salted scrypt, OAuth state/claim validation, encrypted Google secret, local recovery tool, Google-only lockout guard |
+| Local, Google, or both authentication modes | Implemented | JSON/CORS-protected first-Admin bootstrap, salted scrypt, OAuth state/claim validation, encrypted Google secret, local recovery tool, Google-only lockout guard |
 | Fixed Admin and Operator roles | Implemented | Worker route authorization, active-user/current-role revalidation, dashboard policy, and permission tests |
 | Resumable cross-Admin non-modal setup checklist | Implemented | Persisted setup progress for branding, roster, pairing, fingerprint test, test meeting, and attendance confirmation; complete state hides and can reopen |
 | Organization branding and light/dark/themed modes | Implemented | D1-backed name, subtitle, bounded local logo data, explicit organization-colors mode, light/dark/device modes, browser interaction |

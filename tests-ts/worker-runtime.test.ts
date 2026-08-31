@@ -60,6 +60,20 @@ test("Worker rejects an oversized body even without a content-length header", as
   assert.equal(database.batches.length, 0);
 });
 
+test("first setup rejects simple cross-origin media types before any D1 write", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env;
+  const hostile = new Request("https://api.example.test/setup/bootstrap", {
+    method: "POST",
+    headers: { "content-type": "text/plain", origin: "https://hostile.example.test" },
+    body: JSON.stringify({ organizationName: "Taken over", timeZone: "UTC", authMode: "local", localUsername: "attacker", localPassword: "attacker password long enough" }),
+  });
+  const result = await worker.fetch(hostile, env);
+  assert.equal(result.status, 415);
+  assert.equal(result.headers.get("access-control-allow-origin"), null);
+  assert.equal(database.batches.length, 0);
+});
+
 test("local Worker bootstrap creates the first Admin with a salted password hash", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env;

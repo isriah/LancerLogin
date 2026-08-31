@@ -1,4 +1,4 @@
-# Privacy notice (draft)
+# Privacy notice
 
 LancerLogin stores organization configuration, roster, meeting, attendance, and audit information in the adopter's cloud account until an Admin exports or deletes it. Fingerprint templates remain exclusively in the attached R503 sensor. The system does not upload fingerprint templates or raw fingerprint scans.
 
@@ -7,3 +7,5 @@ Optional integrations store encrypted credentials in the adopter's installation 
 The Worker buffers only one coarse diagnostic category (`worker-internal` or `integration-upstream`) after consent; it never stores an exception message, request path, identity, or IP for telemetry. A successfully transmitted category is then cleared. Declining telemetry clears the opaque telemetry installation ID and prevents diagnostic collection.
 
 Support: robolancers@gmail.com. No service-level agreement is offered.
+
+The separately deployable collector is documented in `docs/TELEMETRY-COLLECTOR.md`. It hashes the opaque install ID before storage, accepts at most one row per installation per UTC day, returns only authenticated aggregates, hides metro groups smaller than five installations, and performs scheduled retention deletion. No collector endpoint is configured in the community release until its operator, retention, access, and deletion policies are approved and published.

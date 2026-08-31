@@ -17,7 +17,7 @@ This checklist maps the approved Community Release Plan to durable implementatio
 | Retention, CSV, deletion, and D1 backup/restore | Implemented | Authenticated CSV, typed-confirmation Admin deletion, `docs/BACKUP-RESTORE.md`; no PDF or Sheets |
 | Google, Resend, and full Discord administration/workflows | Implemented with mocked providers | Encrypted status/save/test/rotate/remove, attendance mail, linking, missing-member notices/contests, calendar mapping, persistent kiosk status |
 | Manual captive-portal handling and offline-first queue | Implemented/documented | Atomic local queue and task-oriented kiosk guide; advanced captive-portal compatibility remains unsupported |
-| Consent-gated allowlisted telemetry and plain privacy notice | Runtime implemented | Random install ID, release version, active kiosk count, scrubbed category, connection-derived metro; endpoint/operator/retention decision pending |
+| Consent-gated allowlisted telemetry and plain privacy notice | Runtime and collector implemented | Random install ID, release version, active kiosk count, scrubbed category, connection-derived metro; isolated HMAC-hashing collector with rate limits, aggregate-only access, and configurable retention; endpoint/operator policy pending |
 | Accessible task-first public documentation with annotated visuals | Published | Dashboard, GitHub, Cloudflare, OAuth, kiosk, and integrations visuals; WCAG 2.2 A target; `https://isriah.github.io/LancerLogin/` |
 | Community support without SLA | Implemented | `robolancers@gmail.com` is documented with explicit no-SLA language |
 

@@ -10,7 +10,7 @@ test("foundation documents state standalone constraints", async () => {
   assert.match(readme, /sensor/i);
   const checklist = await readFile("docs/RELEASE-CHECKLIST.md", "utf8");
   assert.match(checklist, /Community release requirement checklist/);
-  assert.match(checklist, /endpoint\/operator\/retention decision pending/);
+  assert.match(checklist, /endpoint\/operator policy pending/);
   assert.match(checklist, /physical acceptance pending/);
   const license = await readFile("LICENSE", "utf8");
   assert.match(license, /Apache License\s+Version 2\.0/);

@@ -384,21 +384,35 @@ test("Operators can list and resolve Discord attendance contests", async () => {
 
 test("telemetry transmits only after acceptance and strictly allowlists its payload", async () => {
   const database = new FakeDatabase();
-  database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "opaque-install-id" });
+  database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "2f1c7d4a-81cb-4cef-934e-4c23181933fd" });
   database.rows.set("COUNT(*) AS count", { count: 1 });
   database.rows.set("FROM telemetry_diagnostics", { errorCategory: "worker-internal" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, TELEMETRY_ENDPOINT: "https://telemetry.example.test/v1", RELEASE_VERSION: "0.1.0", DB: database } as unknown as Env;
-  const originalFetch = globalThis.fetch; let payload: Record<string, unknown> | undefined;
-  globalThis.fetch = async (_input, init) => { payload = JSON.parse(String(init?.body)); return new Response(null, { status: 202 }); };
+  const originalFetch = globalThis.fetch; let payload: Record<string, unknown> | undefined; let fetchOptions: RequestInit | undefined;
+  globalThis.fetch = async (_input, init) => { fetchOptions = init; payload = JSON.parse(String(init?.body)); return new Response(null, { status: 202 }); };
   try {
     const telemetryRequest = request("/admin/privacy", { telemetryAccepted: true }, { method: "PATCH", cookie: await sessionCookie("admin") });
     Object.defineProperty(telemetryRequest, "cf", { value: { city: "Example Metro", ip: "192.0.2.1" } });
     const result = await worker.fetch(telemetryRequest, env);
     assert.equal(result.status, 200);
-    assert.deepEqual(payload, { installId: "opaque-install-id", releaseVersion: "0.1.0", activeKioskCount: 1, metro: "Example Metro", errorCategory: "worker-internal" });
+    assert.deepEqual(payload, { installId: "2f1c7d4a-81cb-4cef-934e-4c23181933fd", releaseVersion: "0.1.0", activeKioskCount: 1, metro: "Example Metro", errorCategory: "worker-internal" });
+    assert.equal(fetchOptions?.redirect, "error");
     assert.equal(JSON.stringify(payload).includes("192.0.2.1"), false);
     assert.equal(JSON.stringify(payload).includes("organization"), false);
     assert.ok(database.calls.some((call) => call.sql.includes("DELETE FROM telemetry_diagnostics")));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("telemetry refuses endpoint credentials, query strings, and URL fragments", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "2f1c7d4a-81cb-4cef-934e-4c23181933fd" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, TELEMETRY_ENDPOINT: "https://user:secret@telemetry.example.test/v1?token=secret#fragment", RELEASE_VERSION: "0.1.0", DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let called = false;
+  globalThis.fetch = async () => { called = true; return new Response(null, { status: 202 }); };
+  try {
+    const result = await worker.fetch(request("/admin/privacy", { telemetryAccepted: true }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
+    assert.equal(result.status, 200);
+    assert.equal(called, false);
   } finally { globalThis.fetch = originalFetch; }
 });
 

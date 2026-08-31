@@ -15,6 +15,8 @@ Raspberry Pi kiosk ── local service ── R503 fingerprint sensor
 
 The dashboard is a static Pages application with an advanced-mode `_worker.js` proxy for `/api/*`. Browser sessions therefore remain first-party on the adopter's Pages origin while API work is forwarded to the separate Worker. The Worker owns authorization, onboarding state, data validation, encrypted secret handling, exports, and integration calls. D1 contains all organization-level data but no fingerprint templates. The Pi service owns sensor I/O, owner-only local pairing material, local slot-to-member mappings, offline scan queue, and kiosk display state.
 
+An optional community telemetry collector is a separate maintainer service and never shares adopter resources. The adopter Worker sends only the consent-gated allowlist to its public ingestion route. The collector HMAC-hashes the opaque install ID, stores one bounded daily row, and exposes only authenticated aggregates; it never receives roster, attendance, biometric, organization, credential, or raw-IP fields.
+
 Worker persistence adapters scope every query and write to an installation ID. Their test double captures bound parameters so cross-installation access is rejected by contract before a real D1 binding is used.
 
 The Worker request boundary allows unauthenticated health and CORS preflight only. Every administrative route authenticates a principal and maps the request to an approved role capability before it invokes a repository or integration.

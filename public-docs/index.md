@@ -16,6 +16,7 @@
 - [Manage data and backups](../docs/BACKUP-RESTORE.md)
 - [Configure optional integrations](../docs/INTEGRATIONS.md)
 - [Understand privacy](../docs/PRIVACY.md)
+- [Review the community telemetry collector](../docs/TELEMETRY-COLLECTOR.md)
 
 ## Screenshot coverage
 

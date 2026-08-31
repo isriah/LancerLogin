@@ -7,7 +7,7 @@
 - Guarded adopter-owned Cloudflare provisioning discovers the account from `CLOUDFLARE_API_TOKEN`, refuses Create collisions, supports explicit Resume, generates installation secrets, migrates D1, and deploys Worker/Pages. It has not been run by this project.
 - Local salted-scrypt and Google OAuth authentication; Admin/Operator enforcement; user administration; interactive local recovery.
 - Shared onboarding, branding, roster, explicit one-kiosk replacement, R503 in-sensor enrollment and slot-only matching, an 800×480 touch UI, atomic offline queue, meetings, attendance, reasoned corrections/excuses, CSV, typed-confirmation deletion, and D1 backup/restore.
-- Encrypted Google/Resend/Discord administration plus mocked/tested provider workflows. Consent-gated telemetry allowlists its payload and never reads raw IP into it.
+- Encrypted Google/Resend/Discord administration plus mocked/tested provider workflows. Consent-gated telemetry allowlists its payload and never reads raw IP into it. A separate account-neutral collector is locally verified with HMAC install identifiers, daily deduplication, edge limits, authenticated aggregates, k-anonymous metros, and scheduled retention.
 - Accessible, task-first static documentation with browser-verified annotated dashboard, GitHub, Cloudflare, OAuth, kiosk, and integration visuals plus the community support contact.
 
 ## Verification boundary
@@ -16,5 +16,5 @@ All current automated tests, workspace typechecks, sanitizer checks, dependency 
 
 ## Remaining acceptance
 
-1. Decide and security-review the community telemetry collector URL, retention, access controls, and public operator. Until `TELEMETRY_ENDPOINT` is configured in the release template, accepted telemetry is safely a no-op.
+1. Name and security-review the community telemetry public operator and HTTPS URL, and approve the proposed 30-day report retention plus maintainer-only aggregate access. Until `TELEMETRY_ENDPOINT` is configured in the release template, accepted telemetry is safely a no-op.
 2. When a user explicitly supplies a fresh LancerLogin-only Cloudflare target and Raspberry Pi, run Create provisioning and the hardware smoke checklist. Never use the existing attendance installation or its resources.

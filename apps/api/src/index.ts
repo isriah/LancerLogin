@@ -499,7 +499,7 @@ async function discordKioskStatus(request: Request, env: Env): Promise<Response>
 
 async function transmitTelemetry(env: Env, metro?: string): Promise<boolean> {
   if (!env.TELEMETRY_ENDPOINT || !env.RELEASE_VERSION || !env.DB) return false;
-  const endpoint = new URL(env.TELEMETRY_ENDPOINT); if (endpoint.protocol !== "https:") return false;
+  const endpoint = new URL(env.TELEMETRY_ENDPOINT); if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return false;
   const installation = await env.DB.prepare("SELECT telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installId FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string; installId?: string }>();
   if (!installation?.acceptedAt || !installation.installId) return false;
   const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM kiosks WHERE installation_id = 'primary' AND active = 1").first<{ count: number }>();
@@ -507,7 +507,7 @@ async function transmitTelemetry(env: Env, metro?: string): Promise<boolean> {
   const payload: Record<string, unknown> = { installId: installation.installId, releaseVersion: env.RELEASE_VERSION, activeKioskCount: Number(count?.count ?? 0) };
   if (metro) payload.metro = String(metro).slice(0, 100);
   if (diagnostic?.errorCategory) payload.errorCategory = diagnostic.errorCategory;
-  const sent = (await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })).ok;
+  const sent = (await fetch(endpoint, { method: "POST", redirect: "error", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })).ok;
   if (sent && diagnostic?.errorCategory) await env.DB.prepare("DELETE FROM telemetry_diagnostics WHERE installation_id = 'primary' AND error_category = ?").bind(diagnostic.errorCategory).run();
   return sent;
 }

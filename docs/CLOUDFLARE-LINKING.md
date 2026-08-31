@@ -1,14 +1,14 @@
 # Link your Cloudflare account
 
-LancerLogin deploys only into the adopter's own Cloudflare account. The setup never asks for an account ID in source code and never reuses another installation's account, database, Worker, Pages project, or token.
+LancerLogin deploys only into the adopter's own Cloudflare account. No account ID is committed to source code, and setup never reuses another installation's account, database, Worker, Pages project, or token.
 
 ## Guided setup
 
 1. In the dashboard, choose **Connect Cloudflare**.
 2. If you do not have an account, use the displayed Cloudflare sign-up link and return after confirming your email.
 3. In Cloudflare, create a narrowly scoped API token following the on-screen permission checklist. Limit it to the one account you intend to use for LancerLogin. Grant Account Settings Read plus Workers Scripts Edit, D1 Edit, and Pages Edit; do not grant zone, DNS, billing, or user-management permissions.
-4. In your GitHub repository, open **Settings → Secrets and variables → Actions** and add the token as `CLOUDFLARE_API_TOKEN`. The dashboard never receives or stores this token.
-5. Run the repository's **Provision adopter installation** workflow in `create` mode and type `CREATE <slug>`. The workflow refuses matching D1, Worker, or Pages resources instead of overwriting them. If a previous run was interrupted after creating resources, deliberately choose `resume` and type `RESUME <slug>`.
+4. Copy the selected account's Account ID from Cloudflare's account overview. In your GitHub repository, open **Settings → Secrets and variables → Actions** and add it as `CLOUDFLARE_ACCOUNT_ID`; add the token separately as `CLOUDFLARE_API_TOKEN`. Keeping both in GitHub avoids source edits, and the dashboard never receives or stores either value.
+5. Run the repository's **Provision adopter installation** workflow in `create` mode and type `CREATE <slug>`. It verifies that the token is active and can access the exact selected account before it does anything else. The workflow refuses matching D1, Worker, or Pages resources instead of overwriting them. If a previous run was interrupted after creating resources, deliberately choose `resume` and type `RESUME <slug>`.
 
 ## Safety checks
 

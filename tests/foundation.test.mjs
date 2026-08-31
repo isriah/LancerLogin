@@ -63,6 +63,7 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /CLOUDFLARE_API_TOKEN/);
+  assert.match(workflow, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
   assert.match(workflow, /expected=.*inputs\.operation/);
   assert.match(workflow, /inputs\.confirmation.*expected.*inputs\.installation_slug/);
   assert.match(workflow, /RESUME|resume/);
@@ -72,8 +73,8 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /VITE_API_BASE_URL: \/api/);
   assert.match(workflow, /prepare-pages-proxy\.mjs/);
   assert.equal((workflow.match(/secrets:\s*\|/g) ?? []).length, 1);
-  assert.match(workflow, /api\.cloudflare\.com\/client\/v4\/accounts/);
-  assert.match(workflow, /select-cloudflare-account\.mjs/);
+  assert.match(workflow, /user\/tokens\/verify/);
+  assert.match(workflow, /accounts\/\$CLOUDFLARE_ACCOUNT_ID/);
   assert.equal((workflow.match(/accountId: \$\{\{ env\.CLOUDFLARE_ACCOUNT_ID \}\}/g) ?? []).length, 3);
   assert.doesNotMatch(workflow, /accountId:\s*[a-f0-9]{32}|account_id\s*[:=]\s*[a-f0-9]{32}/i);
 });
@@ -96,6 +97,7 @@ test("Cloudflare setup is adopter-guided and does not require a target account",
   const guide = await readFile("docs/CLOUDFLARE-LINKING.md", "utf8");
   assert.match(guide, /adopter's own Cloudflare account/i);
   assert.match(guide, /CLOUDFLARE_API_TOKEN/);
+  assert.match(guide, /CLOUDFLARE_ACCOUNT_ID/);
   assert.match(guide, /Account Settings Read/);
   assert.doesNotMatch(guide, /account_id\s*=|database_id\s*=/i);
 });
@@ -105,6 +107,7 @@ test("telemetry deployment is dedicated, collision-safe, and does not activate a
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /environment: telemetry-production/);
   assert.match(workflow, /LANCERLOGIN_TELEMETRY_CLOUDFLARE_API_TOKEN/);
+  assert.match(workflow, /LANCERLOGIN_TELEMETRY_CLOUDFLARE_ACCOUNT_ID/);
   assert.match(workflow, /LANCERLOGIN_TELEMETRY_INSTALL_PEPPER/);
   assert.match(workflow, /LANCERLOGIN_TELEMETRY_ADMIN_TOKEN/);
   assert.doesNotMatch(workflow, /secrets\.CLOUDFLARE_API_TOKEN/);

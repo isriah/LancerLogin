@@ -29,6 +29,7 @@ jobs:
     environment: telemetry-production
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.LANCERLOGIN_TELEMETRY_CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.LANCERLOGIN_TELEMETRY_CLOUDFLARE_ACCOUNT_ID }}
       INSTALL_ID_PEPPER: ${{ secrets.LANCERLOGIN_TELEMETRY_INSTALL_PEPPER }}
       ADMIN_BEARER_TOKEN: ${{ secrets.LANCERLOGIN_TELEMETRY_ADMIN_TOKEN }}
       WRANGLER_SEND_METRICS: "false"
@@ -44,19 +45,23 @@ jobs:
           expected=$(echo "${{ inputs.operation }} LANCERLOGIN TELEMETRY" | tr '[:lower:]' '[:upper:]')
           test "${{ inputs.confirmation }}" = "$expected"
           test -n "$CLOUDFLARE_API_TOKEN"
+          test "${#CLOUDFLARE_ACCOUNT_ID}" = 32
           test "${#INSTALL_ID_PEPPER}" -ge 32
           test "${#ADMIN_BEARER_TOKEN}" -ge 32
       - run: npm ci
-      - name: Discover the token-scoped collector account
+      - name: Verify the scoped token and collector account
         shell: bash
         run: |
           mkdir -p .collector
+          echo "::add-mask::$CLOUDFLARE_ACCOUNT_ID"
           curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            https://api.cloudflare.com/client/v4/accounts > .collector/accounts.json
-          account_id=$(node scripts/select-cloudflare-account.mjs .collector/accounts.json)
-          echo "::add-mask::$account_id"
-          echo "CLOUDFLARE_ACCOUNT_ID=$account_id" >> "$GITHUB_ENV"
+            https://api.cloudflare.com/client/v4/user/tokens/verify > .collector/token.json
+          node -e 'const d=require("./.collector/token.json"); if(d.success!==true||d.result?.status!=="active") process.exit(1)'
+          curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID" > .collector/account.json
+          node -e 'const d=require("./.collector/account.json"); if(d.success!==true||d.result?.id!==process.env.CLOUDFLARE_ACCOUNT_ID) process.exit(1)'
       - name: Discover dedicated collector resources
         id: resources
         shell: bash

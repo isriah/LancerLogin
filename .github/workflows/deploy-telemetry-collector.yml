@@ -45,6 +45,7 @@ jobs:
           expected=$(echo "${{ inputs.operation }} LANCERLOGIN TELEMETRY" | tr '[:lower:]' '[:upper:]')
           test "${{ inputs.confirmation }}" = "$expected"
           test -n "$CLOUDFLARE_API_TOKEN"
+          case "$CLOUDFLARE_API_TOKEN" in cfat_*) ;; *) echo "Expected a Cloudflare account-owned API token" >&2; exit 1;; esac
           test "${#CLOUDFLARE_ACCOUNT_ID}" = 32
           test "${#INSTALL_ID_PEPPER}" -ge 32
           test "${#ADMIN_BEARER_TOKEN}" -ge 32
@@ -54,9 +55,14 @@ jobs:
         run: |
           mkdir -p .collector
           echo "::add-mask::$CLOUDFLARE_ACCOUNT_ID"
-          curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
+          status=$(curl --silent --show-error --proto '=https' --tlsv1.2 \
+            --output .collector/token.json --write-out '%{http_code}' \
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify" > .collector/token.json
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify")
+          if [ "$status" != "200" ]; then
+            node -e 'const d=require("./.collector/token.json"); console.error(`Cloudflare account-token verification failed (HTTP ${process.argv[1]}; codes: ${(d.errors||[]).map(e=>e.code).join(",")||"none"})`)' "$status"
+            exit 1
+          fi
           node -e 'const d=require("./.collector/token.json"); if(d.success!==true||d.result?.status!=="active") process.exit(1)'
       - name: Discover dedicated collector resources
         id: resources

@@ -64,6 +64,7 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /CLOUDFLARE_API_TOKEN/);
   assert.match(workflow, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
+  assert.match(workflow, /cfat_/);
   assert.match(workflow, /expected=.*inputs\.operation/);
   assert.match(workflow, /inputs\.confirmation.*expected.*inputs\.installation_slug/);
   assert.match(workflow, /RESUME|resume/);
@@ -108,6 +109,7 @@ test("telemetry deployment is dedicated, collision-safe, and does not activate a
   assert.match(workflow, /environment: telemetry-production/);
   assert.match(workflow, /LANCERLOGIN_TELEMETRY_CLOUDFLARE_API_TOKEN/);
   assert.match(workflow, /LANCERLOGIN_TELEMETRY_CLOUDFLARE_ACCOUNT_ID/);
+  assert.match(workflow, /cfat_/);
   assert.match(workflow, /LANCERLOGIN_TELEMETRY_INSTALL_PEPPER/);
   assert.match(workflow, /LANCERLOGIN_TELEMETRY_ADMIN_TOKEN/);
   assert.doesNotMatch(workflow, /secrets\.CLOUDFLARE_API_TOKEN/);

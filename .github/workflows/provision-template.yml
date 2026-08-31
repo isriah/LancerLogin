@@ -47,6 +47,7 @@ jobs:
           expected=$(echo "${{ inputs.operation }}" | tr '[:lower:]' '[:upper:]')
           test "${{ inputs.confirmation }}" = "$expected ${{ inputs.installation_slug }}"
           test -n "$CLOUDFLARE_API_TOKEN"
+          case "$CLOUDFLARE_API_TOKEN" in cfat_*) ;; *) echo "Expected a Cloudflare account-owned API token" >&2; exit 1;; esac
           test "${#CLOUDFLARE_ACCOUNT_ID}" = 32
       - run: npm ci
       - name: Verify the scoped token and selected Cloudflare account
@@ -54,9 +55,14 @@ jobs:
         run: |
           mkdir -p .provision
           echo "::add-mask::$CLOUDFLARE_ACCOUNT_ID"
-          curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
+          status=$(curl --silent --show-error --proto '=https' --tlsv1.2 \
+            --output .provision/token.json --write-out '%{http_code}' \
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify" > .provision/token.json
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify")
+          if [ "$status" != "200" ]; then
+            node -e 'const d=require("./.provision/token.json"); console.error(`Cloudflare account-token verification failed (HTTP ${process.argv[1]}; codes: ${(d.errors||[]).map(e=>e.code).join(",")||"none"})`)' "$status"
+            exit 1
+          fi
           node -e 'const d=require("./.provision/token.json"); if(d.success!==true||d.result?.status!=="active") process.exit(1)'
       - name: Discover D1 resources in that account
         shell: bash

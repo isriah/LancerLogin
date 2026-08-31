@@ -19,7 +19,7 @@
     <li>Select it in the attendance workspace. Use <strong>Edit selected</strong> to correct its title, schedule, required status, or notes.</li>
     <li>Use the kiosk scan screen. Offline scans remain queued in order and are idempotent when delivered.</li>
     <li>Review absent records. Every correction or excuse requires a reason and creates an audit record.</li>
-    <li>Monitor the paired kiosk heartbeat, which refreshes every 30 seconds.</li>
+    <li>Monitor the paired kiosk heartbeat, reader state, and installed release, which refresh every 30 seconds.</li>
     <li>Export all attendance as CSV whenever needed.</li>
   </ol>
   <h2>Optional communication workflows</h2>
@@ -37,7 +37,7 @@
     </figcaption>
   </figure>
   <h2>Back up and restore</h2>
-  <p>Use the repository’s token-only <code>backup-d1</code> helper from your adopter-owned checkout. It discovers the single account allowed by your scoped token and refuses to overwrite an existing export. Restore only to the same installation with the exact confirmation phrase, verify row counts, and re-pair the kiosk only when pairing state is inconsistent. See <code>docs/BACKUP-RESTORE.md</code> for commands and checks.</p>
+  <p>Use the repository’s token-only <code>backup-d1</code> helper from your adopter-owned checkout. It discovers the single account allowed by your scoped token and refuses to overwrite an existing export. Attendance CSV protects leading spreadsheet formula markers as text. Restore D1 only to the same installation with the exact confirmation phrase, verify row counts, and re-pair the kiosk only when pairing state is inconsistent. See <code>docs/BACKUP-RESTORE.md</code> for commands and checks.</p>
 </main>
 <footer><div><a href="index.html">Documentation home</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
 </body>

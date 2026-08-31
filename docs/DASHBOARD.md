@@ -8,6 +8,6 @@ Each completed item records the Admin and time that completed it. Admins can reo
 
 Operators can create and edit meetings, copy a selected meeting ID to the kiosk, manage attendance and reasoned corrections/excuses, export reports, and monitor kiosk status. They cannot see or access People, Branding, Integrations, Security, or destructive configuration.
 
-Branding stores an optional bounded PNG, JPEG, or WebP logo directly in D1, never as an externally fetched URL. Organization name, subtitle, primary/secondary colors, and light, dark, or device appearance are applied to authenticated Admin and Operator views. The unbranded default remains LancerLogin.
+Branding stores an optional bounded PNG, JPEG, or WebP logo directly in D1, never as an externally fetched URL. Organization name and subtitle apply in every appearance. **Organization colors** is an explicit themed mode that applies the saved primary and secondary colors; light, dark, and follow-device modes use the accessible LancerLogin palette. The header mode button is a temporary per-page light/dark override and does not silently rewrite installation branding. The unbranded default remains LancerLogin.
 
-The shared attendance workspace shows the active kiosk heartbeat, refreshes status every 30 seconds, supports roster-to-Discord linking, and lists open or resolved Discord attendance contests for the selected meeting.
+The shared attendance workspace shows the active kiosk heartbeat, retained reader state, and reported kiosk release, refreshes status every 30 seconds, supports roster-to-Discord linking, and lists open or resolved Discord attendance contests for the selected meeting.

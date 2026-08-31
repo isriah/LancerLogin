@@ -11,7 +11,7 @@ type Principal = { userId: string; role: Role; expiresAt: number };
 type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "test-meeting" | "confirm-attendance";
 type BootstrapInput = { organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
-type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "light" | "dark" };
+type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark" };
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null };
 
 const baseHeaders = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
@@ -52,7 +52,9 @@ async function principalFor(request: Request, env: Env): Promise<Principal> {
   const token = cookie(request, "lancerlogin_session");
   const principal = token ? await createSessionCodec(env.SESSION_KEY).verify(token) : undefined;
   if (!principal) throw new HttpError(401, "Sign in required");
-  return principal;
+  const current = await requireDatabase(env).prepare("SELECT id, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; role: Role }>();
+  if (!current) throw new HttpError(401, "Session user is unavailable");
+  return { ...principal, role: current.role };
 }
 async function requireRole(request: Request, env: Env, roles: Role[]): Promise<Principal> {
   const principal = await principalFor(request, env);
@@ -146,7 +148,7 @@ async function branding(request: Request, env: Env): Promise<Response> {
   if (input.subtitle && input.subtitle.length > 140) errors.push("Subtitle must be at most 140 characters");
   if (input.logoData && !validLogoData(input.logoData)) errors.push("Logo must be a PNG, JPEG, or WebP image no larger than 128 KiB");
   if (!input.primaryColor || !validColor(input.primaryColor) || !input.secondaryColor || !validColor(input.secondaryColor)) errors.push("Brand colors must use six-digit hex values");
-  if (!input.appearance || !["system", "light", "dark"].includes(input.appearance)) errors.push("Appearance must be system, light, or dark");
+  if (!input.appearance || !["system", "themed", "light", "dark"].includes(input.appearance)) errors.push("Appearance must be themed, light, dark, or follow the device");
   if (errors.length) throw new HttpError(400, "Invalid branding", errors);
   await db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_data = ?, primary_color = ?, secondary_color = ?, appearance = ? WHERE installation_id = 'primary'")
     .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoData || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance).run();
@@ -215,12 +217,12 @@ async function kioskHeartbeat(request: Request, env: Env): Promise<Response> {
   const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; releaseVersion?: string }>(request);
   if (typeof input.readerOnline !== "boolean" || !input.releaseVersion || input.releaseVersion.length > 40) throw new HttpError(400, "Reader status and release version are required");
   const now = new Date().toISOString();
-  await requireDatabase(env).prepare("UPDATE kiosks SET last_seen_at = ? WHERE id = ?").bind(now, kiosk.id).run();
+  await requireDatabase(env).prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, release_version = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.releaseVersion.trim(), kiosk.id).run();
   return response({ ok: true, kioskId: kiosk.id, receivedAt: now });
 }
 async function kioskStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]);
-  const result = await requireDatabase(env).prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
+  const result = await requireDatabase(env).prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
   return response({ kiosks: result.results ?? [] });
 }
 function validTimestamp(value: string | undefined): value is string { return Boolean(value && Number.isFinite(Date.parse(value))); }
@@ -277,7 +279,11 @@ async function correction(request: Request, env: Env): Promise<Response> {
   ]);
   return response({ correction: { id, ...input, reason: input.reason.trim(), createdAt: now } }, 201);
 }
-function csvCell(value: unknown): string { const text = value == null ? "" : String(value); return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text; }
+function csvCell(value: unknown): string {
+  const text = value == null ? "" : String(value);
+  const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
+}
 async function attendanceExport(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const result = await db.prepare("SELECT mt.title AS meeting, mt.starts_at AS meetingStart, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id) THEN 'present' ELSE 'absent' END) AS disposition, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id) AS occurredAt, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason FROM meetings mt CROSS JOIN members m WHERE mt.installation_id = 'primary' AND m.installation_id = 'primary' AND m.active = 1 ORDER BY mt.starts_at, m.last_name, m.first_name").all<Record<string, unknown>>();
@@ -311,6 +317,10 @@ async function integrationsStatus(request: Request, env: Env): Promise<Response>
 async function integrationConfiguration(request: Request, env: Env, provider: IntegrationProvider): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "DELETE") {
+    if (provider === "google") {
+      const installation = await db.prepare("SELECT auth_mode AS authMode FROM installations WHERE id = 'primary'").first<{ authMode: AuthMode }>();
+      if (installation?.authMode === "google") throw new HttpError(409, "Google OAuth is the only enabled sign-in method and cannot be removed");
+    }
     await db.prepare("DELETE FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider).run();
     await writeAudit(db, principal, "integration.removed", "integration", provider); return response({ configured: false, provider });
   }

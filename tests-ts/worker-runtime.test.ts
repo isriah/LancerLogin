@@ -23,9 +23,13 @@ class FakeDatabase {
   lists = new Map<string, unknown[]>();
   prepare(sql: string) { return new FakeStatement(sql, this); }
   async batch(statements: FakeStatement[]) { this.batches.push(statements); return statements.map(() => ({ success: true })); }
-  firstResult(sql: string, _values: unknown[]) {
-    if (sql.includes("FROM users")) return this.user;
+  firstResult(sql: string, values: unknown[]) {
     for (const [fragment, value] of this.rows) if (sql.includes(fragment)) return value;
+    if (sql.includes("SELECT id, role FROM users") && sql.includes("active = 1")) {
+      const id = String(values[0]);
+      return { id, role: id.startsWith("operator") ? "operator" : "admin" };
+    }
+    if (sql.includes("FROM users")) return this.user;
     return undefined;
   }
   allResult(sql: string, _values: unknown[]) { for (const [fragment, value] of this.lists) if (sql.includes(fragment)) return value; return undefined; }
@@ -125,11 +129,24 @@ test("protected setup routes reject anonymous and Operator access", async () => 
   assert.equal((await worker.fetch(request("/admin/branding", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
 });
 
+test("protected routes immediately honor account deactivation and role changes", async () => {
+  const deactivated = new FakeDatabase();
+  deactivated.rows.set("SELECT id, role FROM users", null);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: deactivated } as unknown as Env;
+  assert.equal((await worker.fetch(request("/meetings", undefined, { cookie: await sessionCookie("operator") }), env)).status, 401);
+
+  const changed = new FakeDatabase();
+  changed.rows.set("SELECT id, role FROM users", { id: "admin-1", role: "operator" });
+  const staleAdmin = await sessionCookie("admin");
+  assert.equal((await worker.fetch(request("/admin/branding", undefined, { cookie: staleAdmin }), { ...env, DB: changed } as unknown as Env)).status, 403);
+  assert.equal((await worker.fetch(request("/meetings", undefined, { cookie: staleAdmin }), { ...env, DB: changed } as unknown as Env)).status, 200);
+});
+
 test("branding stores a bounded image asset in D1 and rejects remote logo URLs", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const cookie = await sessionCookie("admin");
-  const base = { organizationName: "Example Arts Club", subtitle: "Create together", primaryColor: "#123456", secondaryColor: "#abcdef", appearance: "dark" };
+  const base = { organizationName: "Example Arts Club", subtitle: "Create together", primaryColor: "#123456", secondaryColor: "#abcdef", appearance: "themed" };
   const remote = await worker.fetch(request("/admin/branding", { ...base, logoData: "https://example.test/logo.png" }, { method: "PATCH", cookie }), env);
   assert.equal(remote.status, 400);
   const logoData = `data:image/png;base64,${Buffer.from("small-logo").toString("base64")}`;
@@ -202,6 +219,8 @@ test("kiosk heartbeat hashes bearer credentials before D1 lookup", async () => {
   assert.ok(lookup);
   assert.notEqual(lookup.values[0], "very-secret");
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET last_seen_at")));
+  const healthUpdate = database.calls.find((call) => call.sql.includes("reader_online"));
+  assert.deepEqual(healthUpdate?.values.slice(1, 3), [1, "0.1.0"]);
 });
 
 test("Operator can create meetings and reasoned attendance corrections", async () => {
@@ -245,15 +264,18 @@ test("kiosk attendance is installation-scoped and idempotent by event ID", async
   assert.ok(insert.values.includes("offline-event-1"));
 });
 
-test("attendance export is an authenticated CSV download", async () => {
+test("attendance export is authenticated, quoted, and safe to open in spreadsheet software", async () => {
   const database = new FakeDatabase();
-  database.lists.set("FROM meetings mt", [{ meeting: "Studio, weekly", meetingStart: "2026-09-01T20:00:00Z", memberId: "A-1", firstName: "Avery", lastName: "Stone", disposition: "present", occurredAt: "2026-09-01T20:02:00Z", reason: null }]);
+  database.lists.set("FROM meetings mt", [{ meeting: "Studio, weekly", meetingStart: "2026-09-01T20:00:00Z", memberId: "=HYPERLINK(\"https://example.test\")", firstName: "+Avery", lastName: "Stone", disposition: "present", occurredAt: "2026-09-01T20:02:00Z", reason: null }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   assert.equal((await worker.fetch(request("/exports/attendance.csv"), env)).status, 401);
   const result = await worker.fetch(request("/exports/attendance.csv", undefined, { cookie: await sessionCookie("operator") }), env);
   assert.equal(result.status, 200);
   assert.match(result.headers.get("content-type") ?? "", /text\/csv/);
-  assert.match(await result.text(), /"Studio, weekly"/);
+  const csv = await result.text();
+  assert.match(csv, /"Studio, weekly"/);
+  assert.match(csv, /"'=HYPERLINK\(""https:\/\/example\.test""\)"/);
+  assert.match(csv, /'\+Avery/);
   const exportQuery = database.calls.find((call) => call.sql.includes("FROM meetings mt"));
   assert.match(exportQuery?.sql ?? "", /ORDER BY c\.created_at DESC/);
   assert.match(exportQuery?.sql ?? "", /MIN\(e\.occurred_at\)/);
@@ -270,6 +292,15 @@ test("integration rotation encrypts secrets and returns only redacted status", a
   assert.ok(saved);
   assert.equal(saved.values.some((value) => String(value).includes("re_super_secret")), false);
   assert.ok(database.calls.some((call) => call.values.includes("integration.rotated")));
+});
+
+test("Google-only installations cannot remove their sole sign-in integration", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("auth_mode AS authMode", { authMode: "google" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/integrations/google", {}, { method: "DELETE", cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 409);
+  assert.equal(database.calls.some((call) => call.sql.includes("DELETE FROM encrypted_integrations")), false);
 });
 
 test("Google OAuth uses signed state and validates identity before issuing a session", async () => {

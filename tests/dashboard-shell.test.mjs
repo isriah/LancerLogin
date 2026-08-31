@@ -56,13 +56,17 @@ test("live branding stores an image locally and applies organization colors and 
   assert.match(workspace, /stored in D1/);
   assert.match(entry, /"--primary": branding\.primaryColor/);
   assert.match(entry, /"--secondary": branding\.secondaryColor/);
+  assert.match(entry, /appearance === "themed"/);
   assert.match(entry, /data-theme=\{appearance\}/);
+  assert.match(workspace, /value="themed">Organization colors/);
 });
 
 test("Operator workspace exposes kiosk monitoring and the complete Discord attendance workflow", async () => {
   const source = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   assert.match(source, /\/admin\/kiosks/);
   assert.match(source, /Status refreshes every 30 seconds/);
+  assert.match(source, /Reader \$\{activeKiosk\.readerOnline/);
+  assert.match(source, /Release \$\{activeKiosk\.releaseVersion/);
   assert.match(source, /\/discord\/link/);
   assert.match(source, /\/discord\/contests\?meetingId=/);
   assert.match(source, /\/discord\/contests\/resolve/);

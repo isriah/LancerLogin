@@ -22,6 +22,7 @@ function App() {
   const [completed, setCompleted] = useState<string[]>([]);
   const [slug, setSlug] = useState("my-organization");
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [themeOverride, setThemeOverride] = useState<"light" | "dark">();
   const [remoteStatus, setRemoteStatus] = useState<SetupStatus | "loading" | "unavailable">(apiBaseUrl ? "loading" : "unavailable");
   const validSlug = /^[a-z][a-z0-9-]{2,40}$/.test(slug);
   const plannedResources = useMemo(() => validSlug ? [`${slug}-api`, `${slug}-data`, `${slug}-dashboard`] : [], [slug, validSlug]);
@@ -35,7 +36,7 @@ function App() {
       .catch(() => setRemoteStatus("unavailable"));
   }, []);
 
-  if (apiBaseUrl) return <ProvisionedEntry status={remoteStatus} onConfigured={(status) => setRemoteStatus(status)} theme={theme} onTheme={() => setTheme(theme === "light" ? "dark" : "light")} />;
+  if (apiBaseUrl) return <ProvisionedEntry status={remoteStatus} onConfigured={(status) => setRemoteStatus(status)} themeOverride={themeOverride} onTheme={setThemeOverride} />;
 
   return <div className="app" data-theme={theme}>
     <a className="skip-link" href="#main">Skip to main content</a>
@@ -90,13 +91,14 @@ function App() {
   </div>;
 }
 
-function ProvisionedEntry({ status, onConfigured, theme, onTheme }: { status: SetupStatus | "loading" | "unavailable"; onConfigured: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: () => void }) {
-  if (status === "loading") return <CenteredState theme={theme} title="Checking your installation…" detail="LancerLogin is securely reading setup status." />;
-  if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
+function ProvisionedEntry({ status, onConfigured, themeOverride, onTheme }: { status: SetupStatus | "loading" | "unavailable"; onConfigured: (status: SetupStatus) => void; themeOverride?: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
+  if (status === "loading") return <CenteredState theme={themeOverride ?? "light"} title="Checking your installation…" detail="LancerLogin is securely reading setup status." />;
+  if (status === "unavailable") return <CenteredState theme={themeOverride ?? "light"} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
   const branding = status.configured ? status.settings : undefined;
-  const appearance = branding?.appearance ?? theme;
-  const style = branding ? { "--primary": branding.primaryColor, "--secondary": branding.secondaryColor, "--gold": branding.secondaryColor } as React.CSSProperties : undefined;
-  return <div className="app" data-theme={appearance} style={style}><main className="provisioned-main"><header className="setup-header">{branding?.logoData ? <img className="brand-logo" src={branding.logoData} alt="" /> : <div className="brand-mark" aria-hidden="true">L</div>}<div><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></div><button className="theme-button" type="button" onClick={onTheme}>{theme === "light" ? "Dark" : "Light"} mode</button></header>{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} /> : <FirstAdminSetup onConfigured={onConfigured} />}</main></div>;
+  const appearance = themeOverride ?? branding?.appearance ?? "system";
+  const style = branding && appearance === "themed" ? { "--primary": branding.primaryColor, "--secondary": branding.secondaryColor, "--gold": branding.secondaryColor } as React.CSSProperties : undefined;
+  const nextTheme = appearance === "dark" ? "light" : "dark";
+  return <div className="app" data-theme={appearance} style={style}><main className="provisioned-main"><header className="setup-header">{branding?.logoData ? <img className="brand-logo" src={branding.logoData} alt="" /> : <div className="brand-mark" aria-hidden="true">L</div>}<div><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></div><button className="theme-button" type="button" onClick={() => onTheme(nextTheme)}>{nextTheme === "dark" ? "Dark" : "Light"} mode</button></header>{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} /> : <FirstAdminSetup onConfigured={onConfigured} />}</main></div>;
 }
 
 function CenteredState({ theme, title, detail }: { theme: "light" | "dark"; title: string; detail: string }) {

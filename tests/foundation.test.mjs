@@ -12,6 +12,10 @@ test("foundation documents state standalone constraints", async () => {
   assert.match(checklist, /Community release requirement checklist/);
   assert.match(checklist, /endpoint\/operator policy pending/);
   assert.match(checklist, /physical acceptance pending/);
+  const audit = await readFile("docs/COMPLETION-AUDIT.md", "utf8");
+  assert.match(audit, /Community release completion audit/);
+  assert.match(audit, /public operator\/endpoint policy pending/);
+  assert.match(audit, /physical acceptance pending/);
   const license = await readFile("LICENSE", "utf8");
   assert.match(license, /Apache License\s+Version 2\.0/);
   assert.match(license, /You may add Your own copyright statement to Your modifications/);
@@ -45,6 +49,14 @@ test("initial schema preserves the biometric and secret boundary", async () => {
   assert.match(schema, /locked_until TEXT/);
   assert.doesNotMatch(schema, /logo_url/i);
   assert.match(schema, /UNIQUE INDEX IF NOT EXISTS idx_one_active_kiosk ON kiosks\(installation_id\) WHERE active = 1/);
+});
+
+test("follow-up schema adds explicit themed branding and retained kiosk health", async () => {
+  const migration = await readFile("apps/api/migrations/0002_branding_and_kiosk_health.sql", "utf8");
+  assert.match(migration, /'themed'/);
+  assert.match(migration, /reader_online INTEGER/);
+  assert.match(migration, /release_version TEXT/);
+  assert.doesNotMatch(migration, /fingerprint|template/i);
 });
 
 test("provisioning workflow is adopter-gated and account-neutral", async () => {

@@ -51,6 +51,8 @@ test("setup and integration guides include sanitized annotated visual callouts",
   assert.match(operations, /integration-controls\.png/);
   assert.match(operations, /Check status, not secrets/);
   assert.match(operations, /Rotate in place/);
+  assert.match(operations, /reader state, and installed release/);
+  assert.match(operations, /spreadsheet formula markers as text/);
 });
 
 test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", async () => {

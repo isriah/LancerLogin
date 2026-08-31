@@ -34,7 +34,8 @@ The Worker request boundary allows unauthenticated health and CORS preflight onl
 
 - Pairing codes are single-use, time-limited, hashed at rest, and bound to one installation.
 - Worker session tokens use Secure, HTTP-only, SameSite=Strict cookies through the same-origin Pages proxy; OAuth ID tokens are verified server-side.
-- Every permission-sensitive API path checks Admin or Operator capability explicitly.
+- Every permission-sensitive API path reloads the active user and current role from D1 before checking Admin or Operator capability.
 - Destructive actions require an explicit confirmation phrase and immutable audit record.
 - Secret encryption uses AES-GCM with per-record random IVs and an installation-specific Worker secret.
 - Integration test actions use least-privilege operations and do not reveal credentials.
+- CSV export neutralizes leading spreadsheet formula markers before quoting cells.

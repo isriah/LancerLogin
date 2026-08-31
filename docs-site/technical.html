@@ -22,14 +22,15 @@
   <ul>
     <li>Every organization query is scoped to installation <code>primary</code>.</li>
     <li>Admin and Operator permissions are enforced by Worker routes, not only hidden in UI.</li>
-    <li>Sessions are HMAC-signed, HTTP-only, Secure, SameSite cookies with an eight-hour lifetime.</li>
+    <li>Sessions are HMAC-signed, HTTP-only, Secure, SameSite cookies with an eight-hour lifetime; protected requests reload active status and role from D1.</li>
     <li>Google OAuth uses signed ten-minute state and validates issuer, audience, verified email, and active user membership.</li>
     <li>Local passwords use salted scrypt (N=32768, r=8, p=1).</li>
     <li>Integration credentials use AES-256-GCM with a per-installation Worker secret.</li>
     <li>Pairing codes and kiosk credentials are stored remotely only as SHA-256 hashes.</li>
+    <li>CSV export neutralizes spreadsheet formula prefixes before quoting cells.</li>
   </ul>
   <h2>Verification and source reference</h2>
-  <p>CI runs workspace typechecks, Node unit tests, Worker runtime tests, production builds, dependency auditing, and sanitizer checks. Read <code>docs/ARCHITECTURE.md</code>, <code>docs/DECISIONS.md</code>, <code>docs/SECURITY.md</code>, and <code>docs/BACKUP-RESTORE.md</code> in the repository for durable technical detail.</p>
+  <p>CI runs workspace typechecks, Node unit tests, Worker runtime tests, production builds, dependency auditing, and sanitizer checks. Read <code>docs/COMPLETION-AUDIT.md</code>, <code>docs/ARCHITECTURE.md</code>, <code>docs/DECISIONS.md</code>, <code>docs/SECURITY.md</code>, and <code>docs/BACKUP-RESTORE.md</code> in the repository for durable technical detail.</p>
 </main>
 <footer><div><a href="index.html">Documentation home</a> · Apache-2.0</div></footer>
 </body>

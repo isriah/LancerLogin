@@ -79,7 +79,12 @@ jobs:
         id: resources
         shell: bash
         run: |
-          npx wrangler pages project list --json > .provision/pages-list.json
+          status=$(curl --silent --show-error --proto '=https' --tlsv1.2 \
+            --output .provision/pages-list.json --write-out '%{http_code}' \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects")
+          test "$status" = "200"
+          node -e 'const d=require("./.provision/pages-list.json"); if(d.success!==true||!Array.isArray(d.result)) process.exit(1)'
           pages=$(node scripts/cloudflare-resource-state.mjs pages "${{ inputs.installation_slug }}-dashboard" .provision/pages-list.json)
           if npx wrangler deployments list --name "${{ inputs.installation_slug }}-api" --json > .provision/worker-deployments.json 2>/dev/null; then
             worker=exists

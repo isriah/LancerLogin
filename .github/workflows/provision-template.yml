@@ -186,7 +186,7 @@ jobs:
           echo "SESSION_KEY=$SESSION_KEY" >> "$GITHUB_ENV"
           echo "INTEGRATION_KEY=$INTEGRATION_KEY" >> "$GITHUB_ENV"
           echo "BOOTSTRAP_CODE_HASH=$BOOTSTRAP_CODE_HASH" >> "$GITHUB_ENV"
-      - name: Deploy new or incomplete Worker API with generated secrets
+      - name: Deploy new or incomplete Worker API
         if: steps.resources.outputs.worker_secrets == 'missing'
         id: deploy-api-new
         uses: cloudflare/wrangler-action@v4
@@ -194,16 +194,17 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: lancerlogin-source
-          preCommands: npx wrangler deploy --config .provision/wrangler.json
           command: deploy --config .provision/wrangler.json
-          secrets: |
-            SESSION_KEY
-            INTEGRATION_KEY
-            BOOTSTRAP_CODE_HASH
+      - name: Upload generated Worker secrets
+        if: steps.resources.outputs.worker_secrets == 'missing'
+        shell: bash
         env:
           SESSION_KEY: ${{ env.SESSION_KEY }}
           INTEGRATION_KEY: ${{ env.INTEGRATION_KEY }}
           BOOTSTRAP_CODE_HASH: ${{ env.BOOTSTRAP_CODE_HASH }}
+        run: |
+          node -e 'process.stdout.write(JSON.stringify({SESSION_KEY:process.env.SESSION_KEY,INTEGRATION_KEY:process.env.INTEGRATION_KEY,BOOTSTRAP_CODE_HASH:process.env.BOOTSTRAP_CODE_HASH}))' \
+            | npx wrangler secret bulk --config .provision/wrangler.json
       - name: Deploy existing Worker API without rotating secrets
         if: steps.resources.outputs.worker_secrets == 'exists'
         id: deploy-api-existing

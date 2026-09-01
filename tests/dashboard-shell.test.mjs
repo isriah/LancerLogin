@@ -130,6 +130,8 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
 test("home shows a five-week rolling calendar, live attendance, and contest review", async () => {
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
   assert.match(home, /length: 35/);
+  assert.match(home, /previousMonth/);
+  assert.match(home, /previous-month/);
   assert.doesNotMatch(home, /Last week through the next three weeks/);
   assert.match(home, /Meetings in progress/);
   assert.match(home, /active\.length > 0.*live-pill/);
@@ -146,4 +148,17 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
   assert.match(source, /private GitHub deployment repository/);
   assert.match(source, /authorize Upgrade manually/);
   assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);
+});
+
+test("integration setup distinguishes saved credentials from verified connections", async () => {
+  const source = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
+  assert.match(source, /Verification required/);
+  assert.match(source, /result\.created \?/);
+  assert.match(source, /credentials saved\. Complete verification below/);
+  assert.match(source, /resend\/verify\/start/);
+  assert.match(source, /resend\/verify\/complete/);
+  assert.match(source, /discord\/verify\/start/);
+  assert.match(source, /Verify with Google/);
+  assert.match(source, /<details className="integration-card"/);
+  assert.doesNotMatch(source, /Previous credentials were replaced|\/test"/);
 });

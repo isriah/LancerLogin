@@ -22,6 +22,7 @@ const server = createServer((request, response) => {
     : path === "/attendance" ? { finalized: false, attendanceClosesAt: iso(90), attendance: [{ memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", disposition: "active", checkedInAt: iso(-20) }, { memberId: "member-2", externalId: "A-102", firstName: "Morgan", lastName: "Diaz", disposition: "present", checkedInAt: iso(-25), checkedOutAt: iso(-2) }, { memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", disposition: "absent" }] }
     : path === "/admin/kiosks" ? { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.5.0", pairedAt: iso(-1440) }] }
     : path === "/admin/simulator" ? { simulator: { name: "Browser test", active: 1, online: 1, lastSeenAt: iso(0), readerOnline: false, releaseVersion: "browser simulator" } }
+    : path === "/admin/integrations" ? { integrations: [{ provider: "google", saved: true, configured: true, state: "configured", verifiedAt: iso(-60) }, { provider: "resend", saved: true, configured: false, state: "verification_required" }, { provider: "discord", saved: false, configured: false, state: "not_configured" }] }
     : { error: "Preview route not implemented" };
   response.statusCode = payload.error ? 404 : 200; response.end(JSON.stringify(payload));
 });

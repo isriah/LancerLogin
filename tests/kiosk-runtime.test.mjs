@@ -11,6 +11,9 @@ import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/s
 import { kioskApp, kioskHtml, kioskStyles } from "../apps/kiosk/src/ui.mjs";
 import { decodePairingKey } from "../apps/kiosk/src/pairing-key.mjs";
 import { createScanner } from "../apps/kiosk/src/scanner.mjs";
+import { createNetworkManager } from "../apps/kiosk/src/network-manager.mjs";
+import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
+import { networkApp } from "../apps/kiosk/src/network-ui.mjs";
 
 test("pairing code is hashed, single-use, and expires", () => {
   const issued = issuePairingCode({ now: () => 0, random: () => Buffer.from("123456") });
@@ -48,6 +51,7 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.match(installer, /Port 8788 is already used by another service/);
   assert.match(installer, /curl --fail --silent --show-error http:\/\/127\.0\.0\.1:8788\/health/);
   assert.match(installer, /systemctl restart lancerlogin-kiosk\.service/);
+  assert.match(installer, /49-lancerlogin-network\.rules/);
   assert.match(installer, /same network.*one-time pairing key/);
   assert.doesNotMatch(installer, /Worker API URL from the GitHub workflow summary/);
   assert.match(installer, /node_major.*-ge 18/s);
@@ -83,6 +87,9 @@ test("tagged release archive includes every kiosk runtime module", async () => {
     "pairing-key.mjs",
     "kiosk-states.mjs",
     "scanner.mjs",
+    "network-manager.mjs",
+    "network-pin.mjs",
+    "network-ui.mjs",
   ]) {
     assert.match(workflow, new RegExp(`apps/kiosk/src/${module.replace(".", "\\.")}`));
   }
@@ -91,6 +98,21 @@ test("tagged release archive includes every kiosk runtime module", async () => {
   assert.match(workflow, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$commit&status=success/);
   assert.match(workflow, /package_version=\$\(jq -r \.version package\.json\)/);
   assert.match(workflow, /GITHUB_REF_NAME.*v\$package_version/);
+});
+
+test("network settings PIN is salted locally and rate limits repeated failures", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-network-pin-")); const path = join(directory, "pin.json"); let time = 1_000;
+  try { const store = createNetworkPinStore(path, { now: () => time }); await store.set("123456"); const saved = await readFile(path, "utf8"); assert.doesNotMatch(saved, /123456/); store.close(); for (let attempt = 0; attempt < 5; attempt += 1) await store.verify("654321"); const locked = await store.verify("123456"); assert.equal(locked.authorized, false); assert.ok(locked.lockedUntil); time += 31_000; assert.equal((await store.verify("123456")).authorized, true); } finally { await rm(directory, { recursive: true }); }
+});
+
+test("NetworkManager adapter lists Wi-Fi without retaining passwords", async () => {
+  const calls = []; const manager = createNetworkManager({ run: async (args) => { calls.push(args); if (args.includes("status")) return "wlan0:wifi:connected:Studio WiFi\neth0:ethernet:disconnected:\n"; if (args.includes("list")) return "*:Studio WiFi:82:WPA2\n:Guest:55:--\n"; return ""; } });
+  assert.deepEqual((await manager.status()).connection, "Studio WiFi"); const networks = await manager.wifi(); assert.deepEqual(networks.map((item) => ({ ssid: item.ssid, secured: item.secured })), [{ ssid: "Studio WiFi", secured: true }, { ssid: "Guest", secured: false }]); assert.ok(calls.some((args) => args.includes("--rescan")));
+});
+
+test("network policy grants only narrow NetworkManager actions to the kiosk account", async () => {
+  const policy = await readFile("apps/kiosk/polkit/49-lancerlogin-network.rules", "utf8");
+  assert.match(policy, /subject\.user === "lancerlogin"/); assert.match(policy, /NetworkManager\.network-control/); assert.doesNotMatch(policy, /polkit\.Result\.YES[\s\S]*return polkit\.Result\.YES/);
 });
 
 test("pairing client requires HTTPS and does not persist the one-time code", async () => {
@@ -209,5 +231,8 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskStyles, /max-height:520px/);
   assert.match(kioskApp, /\/display-state/);
   assert.match(kioskApp, /\/pair/);
+  assert.match(kioskHtml, /\/network\.js/);
+  assert.match(networkApp, /setTimeout\(openNetwork,3000\)/);
+  assert.match(networkApp, /touch-keyboard/);
   assert.doesNotMatch(kioskHtml, /https?:\/\//);
 });

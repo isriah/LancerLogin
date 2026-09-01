@@ -39,7 +39,7 @@ fi
 [[ "$MODE" == "--install" ]] || { echo "Use --dry-run to preview or --install to proceed." >&2; exit 2; }
 [[ "${EUID}" -eq 0 ]] || { echo "Run the installer as root with sudo." >&2; exit 2; }
 check_hardware
-for command in curl sha256sum tar systemctl runuser ss; do command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 2; }; done
+for command in curl sha256sum tar systemctl runuser ss nmcli; do command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 2; }; done
 [[ -x /usr/bin/node ]] || { echo "Node.js 18 or newer must be installed at /usr/bin/node." >&2; exit 2; }
 node_major="$(/usr/bin/node -p 'process.versions.node.split(".")[0]')"
 [[ "$node_major" -ge 18 ]] || { echo "Node.js 18 or newer is required." >&2; exit 2; }
@@ -67,6 +67,8 @@ install -d -m 0700 -o lancerlogin -g lancerlogin /var/lib/lancerlogin
 tar --extract --gzip --file "$temporary/$archive" --directory /opt/lancerlogin --no-same-owner
 
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-kiosk.service /etc/systemd/system/lancerlogin-kiosk.service
+install -d -m 0755 /etc/polkit-1/rules.d
+install -m 0644 /opt/lancerlogin/polkit/49-lancerlogin-network.rules /etc/polkit-1/rules.d/49-lancerlogin-network.rules
 install -d -m 0755 /etc/systemd/system/lancerlogin-kiosk.service.d
 printf '[Service]\nEnvironment=LANCERLOGIN_VERSION=%s\n' "$VERSION" > /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
 chmod 0644 /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf

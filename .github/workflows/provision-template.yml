@@ -13,17 +13,13 @@ on:
           - resume
           - upgrade
       release:
-        description: Install the latest release or enter a specific reviewed tag below
+        description: Choose the release to install
         required: true
-        default: latest
+        default: latest stable
         type: choice
         options:
-          - latest
-          - specific tag
-      release_tag:
-        description: Specific release tag only when selected above, for example v0.5.0
-        required: false
-        type: string
+          - latest stable
+          - original template release
       installation_slug:
         description: Lowercase installation slug, for example example-club
         required: true
@@ -50,7 +46,7 @@ jobs:
       LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
       INPUT_OPERATION: ${{ inputs.operation }}
       RELEASE_SELECTION: ${{ inputs.release }}
-      REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
+      TEMPLATE_RELEASE: v0.7.0
       INSTALLATION_SLUG: ${{ inputs.installation_slug }}
       INPUT_CONFIRMATION: ${{ inputs.confirmation }}
       REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
@@ -100,13 +96,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$RELEASE_SELECTION" = "latest" ]; then
+          if [ "$RELEASE_SELECTION" = "latest stable" ]; then
             tag=$(gh api repos/isriah/LancerLogin/releases/latest --jq .tag_name)
           else
-            tag=$REQUESTED_RELEASE_TAG
+            tag=$TEMPLATE_RELEASE
           fi
           if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-            echo "Choose latest or enter a release tag such as v0.5.0." >&2
+            echo "The selected release is not a valid LancerLogin version." >&2
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

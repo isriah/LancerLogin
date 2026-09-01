@@ -86,7 +86,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /recurrence_frequency: null/);
@@ -97,6 +97,14 @@ test("recurring meeting migration stores series metadata without biometric data"
   assert.match(migration, /recurrence_frequency/);
   assert.match(migration, /idx_meetings_series/);
   assert.doesNotMatch(migration, /fingerprint|template|biometric/i);
+});
+
+test("integration verification migration stores only proof state and hashed challenges", async () => {
+  const migration = await readFile("apps/api/migrations/0007_integration_verification.sql", "utf8");
+  assert.match(migration, /verified_at TEXT/);
+  assert.match(migration, /challenge_hash TEXT NOT NULL/);
+  assert.match(migration, /idx_integration_verification_expiry/);
+  assert.doesNotMatch(migration, /raw_ip|fingerprint|template|biometric/i);
 });
 
 test("entire-installation restore inserts roster members before linked dashboard users", async () => {
@@ -112,7 +120,8 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /Require a private deployment repository/);
-  assert.match(workflow, /release:\s+[\s\S]*type: choice[\s\S]*- latest[\s\S]*- specific tag/);
+  assert.match(workflow, /release:\s+[\s\S]*type: choice[\s\S]*- latest stable[\s\S]*- original template release/);
+  assert.doesNotMatch(workflow, /release_tag:\s/);
   assert.match(workflow, /gh api repos\/isriah\/LancerLogin\/releases\/latest --jq \.tag_name/);
   assert.match(workflow, /ref: \$\{\{ steps\.release\.outputs\.tag \}\}/);
   assert.match(workflow, /REPOSITORY_PRIVATE/);

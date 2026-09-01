@@ -4,6 +4,12 @@ ALTER TABLE organization_settings ADD COLUMN logo_backdrop TEXT NOT NULL DEFAULT
 
 ALTER TABLE attendance_events ADD COLUMN action TEXT NOT NULL DEFAULT 'check_in' CHECK (action IN ('check_in', 'check_out'));
 
+-- Older releases allowed an omitted end. Infer a one-hour duration so upgraded meetings
+-- participate in the same organization-wide closing policy as newly created meetings.
+UPDATE meetings
+SET ends_at = datetime(starts_at, '+1 hour')
+WHERE ends_at IS NULL;
+
 -- Preserve attendance credit recorded by older releases by closing one legacy session per member and meeting.
 INSERT OR IGNORE INTO attendance_events (
   id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by, action

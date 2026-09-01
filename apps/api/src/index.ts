@@ -747,14 +747,50 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-function validateBackup(value: unknown, scope: BackupScope): asserts value is { product: "LancerLogin"; schemaVersion: 2; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> } {
-  if (!isObject(value) || value.product !== "LancerLogin" || value.schemaVersion !== 2 || value.scope !== scope || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
+const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
+  organization_settings: tableColumns.organization_settings.slice(0, -2),
+  attendance_events: tableColumns.attendance_events.slice(0, -1),
+  discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -2),
+};
+const legacyInstallationTables = installationTables.filter((table) => table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients");
+const legacyMeetingTables = meetingTables.filter((table) => table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients");
+const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
+
+function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  const schemaVersion = Number(value.schemaVersion) as 1 | 2;
+  const sourceTables = value.tables;
+  const requiredTables = schemaVersion === 1 ? legacyTablesForScope(scope) : tablesForScope(scope);
   let rows = 0;
-  for (const table of tablesForScope(scope)) {
-    const tableRows = value.tables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    for (const row of tableRows) { if (!isObject(row) || tableColumns[table].some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
+  for (const table of requiredTables) {
+    const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
+    const columns = schemaVersion === 1 ? legacyTableColumns[table] ?? tableColumns[table] : tableColumns[table];
+    for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
+
+  const tables = Object.fromEntries((Object.keys(tableColumns) as BackupTable[]).map((table) => [table, [] as Record<string, unknown>[]])) as Record<BackupTable, Record<string, unknown>[]>;
+  for (const table of requiredTables) tables[table] = (sourceTables[table] as Record<string, unknown>[]).map((row) => ({ ...row }));
+  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", ...row }));
+  if (tables.meetings) tables.meetings = tables.meetings.map((row) => {
+    if (row.ends_at !== null) return row;
+    const start = Date.parse(String(row.starts_at));
+    return { ...row, ends_at: Number.isFinite(start) ? new Date(start + 60 * 60_000).toISOString() : row.starts_at };
+  });
+  if (schemaVersion === 1 && tables.attendance_events) {
+    tables.attendance_events = tables.attendance_events.map((row) => ({ ...row, action: "check_in" }));
+    const latest = new Map<string, Record<string, unknown>>();
+    for (const row of tables.attendance_events) {
+      if (row.meeting_id === null) continue;
+      const key = `${row.installation_id}:${row.member_id}:${row.meeting_id}`;
+      const saved = latest.get(key);
+      if (!saved || String(row.occurred_at) > String(saved.occurred_at)) latest.set(key, row);
+    }
+    for (const row of latest.values()) tables.attendance_events.push({ ...row, id: `legacy-restore-checkout:${row.member_id}:${row.meeting_id}`, source: "manual", kiosk_event_id: null, action: "check_out" });
+  }
+  if (tables.discord_attendance_contests) tables.discord_attendance_contests = tables.discord_attendance_contests.map((row) => ({ submitted_by_discord_user_id: null, review_note: null, ...row }));
+  return { product: "LancerLogin", schemaVersion, scope, exportedAt: value.exportedAt, tables };
 }
 
 const insertBackupRows = (db: D1Database, table: BackupTable, rows: Record<string, unknown>[]) => rows.map((row) => {
@@ -764,7 +800,7 @@ const insertBackupRows = (db: D1Database, table: BackupTable, rows: Record<strin
 async function restoreData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: BackupScope; confirmation?: string; backup?: unknown }>(request, 10_485_760); const scope = input.scope;
   if (!scope || !["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Restore scope must be meetings, roster, or installation");
-  const expected = `RESTORE ${scope.toUpperCase()}`; if (input.confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`); validateBackup(input.backup, scope); const tables = input.backup.tables;
+  const expected = `RESTORE ${scope.toUpperCase()}`; if (input.confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`); const backup = normalizeBackup(input.backup, scope); const tables = backup.tables;
   let statements: D1Statement[];
   if (scope === "meetings") statements = [
     db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"),
@@ -778,7 +814,7 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
     statements = [db.prepare("DELETE FROM installations WHERE id = 'primary'")];
     for (const table of installationTables) statements.push(...insertBackupRows(db, table, tables[table]));
   }
-  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: 2, exportedAt: input.backup.exportedAt }), now));
+  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: backup.schemaVersion, exportedAt: backup.exportedAt }), now));
   await db.batch(statements); return response({ restored: true, scope });
 }
 

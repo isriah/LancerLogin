@@ -78,9 +78,17 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
   const migration = await readFile("apps/api/migrations/0005_attendance_lifecycle.sql", "utf8");
   assert.match(migration, /late_scan_minutes INTEGER NOT NULL DEFAULT 30/);
   assert.match(migration, /action IN \('check_in', 'check_out'\)/);
+  assert.match(migration, /UPDATE meetings[\s\S]*ends_at = datetime\(starts_at, '\+1 hour'\)[\s\S]*ends_at IS NULL/);
   assert.match(migration, /discord_attendance_notifications/);
   assert.match(migration, /discord_attendance_recipients/);
   assert.doesNotMatch(migration, /fingerprint_template|raw_fingerprint|biometric_template/i);
+});
+
+test("dashboard restore accepts and normalizes version-one backups", async () => {
+  const source = await readFile("apps/api/src/index.ts", "utf8");
+  assert.match(source, /\[1, 2\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /legacy-restore-checkout:/);
+  assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
 });
 
 test("entire-installation restore inserts roster members before linked dashboard users", async () => {
@@ -143,6 +151,10 @@ test("CI and tagged releases apply the complete D1 migration chain locally", asy
   for (const workflowPath of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
     assert.match(await readFile(workflowPath, "utf8"), /npm run verify:migrations/);
   }
+  const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
+  assert.match(releaseWorkflow, /docs\/releases\/\$GITHUB_REF_NAME\.md/);
+  assert.match(releaseWorkflow, /--notes-file/);
+  assert.doesNotMatch(releaseWorkflow, /--generate-notes/);
 });
 
 test("Cloudflare setup is adopter-guided and does not require a target account", async () => {

@@ -300,6 +300,20 @@ test("invalid optional Discord IDs do not block core roster import", async () =>
   assert.equal(insert?.values[5], null);
 });
 
+test("replace roster deactivates omitted members without changing dashboard users", async () => {
+  const database = new FakeDatabase();
+  database.lists.set("SELECT external_id AS memberId", [{ memberId: "OLD", active: 1 }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/members", { mode: "replace", members: [{ memberId: "NEW", firstName: "New", lastName: "Member" }] }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 201);
+  const body = await result.json() as { deactivated: number; mode: string };
+  assert.equal(body.deactivated, 1);
+  assert.equal(body.mode, "replace");
+  const batch = database.batches.at(-1) ?? [];
+  assert.ok(batch.some((call) => call.sql.includes("UPDATE members SET active = 0")));
+  assert.equal(batch.some((call) => call.sql.includes("UPDATE users")), false);
+});
+
 test("kiosk heartbeat hashes bearer credentials before D1 lookup", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
@@ -360,6 +374,28 @@ test("Operator can create meetings and reasoned attendance corrections", async (
   const corrected = await worker.fetch(request("/attendance/corrections", { memberId: "member-1", meetingId: "meeting-1", disposition: "excused", reason: "School event" }, { cookie: operator }), env);
   assert.equal(corrected.status, 201);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("attendance.corrected")));
+});
+
+test("Operator can create a bounded recurring meeting series", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/meetings", { title: "Weekly rehearsal", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", required: true, recurrence: { frequency: "weekly", until: "2026-09-22T23:59:59.000Z" } }, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 201);
+  const body = await result.json() as { meetings: unknown[]; seriesId: string };
+  assert.equal(body.meetings.length, 4);
+  assert.ok(body.seriesId);
+  const batch = database.batches.at(-1) ?? [];
+  assert.equal(batch.filter((call) => call.sql.includes("INSERT INTO meetings")).length, 4);
+  assert.ok(batch.some((call) => call.values.includes("weekly")));
+});
+
+test("recurring meetings preserve organization-local time across daylight saving changes", async () => {
+  const database = new FakeDatabase(); database.rows.set("time_zone AS timeZone", { timeZone: "America/New_York" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/meetings", { title: "Sunday rehearsal", startsAt: "2026-10-25T18:00:00.000Z", endsAt: "2026-10-25T20:00:00.000Z", required: true, recurrence: { frequency: "weekly", until: "2026-11-08T23:59:59.000Z" } }, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 201);
+  const body = await result.json() as { meetings: { startsAt: string }[] };
+  assert.deepEqual(body.meetings.map((meeting) => meeting.startsAt), ["2026-10-25T18:00:00.000Z", "2026-11-01T19:00:00.000Z", "2026-11-08T19:00:00.000Z"]);
 });
 
 test("Operator can update meeting details without destructive access", async () => {

@@ -54,7 +54,7 @@ try {
   }, null, 2)}\n`, { mode: 0o600 });
 
   await runWrangler(["d1", "migrations", "apply", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory]);
-  const output = await runWrangler(["d1", "execute", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory, "--json", "--command", "SELECT name FROM d1_migrations ORDER BY id; SELECT name, sql FROM sqlite_master WHERE name IN ('organization_settings', 'kiosks', 'meetings', 'pairing_codes', 'simulated_kiosk_sessions', 'users', 'idx_one_user_per_member', 'attendance_events', 'discord_attendance_notifications', 'discord_attendance_recipients') ORDER BY name;"], { json: true });
+  const output = await runWrangler(["d1", "execute", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory, "--json", "--command", "SELECT name FROM d1_migrations ORDER BY id; SELECT name, sql FROM sqlite_master WHERE name IN ('organization_settings', 'kiosks', 'meetings', 'pairing_codes', 'simulated_kiosk_sessions', 'users', 'idx_one_user_per_member', 'idx_meetings_series', 'attendance_events', 'discord_attendance_notifications', 'discord_attendance_recipients') ORDER BY name;"], { json: true });
   const result = JSON.parse(output);
   const applied = result[0]?.results?.map((row) => row.name) ?? [];
   const expected = (await readdir(migrationsDirectory)).filter((name) => /^\d+_.+\.sql$/.test(name)).sort();
@@ -63,10 +63,11 @@ try {
   const schema = new Map((result[1]?.results ?? []).map((row) => [row.name, row.sql]));
   const brandingSql = schema.get("organization_settings") ?? "";
   const kioskSql = schema.get("kiosks") ?? "";
-  const meetingSql = schema.get("meetings") ?? ""; const pairingSql = schema.get("pairing_codes") ?? ""; const simulatorSql = schema.get("simulated_kiosk_sessions") ?? "";
+  const meetingSql = schema.get("meetings") ?? ""; const meetingSeriesIndexSql = schema.get("idx_meetings_series") ?? ""; const pairingSql = schema.get("pairing_codes") ?? ""; const simulatorSql = schema.get("simulated_kiosk_sessions") ?? "";
   const usersSql = schema.get("users") ?? ""; const memberUserIndexSql = schema.get("idx_one_user_per_member") ?? "";
   if (!brandingSql.includes("'themed'") || !kioskSql.includes("reader_online") || !kioskSql.includes("release_version")) throw new Error("Final D1 schema is missing themed branding or retained kiosk health fields");
   if (!meetingSql.includes("is_test") || !pairingSql.includes("'simulator'") || !simulatorSql.includes("online")) throw new Error("Final D1 schema is missing isolated browser simulator fields");
+  if (!meetingSql.includes("recurrence_frequency") || !meetingSql.includes("series_id") || !meetingSeriesIndexSql.includes("series_id")) throw new Error("Final D1 schema is missing recurring-meeting fields or index");
   if (!usersSql.includes("member_id") || !memberUserIndexSql.includes("member_id")) throw new Error("Final D1 schema is missing the optional one-to-one roster account link");
   const attendanceSql = schema.get("attendance_events") ?? ""; const notificationSql = schema.get("discord_attendance_notifications") ?? ""; const recipientSql = schema.get("discord_attendance_recipients") ?? "";
   if (!brandingSql.includes("late_scan_minutes") || !brandingSql.includes("logo_backdrop") || !attendanceSql.includes("check_out") || !notificationSql.includes("message_id") || !recipientSql.includes("discord_user_id")) throw new Error("Final D1 schema is missing attendance lifecycle or durable Discord notification fields");

@@ -84,11 +84,19 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
   assert.doesNotMatch(migration, /fingerprint_template|raw_fingerprint|biometric_template/i);
 });
 
-test("dashboard restore accepts and normalizes version-one backups", async () => {
+test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
+  assert.match(source, /recurrence_frequency: null/);
+});
+
+test("recurring meeting migration stores series metadata without biometric data", async () => {
+  const migration = await readFile("apps/api/migrations/0006_recurring_meetings.sql", "utf8");
+  assert.match(migration, /recurrence_frequency/);
+  assert.match(migration, /idx_meetings_series/);
+  assert.doesNotMatch(migration, /fingerprint|template|biometric/i);
 });
 
 test("entire-installation restore inserts roster members before linked dashboard users", async () => {

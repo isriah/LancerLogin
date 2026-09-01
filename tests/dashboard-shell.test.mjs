@@ -7,13 +7,13 @@ const branding = { organizationName: "Example Club", subtitle: "Welcome", primar
 
 test("operator dashboard excludes protected administration", () => {
   const navigation = navigationFor("operator");
-  assert.deepEqual(navigation, ["Dashboard", "Meetings", "Attendance", "Reports", "Roster", "Kiosk"]);
+  assert.deepEqual(navigation, ["Dashboard", "Meetings", "Attendance", "Reports", "Roster", "Kiosks"]);
 });
 
 test("admin dashboard includes protected administration", () => {
   const navigation = navigationFor("admin");
   assert.equal(navigation.includes("Roster"), true);
-  assert.deepEqual(navigation.slice(-2), ["Setup", "Settings"]);
+  assert.deepEqual(navigation.slice(-2), ["Kiosks", "Settings"]);
 });
 
 test("checklist is shared, resumable, and hides after completion", () => {
@@ -67,13 +67,13 @@ test("live branding stores an image locally and applies organization colors and 
   assert.match(workspace, /accept="image\/png,image\/jpeg,image\/webp"/);
   assert.match(workspace, /file\.size > 131_072/);
   assert.match(workspace, /stored in D1/);
-  assert.match(entry, /"--primary": branding\.primaryColor/);
-  assert.match(entry, /"--secondary": branding\.secondaryColor/);
-  assert.match(entry, /appearance === "themed"/);
+  assert.match(entry, /brandTheme\(branding\.primaryColor, branding\.secondaryColor\)/);
   assert.match(entry, /data-theme=\{appearance\}/);
-  assert.match(workspace, /value="themed">Organization colors/);
+  assert.match(workspace, /Logo contrast/);
   assert.match(settings, /Organization and appearance/);
   assert.match(settings, /Save organization settings/);
+  assert.match(settings, /Late scan allowance/);
+  assert.match(settings, /individual meetings cannot override it/);
 });
 
 test("Operator workspace exposes kiosk monitoring and the complete Discord attendance workflow", async () => {
@@ -110,7 +110,7 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
   const users = await readFile("apps/dashboard/src/user-settings.tsx", "utf8");
-  for (const route of ["/dashboard", "/meetings", "/attendance", "/reports", "/roster", "/settings/data", "/settings/updates"]) {
+  for (const route of ["/dashboard", "/meetings", "/attendance", "/reports", "/roster", "/kiosks", "/settings/data", "/settings/updates"]) {
     assert.match(shell, new RegExp(route.replaceAll("/", "\\/")));
   }
   assert.match(roster, /Dashboard access/);
@@ -118,6 +118,18 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
   assert.match(roster, /requestAnimationFrame/);
   assert.match(users, /Roster link <span>\(optional\)<\/span>/);
   assert.match(users, /Non-rostered Admin or Operator/);
+  assert.doesNotMatch(shell, /\["\/setup", "Setup"\]/);
+  assert.match(shell, /completedSteps\.length < 6/);
+});
+
+test("home shows a five-week rolling calendar, live attendance, and contest review", async () => {
+  const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
+  assert.match(home, /length: 35/);
+  assert.match(home, /Last week through the next three weeks/);
+  assert.match(home, /Meetings in progress/);
+  assert.match(home, /Active · not checked out/);
+  assert.match(home, /Attendance contests/);
+  assert.match(home, /reviewNote/);
 });
 
 test("update assistant backs up before opening GitHub and cannot deploy automatically", async () => {

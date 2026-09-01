@@ -2,9 +2,9 @@ import { can } from "../../../packages/shared/src/policy.mjs";
 
 const baseNavigation = [
   ["Dashboard", "view-dashboard"], ["Meetings", "manage-meetings"], ["Attendance", "manage-attendance"],
-  ["Reports", "view-reports"], ["Roster", "view-roster"], ["Kiosk", "view-kiosk-status"],
+  ["Reports", "view-reports"], ["Roster", "view-roster"], ["Kiosks", "view-kiosk-status"],
 ];
-const adminNavigation = [["Setup", "manage-branding"], ["Settings", "manage-security"]];
+const adminNavigation = [["Settings", "manage-security"]];
 const steps = [
   ["branding", "Set organization branding"], ["test-meeting", "Create a test meeting"], ["roster", "Add your roster"],
   ["pair-kiosk", "Pair hardware or simulator"], ["fingerprint-test", "Test kiosk input"], ["confirm-attendance", "Confirm attendance"],

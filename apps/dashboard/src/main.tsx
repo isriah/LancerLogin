@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 import type { Branding } from "./setup-workspace";
 import { AppShell } from "./app-shell";
+import { AdaptiveBrandLogo } from "./adaptive-brand-logo";
+import { brandTheme } from "./theme";
 
 type CloudflareStep = { id: string; title: string; detail: string; action?: { label: string; href: string } };
 
@@ -98,9 +100,9 @@ function ProvisionedEntry({ status, onConfigured, themeOverride, onTheme }: { st
   if (status === "unavailable") return <CenteredState theme={themeOverride ?? "light"} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
   const branding = status.configured ? status.settings : undefined;
   const appearance = themeOverride ?? branding?.appearance ?? "system";
-  const style = branding && appearance === "themed" ? { "--primary": branding.primaryColor, "--secondary": branding.secondaryColor, "--gold": branding.secondaryColor } as React.CSSProperties : undefined;
+  const style = branding ? brandTheme(branding.primaryColor, branding.secondaryColor) : undefined;
   const nextTheme = appearance === "dark" ? "light" : "dark";
-  return <div className="app" data-theme={appearance} style={style}><div className="provisioned-main"><header className="setup-header">{branding?.logoData ? <img className="brand-logo" src={branding.logoData} alt="" /> : <div className="brand-mark" aria-hidden="true">L</div>}<div><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></div><button className="theme-button" type="button" onClick={() => onTheme(nextTheme)}>{nextTheme === "dark" ? "Dark" : "Light"} mode</button></header>{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} /> : <FirstAdminSetup onConfigured={onConfigured} />}</div></div>;
+  return <div className="app" data-theme={appearance} style={style}><div className="provisioned-main"><header className="setup-header"><a className="brand-home-link" href="/dashboard" aria-label="Go to dashboard home">{branding?.logoData ? <AdaptiveBrandLogo src={branding.logoData} alt="" backdrop={branding.logoBackdrop} className="header-logo" /> : <div className="brand-mark" aria-hidden="true">L</div>}<span className="brand-heading"><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></span></a><button className="theme-button" type="button" onClick={() => onTheme(nextTheme)}>{nextTheme === "dark" ? "Dark" : "Light"} mode</button></header>{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} /> : <FirstAdminSetup onConfigured={onConfigured} />}</div></div>;
 }
 
 function CenteredState({ theme, title, detail }: { theme: "light" | "dark"; title: string; detail: string }) {
@@ -129,7 +131,7 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
     const response = await fetch(`${apiBaseUrl}/setup/bootstrap`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ setupCode, organizationName, timeZone, authMode, adminEmail: usesGoogle ? adminEmail : undefined, googleClientId: usesGoogle ? googleClientId : undefined, googleClientSecret: usesGoogle ? googleClientSecret : undefined, localUsername: usesLocal ? localUsername : undefined, localPassword: usesLocal ? localPassword : undefined, telemetryAccepted }) });
     const body = await response.json() as { error?: string; details?: string[] };
     if (!response.ok) { setResult({ error: body.details?.join(" ") ?? body.error ?? "Setup failed" }); return; }
-    onConfigured({ configured: true, installation: { authMode }, settings: { organizationName, subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "system" } });
+    onConfigured({ configured: true, installation: { authMode }, settings: { organizationName, subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "system", logoBackdrop: "auto", lateScanMinutes: 30 } });
   }
 
   return <section className="first-admin-card" aria-labelledby="first-admin-title"><div className="form-intro"><p className="kicker">First-time setup</p><h1 id="first-admin-title">Create your installation</h1><p>This creates the first Admin in your organization’s new database. You can change branding and add more users afterward.</p></div><form onSubmit={submit}>
@@ -148,7 +150,7 @@ function ConfiguredInstallation({ status, onStatusChange }: { status: SetupStatu
   const [checking, setChecking] = useState(true);
   useEffect(() => { fetch(`${apiBaseUrl}/auth/session`, { credentials: "include" }).then(async (result) => { if (result.ok) setSession((await result.json() as { user: { role: "admin" | "operator" } }).user); }).finally(() => setChecking(false)); }, []);
   if (checking) return <p className="auth-check" role="status">Checking your session…</p>;
-  if (session) return <AppShell role={session.role} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "system" }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => setSession(undefined)); }} />;
+  if (session) return <AppShell role={session.role} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "system", logoBackdrop: "auto", lateScanMinutes: 30 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => setSession(undefined)); }} />;
   return <LocalLogin status={status} onSignedIn={(role) => setSession({ role })} />;
 }
 

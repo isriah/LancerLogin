@@ -80,7 +80,8 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /accounts\/\$CLOUDFLARE_ACCOUNT_ID\/pages\/projects/);
   assert.doesNotMatch(workflow, /pages project list --json/);
   assert.match(workflow, /Generate installation session key\s+if: steps\.resources\.outputs\.worker_secrets == 'missing'/);
-  assert.match(workflow, /wrangler secret list/);
+  assert.match(workflow, /wrangler secret list --format json/);
+  assert.doesNotMatch(workflow, /wrangler secret list --json/);
   assert.match(workflow, /Deploy existing Worker API without rotating secrets/);
   assert.match(workflow, /workingDirectory: \.provision/);
   assert.match(workflow, /preCommands: npx wrangler deploy/);

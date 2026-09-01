@@ -88,7 +88,7 @@ jobs:
           pages=$(node scripts/cloudflare-resource-state.mjs pages "${{ inputs.installation_slug }}-dashboard" .provision/pages-list.json)
           if npx wrangler deployments list --name "${{ inputs.installation_slug }}-api" --json > .provision/worker-deployments.json 2>/dev/null; then
             worker=exists
-            npx wrangler secret list --json --config .provision/wrangler.json > .provision/worker-secrets.json
+            npx wrangler secret list --format json --config .provision/wrangler.json > .provision/worker-secrets.json
             worker_secrets=$(node -e 'const s=require("./.provision/worker-secrets.json"); const n=new Set(s.map(x=>x.name)); process.stdout.write(n.has("SESSION_KEY")&&n.has("INTEGRATION_KEY")?"exists":"missing")')
           else
             worker=missing

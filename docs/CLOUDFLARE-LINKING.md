@@ -12,13 +12,13 @@ LancerLogin keeps public source and private deployment authority separate. It de
 6. Review the four permission lines, create the token, and copy its value immediately. Cloudflare shows the value once. Never capture the reveal screen in a screenshot.
 7. From any Cloudflare dashboard page, open Quick search or press **Ctrl/Command+K**, enter `Copy account ID`, and select that exact command. This copies the account ID, not a zone ID.
 8. In the private repository's `production` environment, add three **environment secrets**: the Cloudflare token value as `CLOUDFLARE_API_TOKEN`, the 32-character account ID as `CLOUDFLARE_ACCOUNT_ID`, and a unique password-manager-generated value of at least 16 characters as `LANCERLOGIN_SETUP_CODE`. Use secrets, not environment variables. The setup code protects the public first-Admin page; it is not the Admin password.
-9. Run **Install or upgrade LancerLogin** in `create` mode, select a reviewed release tag, and type `CREATE <slug>`. The workflow refuses to run from a public repository, verifies that the token is active in the exact selected account, and refuses matching D1, Worker, or Pages resources. After deployment, enter the setup code once in the first-Admin form. Use `resume` with `RESUME <slug>` only after an interrupted run. For a routine update, choose a newer reviewed release tag, select `upgrade`, and type `UPGRADE <slug>`.
+9. Run **Install or upgrade LancerLogin** in `create` mode, keep **Latest stable** selected, and type `CREATE <slug>`. The workflow refuses to run from a public repository, verifies that the token is active in the exact selected account, and refuses matching D1, Worker, or Pages resources. After deployment, enter the setup code once in the first-Admin form. Use `resume` with `RESUME <slug>` only after an interrupted run. For a routine update, select `upgrade`, keep **Latest stable** selected, and type `UPGRADE <slug>`.
 
 The task-oriented public walkthrough at [`setup.html`](https://isriah.github.io/LancerLogin/setup.html) contains sanitized screenshots captured from the real GitHub and Cloudflare interfaces. It never shows a token value, account ID, or private repository name.
 
 ## Safety checks
 
-- The workflow fetches the selected public release tag rather than deploying a stale template snapshot.
+- The workflow resolves **Latest stable** from public GitHub Releases and checks out that exact tag rather than deploying a stale template snapshot.
 - The workflow refuses Cloudflare deployment from a public repository.
 - The workflow accepts a new installation slug only; it rejects existing installation IDs and resource identifiers.
 - Generated secrets are stored in the adopter's deployment environment, never committed to Git.

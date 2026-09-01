@@ -36,14 +36,14 @@
     <img src="assets/integration-controls.png" alt="Sanitized LancerLogin Admin integrations screen showing encrypted saved values and rotate, test, and remove controls.">
     <figcaption class="callouts">
       <div class="callout"><span>1</span><h3>Check status, not secrets</h3><p>Configured status is visible, while saved credential values remain hidden.</p></div>
-      <div class="callout"><span>2</span><h3>Test before relying on it</h3><p>Each integration has a safe status test and an explicit removal action.</p></div>
+      <div class="callout"><span>2</span><h3>Verify before relying on it</h3><p>Each provider must complete its real Google, email-code, or signed Discord proof.</p></div>
       <div class="callout"><span>3</span><h3>Rotate in place</h3><p>Replacement values overwrite the encrypted configuration without exposing the previous one.</p></div>
     </figcaption>
   </figure>
   <h2>Configure an optional integration</h2>
-  <p>Open <strong>Settings → Integrations</strong> as an Admin. Expand the guide beside Google OAuth, Resend, or Discord for an official console link, exact callback value, required access, testing steps, and rotation guidance. Saved secret values remain hidden.</p>
+  <p>Open <strong>Settings → Integrations</strong> as an Admin. Open Google OAuth, Resend, or Discord for an official console link, exact callback value, required access, and guided verification. Fields appear immediately after the copy step that uses them. Saved secret values remain hidden, and a provider shows Configured only after end-to-end verification.</p>
   <h2>Review an available update</h2>
-  <p>An Admin-only notice appears when a newer public release is available. Open <strong>Settings → Updates</strong>, read the patch notes, and download the required entire-installation backup. LancerLogin then opens the guarded workflow in the private deployment repository; the Admin must authorize the upgrade there.</p>
+  <p>An Admin-only notice appears when a newer public release is available. Open <strong>Settings → Updates</strong>, read the patch notes, and download the required entire-installation backup. LancerLogin then opens the guarded workflow in the private deployment repository; choose Upgrade, keep Latest stable selected, and authorize the run there.</p>
   <h2>Back up, restore, delete, or reset</h2>
   <p><strong>Settings → Data</strong> has independent backup, restore, and delete controls for Meetings and attendance, Roster, and Entire installation. Files restore only to their matching category. Entire-installation backups contain sensitive hashes and encrypted secrets, so protect them like administrator credentials. Reset onboarding clears only checklist progress. Attendance CSV protects spreadsheet formula markers as text. For files over 10 MiB or infrastructure recovery, use the repository’s token-neutral D1 helpers documented in <code>docs/BACKUP-RESTORE.md</code>.</p>
 </main>

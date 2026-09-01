@@ -23,6 +23,8 @@ test("public docs are task-first, keyboard-navigable, and consistently linked", 
 test("public release notes explain visible changes and the manual upgrade path", async () => {
   const releases = await readFile("docs-site/releases.html", "utf8");
   assert.match(releases, /v0\.5\.0/);
+  assert.match(releases, /v0\.7\.0/);
+  assert.match(releases, /Verified integrations/);
   assert.match(releases, /arrival and departure/);
   assert.match(releases, /manually run/);
   assert.match(releases, /application public key/);

@@ -2,6 +2,16 @@
 
 Meaningful release notes are published in [`docs/releases`](docs/releases/) and attached verbatim to each GitHub Release. LancerLogin follows semantic versioning while the Community Edition matures.
 
+## 0.7.0 — Verified integrations
+
+- Require end-to-end Google, Resend, and Discord verification before showing an integration as configured.
+- Send real expiring Resend codes and signed Discord verification buttons while storing only challenge hashes.
+- Collapse configured cards and place setup fields directly beside their copy-and-paste instructions.
+- Default the private updater to a **Latest stable** dropdown without routine release-tag typing.
+- Subtly shade prior-month dates in the rolling Home calendar.
+
+See [`docs/releases/v0.7.0.md`](docs/releases/v0.7.0.md) for migration, upgrade, and verification details.
+
 ## 0.6.1 — Kiosk status badge spacing
 
 - Keep physical-kiosk and browser-simulator names consistently separated from their status badges.

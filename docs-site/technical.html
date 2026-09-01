@@ -26,6 +26,7 @@
     <li>Google OAuth uses signed ten-minute state and validates issuer, audience, verified email, and active user membership.</li>
     <li>Local passwords use salted scrypt (N=32768, r=8, p=1).</li>
     <li>Integration credentials use AES-256-GCM with a per-installation Worker secret.</li>
+    <li>Provider verification challenges expire after ten minutes and store only SHA-256 hashes; unverified credentials cannot run operational email or Discord workflows.</li>
     <li>Pairing codes and kiosk credentials are stored remotely only as SHA-256 hashes.</li>
     <li>CSV export neutralizes spreadsheet formula prefixes before quoting cells.</li>
   </ul>

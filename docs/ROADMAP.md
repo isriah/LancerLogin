@@ -17,7 +17,8 @@ Each unit ended with targeted tests, full typecheck/build gates, a focused commi
 | 11 | Manual feedback-release upgrade acceptance and Raspberry Pi hardware acceptance | GitHub upgrade intentionally pending user test; physical hardware pending |
 | 12 | Public-source/private-deployment separation, release-tag selection, authenticated updater routing, and one-time first-Admin setup code | Implemented and fully verified locally; private live Create acceptance pending |
 | 13 | Recurring meetings, searchable full meeting editor, roster preview/replace, persistent dark-first theme, streamlined onboarding, release notification, and in-dashboard integration guides | Complete locally for v0.6.0; manual adopter Upgrade acceptance pending |
-| Future | Full kiosk-screen simulator with a roster fingerprint-event dropdown and test-attendance effects | Deferred by product decision; keep the existing setup simulator, but do not expand it in v0.6.0 |
+| 14 | End-to-end provider verification, collapsible integration setup, latest-stable update dropdown, and prior-month calendar shading | Complete locally for v0.7.0; manual adopter Upgrade acceptance pending |
+| Future | Full kiosk-screen simulator with a roster fingerprint-event dropdown and test-attendance effects | Deferred by product decision; keep the existing setup simulator, but do not expand it in v0.7.0 |
 
 ## Release exclusions
 

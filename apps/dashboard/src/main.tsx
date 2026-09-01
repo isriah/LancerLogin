@@ -7,11 +7,12 @@ import { AppShell } from "./app-shell";
 type CloudflareStep = { id: string; title: string; detail: string; action?: { label: string; href: string } };
 
 const cloudflareSteps: CloudflareStep[] = [
+  { id: "private-repository", title: "Create a private deployment repository", detail: "Use the public LancerLogin template, choose Private, and keep deployment runs and Cloudflare credentials there." },
   { id: "account", title: "Create or sign in to Cloudflare", detail: "Use an account owned by your organization—not a developer’s personal deployment.", action: { label: "Open Cloudflare", href: "https://dash.cloudflare.com/sign-up" } },
   { id: "token", title: "Create a scoped Account API Token", detail: "In Manage account → Account API Tokens, allow Account Settings read plus Workers Scripts, D1, and Pages edit.", action: { label: "Open Cloudflare", href: "https://dash.cloudflare.com/" } },
   { id: "account-id", title: "Copy the selected Account ID", detail: "Find it on the Cloudflare account overview. Keep it out of source code." },
-  { id: "secrets", title: "Link both values through GitHub", detail: "Save the ID as CLOUDFLARE_ACCOUNT_ID and the token as CLOUDFLARE_API_TOKEN in this repository’s Actions secrets. LancerLogin never receives or displays either value." },
-  { id: "provision", title: "Run the setup workflow", detail: "GitHub Actions previews the new resource names before it creates anything." },
+  { id: "secrets", title: "Link the private deployment secrets", detail: "Store the account ID, token, and a private one-time setup code in the private repository’s production environment. LancerLogin never displays saved values." },
+  { id: "provision", title: "Run the private setup workflow", detail: "Choose a reviewed public release tag. GitHub validates the account and resource names before it creates anything." },
 ];
 
 const installationSteps = ["Organization & brand", "Initial test meeting", "Roster", "Pair hardware or simulator", "Kiosk input test", "Confirm attendance"];
@@ -62,7 +63,7 @@ function App() {
 
       <section className="notice" aria-labelledby="privacy-title">
         <div className="notice-icon" aria-hidden="true">✓</div>
-        <div><h2 id="privacy-title">Your account. Your data. Your installation.</h2><p>The setup workflow creates a new Worker, D1 database, and Pages dashboard only inside the account you link. It cannot see or reuse another LancerLogin installation.</p></div>
+        <div><h2 id="privacy-title">Public source. Private deployment. Your data.</h2><p>The public project contains no adopter credentials. Your private repository deploys a reviewed release into only the Cloudflare account you link.</p></div>
       </section>
 
       <div className="content-grid">
@@ -107,6 +108,7 @@ function CenteredState({ theme, title, detail }: { theme: "light" | "dark"; titl
 }
 
 function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus) => void }) {
+  const [setupCode, setSetupCode] = useState("");
   const [authMode, setAuthMode] = useState<"google" | "local" | "both">("local");
   const [organizationName, setOrganizationName] = useState("");
   const [timeZone, setTimeZone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
@@ -124,13 +126,14 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
   async function submit(event: FormEvent) {
     event.preventDefault(); setResult({ busy: true });
     if (usesLocal && localPassword !== localPasswordConfirmation) { setResult({ error: "The password confirmation does not match. Re-enter both password fields." }); return; }
-    const response = await fetch(`${apiBaseUrl}/setup/bootstrap`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ organizationName, timeZone, authMode, adminEmail: usesGoogle ? adminEmail : undefined, googleClientId: usesGoogle ? googleClientId : undefined, googleClientSecret: usesGoogle ? googleClientSecret : undefined, localUsername: usesLocal ? localUsername : undefined, localPassword: usesLocal ? localPassword : undefined, telemetryAccepted }) });
+    const response = await fetch(`${apiBaseUrl}/setup/bootstrap`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ setupCode, organizationName, timeZone, authMode, adminEmail: usesGoogle ? adminEmail : undefined, googleClientId: usesGoogle ? googleClientId : undefined, googleClientSecret: usesGoogle ? googleClientSecret : undefined, localUsername: usesLocal ? localUsername : undefined, localPassword: usesLocal ? localPassword : undefined, telemetryAccepted }) });
     const body = await response.json() as { error?: string; details?: string[] };
     if (!response.ok) { setResult({ error: body.details?.join(" ") ?? body.error ?? "Setup failed" }); return; }
     onConfigured({ configured: true, installation: { authMode }, settings: { organizationName, subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "system" } });
   }
 
   return <section className="first-admin-card" aria-labelledby="first-admin-title"><div className="form-intro"><p className="kicker">First-time setup</p><h1 id="first-admin-title">Create your installation</h1><p>This creates the first Admin in your organization’s new database. You can change branding and add more users afterward.</p></div><form onSubmit={submit}>
+    <label>One-time setup code<input required minLength={16} type="password" value={setupCode} onChange={(event) => setSetupCode(event.target.value)} autoComplete="one-time-code" /><span className="field-help">Enter the private code you saved as the LANCERLOGIN_SETUP_CODE deployment secret.</span></label>
     <div className="form-grid"><label>Organization name<input required maxLength={100} value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} autoComplete="organization" /></label><label>Time zone<input required value={timeZone} onChange={(event) => setTimeZone(event.target.value)} /></label></div>
     <fieldset><legend>Dashboard sign-in</legend><div className="choice-grid">{(["local", "google", "both"] as const).map((mode) => <label className={authMode === mode ? "choice selected" : "choice"} key={mode}><input type="radio" name="auth-mode" value={mode} checked={authMode === mode} onChange={() => setAuthMode(mode)} /><strong>{mode === "local" ? "Username and password" : mode === "google" ? "Google OAuth" : "Both methods"}</strong><span>{mode === "local" ? "Works without an identity provider." : mode === "google" ? "Use your organization’s Google accounts." : "Let each Admin use either method."}</span></label>)}</div></fieldset>
     {usesGoogle && <fieldset><legend>Google OAuth guided setup</legend><div className="oauth-walkthrough"><p>You do not need prior Google Cloud experience. Keep this LancerLogin page open while completing these steps:</p><ol><li><a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noreferrer">Create or select a Google Cloud project</a> owned by your organization.</li><li><a href="https://console.cloud.google.com/auth/branding" target="_blank" rel="noreferrer">Configure the OAuth consent screen</a>. Choose the audience appropriate for your organization and add your first Admin as a test user if Google requests it.</li><li><a href="https://console.cloud.google.com/auth/clients/create" target="_blank" rel="noreferrer">Create an OAuth client</a>, choose <strong>Web application</strong>, and give it a recognizable LancerLogin name.</li><li>Add <code>{window.location.origin}</code> as an authorized JavaScript origin.</li><li>Add <code>{window.location.origin}/api/auth/google/callback</code> as an authorized redirect URI.</li><li>Create the client, then copy its client ID and client secret into the fields below.</li></ol><p className="field-help">Google may ask you to enable its identity service or finish the consent screen first. Saved secrets are encrypted and never displayed again.</p></div><label>First Admin Google email<input type="email" required value={adminEmail} onChange={(event) => setAdminEmail(event.target.value)} autoComplete="email" /></label><div className="form-grid"><label>OAuth client ID<input required maxLength={500} value={googleClientId} onChange={(event) => setGoogleClientId(event.target.value)} autoComplete="off" /></label><label>OAuth client secret<input required maxLength={500} type="password" value={googleClientSecret} onChange={(event) => setGoogleClientSecret(event.target.value)} autoComplete="off" /></label></div></fieldset>}

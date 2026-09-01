@@ -9,7 +9,9 @@ export function buildProvisionConfig(slug, databases = [], releaseVersion = "0.1
   const databaseName = `${slug}-data`;
   const database = databases.find((entry) => entry.name === databaseName);
   const databaseId = database?.uuid ?? database?.database_id ?? database?.id;
-  const config = { name: `${slug}-api`, main: "../apps/api/src/index.ts", compatibility_date: "2026-08-01", workers_dev: true, vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `https://${slug}-dashboard.pages.dev`, RELEASE_VERSION: releaseVersion, TELEMETRY_ENDPOINT: telemetryEndpoint }, triggers: { crons: ["*/5 * * * *", "0 3 * * *"] } };
+  const updateWorkflowUrl = process.env.LANCERLOGIN_UPDATE_WORKFLOW_URL;
+  if (updateWorkflowUrl && !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/workflows\/[A-Za-z0-9_.-]+$/.test(updateWorkflowUrl)) throw new Error("Invalid private deployment workflow URL");
+  const config = { name: `${slug}-api`, main: "../apps/api/src/index.ts", compatibility_date: "2026-08-01", workers_dev: true, vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `https://${slug}-dashboard.pages.dev`, RELEASE_VERSION: releaseVersion, TELEMETRY_ENDPOINT: telemetryEndpoint, ...(updateWorkflowUrl ? { UPDATE_WORKFLOW_URL: updateWorkflowUrl } : {}) }, triggers: { crons: ["*/5 * * * *", "0 3 * * *"] } };
   if (databaseId) config.d1_databases = [{ binding: "DB", database_name: databaseName, database_id: databaseId, migrations_dir: "../apps/api/migrations" }];
   return { state: databaseId ? "exists" : "missing", config };
 }

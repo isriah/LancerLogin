@@ -2,8 +2,8 @@
 
 ## Start here
 
-1. Create a repository from the LancerLogin GitHub template in your own account.
-2. Follow the browser-led setup to create your Cloudflare resources in your own account.
+1. Create a **private** deployment repository from the public LancerLogin GitHub template in your own account.
+2. Follow the browser-led setup to link your Cloudflare account, save the private setup code, and deploy a reviewed public release tag.
 3. Create the first Admin, select authentication, and read the privacy notice.
 4. Complete the Setup checklist, then use the guided Pi installer and one-time pairing code.
 

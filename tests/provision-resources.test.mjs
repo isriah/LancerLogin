@@ -29,6 +29,20 @@ test("existing adopter D1 is bound after discovery", () => {
   assert.deepEqual(found.config.d1_databases, [{ binding: "DB", database_name: "example-club-data", database_id: "fresh-adopter-database", migrations_dir: "../apps/api/migrations" }]);
 });
 
+test("generated Worker configuration records only a validated private updater URL", () => {
+  const prior = process.env.LANCERLOGIN_UPDATE_WORKFLOW_URL;
+  try {
+    process.env.LANCERLOGIN_UPDATE_WORKFLOW_URL = "https://github.com/example/private-deployment/actions/workflows/provision-template.yml";
+    const result = buildProvisionConfig("example-club", [], "1.2.3");
+    assert.equal(result.config.vars.UPDATE_WORKFLOW_URL, process.env.LANCERLOGIN_UPDATE_WORKFLOW_URL);
+    process.env.LANCERLOGIN_UPDATE_WORKFLOW_URL = "https://hostile.example.test/update";
+    assert.throws(() => buildProvisionConfig("example-club", [], "1.2.3"), /Invalid private deployment workflow URL/);
+  } finally {
+    if (prior === undefined) delete process.env.LANCERLOGIN_UPDATE_WORKFLOW_URL;
+    else process.env.LANCERLOGIN_UPDATE_WORKFLOW_URL = prior;
+  }
+});
+
 test("Pages project discovery is resumable", () => {
   assert.equal(resourceExists("pages", "example-club-dashboard", [{ name: "example-club-dashboard" }]), true);
   assert.equal(resourceExists("pages", "other-dashboard", [{ name: "example-club-dashboard" }]), false);

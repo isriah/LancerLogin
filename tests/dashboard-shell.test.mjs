@@ -123,7 +123,8 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
 test("update assistant backs up before opening GitHub and cannot deploy automatically", async () => {
   const source = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
   assert.match(source, /\/admin\/data\/backup\?scope=installation/);
-  assert.match(source, /github\.com\/isriah\/LancerLogin\/actions\/workflows\/provision-template\.yml/);
-  assert.match(source, /run Upgrade manually/);
+  assert.match(source, /\/admin\/update-info/);
+  assert.match(source, /private GitHub deployment repository/);
+  assert.match(source, /authorize Upgrade manually/);
   assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);
 });

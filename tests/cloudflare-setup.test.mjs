@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { cloudflareSetupSteps, previewProvision, renderCloudflareSetup, setupProgress } from "../apps/dashboard/src/cloudflare-setup.mjs";
 
-test("Cloudflare setup is a clear five-step adopter flow", () => {
-  assert.deepEqual(cloudflareSetupSteps.map((step) => step.id), ["cloudflare-account", "cloudflare-token", "cloudflare-account-id", "github-secrets", "provision"]);
-  assert.equal(setupProgress({ "cloudflare-account": true })[0].complete, true);
-  assert.equal(setupProgress({ "cloudflare-account": true })[1].complete, false);
+test("Cloudflare setup is a clear private-deployment adopter flow", () => {
+  assert.deepEqual(cloudflareSetupSteps.map((step) => step.id), ["private-deployment-repository", "cloudflare-account", "cloudflare-token", "cloudflare-account-id", "github-secrets", "provision"]);
+  assert.equal(setupProgress({ "private-deployment-repository": true })[0].complete, true);
+  assert.equal(setupProgress({ "private-deployment-repository": true })[1].complete, false);
 });
 
 test("preflight previews guarded Create and rejects invalid installation slugs", () => {

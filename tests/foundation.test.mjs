@@ -86,21 +86,27 @@ test("entire-installation restore inserts roster members before linked dashboard
 test("provisioning workflow is adopter-gated and account-neutral", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
   assert.match(workflow, /workflow_dispatch/);
+  assert.match(workflow, /Require a private deployment repository/);
+  assert.match(workflow, /REPOSITORY_PRIVATE/);
+  assert.match(workflow, /repository: isriah\/LancerLogin/);
+  assert.match(workflow, /ref: \$\{\{ inputs\.release_tag \}\}/);
   assert.match(workflow, /CLOUDFLARE_API_TOKEN/);
   assert.match(workflow, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
+  assert.match(workflow, /secrets\.LANCERLOGIN_SETUP_CODE/);
   assert.match(workflow, /cfat_/);
-  assert.match(workflow, /expected=.*inputs\.operation/);
-  assert.match(workflow, /inputs\.confirmation.*expected.*inputs\.installation_slug/);
+  assert.match(workflow, /expected=.*INPUT_OPERATION/);
+  assert.match(workflow, /INPUT_CONFIRMATION.*expected.*INSTALLATION_SLUG/);
   assert.match(workflow, /RESUME|resume/);
   assert.match(workflow, /UPGRADE|upgrade/);
   assert.match(workflow, /accounts\/\$CLOUDFLARE_ACCOUNT_ID\/pages\/projects/);
   assert.doesNotMatch(workflow, /pages project list --json/);
-  assert.match(workflow, /Generate installation session key\s+if: steps\.resources\.outputs\.worker_secrets == 'missing'/);
+  assert.match(workflow, /Generate installation secrets\s+if: steps\.resources\.outputs\.worker_secrets == 'missing'/);
+  assert.match(workflow, /BOOTSTRAP_CODE_HASH/);
   assert.match(workflow, /wrangler secret list --format json/);
   assert.doesNotMatch(workflow, /wrangler secret list --json/);
   assert.match(workflow, /Deploy existing Worker API without rotating secrets/);
-  assert.match(workflow, /workingDirectory: \.provision/);
-  assert.match(workflow, /preCommands: npx wrangler deploy/);
+  assert.match(workflow, /workingDirectory: lancerlogin-source/);
+  assert.match(workflow, /preCommands: npx wrangler deploy --config \.provision\/wrangler\.json/);
   assert.match(workflow, /if: steps\.resources\.outputs\.worker_secrets == 'exists'/);
   assert.match(workflow, /VITE_API_BASE_URL: \/api/);
   assert.match(workflow, /prepare-pages-proxy\.mjs/);
@@ -109,6 +115,7 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.doesNotMatch(workflow, /user\/tokens\/verify/);
   assert.equal((workflow.match(/accountId: \$\{\{ env\.CLOUDFLARE_ACCOUNT_ID \}\}/g) ?? []).length, 3);
   assert.doesNotMatch(workflow, /accountId:\s*[a-f0-9]{32}|account_id\s*[:=]\s*[a-f0-9]{32}/i);
+  assert.doesNotMatch(workflow, /run:[\s\S]{0,300}\$\{\{ inputs\.(?:operation|confirmation|installation_slug) \}\}/);
 });
 
 test("CI and tagged releases apply the complete D1 migration chain locally", async () => {

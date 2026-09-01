@@ -1,11 +1,12 @@
 import { validateProvisionPlan } from "../../../scripts/provision-plan.mjs";
 
 export const cloudflareSetupSteps = Object.freeze([
+  { id: "private-deployment-repository", title: "Create a private deployment repository", detail: "Use the public LancerLogin template and choose Private so deployment history and credentials are not public." },
   { id: "cloudflare-account", title: "Create or sign in to Cloudflare", href: "https://dash.cloudflare.com/sign-up", detail: "Use an account owned by your organization." },
   { id: "cloudflare-token", title: "Create a narrowly scoped Account API Token", href: "https://dash.cloudflare.com/", detail: "Open Manage account → Account API Tokens. Allow Account Settings read plus Workers Scripts, D1, and Pages edit." },
   { id: "cloudflare-account-id", title: "Copy the selected Account ID", detail: "Find it on the Cloudflare account overview. Do not put it in source code." },
-  { id: "github-secrets", title: "Add both values to GitHub Actions", detail: "Save the ID as CLOUDFLARE_ACCOUNT_ID and the token as CLOUDFLARE_API_TOKEN in repository Actions secrets." },
-  { id: "provision", title: "Run Install or upgrade LancerLogin", detail: "Review the generated resource names before creation." },
+  { id: "github-secrets", title: "Add private deployment secrets", detail: "Save CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, and LANCERLOGIN_SETUP_CODE in the private repository’s production environment." },
+  { id: "provision", title: "Run Install or upgrade LancerLogin", detail: "Choose a reviewed public release tag and review the generated resource names before creation." },
 ]);
 
 export function setupProgress(state = {}) {

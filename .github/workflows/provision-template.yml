@@ -12,6 +12,10 @@ on:
           - create
           - resume
           - upgrade
+      release_tag:
+        description: Reviewed public LancerLogin release tag, for example v0.4.0
+        required: true
+        type: string
       installation_slug:
         description: Lowercase installation slug, for example example-club
         required: true
@@ -35,21 +39,75 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
+      INPUT_OPERATION: ${{ inputs.operation }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      INSTALLATION_SLUG: ${{ inputs.installation_slug }}
+      INPUT_CONFIRMATION: ${{ inputs.confirmation }}
+      REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      LANCERLOGIN_UPDATE_WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/workflows/provision-template.yml
       WRANGLER_SEND_METRICS: "false"
+    defaults:
+      run:
+        working-directory: lancerlogin-source
     steps:
-      - uses: actions/checkout@v7
+      - name: Require a private deployment repository
+        shell: bash
+        working-directory: .
+        run: |
+          if [ "$REPOSITORY_PRIVATE" != "true" ]; then
+            echo "Cloudflare deployment is allowed only from an adopter-owned private repository." >&2
+            exit 1
+          fi
+      - name: Validate deployment request
+        shell: bash
+        working-directory: .
+        run: |
+          expected=$(printf '%s' "$INPUT_OPERATION" | tr '[:lower:]' '[:upper:]')
+          if [ "$INPUT_CONFIRMATION" != "$expected $INSTALLATION_SLUG" ]; then
+            echo "Confirmation must be exactly: $expected $INSTALLATION_SLUG" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$INSTALLATION_SLUG" | grep -Eq '^[a-z][a-z0-9-]{2,40}$'; then
+            echo "Installation slug must start with a lowercase letter and contain 3-41 lowercase letters, digits, or hyphens." >&2
+            exit 1
+          fi
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Release tag must look like v0.4.0." >&2
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [[ "$CLOUDFLARE_API_TOKEN" != cfat_* ]]; then
+            echo "CLOUDFLARE_API_TOKEN must be a Cloudflare account-owned API token." >&2
+            exit 1
+          fi
+          if [ "${#CLOUDFLARE_ACCOUNT_ID}" -ne 32 ]; then
+            echo "CLOUDFLARE_ACCOUNT_ID must be the 32-character ID for the selected account." >&2
+            exit 1
+          fi
+          if [ "$INPUT_OPERATION" != "upgrade" ] && [ "${#LANCERLOGIN_SETUP_CODE}" -lt 16 ]; then
+            echo "LANCERLOGIN_SETUP_CODE must be an environment secret of at least 16 characters for Create or Resume." >&2
+            exit 1
+          fi
+      - name: Check out the selected public release
+        uses: actions/checkout@v7
+        with:
+          repository: isriah/LancerLogin
+          ref: ${{ inputs.release_tag }}
+          path: lancerlogin-source
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
-      - name: Validate explicit confirmation and secret
+          cache-dependency-path: lancerlogin-source/package-lock.json
+      - name: Verify the checked-out release identity
         shell: bash
         run: |
-          expected=$(echo "${{ inputs.operation }}" | tr '[:lower:]' '[:upper:]')
-          test "${{ inputs.confirmation }}" = "$expected ${{ inputs.installation_slug }}"
-          test -n "$CLOUDFLARE_API_TOKEN"
-          case "$CLOUDFLARE_API_TOKEN" in cfat_*) ;; *) echo "Expected a Cloudflare account-owned API token" >&2; exit 1;; esac
-          test "${#CLOUDFLARE_ACCOUNT_ID}" = 32
+          package_version=$(node -p "require('./package.json').version")
+          if [ "$RELEASE_TAG" != "v$package_version" ]; then
+            echo "Selected tag $RELEASE_TAG does not match package version v$package_version." >&2
+            exit 1
+          fi
       - run: npm ci
       - name: Verify the scoped token and selected Cloudflare account
         shell: bash
@@ -66,14 +124,12 @@ jobs:
           fi
           node -e 'const d=require("./.provision/token.json"); if(d.success!==true||d.result?.status!=="active") process.exit(1)'
       - name: Discover D1 resources in that account
-        shell: bash
-        run: |
-          npx wrangler d1 list --json > .provision/d1-list.json
+        run: npx wrangler d1 list --json > .provision/d1-list.json
       - name: Prepare account-neutral Worker configuration
         id: d1
         shell: bash
         run: |
-          state=$(node scripts/prepare-cloudflare-provision.mjs "${{ inputs.installation_slug }}" .provision/d1-list.json)
+          state=$(node scripts/prepare-cloudflare-provision.mjs "$INSTALLATION_SLUG" .provision/d1-list.json)
           echo "state=$state" >> "$GITHUB_OUTPUT"
       - name: Check for resource collisions
         id: resources
@@ -85,11 +141,11 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects")
           test "$status" = "200"
           node -e 'const d=require("./.provision/pages-list.json"); if(d.success!==true||!Array.isArray(d.result)) process.exit(1)'
-          pages=$(node scripts/cloudflare-resource-state.mjs pages "${{ inputs.installation_slug }}-dashboard" .provision/pages-list.json)
-          if npx wrangler deployments list --name "${{ inputs.installation_slug }}-api" --json > .provision/worker-deployments.json 2>/dev/null; then
+          pages=$(node scripts/cloudflare-resource-state.mjs pages "$INSTALLATION_SLUG-dashboard" .provision/pages-list.json)
+          if npx wrangler deployments list --name "$INSTALLATION_SLUG-api" --json > .provision/worker-deployments.json 2>/dev/null; then
             worker=exists
             npx wrangler secret list --format json --config .provision/wrangler.json > .provision/worker-secrets.json
-            worker_secrets=$(node -e 'const s=require("./.provision/worker-secrets.json"); const n=new Set(s.map(x=>x.name)); process.stdout.write(n.has("SESSION_KEY")&&n.has("INTEGRATION_KEY")?"exists":"missing")')
+            worker_secrets=$(node -e 'const s=require("./.provision/worker-secrets.json"); const n=new Set(s.map(x=>x.name)); process.stdout.write(n.has("SESSION_KEY")&&n.has("INTEGRATION_KEY")&&n.has("BOOTSTRAP_CODE_HASH")?"exists":"missing")')
           else
             worker=missing
             worker_secrets=missing
@@ -97,11 +153,11 @@ jobs:
           echo "pages=$pages" >> "$GITHUB_OUTPUT"
           echo "worker=$worker" >> "$GITHUB_OUTPUT"
           echo "worker_secrets=$worker_secrets" >> "$GITHUB_OUTPUT"
-          if [ "${{ inputs.operation }}" = "create" ]; then
+          if [ "$INPUT_OPERATION" = "create" ]; then
             test "${{ steps.d1.outputs.state }}" = "missing"
             test "$pages" = "missing"
             test "$worker" = "missing"
-          elif [ "${{ inputs.operation }}" = "upgrade" ]; then
+          elif [ "$INPUT_OPERATION" = "upgrade" ]; then
             test "${{ steps.d1.outputs.state }}" = "exists"
             test "$pages" = "exists"
             test "$worker" = "exists"
@@ -111,23 +167,25 @@ jobs:
           fi
       - name: Create D1 database
         if: inputs.operation == 'create'
-        shell: bash
         run: |
-          npx wrangler d1 create "${{ inputs.installation_slug }}-data" --binding DB --update-config --config .provision/wrangler.json
+          npx wrangler d1 create "$INSTALLATION_SLUG-data" --binding DB --update-config --config .provision/wrangler.json
           npx wrangler d1 list --json > .provision/d1-list.json
-          test "$(node scripts/prepare-cloudflare-provision.mjs "${{ inputs.installation_slug }}" .provision/d1-list.json)" = "exists"
+          test "$(node scripts/prepare-cloudflare-provision.mjs "$INSTALLATION_SLUG" .provision/d1-list.json)" = "exists"
       - name: Apply D1 migrations
-        run: npx wrangler d1 migrations apply "${{ inputs.installation_slug }}-data" --remote --config .provision/wrangler.json
-      - name: Generate installation session key
+        run: npx wrangler d1 migrations apply "$INSTALLATION_SLUG-data" --remote --config .provision/wrangler.json
+      - name: Generate installation secrets
         if: steps.resources.outputs.worker_secrets == 'missing'
         shell: bash
         run: |
           SESSION_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
           INTEGRATION_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
+          BOOTSTRAP_CODE_HASH=$(printf '%s' "$LANCERLOGIN_SETUP_CODE" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
           echo "::add-mask::$SESSION_KEY"
           echo "::add-mask::$INTEGRATION_KEY"
+          echo "::add-mask::$BOOTSTRAP_CODE_HASH"
           echo "SESSION_KEY=$SESSION_KEY" >> "$GITHUB_ENV"
           echo "INTEGRATION_KEY=$INTEGRATION_KEY" >> "$GITHUB_ENV"
+          echo "BOOTSTRAP_CODE_HASH=$BOOTSTRAP_CODE_HASH" >> "$GITHUB_ENV"
       - name: Deploy new or incomplete Worker API with generated secrets
         if: steps.resources.outputs.worker_secrets == 'missing'
         id: deploy-api-new
@@ -135,15 +193,17 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: .provision
-          preCommands: npx wrangler deploy
-          command: deploy
+          workingDirectory: lancerlogin-source
+          preCommands: npx wrangler deploy --config .provision/wrangler.json
+          command: deploy --config .provision/wrangler.json
           secrets: |
             SESSION_KEY
             INTEGRATION_KEY
+            BOOTSTRAP_CODE_HASH
         env:
           SESSION_KEY: ${{ env.SESSION_KEY }}
           INTEGRATION_KEY: ${{ env.INTEGRATION_KEY }}
+          BOOTSTRAP_CODE_HASH: ${{ env.BOOTSTRAP_CODE_HASH }}
       - name: Deploy existing Worker API without rotating secrets
         if: steps.resources.outputs.worker_secrets == 'exists'
         id: deploy-api-existing
@@ -151,6 +211,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: lancerlogin-source
           command: deploy --config .provision/wrangler.json
       - name: Select Worker deployment URL
         id: deploy-api
@@ -162,7 +223,7 @@ jobs:
           api_url="${NEW_API_URL:-$EXISTING_API_URL}"
           test -n "$api_url"
           echo "deployment-url=$api_url" >> "$GITHUB_OUTPUT"
-      - name: Build dashboard for the new API
+      - name: Build dashboard for the selected release
         env:
           VITE_API_BASE_URL: /api
         run: npm --workspace @lancerlogin/dashboard run build
@@ -170,14 +231,14 @@ jobs:
         run: node scripts/prepare-pages-proxy.mjs "${{ steps.deploy-api.outputs.deployment-url }}"
       - name: Create Pages project
         if: steps.resources.outputs.pages == 'missing'
-        run: npx wrangler pages project create "${{ inputs.installation_slug }}-dashboard" --production-branch main
+        run: npx wrangler pages project create "$INSTALLATION_SLUG-dashboard" --production-branch main
       - name: Deploy Pages dashboard
-        id: deploy-dashboard
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy apps/dashboard/dist --project-name=${{ inputs.installation_slug }}-dashboard --branch=main --commit-hash=${{ github.sha }}
+          workingDirectory: lancerlogin-source
+          command: pages deploy apps/dashboard/dist --project-name=${{ inputs.installation_slug }}-dashboard --branch=main
       - name: Publish setup links
         shell: bash
         env:
@@ -185,10 +246,15 @@ jobs:
           DASHBOARD_URL: https://${{ inputs.installation_slug }}-dashboard.pages.dev
         run: |
           {
-            echo "## LancerLogin installation ${{ inputs.operation }} complete"
+            echo "## LancerLogin $INPUT_OPERATION complete"
             echo ""
+            echo "- Release: $RELEASE_TAG"
             echo "- Dashboard: $DASHBOARD_URL"
             echo "- Worker API: $API_URL"
             echo ""
-            echo "Open the dashboard to create the first Admin and review the privacy notice."
+            if [ "$INPUT_OPERATION" = "upgrade" ]; then
+              echo "The existing installation data and secrets were retained."
+            else
+              echo "Open the dashboard and enter the private LANCERLOGIN_SETUP_CODE to create the first Admin."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

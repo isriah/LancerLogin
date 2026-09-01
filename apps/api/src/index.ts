@@ -4,7 +4,7 @@ import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts"
 type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
 interface D1Database { prepare(query: string): D1Statement; batch(statements: D1Statement[]): Promise<D1Result[]>; }
-export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; TELEMETRY_ENDPOINT?: string; RELEASE_VERSION?: string; DB?: D1Database; }
+export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; TELEMETRY_ENDPOINT?: string; RELEASE_VERSION?: string; DB?: D1Database; }
 type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
 type ScheduledController = { cron?: string };
 
@@ -12,7 +12,7 @@ type Role = "admin" | "operator";
 type Principal = { userId: string; role: Role; expiresAt: number };
 type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "test-meeting" | "confirm-attendance";
-type BootstrapInput = { organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
+type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
 type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark" };
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null };
 
@@ -68,6 +68,12 @@ async function sha256(value: string): Promise<string> {
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
   return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return difference === 0;
+}
 function randomToken(bytes = 32): string { return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(bytes)))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }
 async function writeAudit(db: D1Database, principal: Principal, action: string, targetType: string, targetId: string | null, metadata: unknown = {}): Promise<void> {
   await db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)")
@@ -95,6 +101,9 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env);
   if (await db.prepare("SELECT id FROM installations WHERE id = ?").bind("primary").first()) throw new HttpError(409, "Installation is already configured");
   const input = await parseJson<BootstrapInput>(request);
+  if (!env.BOOTSTRAP_CODE_HASH) throw new HttpError(503, "First-Admin setup protection is not configured");
+  const suppliedCodeHash = await sha256(input.setupCode?.trim() ?? "");
+  if (!constantTimeEqual(suppliedCodeHash, env.BOOTSTRAP_CODE_HASH)) throw new HttpError(403, "The one-time setup code is invalid");
   const errors = validateBootstrap(input);
   if (errors.length) throw new HttpError(400, "Invalid setup", errors);
   if ((input.authMode === "google" || input.authMode === "both") && !env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
@@ -117,6 +126,11 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   await db.batch(statements);
   if (telemetryAcceptedAt) { const cf = (request as Request & { cf?: { city?: string; metroCode?: string } }).cf; try { await transmitTelemetry(env, cf?.city || cf?.metroCode); } catch { /* Setup must survive best-effort telemetry failure. */ } }
   return response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, telemetryAccepted: Boolean(telemetryAcceptedAt) }, 201);
+}
+async function updateInfo(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin"]);
+  if (!env.UPDATE_WORKFLOW_URL) throw new HttpError(503, "The private deployment workflow is not configured");
+  return response({ releaseVersion: env.RELEASE_VERSION ?? "development", workflowUrl: env.UPDATE_WORKFLOW_URL });
 }
 async function localLogin(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); if (!env.SESSION_KEY) throw new HttpError(503, "Local authentication is not configured");
@@ -711,6 +725,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/health" && request.method === "GET") result = response({ ok: true, service: "lancerlogin-api", mode: env.DB ? "ready" : "unconfigured", releaseVersion: env.RELEASE_VERSION ?? "development" });
     else if (url.pathname === "/setup/status" && request.method === "GET") result = await setupStatus(env);
     else if (url.pathname === "/setup/bootstrap" && request.method === "POST") result = await bootstrap(request, env);
+    else if (url.pathname === "/admin/update-info" && request.method === "GET") result = await updateInfo(request, env);
     else if (url.pathname === "/auth/local" && request.method === "POST") result = await localLogin(request, env);
     else if (url.pathname === "/auth/session" && request.method === "GET") result = await authSession(request, env);
     else if (url.pathname === "/auth/logout" && request.method === "POST") result = response({ ok: true }, 200, { "set-cookie": "lancerlogin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" });

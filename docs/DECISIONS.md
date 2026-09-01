@@ -6,7 +6,7 @@ LancerLogin supports exactly one paired kiosk per installation. The Raspberry Pi
 
 ## ADR-002: Adopter-owned cloud account
 
-Each adopter deploys to their own Cloudflare account from a GitHub template. A narrowly scoped Cloudflare token is supplied as a GitHub Actions secret. The guarded action creates only resources named from a user-selected installation slug: Worker, D1 database, Pages project, and deployment secrets. Create refuses name collisions; Resume reuses existing resources and never rotates an existing Worker's session or integration-encryption secret.
+Each adopter creates a private deployment repository from the public GitHub template and deploys a selected public release tag into their own Cloudflare account. The workflow refuses to deploy from a public repository. A narrowly scoped Cloudflare token and one-time first-Admin setup code are stored as private GitHub environment secrets. The guarded action creates only resources named from a user-selected installation slug: Worker, D1 database, Pages project, and Worker secrets. Create refuses name collisions; Resume handles an interrupted first deployment; Upgrade preserves D1 and existing secrets.
 
 ## ADR-003: Authentication and authorization
 

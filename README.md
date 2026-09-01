@@ -6,7 +6,7 @@ LancerLogin is a new, standalone project. It has no migration or connection path
 
 ## Current stage
 
-This repository contains the runnable Worker, D1 schema, Pages dashboard, guided Raspberry Pi kiosk service with a touch UI and in-sensor enrollment, public documentation, adopter-owned provisioning workflow, and mocked provider/hardware verification suite. Local builds do not configure or contact a Cloudflare account, Raspberry Pi, or external integration. Deployment occurs only when an adopter adds their own scoped token and manually runs the guarded workflow.
+This public repository contains the runnable Worker, D1 schema, Pages dashboard, guided Raspberry Pi kiosk service with a touch UI and in-sensor enrollment, public documentation, private-repository provisioning workflow, and mocked provider/hardware verification suite. Local builds do not configure or contact a Cloudflare account, Raspberry Pi, or external integration. Adopters create a private repository from this template; only that private repository can deploy a selected public release tag with the adopter's scoped token and one-time first-Admin setup code.
 
 ## Local development
 

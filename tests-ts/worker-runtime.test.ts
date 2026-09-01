@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
@@ -35,17 +36,19 @@ class FakeDatabase {
   allResult(sql: string, _values: unknown[]) { for (const [fragment, value] of this.lists) if (sql.includes(fragment)) return value; return undefined; }
 }
 
+const setupCode = "private setup code 1234";
+const setupCodeHash = createHash("sha256").update(setupCode).digest("base64url");
 const request = (path: string, body?: unknown, options: { method?: string; cookie?: string } = {}) => new Request(`https://api.example.test${path}`, {
   method: options.method ?? (body ? "POST" : "GET"),
   headers: { ...(body ? { "content-type": "application/json" } : {}), ...(options.cookie ? { cookie: options.cookie } : {}) },
-  body: body ? JSON.stringify(body) : undefined,
+  body: body ? JSON.stringify(path === "/setup/bootstrap" && typeof body === "object" ? { setupCode, ...body } : body) : undefined,
 });
 const sessionSecret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const sessionCookie = async (role: "admin" | "operator") => `lancerlogin_session=${await createSessionCodec(sessionSecret).issue({ userId: `${role}-1`, role })}`;
 
 test("Worker bootstrap validates input before writing D1", async () => {
   const database = new FakeDatabase();
-  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env;
+  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example" }), env);
   assert.equal(result.status, 400);
   assert.equal(database.batches.length, 0);
@@ -53,7 +56,7 @@ test("Worker bootstrap validates input before writing D1", async () => {
 
 test("Worker rejects an oversized body even without a content-length header", async () => {
   const database = new FakeDatabase();
-  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env;
+  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, DB: database } as unknown as Env;
   const oversized = new Request("https://api.example.test/setup/bootstrap", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ organizationName: "x".repeat(262_145) }) });
   assert.equal(oversized.headers.has("content-length"), false);
   assert.equal((await worker.fetch(oversized, env)).status, 413);
@@ -62,7 +65,7 @@ test("Worker rejects an oversized body even without a content-length header", as
 
 test("first setup rejects simple cross-origin media types before any D1 write", async () => {
   const database = new FakeDatabase();
-  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env;
+  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, DB: database } as unknown as Env;
   const hostile = new Request("https://api.example.test/setup/bootstrap", {
     method: "POST",
     headers: { "content-type": "text/plain", origin: "https://hostile.example.test" },
@@ -76,7 +79,7 @@ test("first setup rejects simple cross-origin media types before any D1 write", 
 
 test("local Worker bootstrap creates the first Admin with a salted password hash", async () => {
   const database = new FakeDatabase();
-  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env;
+  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Arts Club", timeZone: "America/New_York", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple", telemetryAccepted: false }), env);
   assert.equal(result.status, 201);
   assert.equal(database.batches.length, 1);
@@ -84,6 +87,15 @@ test("local Worker bootstrap creates the first Admin with a salted password hash
   const userInsert = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO users"));
   assert.match(String(userInsert?.values[4]), /^scrypt\$/);
   assert.equal((await result.json() as { telemetryAccepted: boolean }).telemetryAccepted, false);
+});
+
+test("first-Admin bootstrap requires the private one-time setup code", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, DB: database } as unknown as Env;
+  const input = { setupCode: "incorrect setup code", organizationName: "Example Club", timeZone: "UTC", authMode: "local", localUsername: "admin", localPassword: "correct horse battery staple" };
+  const result = await worker.fetch(request("/setup/bootstrap", input), env);
+  assert.equal(result.status, 403);
+  assert.equal(database.batches.length, 0);
 });
 
 test("local login applies generic constant-work failure and temporary account locking", async () => {
@@ -116,7 +128,7 @@ test("successful local login clears prior failed-login state", async () => {
 
 test("Google-only bootstrap encrypts OAuth credentials before the first sign-in", async () => {
   const database = new FakeDatabase();
-  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Classroom", timeZone: "America/New_York", authMode: "google", adminEmail: "teacher@example.test", googleClientId: "google-client-id", googleClientSecret: "google-client-secret", telemetryAccepted: false }), env);
   assert.equal(result.status, 201);
   const integration = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO encrypted_integrations"));
@@ -129,9 +141,9 @@ test("Google-only bootstrap encrypts OAuth credentials before the first sign-in"
 test("Google bootstrap fails before writes when encryption or credentials are unavailable", async () => {
   const database = new FakeDatabase();
   const base = { organizationName: "Example Classroom", timeZone: "America/New_York", authMode: "google", adminEmail: "teacher@example.test", googleClientId: "google-client-id", googleClientSecret: "google-client-secret" };
-  const missingKey = await worker.fetch(request("/setup/bootstrap", base), { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", DB: database } as unknown as Env);
+  const missingKey = await worker.fetch(request("/setup/bootstrap", base), { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, DB: database } as unknown as Env);
   assert.equal(missingKey.status, 503);
-  const missingCredentials = await worker.fetch(request("/setup/bootstrap", { ...base, googleClientSecret: "" }), { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env);
+  const missingCredentials = await worker.fetch(request("/setup/bootstrap", { ...base, googleClientSecret: "" }), { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env);
   assert.equal(missingCredentials.status, 400);
   assert.equal(database.batches.length, 0);
 });
@@ -141,6 +153,17 @@ test("protected setup routes reject anonymous and Operator access", async () => 
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   assert.equal((await worker.fetch(request("/admin/branding"), env)).status, 401);
   assert.equal((await worker.fetch(request("/admin/branding", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
+});
+
+test("only an Admin can discover the private deployment updater", async () => {
+  const database = new FakeDatabase();
+  const workflowUrl = "https://github.com/example/private-deployment/actions/workflows/provision-template.yml";
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, UPDATE_WORKFLOW_URL: workflowUrl, DB: database } as unknown as Env;
+  assert.equal((await worker.fetch(request("/admin/update-info"), env)).status, 401);
+  assert.equal((await worker.fetch(request("/admin/update-info", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
+  const result = await worker.fetch(request("/admin/update-info", undefined, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { releaseVersion: "development", workflowUrl });
 });
 
 test("protected routes immediately honor account deactivation and role changes", async () => {

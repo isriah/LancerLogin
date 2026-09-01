@@ -74,6 +74,15 @@ test("roster account schema links optional credentials without biometric or pass
   assert.doesNotMatch(migration, /fingerprint|template|password_hash/i);
 });
 
+test("attendance lifecycle migration adds complete sessions and durable Discord delivery", async () => {
+  const migration = await readFile("apps/api/migrations/0005_attendance_lifecycle.sql", "utf8");
+  assert.match(migration, /late_scan_minutes INTEGER NOT NULL DEFAULT 30/);
+  assert.match(migration, /action IN \('check_in', 'check_out'\)/);
+  assert.match(migration, /discord_attendance_notifications/);
+  assert.match(migration, /discord_attendance_recipients/);
+  assert.doesNotMatch(migration, /fingerprint_template|raw_fingerprint|biometric_template/i);
+});
+
 test("entire-installation restore inserts roster members before linked dashboard users", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
   const order = source.match(/const installationTables: BackupTable\[\] = \[([\s\S]*?)\];/)?.[1] ?? "";

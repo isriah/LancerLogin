@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
@@ -183,7 +183,7 @@ test("branding stores a bounded image asset in D1 and rejects remote logo URLs",
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const cookie = await sessionCookie("admin");
-  const base = { organizationName: "Example Arts Club", subtitle: "Create together", primaryColor: "#123456", secondaryColor: "#abcdef", appearance: "themed" };
+  const base = { organizationName: "Example Arts Club", subtitle: "Create together", primaryColor: "#123456", secondaryColor: "#abcdef", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 };
   const remote = await worker.fetch(request("/admin/branding", { ...base, logoData: "https://example.test/logo.png" }, { method: "PATCH", cookie }), env);
   assert.equal(remote.status, 400);
   const logoData = `data:image/png;base64,${Buffer.from("small-logo").toString("base64")}`;
@@ -270,7 +270,9 @@ test("browser simulator check-ins are Admin-only and restricted to test meetings
   database.rows.set("FROM simulated_kiosk_sessions", { name: "Browser test", active: 1, online: 1 });
   database.rows.set("AND is_test = 1", { id: "test-meeting" });
   database.rows.set("FROM members", { id: "member-1" });
-  database.rows.set("FROM meetings", { id: "test-meeting" });
+  database.rows.set("FROM meetings", { id: "test-meeting", startsAt: "2020-01-01T00:00:00.000Z", endsAt: "2030-01-01T00:00:00.000Z" });
+  database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
+  database.lists.set("FROM attendance_events", []);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const body = { action: "check-in", memberId: "ROSTER-001", meetingId: "test-meeting" };
   assert.equal((await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("operator") }), env)).status, 403);
@@ -352,7 +354,7 @@ test("Operator can create meetings and reasoned attendance corrections", async (
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const operator = await sessionCookie("operator");
-  const meeting = await worker.fetch(request("/meetings", { title: "Rehearsal", startsAt: "2026-09-01T20:00:00.000Z", required: true }, { cookie: operator }), env);
+  const meeting = await worker.fetch(request("/meetings", { title: "Rehearsal", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", required: true }, { cookie: operator }), env);
   assert.equal(meeting.status, 201);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("meeting.created")));
   const corrected = await worker.fetch(request("/attendance/corrections", { memberId: "member-1", meetingId: "meeting-1", disposition: "excused", reason: "School event" }, { cookie: operator }), env);
@@ -363,11 +365,11 @@ test("Operator can create meetings and reasoned attendance corrections", async (
 test("Operator can update meeting details without destructive access", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/meetings/meeting-1", { title: "Updated rehearsal", startsAt: "2026-09-02T20:00:00.000Z", required: true, notes: "Bring supplies" }, { method: "PATCH", cookie: await sessionCookie("operator") }), env);
+  const result = await worker.fetch(request("/meetings/meeting-1", { title: "Updated rehearsal", startsAt: "2026-09-02T20:00:00.000Z", endsAt: "2026-09-02T22:00:00.000Z", required: true, notes: "Bring supplies" }, { method: "PATCH", cookie: await sessionCookie("operator") }), env);
   assert.equal(result.status, 200);
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE meetings SET") && call.values.includes("meeting-1") && call.values.includes("Bring supplies")));
   assert.ok(database.calls.some((call) => call.values.includes("meeting.updated")));
-  assert.equal((await worker.fetch(request("/meetings/meeting-1", { title: "Too much", startsAt: "2026-09-02T20:00:00.000Z", notes: "x".repeat(2_001) }, { method: "PATCH", cookie: await sessionCookie("operator") }), env)).status, 400);
+  assert.equal((await worker.fetch(request("/meetings/meeting-1", { title: "Too much", startsAt: "2026-09-02T20:00:00.000Z", endsAt: "2026-09-02T22:00:00.000Z", notes: "x".repeat(2_001) }, { method: "PATCH", cookie: await sessionCookie("operator") }), env)).status, 400);
   assert.equal((await worker.fetch(request("/admin/data", { scope: "attendance", confirmation: "DELETE ATTENDANCE" }, { method: "DELETE", cookie: await sessionCookie("operator") }), env)).status, 403);
 });
 
@@ -375,7 +377,9 @@ test("kiosk attendance is installation-scoped and idempotent by event ID", async
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
   database.rows.set("FROM members", { id: "member-1" });
-  database.rows.set("FROM meetings", { id: "meeting-1" });
+  database.rows.set("FROM meetings", { id: "meeting-1", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z" });
+  database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
+  database.lists.set("FROM attendance_events", []);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const attendanceRequest = new Request("https://api.example.test/kiosk/attendance", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ eventId: "offline-event-1", memberId: "ROSTER-001", meetingId: "meeting-1", occurredAt: "2026-09-01T20:02:00.000Z" }) });
   const result = await worker.fetch(attendanceRequest, env);
@@ -391,7 +395,7 @@ test("kiosk attendance is installation-scoped and idempotent by event ID", async
 
 test("attendance export is authenticated, quoted, and safe to open in spreadsheet software", async () => {
   const database = new FakeDatabase();
-  database.lists.set("FROM meetings mt", [{ meeting: "Studio, weekly", meetingStart: "2026-09-01T20:00:00Z", memberId: "=HYPERLINK(\"https://example.test\")", firstName: "+Avery", lastName: "Stone", disposition: "present", occurredAt: "2026-09-01T20:02:00Z", reason: null }]);
+  database.lists.set("FROM meetings mt", [{ meeting: "Studio, weekly", meetingStart: "2026-09-01T20:00:00Z", meetingEnd: "2026-09-01T22:00:00Z", memberId: "=HYPERLINK(\"https://example.test\")", firstName: "+Avery", lastName: "Stone", disposition: "present", checkedInAt: "2026-09-01T20:02:00Z", checkedOutAt: "2026-09-01T21:58:00Z", reason: null }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   assert.equal((await worker.fetch(request("/exports/attendance.csv"), env)).status, 401);
   const result = await worker.fetch(request("/exports/attendance.csv", undefined, { cookie: await sessionCookie("operator") }), env);
@@ -403,7 +407,8 @@ test("attendance export is authenticated, quoted, and safe to open in spreadshee
   assert.match(csv, /'\+Avery/);
   const exportQuery = database.calls.find((call) => call.sql.includes("FROM meetings mt"));
   assert.match(exportQuery?.sql ?? "", /ORDER BY c\.created_at DESC/);
-  assert.match(exportQuery?.sql ?? "", /MIN\(e\.occurred_at\)/);
+  assert.match(exportQuery?.sql ?? "", /e\.action = 'check_in'/);
+  assert.match(exportQuery?.sql ?? "", /e\.action = 'check_out'/);
 });
 
 test("integration rotation encrypts secrets and returns only redacted status", async () => {
@@ -504,7 +509,7 @@ test("missed-meeting email is D1-sourced, escaped, and idempotency keyed", async
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("Discord missing-member workflow mentions only linked absent members and opens contests", async () => {
+test("Discord missing-member workflow mentions only linked absent members and records recipients", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
@@ -518,8 +523,10 @@ test("Discord missing-member workflow mentions only linked absent members and op
     assert.equal(result.status, 202);
     const payload = JSON.parse(String(outbound?.body));
     assert.match(payload.content, /<@323456789012345678>/);
-    assert.deepEqual(payload.allowed_mentions.users, ["323456789012345678"]);
-    assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("discord_attendance_contests")));
+    assert.deepEqual(payload.allowed_mentions, { parse: [], users: ["323456789012345678"] });
+    assert.equal(payload.components[0].components[0].custom_id, "lancerlogin-attendance:meeting-1");
+    assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("discord_attendance_recipients")));
+    assert.equal(database.batches.at(-1)?.some((call) => call.sql.includes("discord_attendance_contests")), false);
     assert.equal(JSON.stringify(await result.json()).includes("discord-secret"), false);
   } finally { globalThis.fetch = originalFetch; }
 });
@@ -532,10 +539,31 @@ test("Operators can list and resolve Discord attendance contests", async () => {
   const listed = await worker.fetch(request("/discord/contests?meetingId=meeting-1", undefined, { cookie }), env);
   assert.equal(listed.status, 200);
   assert.equal((await listed.json() as { contests: unknown[] }).contests.length, 1);
-  const resolved = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved" }, { cookie }), env);
+  const resolved = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved", reviewNote: "Member showed the Operator a kiosk error." }, { cookie }), env);
   assert.equal(resolved.status, 200);
-  assert.ok(database.calls.some((call) => call.sql.includes("UPDATE discord_attendance_contests")));
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("UPDATE discord_attendance_contests")));
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO attendance_corrections")));
   assert.ok(database.calls.some((call) => call.values.includes("discord.contest_resolved")));
+});
+
+test("a signed Discord button creates a contest only for the delivered linked member", async () => {
+  const database = new FakeDatabase();
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  database.rows.set("FROM discord_attendance_recipients", { memberId: "member-1" });
+  database.rows.set("FROM discord_attendance_contests WHERE", { status: "open" });
+  database.lists.set("FROM members m WHERE", [{ id: "member-1", discordUserId: "323456789012345678" }]);
+  const body = JSON.stringify({ type: 3, data: { custom_id: "lancerlogin-attendance:meeting-1" }, member: { user: { id: "323456789012345678" } }, message: { id: "message-1" } });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = sign(null, Buffer.from(timestamp + body), privateKey).toString("hex");
+  const interaction = new Request("https://api.example.test/discord/interactions", { method: "POST", headers: { "content-type": "application/json", "x-signature-ed25519": signature, "x-signature-timestamp": timestamp }, body });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(interaction, env);
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { type: 4, data: { content: "Your attendance contest was recorded for review. Your attendance has not been changed.", flags: 64 } });
+  assert.ok(database.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO discord_attendance_contests") && call.values.includes("323456789012345678")));
 });
 
 test("telemetry transmits only after acceptance and strictly allowlists its payload", async () => {
@@ -643,14 +671,14 @@ test("Admin can link roster members to dashboard accounts while non-rostered acc
 });
 
 test("category backups are scope-labelled and never mix unrelated tables", async () => {
-  const database = new FakeDatabase(); database.lists.set("FROM meetings", [{ id: "meeting-1" }]); database.lists.set("FROM attendance_events", []); database.lists.set("FROM attendance_corrections", []); database.lists.set("FROM discord_attendance_contests", []);
+  const database = new FakeDatabase(); database.lists.set("FROM meetings", [{ id: "meeting-1" }]); database.lists.set("FROM attendance_events", []); database.lists.set("FROM attendance_corrections", []); database.lists.set("FROM discord_attendance_notifications", []); database.lists.set("FROM discord_attendance_recipients", []); database.lists.set("FROM discord_attendance_contests", []);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 200); const backup = await result.json() as { scope: string; tables: Record<string, unknown> }; assert.equal(backup.scope, "meetings"); assert.deepEqual(Object.keys(backup.tables).sort(), ["attendance_corrections", "attendance_events", "discord_attendance_contests", "meetings"]); assert.equal("members" in backup.tables, false); assert.match(result.headers.get("content-disposition") ?? "", /meetings-backup/);
+  const result = await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 200); const backup = await result.json() as { scope: string; tables: Record<string, unknown> }; assert.equal(backup.scope, "meetings"); assert.deepEqual(Object.keys(backup.tables).sort(), ["attendance_corrections", "attendance_events", "discord_attendance_contests", "discord_attendance_notifications", "discord_attendance_recipients", "meetings"]); assert.equal("members" in backup.tables, false); assert.match(result.headers.get("content-disposition") ?? "", /meetings-backup/);
 });
 
 test("restore rejects a backup from another category before executing a batch", async () => {
   const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const backup = { product: "LancerLogin", schemaVersion: 1, scope: "roster", exportedAt: "2026-09-01T00:00:00.000Z", tables: { members: [] } };
+  const backup = { product: "LancerLogin", schemaVersion: 2, scope: "roster", exportedAt: "2026-09-01T00:00:00.000Z", tables: { members: [] } };
   const result = await worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup }, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 400); assert.equal(database.batches.length, 0);
 });
 

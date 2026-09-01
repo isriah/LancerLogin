@@ -1,4 +1,5 @@
 import { requireCapability } from "../../../packages/shared/src/policy.mjs";
+import { attendanceDisposition, nextAttendanceAction, scanWindowState } from "./attendance-lifecycle.ts";
 
 const csv = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
 
@@ -20,19 +21,22 @@ export function createAttendanceService({ now = () => new Date().toISOString() }
     },
     createMeeting(principal, meeting) {
       requireCapability(principal, "manage-meetings");
-      if (!meeting.id || !meeting.title || !meeting.startsAt) throw new Error("Invalid meeting");
-      if (meeting.endsAt && Date.parse(meeting.endsAt) < Date.parse(meeting.startsAt)) throw new Error("Meeting ends before it starts");
+      if (!meeting.id || !meeting.title || !meeting.startsAt || !meeting.endsAt) throw new Error("Invalid meeting");
+      if (Date.parse(meeting.endsAt) <= Date.parse(meeting.startsAt)) throw new Error("Meeting ends before it starts");
       meetings.set(meeting.id, { ...meeting, required: meeting.required !== false });
       writeAudit(principal, "meeting.created", "meeting", meeting.id);
     },
     recordAttendance(principal, event) {
       requireCapability(principal, "manage-attendance");
       if (!members.get(event.memberId)?.active) throw new Error("Unknown active member");
-      if (!meetings.has(event.meetingId)) throw new Error("Unknown meeting");
+      const meeting = meetings.get(event.meetingId); if (!meeting) throw new Error("Unknown meeting");
       if (events.some((existing) => existing.kioskEventId && existing.kioskEventId === event.kioskEventId)) return { duplicate: true };
-      events.push({ ...event, source: event.source ?? "manual", occurredAt: event.occurredAt ?? now() });
+      const occurredAt = event.occurredAt ?? now(); const window = scanWindowState(meeting, occurredAt, 30); if (!window.accepted) throw new Error(window.reason);
+      const prior = events.filter((existing) => existing.memberId === event.memberId && existing.meetingId === event.meetingId);
+      const transition = nextAttendanceAction(prior, occurredAt); if (transition.status === "complete") throw new Error("Attendance already complete"); if (transition.status === "duplicate") return { duplicate: true, action: transition.action };
+      events.push({ ...event, source: event.source ?? "manual", occurredAt, action: transition.action });
       writeAudit(principal, "attendance.recorded", "member", event.memberId);
-      return { duplicate: false };
+      return { duplicate: false, action: transition.action };
     },
     correctAttendance(principal, correction) {
       requireCapability(principal, correction.disposition === "excused" ? "manage-excuses" : "manage-corrections");
@@ -43,8 +47,8 @@ export function createAttendanceService({ now = () => new Date().toISOString() }
     attendanceFor(meetingId) {
       return [...members.values()].filter((member) => member.active).map((member) => {
         const correction = corrections.get(`${member.id}:${meetingId}`);
-        const present = events.some((event) => event.memberId === member.id && event.meetingId === meetingId);
-        return { member, disposition: correction?.disposition ?? (present ? "present" : "absent"), correction };
+        const memberEvents = events.filter((event) => event.memberId === member.id && event.meetingId === meetingId);
+        return { member, disposition: attendanceDisposition(memberEvents, correction?.disposition), correction };
       });
     },
     exportCsv(principal) {

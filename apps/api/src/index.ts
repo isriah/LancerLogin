@@ -1,5 +1,6 @@
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
+import { attendanceClosesAt, attendanceDisposition, nextAttendanceAction, scanWindowState, type AttendanceAction } from "./attendance-lifecycle.ts";
 
 type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
@@ -13,7 +14,7 @@ type Principal = { userId: string; role: Role; expiresAt: number };
 type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "test-meeting" | "confirm-attendance";
 type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
-type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark" };
+type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number };
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null };
 
 const baseHeaders = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
@@ -84,7 +85,7 @@ async function setupStatus(env: Env): Promise<Response> {
   const db = requireDatabase(env);
   const installation = await db.prepare("SELECT id, auth_mode AS authMode, telemetry_accepted_at AS telemetryAcceptedAt FROM installations WHERE id = ?").bind("primary").first<{ id: string; authMode: AuthMode; telemetryAcceptedAt?: string }>();
   if (!installation) return response({ configured: false });
-  const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone FROM organization_settings WHERE installation_id = ?").bind(installation.id).first();
+  const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone, logo_backdrop AS logoBackdrop, late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = ?").bind(installation.id).first();
   return response({ configured: true, installation: { ...installation, telemetryAccepted: Boolean(installation.telemetryAcceptedAt) }, settings });
 }
 function validateBootstrap(input: BootstrapInput): string[] {
@@ -157,7 +158,7 @@ async function authSession(request: Request, env: Env): Promise<Response> {
 async function branding(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") {
-    const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first();
+    const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone, logo_backdrop AS logoBackdrop, late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first();
     return response({ settings });
   }
   const input = await parseJson<BrandingInput>(request); const errors: string[] = [];
@@ -166,9 +167,11 @@ async function branding(request: Request, env: Env): Promise<Response> {
   if (input.logoData && !validLogoData(input.logoData)) errors.push("Logo must be a PNG, JPEG, or WebP image no larger than 128 KiB");
   if (!input.primaryColor || !validColor(input.primaryColor) || !input.secondaryColor || !validColor(input.secondaryColor)) errors.push("Brand colors must use six-digit hex values");
   if (!input.appearance || !["system", "themed", "light", "dark"].includes(input.appearance)) errors.push("Appearance must be themed, light, dark, or follow the device");
+  if (!input.logoBackdrop || !["auto", "light", "dark", "none"].includes(input.logoBackdrop)) errors.push("Logo background must be automatic, light, dark, or none");
+  if (!Number.isInteger(input.lateScanMinutes) || input.lateScanMinutes! < 0 || input.lateScanMinutes! > 180) errors.push("Late scan window must be from 0 to 180 minutes");
   if (errors.length) throw new HttpError(400, "Invalid branding", errors);
-  await db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_data = ?, primary_color = ?, secondary_color = ?, appearance = ? WHERE installation_id = 'primary'")
-    .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoData || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance).run();
+  await db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_data = ?, primary_color = ?, secondary_color = ?, appearance = ?, logo_backdrop = ?, late_scan_minutes = ? WHERE installation_id = 'primary'")
+    .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoData || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance === "themed" ? "system" : input.appearance, input.logoBackdrop, input.lateScanMinutes).run();
   await writeAudit(db, principal, "branding.updated", "organization_settings", "primary"); return response({ ok: true });
 }
 async function setupProgress(request: Request, env: Env): Promise<Response> {
@@ -248,35 +251,47 @@ async function kioskStatus(request: Request, env: Env): Promise<Response> {
 function validTimestamp(value: string | undefined): value is string { return Boolean(value && Number.isFinite(Date.parse(value))); }
 async function meetings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const result = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes, is_test AS isTest FROM meetings WHERE installation_id = 'primary' ORDER BY starts_at DESC LIMIT 250").all(); return response({ meetings: result.results ?? [] }); }
+  if (request.method === "GET") { const [result, settings] = await Promise.all([db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes, is_test AS isTest FROM meetings WHERE installation_id = 'primary' ORDER BY starts_at DESC LIMIT 250").all<{ id: string; title: string; startsAt: string; endsAt: string; required: number; notes?: string; isTest: number }>(), db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>()]); return response({ meetings: (result.results ?? []).map((meeting) => ({ ...meeting, attendanceClosesAt: attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30) })), lateScanMinutes: settings?.lateScanMinutes ?? 30 }); }
   const input = await parseJson<{ title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; isTest?: boolean }>(request);
-  if (!input.title?.trim() || input.title.length > 120 || (input.notes?.length ?? 0) > 2_000 || !validTimestamp(input.startsAt) || (input.endsAt && !validTimestamp(input.endsAt)) || (input.endsAt && Date.parse(input.endsAt) <= Date.parse(input.startsAt!))) throw new HttpError(400, "Meeting needs a title, valid start, optional notes under 2,000 characters, and an optional end after its start");
+  if (!input.title?.trim() || input.title.length > 120 || (input.notes?.length ?? 0) > 2_000 || !validTimestamp(input.startsAt) || !validTimestamp(input.endsAt ?? undefined) || Date.parse(input.endsAt!) <= Date.parse(input.startsAt!)) throw new HttpError(400, "Meeting needs a title, valid start and end times, an end after its start, and optional notes under 2,000 characters");
   const id = crypto.randomUUID(); const now = new Date().toISOString();
   await db.batch([
-    db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at, is_test) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, input.title.trim(), input.startsAt, input.endsAt || null, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now, input.isTest === true ? 1 : 0),
+    db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at, is_test) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now, input.isTest === true ? 1 : 0),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, 'primary', ?, 'meeting.created', 'meeting', ?, ?)").bind(crypto.randomUUID(), principal.userId, id, now),
   ]);
-  return response({ meeting: { id, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt || null, required: input.required !== false, isTest: input.isTest === true } }, 201);
+  return response({ meeting: { id, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, isTest: input.isTest === true } }, 201);
 }
 async function updateMeeting(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const input = await parseJson<{ title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null }>(request);
-  if (!input.title?.trim() || input.title.length > 120 || (input.notes?.length ?? 0) > 2_000 || !validTimestamp(input.startsAt) || (input.endsAt && !validTimestamp(input.endsAt)) || (input.endsAt && Date.parse(input.endsAt) <= Date.parse(input.startsAt!))) throw new HttpError(400, "Meeting needs a title, valid start, optional notes under 2,000 characters, and an optional end after its start");
-  const updated = await db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ? WHERE installation_id = 'primary' AND id = ?").bind(input.title.trim(), input.startsAt, input.endsAt || null, input.required === false ? 0 : 1, input.notes?.trim() || null, meetingId).run();
+  if (!input.title?.trim() || input.title.length > 120 || (input.notes?.length ?? 0) > 2_000 || !validTimestamp(input.startsAt) || !validTimestamp(input.endsAt ?? undefined) || Date.parse(input.endsAt!) <= Date.parse(input.startsAt!)) throw new HttpError(400, "Meeting needs a title, valid start and end times, an end after its start, and optional notes under 2,000 characters");
+  const updated = await db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ? WHERE installation_id = 'primary' AND id = ?").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, meetingId).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
   await writeAudit(db, principal, "meeting.updated", "meeting", meetingId);
-  return response({ meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt || null, required: input.required !== false, notes: input.notes?.trim() || null } });
+  return response({ meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null } });
 }
-async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string }, source: "kiosk" | "manual", actorId?: string): Promise<Response> {
+async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual", actorId?: string): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !input.meetingId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, meetingId, and a valid occurredAt timestamp are required");
-  const [member, meeting] = await Promise.all([
+  const existing = await db.prepare("SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?").bind(input.eventId.trim()).first<{ action: AttendanceAction }>();
+  if (existing) return response({ accepted: false, duplicate: true, eventId: input.eventId, action: existing.action }, 200);
+  const [member, meeting, settings] = await Promise.all([
     db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND (id = ? OR external_id = ?) AND active = 1").bind(input.memberId, input.memberId).first<{ id: string }>(),
-    db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first(),
+    db.prepare("SELECT id, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string; startsAt: string; endsAt: string }>(),
+    db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>(),
   ]);
   if (!member || !meeting) throw new HttpError(404, "Member or meeting was not found in this installation");
+  const window = scanWindowState(meeting, input.occurredAt, settings?.lateScanMinutes ?? 30);
+  if (!window.accepted) throw new HttpError(409, window.reason);
+  const prior = await db.prepare("SELECT id, action, occurred_at AS occurredAt FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ? ORDER BY occurred_at, id").bind(member.id, input.meetingId).all<{ id: string; action: AttendanceAction; occurredAt: string }>();
+  const priorEvents = prior.results ?? [];
+  const transition = input.desiredAction
+    ? priorEvents.some((event) => event.action === input.desiredAction) ? { status: "duplicate" as const, action: input.desiredAction } : input.desiredAction === "check_out" && !priorEvents.some((event) => event.action === "check_in") ? { status: "complete" as const } : { status: "accepted" as const, action: input.desiredAction }
+    : nextAttendanceAction(priorEvents, input.occurredAt);
+  if (transition.status === "duplicate") return response({ accepted: false, duplicate: true, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt }, 200);
+  if (transition.status === "complete") throw new HttpError(409, "Attendance is already complete for this member and meeting");
   const id = crypto.randomUUID();
-  const result = await db.prepare("INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, member.id, input.meetingId, source, input.occurredAt, input.eventId.trim(), actorId ?? null).run();
-  return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId }, 202);
+  const result = await db.prepare("INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by, action) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, member.id, input.meetingId, source, input.occurredAt, input.eventId.trim(), actorId ?? null, transition.action).run();
+  return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt }, 202);
 }
 async function kioskAttendance(request: Request, env: Env): Promise<Response> { await kioskFor(request, env); return recordAttendance(requireDatabase(env), await parseJson(request), "kiosk"); }
 async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
@@ -285,7 +300,7 @@ async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
     const simulator = await db.prepare("SELECT name, active, online, last_seen_at AS lastSeenAt, created_at AS pairedAt FROM simulated_kiosk_sessions WHERE installation_id = 'primary'").first();
     return response({ simulator: simulator ? { ...simulator, readerOnline: false, releaseVersion: "browser simulator" } : null });
   }
-  const input = await parseJson<{ action?: "pair" | "heartbeat" | "check-in" | "stop"; code?: string; kioskName?: string; online?: boolean; memberId?: string; meetingId?: string; eventId?: string }>(request);
+  const input = await parseJson<{ action?: "pair" | "heartbeat" | "check-in" | "scan" | "stop"; scanAction?: AttendanceAction; code?: string; kioskName?: string; online?: boolean; memberId?: string; meetingId?: string; eventId?: string }>(request);
   if (input.action === "pair") {
     const code = input.code?.trim().toUpperCase(); const kioskName = input.kioskName?.trim();
     if (!code || !kioskName || kioskName.length > 80) throw new HttpError(400, "Simulator pairing code and name are required");
@@ -311,21 +326,28 @@ async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
     await db.prepare("UPDATE simulated_kiosk_sessions SET active = 0, online = 0 WHERE installation_id = 'primary'").run();
     await writeAudit(db, principal, "simulator.stopped", "simulated_kiosk", "browser"); return response({ active: false });
   }
-  if (input.action === "check-in") {
+  if (input.action === "check-in" || input.action === "scan") {
     if (!simulator.online) throw new HttpError(409, "Bring the simulated kiosk online before checking in");
     const meeting = input.meetingId ? await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND is_test = 1").bind(input.meetingId).first() : null;
     if (!meeting) throw new HttpError(400, "The simulator can check in only to a meeting marked as a test");
-    const result = await recordAttendance(db, { eventId: input.eventId ?? `simulator-${crypto.randomUUID()}`, memberId: input.memberId, meetingId: input.meetingId, occurredAt: new Date().toISOString() }, "manual", principal.userId);
-    await writeAudit(db, principal, "simulator.check_in", "meeting", input.meetingId!, { memberId: input.memberId }); return result;
+    if (input.action === "scan" && !["check_in", "check_out"].includes(input.scanAction ?? "")) throw new HttpError(400, "Simulator scanAction must be check_in or check_out");
+    const result = await recordAttendance(db, { eventId: input.eventId ?? `simulator-${crypto.randomUUID()}`, memberId: input.memberId, meetingId: input.meetingId, occurredAt: new Date().toISOString(), desiredAction: input.action === "scan" ? input.scanAction : undefined }, "manual", principal.userId);
+    await writeAudit(db, principal, input.scanAction === "check_out" ? "simulator.check_out" : "simulator.check_in", "meeting", input.meetingId!, { memberId: input.memberId }); return result;
   }
-  throw new HttpError(400, "Simulator action must be pair, heartbeat, check-in, or stop");
+  throw new HttpError(400, "Simulator action must be pair, heartbeat, scan, or stop");
 }
 async function attendance(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const url = new URL(request.url);
   if (request.method === "GET") {
     const meetingId = url.searchParams.get("meetingId"); if (!meetingId) throw new HttpError(400, "meetingId is required");
-    const rows = await db.prepare("SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ?) THEN 'present' ELSE 'absent' END) AS disposition, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ?) AS occurredAt, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 ORDER BY m.last_name, m.first_name").bind(meetingId, meetingId, meetingId, meetingId).all();
-    return response({ attendance: rows.results ?? [] });
+    const [rows, meeting, settings] = await Promise.all([
+      db.prepare("SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, (SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 ORDER BY m.last_name, m.first_name").bind(meetingId, meetingId, meetingId, meetingId).all<{ memberId: string; externalId: string; firstName: string; lastName: string; discordUserId?: string; correction?: "present" | "absent" | "excused"; reason?: string; checkedInAt?: string; checkedOutAt?: string }>(),
+      db.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(meetingId).first<{ startsAt: string; endsAt: string }>(),
+      db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>(),
+    ]);
+    if (!meeting) throw new HttpError(404, "Meeting not found");
+    const closesAt = attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30); const finalized = Date.now() > Date.parse(closesAt);
+    return response({ attendance: (rows.results ?? []).map((row) => { const events = [{ action: "check_in" as const, occurredAt: row.checkedInAt }, ...(row.checkedOutAt ? [{ action: "check_out" as const, occurredAt: row.checkedOutAt }] : [])].filter((event) => event.occurredAt); const derived = attendanceDisposition(events, row.correction); return { ...row, disposition: finalized && derived === "active" ? "absent" : derived }; }), attendanceClosesAt: closesAt, finalized });
   }
   return recordAttendance(db, await parseJson(request), "manual", principal.userId);
 }
@@ -347,8 +369,8 @@ function csvCell(value: unknown): string {
 }
 async function attendanceExport(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
-  const result = await db.prepare("SELECT mt.title AS meeting, CASE WHEN mt.is_test = 1 THEN 'test' ELSE 'normal' END AS meetingType, mt.starts_at AS meetingStart, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id) THEN 'present' ELSE 'absent' END) AS disposition, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id) AS occurredAt, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason FROM meetings mt CROSS JOIN members m WHERE mt.installation_id = 'primary' AND m.installation_id = 'primary' AND m.active = 1 ORDER BY mt.starts_at, m.last_name, m.first_name").all<Record<string, unknown>>();
-  const headers = ["meeting", "meetingType", "meetingStart", "memberId", "firstName", "lastName", "disposition", "occurredAt", "reason"];
+  const result = await db.prepare("SELECT mt.title AS meeting, CASE WHEN mt.is_test = 1 THEN 'test' ELSE 'normal' END AS meetingType, mt.starts_at AS meetingStart, mt.ends_at AS meetingEnd, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_in') AND EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_out') THEN 'present' ELSE 'absent' END) AS disposition, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_out') AS checkedOutAt, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason FROM meetings mt CROSS JOIN members m WHERE mt.installation_id = 'primary' AND m.installation_id = 'primary' AND m.active = 1 ORDER BY mt.starts_at, m.last_name, m.first_name").all<Record<string, unknown>>();
+  const headers = ["meeting", "meetingType", "meetingStart", "meetingEnd", "memberId", "firstName", "lastName", "disposition", "checkedInAt", "checkedOutAt", "reason"];
   const csv = [headers.join(","), ...(result.results ?? []).map((row) => headers.map((header) => csvCell(row[header])).join(","))].join("\r\n") + "\r\n";
   return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-attendance-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
 }
@@ -360,10 +382,11 @@ function providerFrom(pathname: string): IntegrationProvider {
   return provider;
 }
 function validateIntegration(provider: IntegrationProvider, input: Record<string, unknown>): Record<string, string> {
-  const fields = provider === "google" ? ["clientId", "clientSecret"] : provider === "resend" ? ["apiKey", "fromEmail"] : ["botToken", "guildId", "channelId"];
+  const fields = provider === "google" ? ["clientId", "clientSecret"] : provider === "resend" ? ["apiKey", "fromEmail"] : ["botToken", "guildId", "channelId", "publicKey"];
   const output: Record<string, string> = {};
   for (const field of fields) { const value = input[field]; if (typeof value !== "string" || !value.trim() || value.length > 500) throw new HttpError(400, `${field} is required`); output[field] = value.trim(); }
   if (provider === "resend" && !validEmail(output.fromEmail)) throw new HttpError(400, "fromEmail must be a valid email address");
+  if (provider === "discord" && !/^[0-9a-f]{64}$/i.test(output.publicKey)) throw new HttpError(400, "Discord public key must contain 64 hexadecimal characters");
   return output;
 }
 async function integrationRecord(env: Env, provider: IntegrationProvider): Promise<{ id: string; ciphertext: string; iv: string; updatedAt: string } | null> {
@@ -497,7 +520,7 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
     if (!meeting) throw new HttpError(404, "Meeting not found");
     subject = `Missed meeting: ${meeting.title}`; content = `<p>Hello ${html(member.firstName)},</p><p>Our records show you missed <strong>${html(meeting.title)}</strong> on ${html(new Date(meeting.startsAt).toISOString().slice(0, 10))}.</p><p>Please contact your organization if this should be corrected or excused.</p>`; deliveryKey = `missed:${meeting.id}:${member.id}`;
   } else {
-    const records = await db.prepare("SELECT mt.title, mt.starts_at AS startsAt, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.meeting_id = mt.id AND c.member_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.meeting_id = mt.id AND e.member_id = ?) THEN 'present' ELSE 'absent' END) AS disposition FROM meetings mt WHERE mt.installation_id = 'primary' ORDER BY mt.starts_at DESC LIMIT 100").bind(member.id, member.id).all<{ title: string; startsAt: string; disposition: string }>();
+    const records = await db.prepare("SELECT mt.title, mt.starts_at AS startsAt, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.meeting_id = mt.id AND c.member_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.meeting_id = mt.id AND e.member_id = ? AND e.action = 'check_in') AND EXISTS (SELECT 1 FROM attendance_events e WHERE e.meeting_id = mt.id AND e.member_id = ? AND e.action = 'check_out') THEN 'present' ELSE 'absent' END) AS disposition FROM meetings mt WHERE mt.installation_id = 'primary' ORDER BY mt.starts_at DESC LIMIT 100").bind(member.id, member.id, member.id).all<{ title: string; startsAt: string; disposition: string }>();
     subject = "Your attendance report"; content = `<p>Hello ${html(member.firstName)},</p><p>Here is your current attendance report.</p><table><thead><tr><th>Meeting</th><th>Date</th><th>Status</th></tr></thead><tbody>${(records.results ?? []).map((row) => `<tr><td>${html(row.title)}</td><td>${html(row.startsAt.slice(0, 10))}</td><td>${html(row.disposition)}</td></tr>`).join("")}</tbody></table>`; deliveryKey = `report:${member.id}:${new Date().toISOString().slice(0, 10)}`;
   }
   if (await db.prepare("SELECT id FROM integration_deliveries WHERE installation_id = 'primary' AND provider = 'resend' AND delivery_key = ? AND status IN ('pending', 'delivered')").bind(deliveryKey).first()) throw new HttpError(409, "This email was already sent or is currently sending");
@@ -528,30 +551,92 @@ async function linkDiscordMember(request: Request, env: Env): Promise<Response> 
   await writeAudit(db, principal, input.discordUserId ? "discord.member_linked" : "discord.member_unlinked", "member", input.memberId);
   return response({ linked: Boolean(input.discordUserId), memberId: input.memberId });
 }
+async function linkedAbsentMembers(db: D1Database, meetingId: string): Promise<{ id: string; discordUserId: string }[]> {
+  const missing = await db.prepare("SELECT m.id, m.discord_user_id AS discordUserId FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 AND m.discord_user_id IS NOT NULL AND COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AND EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') THEN 'present' ELSE 'absent' END) = 'absent'").bind(meetingId, meetingId, meetingId).all<{ id: string; discordUserId: string }>();
+  return missing.results ?? [];
+}
+async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string; title: string }, options: { force?: boolean; actor?: Principal } = {}): Promise<{ posted: boolean; duplicate?: boolean; linkedMissingCount: number; messageId?: string }> {
+  const db = requireDatabase(env); const now = new Date().toISOString();
+  const existing = await db.prepare("SELECT status, message_id AS messageId, attempts FROM discord_attendance_notifications WHERE installation_id = 'primary' AND meeting_id = ?").bind(meeting.id).first<{ status: string; messageId?: string; attempts: number }>();
+  if (!options.force && ["delivered", "no_recipients"].includes(existing?.status ?? "")) return { posted: existing?.status === "delivered", duplicate: true, linkedMissingCount: 0, messageId: existing?.messageId };
+  if (!existing) await db.prepare("INSERT INTO discord_attendance_notifications (installation_id, meeting_id, status, attempts, updated_at) VALUES ('primary', ?, 'pending', 1, ?)").bind(meeting.id, now).run();
+  else await db.prepare("UPDATE discord_attendance_notifications SET status = 'pending', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, meeting.id).run();
+  const members = await linkedAbsentMembers(db, meeting.id);
+  if (!members.length) {
+    await db.prepare("UPDATE discord_attendance_notifications SET status = 'no_recipients', processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, now, meeting.id).run();
+    return { posted: false, linkedMissingCount: 0 };
+  }
+  try {
+    const config = await discordConfiguration(env); const userIds = members.map((member) => member.discordUserId); const mentions = userIds.map((id) => `<@${id}>`).join(" ");
+    const payload = { content: `Attendance has closed for **${meeting.title}**. The following members are marked absent: ${mentions}\nIf you attended, use the button below to request a private review. Your attendance will not change until an Operator or Admin approves it.`, allowed_mentions: { parse: [], users: userIds }, components: [{ type: 1, components: [{ type: 2, style: 2, label: "Contest absence", custom_id: `lancerlogin-attendance:${meeting.id}` }] }] };
+    const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }); const messageId = String(body.id ?? "");
+    if (!messageId) throw new HttpError(502, "Discord did not return a message identifier");
+    await db.batch([
+      db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary' AND meeting_id = ?").bind(meeting.id),
+      ...members.map((member) => db.prepare("INSERT INTO discord_attendance_recipients (installation_id, meeting_id, member_id, discord_user_id, message_id, delivered_at) VALUES ('primary', ?, ?, ?, ?, ?)").bind(meeting.id, member.id, member.discordUserId, messageId, now)),
+      db.prepare("UPDATE discord_attendance_notifications SET status = 'delivered', message_id = ?, processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(messageId, now, now, meeting.id),
+    ]);
+    if (options.actor) await writeAudit(db, options.actor, "discord.missing_notified", "meeting", meeting.id, { linkedMissingCount: members.length, messageId, manual: true });
+    return { posted: true, linkedMissingCount: members.length, messageId };
+  } catch (error) {
+    await db.prepare("UPDATE discord_attendance_notifications SET status = 'failed', last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(error instanceof Error ? error.message.slice(0, 300) : "Discord delivery failed", new Date().toISOString(), meeting.id).run();
+    throw error;
+  }
+}
+async function processDiscordAttendanceNotifications(env: Env, now = Date.now()): Promise<void> {
+  const db = requireDatabase(env); const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>();
+  const meetings = await db.prepare("SELECT m.id, m.title, m.ends_at AS endsAt, n.status AS notificationStatus, n.updated_at AS notificationUpdatedAt FROM meetings m LEFT JOIN discord_attendance_notifications n ON n.installation_id = m.installation_id AND n.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.required = 1 AND m.is_test = 0 AND m.ends_at IS NOT NULL ORDER BY m.ends_at DESC LIMIT 100").all<{ id: string; title: string; endsAt: string; notificationStatus?: string; notificationUpdatedAt?: string }>();
+  for (const meeting of meetings.results ?? []) {
+    const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30)); const newlyEligible = cutoff <= now && cutoff >= now - 15 * 60_000; const retry = meeting.notificationStatus === "failed";
+    if ((!meeting.notificationStatus && newlyEligible) || retry) await sendDiscordAttendanceNotification(env, meeting);
+  }
+}
 async function discordMissing(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string }>(request);
-  if (!input.meetingId) throw new HttpError(400, "Meeting is required"); const config = await discordConfiguration(env);
+  if (!input.meetingId) throw new HttpError(400, "Meeting is required");
   const meeting = await db.prepare("SELECT id, title FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string; title: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
-  const missing = await db.prepare("SELECT m.id, m.discord_user_id AS discordUserId FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 AND m.discord_user_id IS NOT NULL AND COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ?) THEN 'present' ELSE 'absent' END) = 'absent'").bind(meeting.id, meeting.id).all<{ id: string; discordUserId: string }>();
-  const members = missing.results ?? []; const mentions = members.map((member) => `<@${member.discordUserId}>`).join(" ");
-  const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify({ content: members.length ? `Missing from **${meeting.title}**: ${mentions}\nReply to your organization if this attendance should be reviewed.` : `Everyone with a linked Discord account is accounted for at **${meeting.title}**.`, allowed_mentions: { users: members.map((member) => member.discordUserId) } }) });
-  const messageId = String(body.id ?? ""); const now = new Date().toISOString();
-  if (members.length) await db.batch(members.map((member) => db.prepare("INSERT INTO discord_attendance_contests (installation_id, meeting_id, member_id, message_id, status, created_at) VALUES ('primary', ?, ?, ?, 'open', ?) ON CONFLICT(installation_id, meeting_id, member_id) DO UPDATE SET message_id = excluded.message_id, status = 'open', resolved_by = NULL, resolved_at = NULL, created_at = excluded.created_at").bind(meeting.id, member.id, messageId, now)));
-  await writeAudit(db, principal, "discord.missing_notified", "meeting", meeting.id, { linkedMissingCount: members.length, messageId });
-  return response({ posted: true, linkedMissingCount: members.length, messageId }, 202);
+  return response(await sendDiscordAttendanceNotification(env, meeting, { force: true, actor: principal }), 202);
 }
 async function discordContests(request: Request, env: Env): Promise<Response> {
-  await requireRole(request, env, ["admin", "operator"]); const meetingId = new URL(request.url).searchParams.get("meetingId");
-  if (!meetingId) throw new HttpError(400, "Meeting is required");
-  const result = await requireDatabase(env).prepare("SELECT c.meeting_id AS meetingId, c.member_id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, c.status, c.created_at AS createdAt, c.resolved_at AS resolvedAt FROM discord_attendance_contests c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id WHERE c.installation_id = 'primary' AND c.meeting_id = ? ORDER BY m.last_name, m.first_name").bind(meetingId).all();
+  await requireRole(request, env, ["admin", "operator"]); const meetingId = new URL(request.url).searchParams.get("meetingId"); const where = meetingId ? "AND c.meeting_id = ?" : "";
+  const statement = requireDatabase(env).prepare(`SELECT c.meeting_id AS meetingId, mt.title AS meetingTitle, c.member_id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, c.status, c.created_at AS createdAt, c.resolved_at AS resolvedAt, c.review_note AS reviewNote FROM discord_attendance_contests c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id JOIN meetings mt ON mt.id = c.meeting_id AND mt.installation_id = c.installation_id WHERE c.installation_id = 'primary' ${where} ORDER BY CASE WHEN c.status = 'open' THEN 0 ELSE 1 END, c.created_at DESC`); const result = meetingId ? await statement.bind(meetingId).all() : await statement.all();
   return response({ contests: result.results ?? [] });
 }
 async function resolveDiscordContest(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; memberId?: string; resolution?: "approved" | "rejected" | "reviewed" }>(request);
-  if (!input.meetingId || !input.memberId || !input.resolution || !["approved", "rejected", "reviewed"].includes(input.resolution)) throw new HttpError(400, "Meeting, member, and a valid resolution are required");
-  const result = await db.prepare("UPDATE discord_attendance_contests SET status = ?, resolved_by = ?, resolved_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ? AND status = 'open'").bind(input.resolution, principal.userId, new Date().toISOString(), input.meetingId, input.memberId).run();
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; memberId?: string; resolution?: "approved" | "rejected" | "reviewed"; reviewNote?: string }>(request);
+  if (!input.meetingId || !input.memberId || !input.resolution || !["approved", "rejected", "reviewed"].includes(input.resolution) || !input.reviewNote?.trim() || input.reviewNote.length > 500) throw new HttpError(400, "Meeting, member, valid resolution, and a review note are required");
+  const now = new Date().toISOString(); const statements: D1Statement[] = [];
+  if (input.resolution === "approved") statements.push(db.prepare("INSERT INTO attendance_corrections (id, installation_id, member_id, meeting_id, disposition, reason, created_by, created_at) SELECT ?, 'primary', ?, ?, 'present', ?, ?, ? WHERE EXISTS (SELECT 1 FROM discord_attendance_contests WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ? AND status = 'open')").bind(crypto.randomUUID(), input.memberId, input.meetingId, `Discord contest approved: ${input.reviewNote.trim()}`, principal.userId, now, input.meetingId, input.memberId));
+  statements.push(db.prepare("UPDATE discord_attendance_contests SET status = ?, resolved_by = ?, resolved_at = ?, review_note = ? WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ? AND status = 'open'").bind(input.resolution, principal.userId, now, input.reviewNote.trim(), input.meetingId, input.memberId));
+  const results = await db.batch(statements); const result = results.at(-1)!;
   if ((result.meta?.changes ?? 1) < 1) throw new HttpError(404, "Open contest not found");
-  await writeAudit(db, principal, "discord.contest_resolved", "member", input.memberId, { meetingId: input.meetingId, resolution: input.resolution }); return response({ resolved: true });
+  await writeAudit(db, principal, "discord.contest_resolved", "member", input.memberId, { meetingId: input.meetingId, resolution: input.resolution, reviewNote: input.reviewNote.trim() }); return response({ resolved: true, attendanceChanged: input.resolution === "approved" });
+}
+function hexBytes(value: string): Uint8Array { if (!/^[0-9a-f]+$/i.test(value) || value.length % 2) throw new Error("Invalid hexadecimal value"); return Uint8Array.from(value.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16)); }
+const byteBuffer = (value: Uint8Array): ArrayBuffer => Uint8Array.from(value).buffer;
+async function verifyDiscordInteraction(request: Request, config: Record<string, string>, body: string): Promise<boolean> {
+  const signature = request.headers.get("x-signature-ed25519"); const timestamp = request.headers.get("x-signature-timestamp");
+  if (!signature || !timestamp || !/^\d+$/.test(timestamp) || Math.abs(Date.now() - Number(timestamp) * 1000) > 5 * 60_000) return false;
+  try {
+    const key = await crypto.subtle.importKey("raw", byteBuffer(hexBytes(config.publicKey)), { name: "Ed25519" }, false, ["verify"]);
+    return crypto.subtle.verify({ name: "Ed25519" }, key, byteBuffer(hexBytes(signature)), byteBuffer(new TextEncoder().encode(timestamp + body)));
+  } catch { return false; }
+}
+const discordEphemeral = (content: string) => response({ type: 4, data: { content, flags: 64 } });
+async function discordInteraction(request: Request, env: Env): Promise<Response> {
+  const config = await discordConfiguration(env); const raw = await request.text();
+  if (!await verifyDiscordInteraction(request, config, raw)) throw new HttpError(401, "Discord interaction signature is invalid");
+  let interaction: { type?: number; data?: { custom_id?: string }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
+  try { interaction = JSON.parse(raw); } catch { throw new HttpError(400, "Discord interaction body is invalid"); }
+  if (interaction.type === 1) return response({ type: 1 });
+  const customId = interaction.data?.custom_id ?? ""; const meetingId = customId.startsWith("lancerlogin-attendance:") ? customId.slice("lancerlogin-attendance:".length) : ""; const discordUserId = interaction.member?.user?.id ?? interaction.user?.id; const messageId = interaction.message?.id;
+  if (interaction.type !== 3 || !meetingId || !discordUserId || !messageId) return discordEphemeral("This attendance contest button is invalid or expired. Ask an Operator for help.");
+  const db = requireDatabase(env); const recipient = await db.prepare("SELECT r.member_id AS memberId FROM discord_attendance_recipients r JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE r.installation_id = 'primary' AND r.meeting_id = ? AND r.message_id = ? AND r.discord_user_id = ? AND m.discord_user_id = ? AND m.active = 1").bind(meetingId, messageId, discordUserId, discordUserId).first<{ memberId: string }>();
+  if (!recipient) return discordEphemeral("This absence notice was not delivered for your linked roster account. Ask an Operator for help.");
+  if (!(await linkedAbsentMembers(db, meetingId)).some((member) => member.id === recipient.memberId)) return discordEphemeral("Attendance no longer shows you as absent, so no contest was created.");
+  const now = new Date().toISOString(); await db.prepare("INSERT OR IGNORE INTO discord_attendance_contests (installation_id, meeting_id, member_id, message_id, status, created_at, submitted_by_discord_user_id) VALUES ('primary', ?, ?, ?, 'open', ?, ?)").bind(meetingId, recipient.memberId, messageId, now, discordUserId).run();
+  const contest = await db.prepare("SELECT status FROM discord_attendance_contests WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ?").bind(meetingId, recipient.memberId).first<{ status: string }>();
+  return contest?.status === "open" ? discordEphemeral("Your attendance contest was recorded for review. Your attendance has not been changed.") : discordEphemeral(`Your attendance contest was already reviewed with status ${contest?.status ?? "unknown"}.`);
 }
 async function discordCalendar(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string }>(request); if (!input.meetingId) throw new HttpError(400, "Meeting is required");
@@ -618,11 +703,11 @@ async function privacySettings(request: Request, env: Env): Promise<Response> {
 type BackupScope = "meetings" | "roster" | "installation";
 const tableColumns = {
   installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id"],
-  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone"],
+  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at"],
   meetings: ["id", "installation_id", "title", "starts_at", "ends_at", "required", "notes", "created_by", "created_at", "is_test"],
-  attendance_events: ["id", "installation_id", "member_id", "meeting_id", "source", "occurred_at", "kiosk_event_id", "created_by"],
+  attendance_events: ["id", "installation_id", "member_id", "meeting_id", "source", "occurred_at", "kiosk_event_id", "created_by", "action"],
   attendance_corrections: ["id", "installation_id", "member_id", "meeting_id", "disposition", "reason", "created_by", "created_at"],
   setup_progress: ["installation_id", "step", "completed_at", "completed_by"],
   pairing_codes: ["id", "installation_id", "code_hash", "expires_at", "redeemed_at", "created_by", "created_at", "purpose"],
@@ -631,7 +716,9 @@ const tableColumns = {
   encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at"],
   integration_deliveries: ["id", "installation_id", "provider", "delivery_key", "status", "external_id", "created_at", "updated_at"],
   integration_state: ["installation_id", "provider", "state_key", "external_id", "content_hash", "updated_at"],
-  discord_attendance_contests: ["installation_id", "meeting_id", "member_id", "message_id", "status", "resolved_by", "resolved_at", "created_at"],
+  discord_attendance_notifications: ["installation_id", "meeting_id", "status", "message_id", "attempts", "last_error", "processed_at", "updated_at"],
+  discord_attendance_recipients: ["installation_id", "meeting_id", "member_id", "discord_user_id", "message_id", "delivered_at"],
+  discord_attendance_contests: ["installation_id", "meeting_id", "member_id", "message_id", "status", "resolved_by", "resolved_at", "created_at", "submitted_by_discord_user_id", "review_note"],
   audit_log: ["id", "installation_id", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "created_at"],
   telemetry_diagnostics: ["installation_id", "error_category", "last_seen_at"],
 } as const;
@@ -641,9 +728,9 @@ const installationTables: BackupTable[] = [
   "installations", "organization_settings", "members", "users", "meetings",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
   "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "integration_deliveries",
-  "integration_state", "discord_attendance_contests", "audit_log", "telemetry_diagnostics",
+  "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "audit_log", "telemetry_diagnostics",
 ];
-const meetingTables: BackupTable[] = ["meetings", "attendance_events", "attendance_corrections", "discord_attendance_contests"];
+const meetingTables: BackupTable[] = ["meetings", "attendance_events", "attendance_corrections", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests"];
 const rosterTables: BackupTable[] = ["members"];
 const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -655,13 +742,13 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 1, scope, exportedAt, tables: Object.fromEntries(entries) };
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 1 });
+  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 2, scope, exportedAt, tables: Object.fromEntries(entries) };
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 2 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-function validateBackup(value: unknown, scope: BackupScope): asserts value is { product: "LancerLogin"; schemaVersion: 1; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> } {
-  if (!isObject(value) || value.product !== "LancerLogin" || value.schemaVersion !== 1 || value.scope !== scope || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching LancerLogin backup");
+function validateBackup(value: unknown, scope: BackupScope): asserts value is { product: "LancerLogin"; schemaVersion: 2; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> } {
+  if (!isObject(value) || value.product !== "LancerLogin" || value.schemaVersion !== 2 || value.scope !== scope || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
   let rows = 0;
   for (const table of tablesForScope(scope)) {
     const tableRows = value.tables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
@@ -680,8 +767,8 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
   const expected = `RESTORE ${scope.toUpperCase()}`; if (input.confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`); validateBackup(input.backup, scope); const tables = input.backup.tables;
   let statements: D1Statement[];
   if (scope === "meetings") statements = [
-    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"),
-    ...insertBackupRows(db, "meetings", tables.meetings), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests),
+    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"),
+    ...insertBackupRows(db, "meetings", tables.meetings), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_notifications", tables.discord_attendance_notifications), ...insertBackupRows(db, "discord_attendance_recipients", tables.discord_attendance_recipients), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests),
   ];
   else if (scope === "roster") statements = [
     db.prepare("UPDATE members SET active = 0 WHERE installation_id = 'primary'"),
@@ -691,7 +778,7 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
     statements = [db.prepare("DELETE FROM installations WHERE id = 'primary'")];
     for (const table of installationTables) statements.push(...insertBackupRows(db, table, tables[table]));
   }
-  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: 1, exportedAt: input.backup.exportedAt }), now));
+  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: 2, exportedAt: input.backup.exportedAt }), now));
   await db.batch(statements); return response({ restored: true, scope });
 }
 
@@ -706,7 +793,7 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
   const expected = input.scope === "attendance" ? "DELETE ATTENDANCE" : input.scope === "roster" ? "DELETE ROSTER" : input.scope === "installation" ? "DELETE INSTALLATION" : undefined;
   if (!expected || input.confirmation !== expected) throw new HttpError(400, `Type ${expected ?? "a valid confirmation"} exactly to continue`);
   if (input.scope === "attendance") await db.batch([
-    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"),
+    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.attendance_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString()),
   ]);
   else if (input.scope === "roster") {
@@ -748,6 +835,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/users" && ["GET", "POST"].includes(request.method)) result = await users(request, env);
     else if (/^\/admin\/users\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateUser(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/communications/email" && request.method === "POST") result = await sendAttendanceEmail(request, env);
+    else if (url.pathname === "/discord/interactions" && request.method === "POST") result = await discordInteraction(request, env);
     else if (url.pathname === "/discord/link" && request.method === "POST") result = await linkDiscordMember(request, env);
     else if (url.pathname === "/discord/missing" && request.method === "POST") result = await discordMissing(request, env);
     else if (url.pathname === "/discord/contests" && request.method === "GET") result = await discordContests(request, env);
@@ -772,6 +860,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   return withCors(result, request, env);
 }, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
   if (controller.cron === "0 3 * * *") { try { await transmitTelemetry(env); } catch { /* Telemetry is best-effort and cannot affect attendance. */ } }
+  if (controller.cron === "*/5 * * * *") { try { await processDiscordAttendanceNotifications(env); } catch { /* Discord attendance delivery retries safely on the next scheduled pass. */ } }
   try { await syncDiscordKioskStatus(env); } catch { /* Discord status is best-effort and cannot affect kiosk operation. */ }
 } };
 export default worker;

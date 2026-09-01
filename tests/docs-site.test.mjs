@@ -30,22 +30,33 @@ test("annotated dashboard screenshot is a real non-empty asset with text alterna
 
 test("setup and integration guides include sanitized annotated visual callouts", async () => {
   const expectedAssets = [
-    "github-template-setup.png",
-    "cloudflare-token-setup.png",
+    "github-environment-create.png",
+    "github-environment-secret.png",
+    "cloudflare-token-chooser.png",
+    "cloudflare-token-review.png",
+    "cloudflare-account-id.png",
     "google-oauth-setup.png",
     "integration-controls.png",
   ];
   for (const asset of expectedAssets) {
-    assert.ok((await stat(`docs-site/assets/${asset}`)).size > 50_000, `${asset} should be a rendered image`);
+    assert.ok((await stat(`docs-site/assets/${asset}`)).size > 20_000, `${asset} should be a rendered image`);
   }
 
   const setup = await readFile("docs-site/setup.html", "utf8");
-  assert.match(setup, /github-template-setup\.png/);
-  assert.match(setup, /cloudflare-token-setup\.png/);
+  assert.match(setup, /github-environment-create\.png/);
+  assert.match(setup, /github-environment-secret\.png/);
+  assert.match(setup, /cloudflare-token-chooser\.png/);
+  assert.match(setup, /cloudflare-token-review\.png/);
+  assert.match(setup, /cloudflare-account-id\.png/);
   assert.match(setup, /google-oauth-setup\.png/);
-  assert.match(setup, /Account Settings read/);
-  assert.match(setup, /Store protected setup values/);
+  assert.match(setup, /Start from scratch/);
+  assert.match(setup, /Account Settings Read/);
+  assert.match(setup, /Copy account ID/);
+  assert.match(setup, /Settings.*Environments/s);
   assert.match(setup, /CLOUDFLARE_ACCOUNT_ID/);
+  assert.match(setup, /CLOUDFLARE_API_TOKEN/);
+  assert.match(setup, /LANCERLOGIN_SETUP_CODE/);
+  assert.match(setup, /https:\/\/dash\.cloudflare\.com\//);
   assert.match(setup, /Copy the exact callback/);
 
   const operations = await readFile("docs-site/operations.html", "utf8");

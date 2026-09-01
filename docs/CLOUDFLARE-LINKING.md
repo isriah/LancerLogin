@@ -4,12 +4,17 @@ LancerLogin keeps public source and private deployment authority separate. It de
 
 ## Guided setup
 
-1. Select **Use this template** on the public LancerLogin repository and create a **private** deployment repository in the adopter's account.
-2. If you do not have an account, use the displayed Cloudflare sign-up link and return after confirming your email.
-3. In Cloudflare, create a narrowly scoped **Account API Token** following the on-screen permission checklist. Account-owned tokens are intended for durable CI/CD integrations. Limit it to the one account you intend to use for LancerLogin. Grant Account Settings Read plus Workers Scripts Edit, D1 Edit, and Pages Edit; do not grant zone, DNS, billing, or user-management permissions.
-4. Copy the selected account's Account ID from Cloudflare's account overview. In the private GitHub repository, open **Settings → Environments → production** and add `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` as environment secrets.
-5. Generate and save a unique value of at least 16 characters in a password manager, then add the same value as the `LANCERLOGIN_SETUP_CODE` environment secret. This protects the public first-Admin page; it is not the Admin password.
-6. Run **Install or upgrade LancerLogin** in `create` mode, select a reviewed release tag, and type `CREATE <slug>`. The workflow refuses to run from a public repository, verifies that the token is active in the exact selected account, and refuses matching D1, Worker, or Pages resources. After deployment, enter the setup code once in the first-Admin form. Use `resume` with `RESUME <slug>` only after an interrupted run. For a routine update, choose a newer reviewed release tag, select `upgrade`, and type `UPGRADE <slug>`.
+1. Select **Use this template** on the [public LancerLogin repository](https://github.com/isriah/LancerLogin) and create a **private** deployment repository in the adopter's account. Do not fork the public repository for a private installation.
+2. In the private repository, open **Settings → Environments**, create an environment with the exact name `production`, and optionally add a required reviewer when the GitHub plan supports it.
+3. [Create or sign in to Cloudflare](https://dash.cloudflare.com/) and select the adopter-owned account that will hold the installation. Creating an account-owned token requires Super Administrator access to that account.
+4. Open **Manage account → Account API tokens → Create Token**. Give the token a human-readable label such as `LancerLogin deployment`. The label is not a credential and does not need to match a GitHub secret name.
+5. None of Cloudflare's displayed templates has the exact least-privilege combination. Select **Start from scratch**, restrict the policy to the selected account, and grant only Workers Scripts Edit, D1 Edit, Pages Edit, and Account Settings Read. Do not grant zone, DNS, billing, member, or user-management permissions.
+6. Review the four permission lines, create the token, and copy its value immediately. Cloudflare shows the value once. Never capture the reveal screen in a screenshot.
+7. From any Cloudflare dashboard page, open Quick search or press **Ctrl/Command+K**, enter `Copy account ID`, and select that exact command. This copies the account ID, not a zone ID.
+8. In the private repository's `production` environment, add three **environment secrets**: the Cloudflare token value as `CLOUDFLARE_API_TOKEN`, the 32-character account ID as `CLOUDFLARE_ACCOUNT_ID`, and a unique password-manager-generated value of at least 16 characters as `LANCERLOGIN_SETUP_CODE`. Use secrets, not environment variables. The setup code protects the public first-Admin page; it is not the Admin password.
+9. Run **Install or upgrade LancerLogin** in `create` mode, select a reviewed release tag, and type `CREATE <slug>`. The workflow refuses to run from a public repository, verifies that the token is active in the exact selected account, and refuses matching D1, Worker, or Pages resources. After deployment, enter the setup code once in the first-Admin form. Use `resume` with `RESUME <slug>` only after an interrupted run. For a routine update, choose a newer reviewed release tag, select `upgrade`, and type `UPGRADE <slug>`.
+
+The task-oriented public walkthrough at [`setup.html`](https://isriah.github.io/LancerLogin/setup.html) contains sanitized screenshots captured from the real GitHub and Cloudflare interfaces. It never shows a token value, account ID, or private repository name.
 
 ## Safety checks
 

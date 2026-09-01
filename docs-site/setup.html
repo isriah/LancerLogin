@@ -6,24 +6,86 @@
 <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html" aria-current="page">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="technical.html">Technical</a></nav></header>
 <header class="page-header"><div><p class="eyebrow">Task 1</p><h1>Create your installation</h1><p>Nothing in this flow uses or discovers another LancerLogin installation.</p></div></header>
 <main id="main" class="page">
-  <h2>1. Link your Cloudflare account through GitHub</h2>
-  <ol class="steps"><li>Create or sign in to a Cloudflare account owned by your organization.</li><li>In Cloudflare, create an <strong>Account API Token</strong> restricted to that account with Account Settings read plus Workers Scripts edit, D1 edit, and Pages edit.</li><li>Copy the Account ID from Cloudflare's account overview. In your new LancerLogin repository, open <span class="ui-path">Settings <span>›</span> Secrets and variables <span>›</span> Actions</span> and add it as <code>CLOUDFLARE_ACCOUNT_ID</code>; add the token separately as <code>CLOUDFLARE_API_TOKEN</code>. Never paste either value into the dashboard.</li><li>Open <span class="ui-path">Actions <span>›</span> Install or upgrade LancerLogin <span>›</span> Run workflow</span>. Choose <strong>Create</strong>, enter a lowercase slug, and type <code>CREATE &lt;slug&gt;</code>.</li><li>The workflow verifies the token against the exact selected account, refuses resource-name collisions, then creates D1, the Worker, and Pages. Open the stable Pages dashboard link from the workflow summary.</li></ol>
-  <figure class="annotated"><img src="assets/github-template-setup.png" alt="Sanitized GitHub repository settings showing protected Cloudflare setup values, the provisioning workflow, and ready result."><figcaption class="callouts"><div class="callout"><span>1</span><h3>Store protected setup values</h3><p>Add <code>CLOUDFLARE_ACCOUNT_ID</code> and the scoped account token as <code>CLOUDFLARE_API_TOKEN</code>; both values stay masked.</p></div><div class="callout"><span>2</span><h3>Run intentionally</h3><p>The manual workflow requires the resource slug and typed confirmation before it provisions.</p></div><div class="callout"><span>3</span><h3>Follow the summary</h3><p>The successful run reports the stable Pages URL and the resources it created.</p></div></figcaption></figure>
-  <figure class="annotated"><img src="assets/cloudflare-token-setup.png" alt="Sanitized Cloudflare account API token screen showing Account Settings read plus Workers Scripts, D1, and Pages edit permissions."><figcaption class="callouts"><div class="callout"><span>1</span><h3>Use an account token</h3><p>Create it under <strong>Manage account → Account API Tokens</strong> for a durable CI/CD credential tied to the selected account.</p></div><div class="callout"><span>2</span><h3>Allow the backend</h3><p>Workers Scripts and D1 edit permissions let the workflow deploy code and schema.</p></div><div class="callout"><span>3</span><h3>Allow the dashboard</h3><p>Pages edit permission creates and updates the adopter’s static dashboard project.</p></div></figcaption></figure>
-  <figure class="annotated"><img src="assets/dashboard-cloudflare-setup.png" alt="LancerLogin local setup preview showing Cloudflare linking steps and a resource-name plan."><span class="pin one" aria-hidden="true">1</span><span class="pin two" aria-hidden="true">2</span><span class="pin three" aria-hidden="true">3</span><figcaption class="callouts"><div class="callout"><span>1</span><h3>Adopter-owned account</h3><p>The workflow verifies the account-owned token against the exact Account ID saved in GitHub.</p></div><div class="callout"><span>2</span><h3>Values stay in GitHub</h3><p>The dashboard never asks for or displays the Cloudflare Account ID or token.</p></div><div class="callout"><span>3</span><h3>Preview names first</h3><p>The slug deterministically names the new Worker, D1 database, and Pages project.</p></div></figcaption></figure>
-  <h2>2. Create the first Admin</h2>
+  <div class="notice"><strong>Public source, private deployment.</strong> Start at the <a href="https://github.com/isriah/LancerLogin">public LancerLogin repository</a>, select <strong>Use this template</strong>, and create a <strong>private</strong> repository in your own GitHub account. Your private repository holds deployment history and secrets; the public repository continues to provide reviewed releases. Do not fork the public repository for a private installation.</div>
+
+  <h2>1. Create the private deployment environment</h2>
+  <ol class="steps">
+    <li>In the private repository, open <span class="ui-path">Settings <span>›</span> Environments</span>.</li>
+    <li>Select <strong>New environment</strong>, enter the exact name <code>production</code>, and select <strong>Configure environment</strong>.</li>
+    <li>You may add a required reviewer if your GitHub plan supports it. This is optional; do not change branch restrictions during initial setup.</li>
+  </ol>
+  <figure class="annotated compact-shot"><img src="assets/github-environment-create.png" alt="Real GitHub environment creation screen with an empty Name field and Configure environment button."><figcaption class="callouts two"><div class="callout"><span>1</span><h3>Use the exact name</h3><p>Enter <code>production</code>. The installer workflow looks for this environment.</p></div><div class="callout"><span>2</span><h3>Keep the repository private</h3><p>The workflow refuses to deploy from a public repository, even if secrets are present.</p></div></figcaption></figure>
+
+  <h2>2. Create a narrowly scoped Cloudflare token</h2>
+  <ol class="steps">
+    <li><a href="https://dash.cloudflare.com/">Create or sign in to Cloudflare</a>, then select the account that will own this LancerLogin installation. You must be a Super Administrator of that account to create an account-owned token.</li>
+    <li>Open <span class="ui-path">Manage account <span>›</span> Account API tokens <span>›</span> Create Token</span>. If you cannot find this page, use Cloudflare's <a href="https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/">account API token guide</a>.</li>
+    <li>For <strong>Token name</strong>, enter a descriptive label such as <code>LancerLogin deployment</code>. This Cloudflare label is only for your reference; it is not the GitHub secret name.</li>
+    <li>Do not choose <strong>Read all resources</strong>, <strong>Write all resources</strong>, <strong>Edit Cloudflare Workers</strong>, or a template under <strong>View all templates</strong>. None has the exact least-privilege combination LancerLogin needs. Select <strong>Start from scratch</strong>.</li>
+  </ol>
+  <figure class="annotated"><img src="assets/cloudflare-token-chooser.png" alt="Real Cloudflare account token creation screen showing broad templates and the Start from scratch custom-policy option."><figcaption class="callouts two"><div class="callout"><span>1</span><h3>Name it for humans</h3><p><code>LancerLogin deployment</code> makes the credential easy to identify later; any descriptive label works.</p></div><div class="callout"><span>2</span><h3>Start from scratch</h3><p>The visible templates are broader or incomplete. Build the four-permission policy below.</p></div></figcaption></figure>
+
+  <h3>Add four account permissions</h3>
+  <p>Keep the resource selector on the selected account, then enable only these permissions:</p>
+  <table class="credential-table">
+    <thead><tr><th scope="col">Cloudflare permission</th><th scope="col">Access</th><th scope="col">Why it is needed</th></tr></thead>
+    <tbody>
+      <tr><td>Workers Scripts</td><td>Edit</td><td>Deploy and update the API Worker.</td></tr>
+      <tr><td>D1</td><td>Edit</td><td>Create the database and apply schema migrations.</td></tr>
+      <tr><td>Pages</td><td>Edit</td><td>Create and update the dashboard project.</td></tr>
+      <tr><td>Account Settings</td><td>Read</td><td>Verify that the token belongs to the exact selected account.</td></tr>
+    </tbody>
+  </table>
+  <p class="notice"><strong>Do not add zone or DNS access.</strong> LancerLogin uses the default Pages and Workers URLs. It does not need billing, member, user-management, or domain permissions.</p>
+  <ol class="steps" start="5">
+    <li>Choose an expiration appropriate for your organization. If the token expires, replace the GitHub secret before the next update. Leave IP filtering empty unless your GitHub-hosted Actions traffic has a stable approved range.</li>
+    <li>Select <strong>Review token</strong> and compare the summary with the four lines below. Do not continue if any additional permission appears.</li>
+    <li>Select <strong>Create token</strong>, copy the token value immediately, and keep the page open until you have stored it in GitHub. Cloudflare displays the value only once.</li>
+  </ol>
+  <figure class="annotated"><img src="assets/cloudflare-token-review.png" alt="Real, account-redacted Cloudflare token review screen showing Workers Scripts Write, D1 Write, Pages Write, and Account Settings Read."><figcaption class="callouts two"><div class="callout"><span>1</span><h3>Compare all four lines</h3><p>The review must say Workers Scripts Write, D1 Write, Pages Write, and Account Settings Read.</p></div><div class="callout"><span>2</span><h3>Copy only after review</h3><p>The next screen reveals the credential once. Never capture it in a screenshot or commit it to Git.</p></div></figcaption></figure>
+
+  <h2>3. Copy the Cloudflare Account ID</h2>
+  <ol class="steps">
+    <li>From any Cloudflare dashboard page, open <strong>Quick search</strong> or press <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>Command</kbd>+<kbd>K</kbd> on macOS).</li>
+    <li>Enter <code>Copy account ID</code> and select the command with that exact name. This copies the selected account's 32-character ID; it is not a zone ID.</li>
+  </ol>
+  <figure class="annotated compact-shot"><img src="assets/cloudflare-account-id.png" alt="Real Cloudflare quick-search dialog showing the Copy account ID command without revealing the copied identifier."><figcaption class="callouts two"><div class="callout"><span>1</span><h3>Use the command</h3><p>This avoids hunting through account pages whose layout can change.</p></div><div class="callout"><span>2</span><h3>Do not copy a zone ID</h3><p>The installer validates a 32-character account ID against the token before creating anything.</p></div></figcaption></figure>
+
+  <h2>4. Store three GitHub environment secrets</h2>
+  <p>Return to the private repository's <code>production</code> environment. Under <strong>Environment secrets</strong>, select <strong>Add environment secret</strong> once for each row:</p>
+  <table class="credential-table">
+    <thead><tr><th scope="col">Exact GitHub secret name</th><th scope="col">Value to paste</th></tr></thead>
+    <tbody>
+      <tr><td><code>CLOUDFLARE_API_TOKEN</code></td><td>The one-time token value Cloudflare just displayed—not its descriptive name.</td></tr>
+      <tr><td><code>CLOUDFLARE_ACCOUNT_ID</code></td><td>The 32-character value copied by Cloudflare's <strong>Copy account ID</strong> command.</td></tr>
+      <tr><td><code>LANCERLOGIN_SETUP_CODE</code></td><td>A new, unique value of at least 16 characters generated and saved in your password manager.</td></tr>
+    </tbody>
+  </table>
+  <p class="notice"><strong>Use secrets, not variables.</strong> Do not paste these values into a repository file, issue, workflow input, dashboard form, or chat. The setup code protects first-Admin creation; it is separate from the Admin password you will create later.</p>
+  <figure class="annotated compact-shot"><img src="assets/github-environment-secret.png" alt="Real GitHub production environment screen with the Add secret dialog and empty Name and Value fields."><figcaption class="callouts two"><div class="callout"><span>1</span><h3>Name must match exactly</h3><p>GitHub secret names are case-sensitive. Add all three names from the table.</p></div><div class="callout"><span>2</span><h3>Values remain masked</h3><p>GitHub lets you replace a saved secret later but never displays its stored value.</p></div></figcaption></figure>
+
+  <h2>5. Run the private installation workflow</h2>
+  <ol class="steps">
+    <li>In the private repository, open <span class="ui-path">Actions <span>›</span> Install or upgrade LancerLogin <span>›</span> Run workflow</span>.</li>
+    <li>Choose <strong>Create</strong>. Enter the latest reviewed tag from <a href="https://github.com/isriah/LancerLogin/releases">public LancerLogin releases</a>.</li>
+    <li>Choose a lowercase installation slug using letters, numbers, and hyphens, such as <code>northside-art-club</code>. It creates exactly <code>&lt;slug&gt;-api</code>, <code>&lt;slug&gt;-data</code>, and <code>&lt;slug&gt;-dashboard</code>.</li>
+    <li>For confirmation, enter <code>CREATE &lt;slug&gt;</code> with the same slug, then run the workflow.</li>
+    <li>The workflow verifies the account-token pair and refuses name collisions before creating anything. When it succeeds, open the Pages dashboard URL from the workflow summary.</li>
+  </ol>
+  <figure class="annotated"><img src="assets/dashboard-cloudflare-setup.png" alt="LancerLogin setup preview showing adopter-owned Cloudflare linking and the three resource names generated from an installation slug."><span class="pin one" aria-hidden="true">1</span><span class="pin two" aria-hidden="true">2</span><span class="pin three" aria-hidden="true">3</span><figcaption class="callouts"><div class="callout"><span>1</span><h3>Adopter-owned account</h3><p>The workflow verifies the account-owned token against the exact Account ID saved in GitHub.</p></div><div class="callout"><span>2</span><h3>Values stay in GitHub</h3><p>The dashboard never asks for or displays the Cloudflare Account ID or API token.</p></div><div class="callout"><span>3</span><h3>Preview names first</h3><p>The slug deterministically names the new Worker, D1 database, and Pages project.</p></div></figcaption></figure>
+  <h2>6. Create the first Admin</h2>
   <p>Choose local username/password, Google OAuth, or both. Local passwords require at least 12 characters and matching password confirmation; they are stored as salted scrypt hashes. The dashboard and API use one Pages origin through a generated proxy, so strict session cookies are not third-party cookies.</p>
   <p>For Google, keep LancerLogin open and follow these beginner-friendly steps:</p>
   <ol class="steps"><li><a href="https://console.cloud.google.com/projectcreate">Create or select a Google Cloud project</a> owned by your organization.</li><li><a href="https://console.cloud.google.com/auth/branding">Configure the OAuth consent screen</a>. Choose the audience that fits your organization and add the first Admin as a test user if requested.</li><li><a href="https://console.cloud.google.com/auth/clients/create">Create an OAuth client</a> and choose <strong>Web application</strong>.</li><li>Add your Pages dashboard origin as an authorized JavaScript origin.</li><li>Add the exact callback below as an authorized redirect URI.</li><li>Copy the client ID and client secret into LancerLogin. The secret is encrypted and never displayed again.</li></ol>
   <p class="ui-path">Your Pages dashboard URL <span>›</span> <code>/api/auth/google/callback</code></p>
   <p>Enter the client ID and secret in the first-Admin setup form when Google or both methods are selected. This avoids a first-login dependency: the secret is encrypted before storage and is never displayed again. After signing in, an Admin can test, rotate, or remove it under <strong>Optional integrations → Google OAuth</strong>.</p>
   <figure class="annotated"><img src="assets/google-oauth-setup.png" alt="Sanitized Google OAuth client setup showing a web application and the exact LancerLogin Pages callback URI."><figcaption class="callouts"><div class="callout"><span>1</span><h3>Choose a web client</h3><p>Create a Web application client for the dashboard rather than a desktop client.</p></div><div class="callout"><span>2</span><h3>Copy the exact callback</h3><p>Use the HTTPS Pages origin followed by <code>/api/auth/google/callback</code>.</p></div><div class="callout"><span>3</span><h3>Enter credentials once</h3><p>The first-Admin form encrypts both values; saved secrets are never shown again.</p></div></figcaption></figure>
-  <h2>3. Choose anonymous usage reporting</h2>
+  <h2>7. Choose anonymous usage reporting</h2>
   <p>Anonymous usage reporting is enabled by default on the first-Admin form. Uncheck it to opt out before creating the installation, or turn it off later under <strong>Settings → Privacy</strong>. Anonymous usage data only; no roster or user data is ever shared.</p>
-  <h2>4. Finish the guided setup</h2>
+  <h2>8. Finish the guided setup</h2>
   <ol><li>Organization and brand</li><li>Initial test meeting</li><li>Roster (email and Discord user ID are optional)</li><li>Pair a Raspberry Pi or the browser simulator</li><li>Test kiosk input</li><li>Confirm test attendance</li></ol>
   <p>The wizard focuses on one task at a time. Every step can be skipped and revisited, and progress is shared across Admins. Confirming the final attendance check plays an accessible celebration; dismiss it to enter dashboard Home. Setup remains reachable afterward. Google, Resend, and Discord are separate optional integrations.</p>
-  <h2>5. Upgrade an existing installation</h2>
+  <h2>9. Upgrade an existing installation</h2>
   <p>Open <strong>Settings → Updates</strong> to compare the installed and latest releases. <strong>Back up and begin update</strong> downloads an entire-installation backup, then opens <span class="ui-path">Actions <span>›</span> Install or upgrade LancerLogin</span>. It never starts a deployment itself. In GitHub choose <strong>Upgrade</strong>, enter the same installation slug, and type <code>UPGRADE &lt;slug&gt;</code>. The workflow requires the existing Worker, D1 database, Pages project, and retained Worker secrets; it applies new migrations and redeploys code without replacing D1 data or rotating installation secrets.</p>
 </main>
 <footer><div><a href="index.html">Documentation home</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>

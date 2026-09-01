@@ -41,11 +41,11 @@ class HttpError extends Error {
   readonly details?: string[];
   constructor(status: number, message: string, details?: string[]) { super(message); this.status = status; this.details = details; }
 }
-async function parseJson<T>(request: Request): Promise<T> {
+async function parseJson<T>(request: Request, maxBytes = 262_144): Promise<T> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new HttpError(415, "Content-Type must be application/json");
-  if (Number(request.headers.get("content-length") ?? 0) > 262_144) throw new HttpError(413, "Request body is too large");
+  if (Number(request.headers.get("content-length") ?? 0) > maxBytes) throw new HttpError(413, "Request body is too large");
   const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > 262_144) throw new HttpError(413, "Request body is too large");
+  if (new TextEncoder().encode(text).byteLength > maxBytes) throw new HttpError(413, "Request body is too large");
   try { return JSON.parse(text) as T; } catch { throw new HttpError(400, "Request body must be valid JSON"); }
 }
 function requireDatabase(env: Env): D1Database { if (!env.DB) throw new HttpError(503, "D1 is not linked"); return env.DB; }
@@ -167,7 +167,7 @@ async function setupProgress(request: Request, env: Env): Promise<Response> {
   await writeAudit(db, principal, input.completed ? "setup.step_completed" : "setup.step_reopened", "setup_step", input.step); return response({ ok: true, step: input.step, completed: input.completed });
 }
 async function members(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const principal = await requireRole(request, env, request.method === "GET" ? ["admin", "operator"] : ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") { const result = await db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active FROM members WHERE installation_id = 'primary' ORDER BY last_name, first_name").all(); return response({ members: result.results ?? [] }); }
   const input = await parseJson<{ members?: MemberInput[] }>(request);
   if (!Array.isArray(input.members) || !input.members.length || input.members.length > 500) throw new HttpError(400, "Provide between 1 and 500 roster members");
@@ -428,35 +428,40 @@ async function googleCallback(request: Request, env: Env): Promise<Response> {
 }
 async function users(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const result = await db.prepare("SELECT id, email, local_username AS localUsername, role, active, created_at AS createdAt FROM users WHERE installation_id = 'primary' ORDER BY created_at").all(); return response({ users: result.results ?? [] }); }
-  const input = await parseJson<{ email?: string | null; localUsername?: string | null; localPassword?: string; role?: Role }>(request);
+  if (request.method === "GET") { const result = await db.prepare("SELECT u.id, u.email, u.local_username AS localUsername, u.member_id AS memberId, u.role, u.active, u.created_at AS createdAt, m.external_id AS memberExternalId, m.first_name AS memberFirstName, m.last_name AS memberLastName FROM users u LEFT JOIN members m ON m.installation_id = u.installation_id AND m.id = u.member_id WHERE u.installation_id = 'primary' ORDER BY u.created_at").all(); return response({ users: result.results ?? [] }); }
+  const input = await parseJson<{ email?: string | null; localUsername?: string | null; localPassword?: string; role?: Role; memberId?: string | null }>(request);
   const email = input.email?.trim().toLowerCase() || null; const username = input.localUsername?.trim().toLowerCase() || null;
   if (!email && !username) throw new HttpError(400, "An email or local username is required");
   if (email && !validEmail(email)) throw new HttpError(400, "Email is invalid");
   if (username && !/^[a-z0-9._-]{3,64}$/.test(username)) throw new HttpError(400, "Local username must be 3–64 letters, numbers, dots, underscores, or hyphens");
   if (!input.role || !["admin", "operator"].includes(input.role)) throw new HttpError(400, "Role must be admin or operator");
   if (username && (input.localPassword?.length ?? 0) < 12) throw new HttpError(400, "A local user needs a password of at least 12 characters");
+  const memberId = input.memberId?.trim() || null;
+  if (memberId && !await db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ?").bind(memberId).first()) throw new HttpError(400, "Linked roster member was not found");
+  if (memberId && await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND member_id = ?").bind(memberId).first()) throw new HttpError(409, "That roster member already has dashboard access");
   const duplicate = await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND ((email IS NOT NULL AND email = ?) OR (local_username IS NOT NULL AND local_username = ?))").bind(email, username).first();
   if (duplicate) throw new HttpError(409, "That email or username is already in use");
   const id = crypto.randomUUID(); const now = new Date().toISOString(); const passwordHash = username ? await hashPassword(input.localPassword!) : null;
   await db.batch([
-    db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, role, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?)").bind(id, email, username, passwordHash, input.role, now),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.created', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ role: input.role, hasGoogle: Boolean(email), hasLocal: Boolean(username) }), now),
+    db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, member_id, role, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, email, username, passwordHash, memberId, input.role, now),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.created', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ role: input.role, hasGoogle: Boolean(email), hasLocal: Boolean(username), memberId }), now),
   ]);
-  return response({ user: { id, email, localUsername: username, role: input.role, active: true, createdAt: now } }, 201);
+  return response({ user: { id, email, localUsername: username, memberId, role: input.role, active: true, createdAt: now } }, 201);
 }
 async function updateUser(request: Request, env: Env, userId: string): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ role?: Role; active?: boolean; localPassword?: string }>(request);
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ role?: Role; active?: boolean; localPassword?: string; memberId?: string | null }>(request);
   const target = await db.prepare("SELECT id, role, active, local_username AS localUsername FROM users WHERE installation_id = 'primary' AND id = ?").bind(userId).first<{ id: string; role: Role; active: number; localUsername?: string }>();
   if (!target) throw new HttpError(404, "User not found");
   if (userId === principal.userId && ((input.role && input.role !== "admin") || input.active === false)) throw new HttpError(409, "You cannot demote or deactivate your current Admin account");
   if (input.role && !["admin", "operator"].includes(input.role)) throw new HttpError(400, "Role must be admin or operator");
   if (input.localPassword && (!target.localUsername || input.localPassword.length < 12)) throw new HttpError(400, "Password reset requires a local username and at least 12 characters");
-  if (input.role === undefined && input.active === undefined && input.localPassword === undefined) throw new HttpError(400, "Provide a role, active status, or new local password");
+  if (input.memberId !== undefined && input.memberId !== null && (!input.memberId.trim() || !await db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ?").bind(input.memberId.trim()).first())) throw new HttpError(400, "Linked roster member was not found");
+  if (input.memberId && await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND member_id = ? AND id <> ?").bind(input.memberId.trim(), userId).first()) throw new HttpError(409, "That roster member already has dashboard access");
+  if (input.role === undefined && input.active === undefined && input.localPassword === undefined && input.memberId === undefined) throw new HttpError(400, "Provide a role, active status, roster link, or new local password");
   const passwordHash = input.localPassword ? await hashPassword(input.localPassword) : null; const now = new Date().toISOString();
   await db.batch([
-    db.prepare("UPDATE users SET role = COALESCE(?, role), active = COALESCE(?, active), password_hash = COALESCE(?, password_hash) WHERE installation_id = 'primary' AND id = ?").bind(input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0, passwordHash, userId),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.updated', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, userId, JSON.stringify({ role: input.role, active: input.active, passwordReset: Boolean(input.localPassword) }), now),
+    db.prepare("UPDATE users SET role = COALESCE(?, role), active = COALESCE(?, active), password_hash = COALESCE(?, password_hash), member_id = CASE WHEN ? = 1 THEN ? ELSE member_id END WHERE installation_id = 'primary' AND id = ?").bind(input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0, passwordHash, input.memberId === undefined ? 0 : 1, input.memberId?.trim() || null, userId),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.updated', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, userId, JSON.stringify({ role: input.role, active: input.active, passwordReset: Boolean(input.localPassword), memberId: input.memberId }), now),
   ]);
   return response({ ok: true });
 }
@@ -588,13 +593,100 @@ async function recordTelemetryDiagnostic(env: Env, errorCategory: "worker-intern
 }
 async function privacySettings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const installation = await db.prepare("SELECT telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installationReference FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string; installationReference?: string }>(); return response({ telemetryAccepted: Boolean(installation?.acceptedAt), acceptedAt: installation?.acceptedAt, installationReference: installation?.acceptedAt ? installation.installationReference : undefined, notice: "Anonymous usage reporting sends only a random installation ID, release version, active kiosk count, scrubbed diagnostics, and best-effort metro. It never sends organization, roster, attendance, fingerprint, or raw IP data." }); }
+  if (request.method === "GET") { const installation = await db.prepare("SELECT telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installationReference FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string; installationReference?: string }>(); return response({ telemetryAccepted: Boolean(installation?.acceptedAt), acceptedAt: installation?.acceptedAt, installationReference: installation?.acceptedAt ? installation.installationReference : undefined, notice: "Anonymous usage data only. No roster or user data is ever shared." }); }
   const input = await parseJson<{ telemetryAccepted?: boolean }>(request); if (typeof input.telemetryAccepted !== "boolean") throw new HttpError(400, "telemetryAccepted must be true or false"); const now = new Date().toISOString();
   await db.prepare("UPDATE installations SET telemetry_accepted_at = ?, telemetry_install_id = ? WHERE id = 'primary'").bind(input.telemetryAccepted ? now : null, input.telemetryAccepted ? crypto.randomUUID() : null).run();
   await writeAudit(db, principal, input.telemetryAccepted ? "telemetry.accepted" : "telemetry.declined", "installation", "primary");
   if (input.telemetryAccepted) { const cf = (request as Request & { cf?: { city?: string; metroCode?: string } }).cf; try { await transmitTelemetry(env, cf?.city || cf?.metroCode); } catch { /* Consent remains saved if reporting is unavailable. */ } }
   return response({ telemetryAccepted: input.telemetryAccepted, acceptedAt: input.telemetryAccepted ? now : null });
 }
+
+type BackupScope = "meetings" | "roster" | "installation";
+const tableColumns = {
+  installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id"],
+  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone"],
+  users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id"],
+  members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at"],
+  meetings: ["id", "installation_id", "title", "starts_at", "ends_at", "required", "notes", "created_by", "created_at", "is_test"],
+  attendance_events: ["id", "installation_id", "member_id", "meeting_id", "source", "occurred_at", "kiosk_event_id", "created_by"],
+  attendance_corrections: ["id", "installation_id", "member_id", "meeting_id", "disposition", "reason", "created_by", "created_at"],
+  setup_progress: ["installation_id", "step", "completed_at", "completed_by"],
+  pairing_codes: ["id", "installation_id", "code_hash", "expires_at", "redeemed_at", "created_by", "created_at", "purpose"],
+  kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version"],
+  simulated_kiosk_sessions: ["installation_id", "pairing_code_id", "name", "active", "online", "last_seen_at", "created_by", "created_at"],
+  encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at"],
+  integration_deliveries: ["id", "installation_id", "provider", "delivery_key", "status", "external_id", "created_at", "updated_at"],
+  integration_state: ["installation_id", "provider", "state_key", "external_id", "content_hash", "updated_at"],
+  discord_attendance_contests: ["installation_id", "meeting_id", "member_id", "message_id", "status", "resolved_by", "resolved_at", "created_at"],
+  audit_log: ["id", "installation_id", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "created_at"],
+  telemetry_diagnostics: ["installation_id", "error_category", "last_seen_at"],
+} as const;
+type BackupTable = keyof typeof tableColumns;
+// Restore parents before children so SQLite's immediate foreign-key checks remain valid.
+const installationTables: BackupTable[] = [
+  "installations", "organization_settings", "members", "users", "meetings",
+  "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
+  "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "integration_deliveries",
+  "integration_state", "discord_attendance_contests", "audit_log", "telemetry_diagnostics",
+];
+const meetingTables: BackupTable[] = ["meetings", "attendance_events", "attendance_corrections", "discord_attendance_contests"];
+const rosterTables: BackupTable[] = ["members"];
+const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
+const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const safeBackupValue = (value: unknown) => value === null || ["string", "number", "boolean"].includes(typeof value);
+
+async function backupData(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const scope = new URL(request.url).searchParams.get("scope") as BackupScope;
+  if (!["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Backup scope must be meetings, roster, or installation");
+  const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
+    const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
+  }));
+  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 1, scope, exportedAt, tables: Object.fromEntries(entries) };
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 1 });
+  return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
+}
+
+function validateBackup(value: unknown, scope: BackupScope): asserts value is { product: "LancerLogin"; schemaVersion: 1; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> } {
+  if (!isObject(value) || value.product !== "LancerLogin" || value.schemaVersion !== 1 || value.scope !== scope || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching LancerLogin backup");
+  let rows = 0;
+  for (const table of tablesForScope(scope)) {
+    const tableRows = value.tables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
+    for (const row of tableRows) { if (!isObject(row) || tableColumns[table].some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
+  }
+  if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
+}
+
+const insertBackupRows = (db: D1Database, table: BackupTable, rows: Record<string, unknown>[]) => rows.map((row) => {
+  const columns = tableColumns[table]; return db.prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`).bind(...columns.map((column) => row[column]));
+});
+
+async function restoreData(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: BackupScope; confirmation?: string; backup?: unknown }>(request, 10_485_760); const scope = input.scope;
+  if (!scope || !["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Restore scope must be meetings, roster, or installation");
+  const expected = `RESTORE ${scope.toUpperCase()}`; if (input.confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`); validateBackup(input.backup, scope); const tables = input.backup.tables;
+  let statements: D1Statement[];
+  if (scope === "meetings") statements = [
+    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"),
+    ...insertBackupRows(db, "meetings", tables.meetings), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests),
+  ];
+  else if (scope === "roster") statements = [
+    db.prepare("UPDATE members SET active = 0 WHERE installation_id = 'primary'"),
+    ...tables.members.map((row) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = excluded.active").bind(row.id, row.external_id, row.first_name, row.last_name, row.email, row.discord_user_id, row.active, row.created_at)),
+  ];
+  else {
+    statements = [db.prepare("DELETE FROM installations WHERE id = 'primary'")];
+    for (const table of installationTables) statements.push(...insertBackupRows(db, table, tables[table]));
+  }
+  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: 1, exportedAt: input.backup.exportedAt }), now));
+  await db.batch(statements); return response({ restored: true, scope });
+}
+
+async function resetOnboarding(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ confirmation?: string }>(request);
+  if (input.confirmation !== "RESET ONBOARDING") throw new HttpError(400, "Type RESET ONBOARDING exactly to continue");
+  await db.batch([db.prepare("DELETE FROM setup_progress WHERE installation_id = 'primary'"), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'setup.reset', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString())]); return response({ reset: true });
+}
+
 async function deleteData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "attendance" | "roster" | "installation"; confirmation?: string }>(request);
   const expected = input.scope === "attendance" ? "DELETE ATTENDANCE" : input.scope === "roster" ? "DELETE ROSTER" : input.scope === "installation" ? "DELETE INSTALLATION" : undefined;
@@ -603,10 +695,11 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
     db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.attendance_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString()),
   ]);
-  else if (input.scope === "roster") await db.batch([
-    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM members WHERE installation_id = 'primary'"),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.roster_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString()),
-  ]);
+  else if (input.scope === "roster") {
+    const references = await db.prepare("SELECT COUNT(*) AS count FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id) OR EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.member_id = m.id) OR EXISTS (SELECT 1 FROM discord_attendance_contests d WHERE d.member_id = m.id))").first<{ count: number }>();
+    if (Number(references?.count ?? 0) > 0) throw new HttpError(409, "Delete meetings and attendance first so historical records do not lose their roster references");
+    await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id IS NOT NULL"), db.prepare("DELETE FROM members WHERE installation_id = 'primary'"), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.roster_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString())]);
+  }
   else await db.prepare("DELETE FROM installations WHERE id = 'primary'").run();
   return response({ deleted: true, scope: input.scope });
 }
@@ -615,7 +708,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   const url = new URL(request.url); let result: Response;
   try {
     if (request.method === "OPTIONS") result = new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "authorization, content-type", "access-control-allow-credentials": "true" } });
-    else if (url.pathname === "/health" && request.method === "GET") result = response({ ok: true, service: "lancerlogin-api", mode: env.DB ? "ready" : "unconfigured" });
+    else if (url.pathname === "/health" && request.method === "GET") result = response({ ok: true, service: "lancerlogin-api", mode: env.DB ? "ready" : "unconfigured", releaseVersion: env.RELEASE_VERSION ?? "development" });
     else if (url.pathname === "/setup/status" && request.method === "GET") result = await setupStatus(env);
     else if (url.pathname === "/setup/bootstrap" && request.method === "POST") result = await bootstrap(request, env);
     else if (url.pathname === "/auth/local" && request.method === "POST") result = await localLogin(request, env);
@@ -647,6 +740,9 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/discord/calendar" && request.method === "POST") result = await discordCalendar(request, env);
     else if (url.pathname === "/discord/kiosk-status" && request.method === "POST") result = await discordKioskStatus(request, env);
     else if (url.pathname === "/admin/privacy" && ["GET", "PATCH"].includes(request.method)) result = await privacySettings(request, env);
+    else if (url.pathname === "/admin/data/backup" && request.method === "GET") result = await backupData(request, env);
+    else if (url.pathname === "/admin/data/restore" && request.method === "POST") result = await restoreData(request, env);
+    else if (url.pathname === "/admin/setup/reset" && request.method === "POST") result = await resetOnboarding(request, env);
     else if (url.pathname === "/admin/data" && request.method === "DELETE") result = await deleteData(request, env);
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env, context);

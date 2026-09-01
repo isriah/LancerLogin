@@ -5,6 +5,8 @@ export const capabilities = Object.freeze({
   "manage-corrections": ["admin", "operator"],
   "manage-excuses": ["admin", "operator"],
   "view-reports": ["admin", "operator"],
+  "view-roster": ["admin", "operator"],
+  "manage-roster": ["admin"],
   "view-kiosk-status": ["admin", "operator"],
   "manage-users": ["admin"],
   "manage-security": ["admin"],

@@ -67,6 +67,22 @@ test("guided setup schema isolates simulator pairing and test meetings", async (
   assert.doesNotMatch(migration, /token_hash|fingerprint|template/i);
 });
 
+test("roster account schema links optional credentials without biometric or password fields", async () => {
+  const migration = await readFile("apps/api/migrations/0004_roster_accounts.sql", "utf8");
+  assert.match(migration, /member_id TEXT REFERENCES members\(id\) ON DELETE SET NULL/);
+  assert.match(migration, /UNIQUE INDEX IF NOT EXISTS idx_one_user_per_member/);
+  assert.doesNotMatch(migration, /fingerprint|template|password_hash/i);
+});
+
+test("entire-installation restore inserts roster members before linked dashboard users", async () => {
+  const source = await readFile("apps/api/src/index.ts", "utf8");
+  const order = source.match(/const installationTables: BackupTable\[\] = \[([\s\S]*?)\];/)?.[1] ?? "";
+  assert.ok(order.indexOf('"members"') >= 0);
+  assert.ok(order.indexOf('"users"') > order.indexOf('"members"'));
+  assert.ok(order.indexOf('"meetings"') > order.indexOf('"users"'));
+  assert.ok(order.indexOf('"attendance_events"') > order.indexOf('"meetings"'));
+});
+
 test("provisioning workflow is adopter-gated and account-neutral", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
   assert.match(workflow, /workflow_dispatch/);

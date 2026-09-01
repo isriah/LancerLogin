@@ -597,7 +597,7 @@ test("scrubbed diagnostics are recorded only after telemetry consent", async () 
   assert.equal(declined.calls.some((call) => call.sql.includes("INSERT INTO telemetry_diagnostics")), false);
 });
 
-test("destructive data operations require exact confirmation and FK-safe ordering", async () => {
+test("destructive data operations are scoped and require exact confirmation", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const admin = await sessionCookie("admin");
@@ -605,8 +605,34 @@ test("destructive data operations require exact confirmation and FK-safe orderin
   const result = await worker.fetch(request("/admin/data", { scope: "roster", confirmation: "DELETE ROSTER" }, { method: "DELETE", cookie: admin }), env);
   assert.equal(result.status, 200);
   const statements = database.batches.at(-1) ?? [];
-  const meetingDelete = statements.findIndex((call) => call.sql.includes("DELETE FROM meetings"));
-  const rosterDelete = statements.findIndex((call) => call.sql.includes("DELETE FROM members"));
-  assert.ok(meetingDelete >= 0 && rosterDelete > meetingDelete);
+  assert.ok(statements.some((call) => call.sql.includes("DELETE FROM members")));
+  assert.equal(statements.some((call) => call.sql.includes("DELETE FROM meetings")), false);
+  assert.ok(statements.some((call) => call.sql.includes("UPDATE users SET member_id = NULL")));
   assert.ok(statements.some((call) => call.sql.includes("data.roster_deleted")));
+});
+
+test("Admin can link roster members to dashboard accounts while non-rostered accounts remain supported", async () => {
+  const database = new FakeDatabase(); database.rows.set("SELECT id FROM members", { id: "member-1" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/users", { localUsername: "member.operator", localPassword: "temporary password", memberId: "member-1", role: "operator" }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 201); const statements = database.batches.at(-1) ?? []; const insert = statements.find((call) => call.sql.includes("INSERT INTO users")); assert.ok(insert?.sql.includes("member_id")); assert.ok(insert?.values.includes("member-1"));
+  const unlinked = await worker.fetch(request("/admin/users", { email: "staff@example.test", memberId: null, role: "admin" }, { cookie: await sessionCookie("admin") }), env); assert.equal(unlinked.status, 201);
+});
+
+test("category backups are scope-labelled and never mix unrelated tables", async () => {
+  const database = new FakeDatabase(); database.lists.set("FROM meetings", [{ id: "meeting-1" }]); database.lists.set("FROM attendance_events", []); database.lists.set("FROM attendance_corrections", []); database.lists.set("FROM discord_attendance_contests", []);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 200); const backup = await result.json() as { scope: string; tables: Record<string, unknown> }; assert.equal(backup.scope, "meetings"); assert.deepEqual(Object.keys(backup.tables).sort(), ["attendance_corrections", "attendance_events", "discord_attendance_contests", "meetings"]); assert.equal("members" in backup.tables, false); assert.match(result.headers.get("content-disposition") ?? "", /meetings-backup/);
+});
+
+test("restore rejects a backup from another category before executing a batch", async () => {
+  const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const backup = { product: "LancerLogin", schemaVersion: 1, scope: "roster", exportedAt: "2026-09-01T00:00:00.000Z", tables: { members: [] } };
+  const result = await worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup }, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 400); assert.equal(database.batches.length, 0);
+});
+
+test("onboarding reset clears progress without deleting organization data", async () => {
+  const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const admin = await sessionCookie("admin");
+  assert.equal((await worker.fetch(request("/admin/setup/reset", { confirmation: "reset onboarding" }, { cookie: admin }), env)).status, 400);
+  assert.equal((await worker.fetch(request("/admin/setup/reset", { confirmation: "RESET ONBOARDING" }, { cookie: admin }), env)).status, 200); const statements = database.batches.at(-1) ?? []; assert.ok(statements.some((call) => call.sql.includes("DELETE FROM setup_progress"))); assert.equal(statements.some((call) => /DELETE FROM members|DELETE FROM meetings|DELETE FROM installations/.test(call.sql)), false);
 });

@@ -25,3 +25,9 @@ Data remains until an admin exports or deletes it. CSV exports and documented D1
 ## ADR-006: Complete attendance sessions
 
 Every meeting has a required start and end. A member scans once on arrival and once on departure; an arrival alone is active while the scan window remains open, a completed pair is present, and an incomplete or missing pair is absent after the window closes unless an audited correction or excuse overrides it. One organization-wide late-scan allowance applies after every scheduled end, defaults to 30 minutes, and cannot be overridden per meeting. Optional Discord absence processing runs every five minutes after that cutoff.
+
+Meeting attendance windows may not overlap, including the organization-wide late-scan allowance. The rule applies to one-time creation, every occurrence in a recurring series, occurrence/future-series edits, and changes to the shared cutoff. This keeps unattended kiosk meeting resolution deterministic without asking members or kiosk operators to choose a meeting.
+
+## ADR-008: Protected local kiosk operations
+
+The physical kiosk is an unattended attendance appliance, not an administrator dashboard. Normal operation continuously scans the R503, resolves the eligible meeting through the Worker, and shows only member-facing status. Holding the network indicator opens touch Wi-Fi settings; holding the organization brand opens fingerprint maintenance. Both use one locally salted settings PIN and loopback-only operational routes. Admins may queue only four fixed, short-lived recovery commands from the dashboard: reload display, restart service, reboot Pi, and reset the local PIN. No remote shell or arbitrary command payload exists.

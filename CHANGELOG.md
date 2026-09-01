@@ -2,6 +2,17 @@
 
 Meaningful release notes are published in [`docs/releases`](docs/releases/) and attached verbatim to each GitHub Release. LancerLogin follows semantic versioning while the Community Edition matures.
 
+## 0.9.0 — Unattended kiosk operations
+
+- Prevent one-time, recurring, edited, and organization-cutoff meeting windows from overlapping.
+- Replace typed meeting selection with automatic server-side meeting resolution for every fingerprint scan.
+- Restore a continuous, full-screen R503 kiosk experience with familiar arrival/departure feedback, cached branding, semantic reader lighting, and an offline queue.
+- Add PIN-protected touch Wi-Fi controls and local fingerprint maintenance while keeping templates exclusively inside the sensor.
+- Manage pairing, replacement, history, health, maintenance guidance, and fixed recovery commands from the dedicated Kiosks page.
+- Harden installation and upgrades around serial startup, port conflicts, service health, release packaging, and narrow Pi permissions.
+
+See [`docs/releases/v0.9.0.md`](docs/releases/v0.9.0.md) for migration, Pi-upgrade, security, and verification details.
+
 ## 0.8.0 — Roster polish and remote kiosk pairing
 
 - Make the roster directory the page focus, with modal CSV preview/replace and individual-member entry.

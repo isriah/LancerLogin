@@ -6,4 +6,6 @@ Roster CSV imports require `memberId`, `firstName`, and `lastName`; `email` and 
 
 Every meeting requires a scheduled end. Members scan once on arrival and once on departure. One arrival scan is active but not yet present; a completed pair is present. At the scheduled end plus the single organization-wide late-scan allowance (30 minutes by default), an incomplete pair is absent. A reasoned correction or excuse overrides the derived result without deleting the source scans. Source events remain retained for auditability.
 
+Meeting attendance windows cannot overlap. LancerLogin validates one-time meetings, every occurrence of a recurring series, occurrence/future-series edits, and changes to the organization-wide allowance. The kiosk therefore needs no meeting selector: each scan timestamp has at most one eligible meeting, which the Worker resolves before recording the arrival or departure.
+
 Dashboard Data settings provide three independent data categories: Meetings and attendance, Roster, and Entire installation. Each category has a matching JSON backup, restore, and typed-confirmation delete action. A backup can restore only its matching category. Whole-installation backups include sensitive password hashes, encrypted integration ciphertext, and credential hashes, so they must be protected like administrator credentials.

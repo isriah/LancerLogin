@@ -26,6 +26,7 @@ This checklist maps the approved Community Release Plan to durable implementatio
 | Meaningful release patch notes | Implemented | Every tag must have `docs/releases/<tag>.md`; tagged release publishes that file and public docs link the release history |
 | Routed dashboard, roster access, and safe update assistance | Implemented locally | Deep-link pages with SPA fallback; roster-linked or non-rostered Admin/Operator accounts; version check and pre-update backup before opening GitHub; dashboard cannot dispatch deployments |
 | Recurring scheduling and preview-first roster import | Implemented locally | Daily/weekly/biweekly/monthly local-time series, searchable complete meeting table, occurrence/future edits, merge/replace preview, and credential/history preservation |
+| Deterministic unattended physical kiosk | Implemented locally | Non-overlap validation, automatic scan-time meeting resolution, continuous R503 polling, protected local tools, lifecycle/recovery dashboard, fixed command allowlist, and hardened installer |
 | In-dashboard integration setup guidance | Implemented locally | Official provider links, installation-specific callbacks, one-copy/one-paste field order, real verification, and rotation instructions inside collapsible Google OAuth, Resend, and Discord cards |
 | Accessible task-first public documentation with annotated visuals | Published | Dashboard, GitHub, Cloudflare, OAuth, kiosk, and integrations visuals; WCAG 2.2 A target; `https://isriah.github.io/LancerLogin/` |
 | Community support without SLA | Implemented | `robolancers@gmail.com` is documented with explicit no-SLA language |
@@ -34,7 +35,7 @@ This checklist maps the approved Community Release Plan to durable implementatio
 
 Automated tests use fake D1 bindings, provider responses, Cloudflare resource lists, and R503 transport. The dedicated community collector workflow passed its live self-tests. The adopter provisioning workflow also created only the user-approved isolated `lancerlogin-test` Worker, D1, and Pages resources alongside—but without connecting to or modifying—the earlier attendance resources. Provider delivery, Pi installation, and physical sensor operation remain untested.
 
-The v0.4 private-deployment release has not yet been deployed. Its fresh private-repository Create run is deliberately reserved for live acceptance after the release tag is published.
+The isolated private deployment has been manually upgraded through v0.8.0. The v0.9.0 Upgrade and matching Pi installer remain deliberately reserved for user-led live acceptance after the release tag is published.
 
 The detailed requirement-to-evidence matrix is maintained in `docs/COMPLETION-AUDIT.md`.
 

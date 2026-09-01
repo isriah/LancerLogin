@@ -2,6 +2,18 @@
 
 Meaningful release notes are published in [`docs/releases`](docs/releases/) and attached verbatim to each GitHub Release. LancerLogin follows semantic versioning while the Community Edition matures.
 
+## 0.6.0 — Recurring meetings and dashboard refinement
+
+- Add daily, weekly, biweekly, and monthly meeting series that preserve local wall time across daylight-saving changes.
+- Replace the meeting cards with a searchable, complete meeting table and full occurrence/future-series editing.
+- Add a confirm-before-write roster preview with merge and replace modes while preserving history and credentials.
+- Refine onboarding, persistent dark-first browser themes, responsive/accessibility behavior, and page hierarchy.
+- Notify Admins when a newer release is available without ever dispatching an update.
+- Put guided Google OAuth, Resend, and Discord setup beside each integration form.
+- Keep the full kiosk-screen simulator on the future-work list; the existing guided-setup simulator remains available.
+
+See [`docs/releases/v0.6.0.md`](docs/releases/v0.6.0.md) for upgrade notes, limits, and validation details.
+
 ## 0.5.0 — Attendance lifecycle and operations home
 
 - Require meeting end times and derive attendance from an arrival/departure scan pair.

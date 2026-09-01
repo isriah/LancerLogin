@@ -6,6 +6,19 @@
   <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html" aria-current="page">Releases</a><a href="technical.html">Technical</a></nav></header>
   <header class="page-header"><div><p class="eyebrow">Patch notes</p><h1>LancerLogin releases</h1><p>Review user-visible changes and migration notes before manually authorizing an upgrade in your private deployment repository.</p></div></header>
   <main id="main" class="page"><article>
+    <p class="eyebrow">v0.6.0</p>
+    <h2>Recurring meetings and dashboard refinement</h2>
+    <p>Create bounded daily, weekly, biweekly, or monthly meeting series, then search and edit every meeting attribute from one complete table.</p>
+    <ul>
+      <li>Recurring schedules retain the selected organization-local time through daylight-saving changes.</li>
+      <li>Roster CSV preview with explicit add/update or replace confirmation before any data changes.</li>
+      <li>Temporary guided setup, persistent dark-first browser theme, clearer headings, local errors, and responsive containment.</li>
+      <li>Admin-only update availability notice that opens the manual private-repository workflow after a backup.</li>
+      <li>Beginner setup instructions and exact callback values beside Google OAuth, Resend, and Discord forms.</li>
+    </ul>
+    <section class="notice"><strong>Before upgrading</strong>Download an Entire installation backup. Then manually run <strong>Install or upgrade LancerLogin</strong> in the private deployment repository, choose <strong>Upgrade</strong>, keep <strong>latest</strong> selected, and verify the exact installation slug. The dashboard cannot start the deployment itself.</section>
+    <p><a class="button" href="https://github.com/isriah/LancerLogin/blob/main/docs/releases/v0.6.0.md">Read complete v0.6.0 notes</a></p>
+  </article><article>
     <p class="eyebrow">v0.5.0</p>
     <h2>Attendance lifecycle and operations home</h2>
     <p>Meetings now require an end time. Members scan on arrival and departure; one scan is active, a pair is present, and incomplete attendance becomes absent after one organization-wide late-scan allowance.</p>

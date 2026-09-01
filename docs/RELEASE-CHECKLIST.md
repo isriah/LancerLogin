@@ -25,6 +25,8 @@ This checklist maps the approved Community Release Plan to durable implementatio
 | Signed Discord absence contests | Implemented with mocked provider | Five-minute post-cutoff processing, durable delivery/recipient state, Ed25519 verification, recipient/message/link checks, reasoned audited resolution |
 | Meaningful release patch notes | Implemented | Every tag must have `docs/releases/<tag>.md`; tagged release publishes that file and public docs link the release history |
 | Routed dashboard, roster access, and safe update assistance | Implemented locally | Deep-link pages with SPA fallback; roster-linked or non-rostered Admin/Operator accounts; version check and pre-update backup before opening GitHub; dashboard cannot dispatch deployments |
+| Recurring scheduling and preview-first roster import | Implemented locally | Daily/weekly/biweekly/monthly local-time series, searchable complete meeting table, occurrence/future edits, merge/replace preview, and credential/history preservation |
+| In-dashboard integration setup guidance | Implemented locally | Official provider links, installation-specific callbacks, permissions/configuration steps, tests, and rotation instructions beside Google OAuth, Resend, and Discord forms |
 | Accessible task-first public documentation with annotated visuals | Published | Dashboard, GitHub, Cloudflare, OAuth, kiosk, and integrations visuals; WCAG 2.2 A target; `https://isriah.github.io/LancerLogin/` |
 | Community support without SLA | Implemented | `robolancers@gmail.com` is documented with explicit no-SLA language |
 

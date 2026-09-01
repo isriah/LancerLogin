@@ -18,7 +18,7 @@
     <li>Sensor slot-to-member mapping, queued events, and pairing material locally on the Pi</li>
     <li>Fingerprint templates exclusively inside the R503 sensor</li>
   </ul>
-  <h2>Never sent as telemetry</h2>
+  <h2>Never sent in anonymous usage reports</h2>
   <ul class="privacy-list never">
     <li>Organization name</li>
     <li>Roster or personal names</li>
@@ -26,12 +26,12 @@
     <li>Fingerprint templates or raw scans</li>
     <li>Raw IP address</li>
   </ul>
-  <h2>Consent-gated telemetry</h2>
-  <p>Only after the first Admin clearly accepts, LancerLogin may send a random installation ID, release version, active kiosk count, scrubbed error category, and best-effort city/metro derived from the connection. Raw IP is not read into the payload or stored. An Admin can later decline in Privacy settings, which clears the telemetry installation ID.</p>
-  <p>RoboLancers operates the isolated community collector, whose reviewed endpoint is configured in adopter deployments. It receives nothing until the first Admin accepts telemetry. It hashes that random ID before storage, keeps at most one report per installation per UTC day, and deletes reports after 30 days. Only designated maintainers can access authenticated aggregates, which never expose installation references or hashes. Metro groups smaller than five installations stay hidden.</p>
+  <h2>Anonymous usage reporting</h2>
+  <p>Anonymous usage reporting is enabled by default on the first-Admin form and can be unchecked to opt out before setup completes. When enabled, LancerLogin may send a random installation ID, release version, active kiosk count, scrubbed error category, and best-effort city/metro derived from the connection. Raw IP is not read into the payload or stored. An Admin can turn reporting off later, which clears the anonymous installation ID.</p>
+  <p>RoboLancers operates the isolated community collector. It hashes the random ID before storage, keeps at most one report per installation per UTC day, and deletes reports after 30 days. Only designated maintainers can access authenticated aggregates, which never expose installation references or hashes. Metro groups smaller than five installations stay hidden.</p>
   <h2>Deletion and incident contact</h2>
-  <p>While telemetry is accepted, an Admin can copy the deletion-request reference shown in <strong>Setup → Privacy</strong> and email it to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. Maintainers verify the request and use the authenticated deletion route to remove matching reports and the pseudonymous installation row. Request deletion before declining telemetry if you want retained reports removed.</p>
-  <p>Send suspected telemetry privacy or security incidents to the same address. RoboLancers will investigate, contain or disable the collector where needed, and publish a plain-language repository notice for incidents that could materially affect community installations. Support is best-effort without an SLA.</p>
+  <p>While anonymous usage reporting is enabled, an Admin can copy the deletion-request reference shown in <strong>Setup → Anonymous usage reporting</strong> and email it to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. Maintainers verify the request and use the authenticated deletion route to remove matching reports and the pseudonymous installation row. Request deletion before turning reporting off if you want retained reports removed.</p>
+  <p>Send suspected reporting privacy or security incidents to the same address. RoboLancers will investigate, contain or disable the collector where needed, and publish a plain-language repository notice for incidents that could materially affect community installations. Support is best-effort without an SLA.</p>
   <p>Data remains in the adopter-owned installation until an Admin deletes it. Exporting creates a copy and does not remove the stored records. LancerLogin provides no migration path from earlier installations.</p>
 </main>
 <footer><div><a href="index.html">Documentation home</a> · Privacy questions: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>

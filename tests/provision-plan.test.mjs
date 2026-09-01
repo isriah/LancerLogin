@@ -8,4 +8,5 @@ test("provision plan requires a fresh adopter installation and explicit operatio
   assert.deepEqual(plan.requiredSecretNames, ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]);
   assert.throws(() => validateProvisionPlan({ installationSlug: "example", operation: "create", confirmation: "CREATE something-else" }), /Confirmation/);
   assert.throws(() => validateProvisionPlan({ installationSlug: "example", operation: "resume", confirmation: "RESUME example", existingDatabaseId: "anything" }), /Existing installation/);
+  assert.equal(validateProvisionPlan({ installationSlug: "example", operation: "upgrade", confirmation: "UPGRADE example" }).operation, "upgrade");
 });

@@ -2,6 +2,12 @@
 
 Supported hardware: Raspberry Pi 3B+, 4, or 5 with at least 1 GB RAM; Waveshare 7-inch DSI LCD (E); R503 fingerprint reader; Wi-Fi or Ethernet.
 
+## Browser simulator
+
+The guided dashboard can pair a software-only browser simulator with its own ten-minute pairing-code purpose. Pairing is Admin-only and creates no bearer credential in the browser or row in the production `kiosks` table, so it neither replaces nor counts as the active hardware kiosk. The simulator can be toggled online/offline and can submit a selected roster member in place of a fingerprint match. The API permits those check-ins only for meetings whose `is_test` flag is set, records an explicit simulator audit event, and labels test meetings in the dashboard and CSV export.
+
+This verifies setup navigation, pairing-code redemption, roster selection, authenticated delivery, attendance confirmation, and reports without hardware. It does not claim to verify fingerprint enrollment or matching, UART, the Pi service, Chromium kiosk mode, or the physical offline queue.
+
 The public release installer is linked from the dashboard and guides a local operator through OS prerequisites, display/UART checks, sensor test, and kiosk pairing. Each tagged release stamps its own version into that installer, which then downloads only the matching immutable GitHub release artifact and verifies its SHA-256 checksum. It does not require a repository checkout or manual source changes. Run it with `--dry-run` first to preview every operation. `--install` requires root because it creates a dedicated `lancerlogin` system account, installs into `/opt/lancerlogin`, writes pairing state under `/var/lib/lancerlogin`, and enables the sandboxed systemd service.
 
 The Pi needs a 32-bit or 64-bit Raspberry Pi OS environment with Node.js 18 or newer available as `/usr/bin/node`. The release publishes separate `armv7` and `arm64` artifact names, though the JavaScript service payload is architecture-neutral. The installer does not configure a captive portal; connect Wi-Fi or Ethernet manually before setup.

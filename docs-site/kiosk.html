@@ -6,6 +6,9 @@
 <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html" aria-current="page">Kiosk</a><a href="operations.html">Operate</a><a href="technical.html">Technical</a></nav></header>
 <header class="page-header"><div><p class="eyebrow">Task 2</p><h1>Install and pair one kiosk</h1></div></header>
 <main id="main" class="page">
+  <h2>Test without hardware</h2>
+  <p>During guided setup, choose <strong>Browser simulator</strong>. It consumes a simulator-only ten-minute pairing code, can be toggled online or offline, and lets an Admin choose a roster member in place of a fingerprint scan. Simulator check-ins are accepted only for meetings marked as tests. The simulator never receives a hardware kiosk credential, never counts as the active production kiosk, and never creates or handles fingerprint data.</p>
+  <p>Use it to verify pairing, roster selection, check-in delivery, attendance confirmation, reports, and basic offline-status behavior. A physical Raspberry Pi and R503 are still required for fingerprint enrollment, sensor matching, UART, Chromium kiosk mode, and full offline-queue acceptance.</p>
   <h2>Hardware checklist</h2>
   <ul><li>Raspberry Pi 3B+, 4, or 5 with at least 1 GB RAM</li><li>Waveshare 7-inch DSI LCD (E)</li><li>R503 fingerprint reader connected to the Pi UART</li><li>Manual Wi-Fi or Ethernet connection</li><li>32-bit or 64-bit Raspberry Pi OS and Node.js 18+</li></ul>
   <h2>Guided installer</h2>

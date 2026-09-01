@@ -1,22 +1,23 @@
-name: Provision adopter installation
+name: Install or upgrade LancerLogin
 
 on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Create a fresh installation or resume an interrupted setup
+        description: Create, resume an interrupted setup, or upgrade an existing installation
         required: true
         default: create
         type: choice
         options:
           - create
           - resume
+          - upgrade
       installation_slug:
         description: Lowercase installation slug, for example example-club
         required: true
         type: string
       confirmation:
-        description: Type CREATE followed by a space and the installation slug
+        description: Type CREATE, RESUME, or UPGRADE followed by a space and the installation slug
         required: true
         type: string
 
@@ -95,6 +96,11 @@ jobs:
             test "${{ steps.d1.outputs.state }}" = "missing"
             test "$pages" = "missing"
             test "$worker" = "missing"
+          elif [ "${{ inputs.operation }}" = "upgrade" ]; then
+            test "${{ steps.d1.outputs.state }}" = "exists"
+            test "$pages" = "exists"
+            test "$worker" = "exists"
+            test "$worker_secrets" = "exists"
           else
             test "${{ steps.d1.outputs.state }}" = "exists"
           fi
@@ -174,7 +180,7 @@ jobs:
           DASHBOARD_URL: https://${{ inputs.installation_slug }}-dashboard.pages.dev
         run: |
           {
-            echo "## LancerLogin installation ready"
+            echo "## LancerLogin installation ${{ inputs.operation }} complete"
             echo ""
             echo "- Dashboard: $DASHBOARD_URL"
             echo "- Worker API: $API_URL"

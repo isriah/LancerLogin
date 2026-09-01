@@ -12,18 +12,19 @@ This checklist maps the approved Community Release Plan to durable implementatio
 | Guided Pi setup without clone or manual source edits; short-lived one-time pairing | Implemented | Dashboard installer link, version-matched checksummed installer, hashed ten-minute code, owner-only kiosk credential |
 | Local, Google, or both authentication modes | Implemented | JSON/CORS-protected first-Admin bootstrap, salted scrypt, OAuth state/claim validation, encrypted Google secret, local recovery tool, Google-only lockout guard |
 | Fixed Admin and Operator roles | Implemented | Worker route authorization, active-user/current-role revalidation, dashboard policy, and permission tests |
-| Resumable cross-Admin non-modal setup checklist | Implemented | Persisted setup progress for branding, roster, pairing, fingerprint test, test meeting, and attendance confirmation; complete state hides and can reopen |
+| Resumable cross-Admin guided setup | Implemented | One task per page: organization/brand, test meeting, roster, hardware or simulator pairing, kiosk input test, attendance confirmation; steps skip/reopen and completed setup hides |
 | Organization branding and light/dark/themed modes | Implemented | D1-backed name, subtitle, bounded local logo data, explicit organization-colors mode, light/dark/device modes, browser interaction |
 | Retention, CSV, deletion, and D1 backup/restore | Implemented | Authenticated and formula-safe CSV, typed-confirmation Admin deletion, `docs/BACKUP-RESTORE.md`; no PDF or Sheets |
 | Google, Resend, and full Discord administration/workflows | Implemented with mocked providers | Encrypted status/save/test/rotate/remove, attendance mail, linking, missing-member notices/contests, calendar mapping, heartbeat-driven persistent kiosk status with scheduled offline reconciliation |
 | Manual captive-portal handling and offline-first queue | Implemented/documented | Atomic local queue, retained heartbeat/reader/release health, and task-oriented kiosk guide; advanced captive-portal compatibility remains unsupported |
-| Consent-gated allowlisted telemetry and plain privacy notice | Runtime, collector, governance, and fresh endpoint active | Random install ID, release version, active kiosk count, scrubbed category, connection-derived metro; isolated HMAC collector, 30-day retention, maintainer aggregates, authenticated deletion, incident policy, live health, and synthetic report/aggregate/deletion workflow checks |
+| Opt-out anonymous usage reporting and plain privacy notice | Runtime, collector, governance, and fresh endpoint active | Default-enabled first-Admin checkbox with immediate opt-out; limited anonymous fields, isolated HMAC collector, retention and deletion controls |
+| Hardware-free browser simulator | Implemented | Admin-only simulator code, no production kiosk token/count, test-meeting-only check-ins, online/offline controls, visible test labels, and audit events |
 | Accessible task-first public documentation with annotated visuals | Published | Dashboard, GitHub, Cloudflare, OAuth, kiosk, and integrations visuals; WCAG 2.2 A target; `https://isriah.github.io/LancerLogin/` |
 | Community support without SLA | Implemented | `robolancers@gmail.com` is documented with explicit no-SLA language |
 
 ## Verification boundary
 
-Automated tests use fake D1 bindings, provider responses, Cloudflare resource lists, and R503 transport. The dedicated community telemetry workflow was executed only against a fresh collector-only Cloudflare account and passed its live self-tests. No adopter provisioning workflow, provider delivery, Pi installation, or sensor operation has been performed from this project. Those acceptance steps require a separate fresh LancerLogin-only adopter target and must never use an existing attendance installation.
+Automated tests use fake D1 bindings, provider responses, Cloudflare resource lists, and R503 transport. The dedicated community collector workflow passed its live self-tests. The adopter provisioning workflow also created only the user-approved isolated `lancerlogin-test` Worker, D1, and Pages resources alongside—but without connecting to or modifying—the earlier attendance resources. Provider delivery, Pi installation, and physical sensor operation remain untested.
 
 The detailed requirement-to-evidence matrix is maintained in `docs/COMPLETION-AUDIT.md`.
 

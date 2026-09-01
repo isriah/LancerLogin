@@ -23,4 +23,4 @@ The recommended path is the manual **Deploy community telemetry collector** GitH
 5. Generate independent random base64url values of at least 32 characters for the `INSTALL_ID_PEPPER` and `ADMIN_BEARER_TOKEN` Worker secrets. Never commit, display, or reuse them.
 6. Deploy from the generated configuration, verify `/health`, send only a mock UUID payload, inspect the authenticated aggregate response, and verify scheduled deletion in a test database before approving production use.
 
-The reviewed HTTPS `/v1/report` route is configured as `TELEMETRY_ENDPOINT` by the adopter provisioning generator. Sending remains disabled until a first Admin accepts the privacy notice. Collector failures are best-effort and never block attendance.
+The reviewed HTTPS `/v1/report` route is configured internally as `TELEMETRY_ENDPOINT` by the adopter provisioning generator. The first-Admin form presents anonymous usage reporting as enabled with a clear opt-out checkbox; opting out prevents sending. Collector failures are best-effort and never block attendance.

@@ -331,7 +331,7 @@ test("kiosk heartbeat hashes bearer credentials before D1 lookup", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const heartbeat = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "0.1.0" }) });
+  const heartbeat = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "0.1.0", pendingEvents: 2, lastSyncAt: "2026-09-01T20:00:00.000Z", errorCategory: null }) });
   const result = await worker.fetch(heartbeat, env);
   assert.equal(result.status, 200);
   const lookup = database.calls.find((call) => call.sql.includes("FROM kiosks"));
@@ -352,7 +352,7 @@ test("kiosk heartbeats maintain one idempotent Discord status message and schedu
   globalThis.fetch = async (input, init) => { outbound.push({ input: String(input), init }); return new Response(JSON.stringify({ id: "message-1" }), { headers: { "content-type": "application/json" } }); };
   try {
     const background: Promise<unknown>[] = [];
-    const heartbeat = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "0.1.3" }) });
+    const heartbeat = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "0.1.3", pendingEvents: 0, lastSyncAt: "2026-09-01T20:00:00.000Z", errorCategory: null }) });
     const result = await worker.fetch(heartbeat, env, { waitUntil: (promise) => background.push(promise) });
     assert.equal(result.status, 200);
     assert.equal(background.length, 1);
@@ -387,6 +387,16 @@ test("Operator can create meetings and reasoned attendance corrections", async (
   const corrected = await worker.fetch(request("/attendance/corrections", { memberId: "member-1", meetingId: "meeting-1", disposition: "excused", reason: "School event" }, { cookie: operator }), env);
   assert.equal(corrected.status, 201);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("attendance.corrected")));
+});
+
+test("authenticated kiosk configuration returns current display branding", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
+  database.rows.set("organization_name AS organizationName", { organizationName: "Example Arts", subtitle: "Studio", logoData: null, primaryColor: "#123456", secondaryColor: "#abcdef", logoBackdrop: "auto" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(new Request("https://api.example.test/kiosk/config", { headers: { authorization: "Bearer very-secret" } }), env);
+  assert.equal(result.status, 200);
+  assert.equal((await result.json() as { settings: { organizationName: string } }).settings.organizationName, "Example Arts");
 });
 
 test("Operator can create a bounded recurring meeting series", async () => {

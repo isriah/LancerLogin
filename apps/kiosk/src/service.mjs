@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { chmod, readFile, rename, writeFile } from "node:fs/promises";
-import { pairInstallation, sendAttendance, sendHeartbeat } from "./cloud-client.mjs";
+import { fetchKioskConfiguration, pairInstallation, sendAttendance, sendHeartbeat } from "./cloud-client.mjs";
 import { createFileQueue } from "./file-queue.mjs";
 import { createMappingStore } from "./mapping-store.mjs";
 import { decodePairingKey } from "./pairing-key.mjs";
@@ -12,22 +12,26 @@ import { kioskApp, kioskHtml, kioskStyles } from "./ui.mjs";
 
 const port = Number(process.env.LANCERLOGIN_KIOSK_PORT ?? 8788);
 const configPath = process.env.LANCERLOGIN_CONFIG ?? "/var/lib/lancerlogin/pairing.json";
+const brandingPath = process.env.LANCERLOGIN_BRANDING ?? "/var/lib/lancerlogin/branding.json";
 const queue = createFileQueue(process.env.LANCERLOGIN_QUEUE ?? "/var/lib/lancerlogin/attendance-queue.json");
 const mappings = createMappingStore(process.env.LANCERLOGIN_MAPPINGS ?? "/var/lib/lancerlogin/slot-mappings.json");
 const sensor = process.env.LANCERLOGIN_SENSOR_PATH === "disabled" ? undefined : createR503(createSerialExchange(process.env.LANCERLOGIN_SENSOR_PATH ?? "/dev/serial0"));
-let state = { paired: false, readerOnline: false, cloudOnline: false, kioskName: undefined };
+let state = { paired: false, readerOnline: false, cloudOnline: false, kioskName: undefined, lastSyncAt: undefined, errorCategory: undefined };
+let branding = { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", logoBackdrop: "auto" };
 let sensorOperation = Promise.resolve();
 let pairingConfig; let pairingLoaded = false; let display = kioskState("unpaired"); let displayTimer;
 
 async function loadPairing() { if (pairingLoaded) return pairingConfig; pairingLoaded = true; try { pairingConfig = JSON.parse(await readFile(configPath, "utf8")); state = { ...state, paired: true, kioskName: pairingConfig.kioskName }; display = kioskState("ready"); return pairingConfig; } catch { return undefined; } }
 async function savePairing(config) { const temporary = `${configPath}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, configPath); await chmod(configPath, 0o600); pairingConfig = config; pairingLoaded = true; state = { ...state, paired: true, kioskName: config.kioskName }; display = kioskState("ready"); }
+async function loadBranding() { try { branding = { ...branding, ...JSON.parse(await readFile(brandingPath, "utf8")) }; } catch { /* Defaults remain available before the first cloud sync. */ } }
+async function saveBranding(value) { const safe = { organizationName: String(value?.organizationName || "LancerLogin").slice(0, 100), subtitle: String(value?.subtitle || "").slice(0, 140), logoData: typeof value?.logoData === "string" ? value.logoData : "", primaryColor: /^#[0-9a-f]{6}$/i.test(value?.primaryColor) ? value.primaryColor : "#7c3aed", secondaryColor: /^#[0-9a-f]{6}$/i.test(value?.secondaryColor) ? value.secondaryColor : "#0f766e", logoBackdrop: ["auto", "light", "dark", "none"].includes(value?.logoBackdrop) ? value.logoBackdrop : "auto" }; const temporary = `${brandingPath}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify(safe)}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, brandingPath); await chmod(brandingPath, 0o600); branding = safe; }
 async function flushAttendance(config) { const pending = await queue.pending(); const acknowledgements = []; const delivered = await queue.flush(async (event) => { const result = await sendAttendance(config, event); acknowledgements.push({ eventId: event.eventId, ...result }); }); if (delivered.length < pending.length) throw new Error("Cloud attendance sync is unavailable"); return { delivered, acknowledgements }; }
 async function useSensor(operation) { const current = sensorOperation.then(operation, operation); sensorOperation = current.then(() => undefined, () => undefined); return current; }
 async function testSensor() { if (!sensor) { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } try { const status = await useSensor(() => sensor.status()); state.readerOnline = status.connected; return { readerOnline: status.connected, templateCount: status.templateCount }; } catch { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } }
-async function heartbeat() { const config = await loadPairing(); if (!config) return; await testSensor(); try { await flushAttendance(config); await sendHeartbeat(config, { readerOnline: state.readerOnline, releaseVersion: process.env.LANCERLOGIN_VERSION ?? "development" }); state.cloudOnline = true; } catch { state.cloudOnline = false; } }
+async function heartbeat() { const config = await loadPairing(); if (!config) return; await testSensor(); try { await flushAttendance(config); state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; const remote = await fetchKioskConfiguration(config); if (remote.settings) await saveBranding(remote.settings); if (remote.kiosk?.name) state.kioskName = remote.kiosk.name; await sendHeartbeat(config, { readerOnline: state.readerOnline, releaseVersion: process.env.LANCERLOGIN_VERSION ?? "development", pendingEvents: (await queue.pending()).length, lastSyncAt: state.lastSyncAt, errorCategory: null }); state.cloudOnline = true; } catch { state.cloudOnline = false; state.errorCategory = "cloud_sync"; } }
 async function showDisplay(id, overrides = {}) { if (displayTimer) clearTimeout(displayTimer); display = kioskState(id, overrides); const duration = kioskStates[id]?.durationMs; if (duration) displayTimer = setTimeout(() => { display = kioskState(state.readerOnline ? "ready" : "reader_offline"); void setLed(display.id); }, duration); }
 async function setLed(id) { const definition = kioskStates[id]; if (sensor && definition?.led) await useSensor(() => sensor.led(definition.led)); }
-const scanner = createScanner({ scanSensor: async () => sensor ? useSensor(() => sensor.scan()) : Promise.reject(new Error("Reader disabled")), setLed, mappings, queue, loadPairing, flushAttendance, onDisplay: showDisplay, onReader: (online) => { state.readerOnline = online; }, onCloud: (online) => { state.cloudOnline = online; } });
+const scanner = createScanner({ scanSensor: async () => sensor ? useSensor(() => sensor.scan()) : Promise.reject(new Error("Reader disabled")), setLed, mappings, queue, loadPairing, flushAttendance, onDisplay: showDisplay, onReader: (online) => { state.readerOnline = online; }, onCloud: (online) => { state.cloudOnline = online; if (online) { state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; } else state.errorCategory = "cloud_sync"; } });
 async function body(request) { const chunks = []; let size = 0; for await (const chunk of request) { size += chunk.length; if (size > 65_536) throw new Error("Request body is too large"); chunks.push(chunk); } return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
 function trusted(request) { const origin = request.headers.origin; const host = request.headers.host; return !origin || Boolean(host && origin === `http://${host}`); }
 function localRequest(request) { const address = request.socket.remoteAddress ?? ""; return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1"; }
@@ -44,7 +48,7 @@ const server = createServer(async (request, response) => {
   if (pathname === "/app.js" && request.method === "GET") { response.setHeader("content-type", "text/javascript; charset=utf-8"); response.end(kioskApp); return; }
   response.setHeader("content-type", "application/json; charset=utf-8");
   if (pathname === "/health" && request.method === "GET") { await loadPairing(); response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", ...state, pendingEvents: (await queue.pending()).length })); return; }
-  if (pathname === "/display-state" && request.method === "GET") { response.end(JSON.stringify({ display, kioskName: state.kioskName, readerOnline: state.readerOnline, cloudOnline: state.cloudOnline, pendingEvents: (await queue.pending()).length })); return; }
+  if (pathname === "/display-state" && request.method === "GET") { response.end(JSON.stringify({ display, branding, kioskName: state.kioskName, readerOnline: state.readerOnline, cloudOnline: state.cloudOnline, pendingEvents: (await queue.pending()).length })); return; }
   if (pathname === "/pair" && request.method === "POST") { try { if (await loadPairing()) throw new Error("This kiosk is already paired"); const input = await body(request); const pairing = decodePairingKey(input.pairingKey); const config = await pairInstallation(pairing); await savePairing(config); response.statusCode = 201; response.end(JSON.stringify({ paired: true, kioskName: config.kioskName })); void heartbeat(); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Pairing failed" })); } return; }
   if (pathname === "/attendance" && request.method === "POST") { try { const event = await body(request); const accepted = await queue.enqueue({ eventId: event.eventId || crypto.randomUUID(), memberId: event.memberId, meetingId: event.meetingId, occurredAt: event.occurredAt || new Date().toISOString() }); const config = await loadPairing(); if (config) await flushAttendance(config); response.statusCode = accepted ? 202 : 200; response.end(JSON.stringify({ accepted, queued: (await queue.pending()).length })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Invalid attendance event" })); } return; }
   if (pathname === "/mappings" && request.method === "GET") { response.end(JSON.stringify({ mappings: await mappings.read() })); return; }
@@ -56,7 +60,7 @@ const server = createServer(async (request, response) => {
 
 if (process.env.NODE_ENV !== "test") {
   server.listen(port, process.env.LANCERLOGIN_KIOSK_HOST ?? "0.0.0.0", () => console.log(`LancerLogin kiosk service listening on port ${port}`));
-  void loadPairing().then(() => scanner.start()); heartbeat(); setInterval(heartbeat, 60_000).unref();
+  void Promise.all([loadPairing(), loadBranding()]).then(() => scanner.start()); heartbeat(); setInterval(heartbeat, 60_000).unref();
 }
 
 export { server };

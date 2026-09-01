@@ -23,12 +23,17 @@ export async function pairInstallation({ apiUrl, code, kioskName, fetchImpl = fe
   return { apiUrl: endpoint, kioskId: paired.kioskId, kioskToken: paired.kioskToken, kioskName: paired.name ?? kioskName, pairedAt: new Date().toISOString() };
 }
 
-export async function sendHeartbeat(config, { readerOnline = false, releaseVersion = "development", fetchImpl = fetch } = {}) {
+export async function sendHeartbeat(config, { readerOnline = false, releaseVersion = "development", pendingEvents = 0, lastSyncAt = null, errorCategory = null, fetchImpl = fetch } = {}) {
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/heartbeat`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
-    body: JSON.stringify({ readerOnline: Boolean(readerOnline), releaseVersion }),
+    body: JSON.stringify({ readerOnline: Boolean(readerOnline), releaseVersion, pendingEvents, lastSyncAt, errorCategory }),
   });
+  return parseResponse(response);
+}
+
+export async function fetchKioskConfiguration(config, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/config`, { headers: { authorization: `Bearer ${config.kioskToken}` } });
   return parseResponse(response);
 }
 

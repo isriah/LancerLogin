@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createOfflineQueue, createSensorAdapter, issuePairingCode, redeemPairingCode } from "../apps/kiosk/src/local-runtime.mjs";
-import { normalizeApiUrl, pairInstallation, sendAttendance, sendHeartbeat } from "../apps/kiosk/src/cloud-client.mjs";
+import { fetchKioskConfiguration, normalizeApiUrl, pairInstallation, sendAttendance, sendHeartbeat } from "../apps/kiosk/src/cloud-client.mjs";
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
 import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/src/r503.mjs";
@@ -107,7 +107,15 @@ test("heartbeat authenticates with the kiosk token and reports only operational 
   let request;
   await sendHeartbeat({ apiUrl: "https://api.example.test", kioskToken: "secret", kioskId: "kiosk-1" }, { readerOnline: true, releaseVersion: "1.0.0", fetchImpl: async (_url, init) => { request = init; return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }); } });
   assert.equal(request.headers.authorization, "Bearer secret");
-  assert.deepEqual(JSON.parse(request.body), { readerOnline: true, releaseVersion: "1.0.0" });
+  assert.deepEqual(JSON.parse(request.body), { readerOnline: true, releaseVersion: "1.0.0", pendingEvents: 0, lastSyncAt: null, errorCategory: null });
+});
+
+test("kiosk configuration fetch is authenticated and contains no biometric request data", async () => {
+  let request;
+  const result = await fetchKioskConfiguration({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { fetchImpl: async (url, init) => { request = { url, init }; return new Response(JSON.stringify({ settings: { organizationName: "Example" } }), { headers: { "content-type": "application/json" } }); } });
+  assert.equal(request.url, "https://api.example.test/kiosk/config");
+  assert.equal(request.init.headers.authorization, "Bearer secret");
+  assert.deepEqual(result.settings, { organizationName: "Example" });
 });
 
 test("file queue survives restart, preserves order, and removes only delivered events", async () => {

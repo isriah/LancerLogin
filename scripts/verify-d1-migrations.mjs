@@ -65,7 +65,7 @@ try {
   const kioskSql = schema.get("kiosks") ?? "";
   const meetingSql = schema.get("meetings") ?? ""; const meetingSeriesIndexSql = schema.get("idx_meetings_series") ?? ""; const pairingSql = schema.get("pairing_codes") ?? ""; const simulatorSql = schema.get("simulated_kiosk_sessions") ?? "";
   const usersSql = schema.get("users") ?? ""; const memberUserIndexSql = schema.get("idx_one_user_per_member") ?? "";
-  if (!brandingSql.includes("'themed'") || !kioskSql.includes("reader_online") || !kioskSql.includes("release_version")) throw new Error("Final D1 schema is missing themed branding or retained kiosk health fields");
+  if (!brandingSql.includes("'themed'") || !kioskSql.includes("reader_online") || !kioskSql.includes("release_version") || !kioskSql.includes("pending_events") || !kioskSql.includes("last_sync_at")) throw new Error("Final D1 schema is missing themed branding or retained kiosk health fields");
   if (!meetingSql.includes("is_test") || !pairingSql.includes("'simulator'") || !simulatorSql.includes("online")) throw new Error("Final D1 schema is missing isolated browser simulator fields");
   if (!meetingSql.includes("recurrence_frequency") || !meetingSql.includes("series_id") || !meetingSeriesIndexSql.includes("series_id")) throw new Error("Final D1 schema is missing recurring-meeting fields or index");
   if (!usersSql.includes("member_id") || !memberUserIndexSql.includes("member_id")) throw new Error("Final D1 schema is missing the optional one-to-one roster account link");

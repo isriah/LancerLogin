@@ -12,9 +12,9 @@ The public release installer is linked from the dashboard and guides a local ope
 
 The Pi needs a 32-bit or 64-bit Raspberry Pi OS environment with Node.js 18 or newer available as `/usr/bin/node`. The release publishes separate `armv7` and `arm64` artifact names, though the JavaScript service payload is architecture-neutral. The installer does not configure a captive portal; connect Wi-Fi or Ethernet manually before setup.
 
-The dashboard creates a time-limited, one-time pairing code. The installer sends it directly to the adopter-owned Worker API and then discards it. The returned kiosk bearer credential is stored with owner-only permissions; D1 stores only its SHA-256 hash. Pairing code hashes are likewise the only code representation stored remotely.
+The dashboard creates a time-limited pairing key that combines the adopter-owned Worker address, kiosk name, and one-time code. The installer first starts an unpaired local service, then prints a `.local` address and LAN IP fallback. An Admin opens that address from a phone or laptop on the same network and pastes the key once. The Pi redeems the code directly with its Worker, discards the combined key, and stores the returned kiosk bearer credential with owner-only permissions; D1 stores only credential and pairing-code hashes.
 
-Only an Admin can generate a pairing code. Generating a new one supersedes the prior code; expiration and successful redemption both make it unusable. The API exposes code status but never returns a code after the creation response.
+Only an Admin can generate a pairing key. Generating a new one supersedes the prior code; expiration and successful redemption both make it unusable. The API exposes code status but never returns a code after the creation response. LAN clients can reach only the local setup assets, health state, and pairing endpoint; attendance, reader, scan, enrollment, and mapping routes accept only loopback requests from the kiosk itself.
 
 LancerLogin deliberately supports one active kiosk. When a kiosk is already paired, the dashboard requires an Admin to explicitly confirm replacement before it will issue another code. The existing kiosk continues working while the code is pending; successful redemption disables its credential before activating the replacement.
 

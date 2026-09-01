@@ -2,7 +2,7 @@
   "name": "lancerlogin",
   "private": true,
   "type": "module",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Self-hosted single-kiosk attendance",
   "license": "Apache-2.0",
   "workspaces": [
@@ -13,6 +13,7 @@
     "test": "node --test tests/**/*.test.mjs && node --experimental-strip-types --test tests-ts/**/*.test.ts",
     "test:api": "node --test tests/attendance-service.test.mjs tests/d1-repository.test.mjs tests/integration-workflows.test.mjs tests/pairing-service.test.mjs tests/roster-import.test.mjs tests/security.test.mjs tests/setup-progress.test.mjs tests/telemetry.test.mjs tests/worker.test.mjs && node --experimental-strip-types --test tests-ts/attendance-lifecycle.test.ts tests-ts/integration-runtime.test.ts tests-ts/runtime-security.test.ts tests-ts/worker-runtime.test.ts",
     "test:dashboard": "node --test tests/dashboard-shell.test.mjs",
+    "test:browser": "playwright test",
     "test:docs": "node --test tests/docs-site.test.mjs",
     "test:kiosk": "node --test tests/kiosk-runtime.test.mjs",
     "test:provisioning": "node --test tests/cloudflare-setup.test.mjs tests/d1-maintenance.test.mjs tests/foundation.test.mjs tests/pages-proxy.test.mjs tests/provision-plan.test.mjs tests/provision-resources.test.mjs",
@@ -22,6 +23,7 @@
     "build": "npm run build --workspaces --if-present && node scripts/verify-template-config.mjs",
     "verify:api": "npm run test:api && npm run typecheck --workspace @lancerlogin/api --workspace @lancerlogin/shared",
     "verify:dashboard": "npm run test:dashboard && npm run typecheck --workspace @lancerlogin/dashboard",
+    "verify:browser": "npm run test:browser",
     "verify:docs": "npm run test:docs",
     "verify:kiosk": "npm run test:kiosk && npm run typecheck --workspace @lancerlogin/kiosk",
     "verify:provisioning": "npm run test:provisioning && node scripts/verify-template-config.mjs",
@@ -36,6 +38,7 @@
     "restore-d1": "node scripts/d1-maintenance.mjs restore"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "typescript": "^5.7.3"
   }
 }

@@ -2,6 +2,16 @@
 
 Meaningful release notes are published in [`docs/releases`](docs/releases/) and attached verbatim to each GitHub Release. LancerLogin follows semantic versioning while the Community Edition matures.
 
+## 0.8.0 — Roster polish and remote kiosk pairing
+
+- Make the roster directory the page focus, with modal CSV preview/replace and individual-member entry.
+- Replace redundant meeting counts and inconsistent card gaps with a shared responsive page rhythm.
+- Self-host Bebas Neue headings and Roboto body text; add themed Hex/RGB color editors and neutral dark surfaces.
+- Let a phone or laptop pair a freshly installed Pi over the local network with one dashboard-generated, ten-minute key—no Cloudflare URL or OTP typing on the kiosk.
+- Add focused Playwright browser smoke coverage and GitHub workflow linting alongside the existing full release gate.
+
+See [`docs/releases/v0.8.0.md`](docs/releases/v0.8.0.md) for upgrade, security, and verification details.
+
 ## 0.7.0 — Verified integrations
 
 - Require end-to-end Google, Resend, and Discord verification before showing an integration as configured.

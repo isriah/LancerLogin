@@ -169,6 +169,8 @@ test("CI runs the complete release gate and tags require that exact verified com
   assert.doesNotMatch(verifier, /--remote|CLOUDFLARE_API_TOKEN/);
   const ciWorkflow = await readFile(".github/workflows/ci.yml", "utf8");
   assert.match(ciWorkflow, /npm run verify:release/);
+  assert.match(ciWorkflow, /rhysd\/actionlint:1\.7\.12/);
+  assert.match(ciWorkflow, /npm run test:browser/);
   const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
   assert.match(releaseWorkflow, /actions: read/);
   assert.match(releaseWorkflow, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$commit&status=success/);

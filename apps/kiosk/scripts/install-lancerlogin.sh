@@ -29,7 +29,7 @@ if [[ "$MODE" == "--dry-run" ]]; then
   echo "1. Verify Raspberry Pi 3B+/4/5, >=1 GB RAM, network, UART, and display."
   echo "2. Download the fixed v${VERSION} kiosk artifact and SHA-256 checksum."
   echo "3. Install into /opt/lancerlogin with a dedicated system user."
-  echo "4. Ask for the adopter's Worker API URL and one-time pairing code."
+  echo "4. Ask once for the dashboard-generated, time-limited pairing key."
   echo "5. Store the resulting kiosk credential owner-only and start the local service."
   echo "6. Configure an installed Chromium browser to open the local touch kiosk at desktop login."
   echo "Dry-run complete: no files, services, hardware, accounts, or network were changed."
@@ -59,20 +59,17 @@ install -d -m 0755 -o root -g root /opt/lancerlogin
 install -d -m 0700 -o lancerlogin -g lancerlogin /var/lib/lancerlogin
 tar --extract --gzip --file "$temporary/$archive" --directory /opt/lancerlogin --no-same-owner
 
-read -r -p "Worker API URL from the GitHub workflow summary: " api_url
-read -r -p "Kiosk name [Main kiosk]: " kiosk_name
-kiosk_name="${kiosk_name:-Main kiosk}"
-read -r -s -p "One-time pairing code from the dashboard: " pairing_code
-echo
-runuser --user lancerlogin -- /usr/bin/node /opt/lancerlogin/src/pair-cli.mjs "$api_url" "$pairing_code" "$kiosk_name"
-unset pairing_code
-
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-kiosk.service /etc/systemd/system/lancerlogin-kiosk.service
 install -d -m 0755 /etc/systemd/system/lancerlogin-kiosk.service.d
 printf '[Service]\nEnvironment=LANCERLOGIN_VERSION=%s\n' "$VERSION" > /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
 chmod 0644 /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
 systemctl daemon-reload
 systemctl enable --now lancerlogin-kiosk.service
+host_name="$(hostname)"
+local_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+echo "LancerLogin is installed and waiting for pairing."
+echo "On a phone or computer connected to the same network, open http://${host_name}.local:8788/ and paste the one-time pairing key from the dashboard."
+[[ -z "$local_ip" ]] || echo "If the .local address does not open, use http://${local_ip}:8788/ instead."
 browser_path="$(command -v chromium || command -v chromium-browser || true)"
 if [[ -n "$browser_path" ]]; then
   install -d -m 0755 /etc/xdg/autostart
@@ -82,4 +79,4 @@ if [[ -n "$browser_path" ]]; then
 else
   echo "Chromium was not found. Install it with Raspberry Pi OS software management, then open http://127.0.0.1:8788/ locally."
 fi
-echo "LancerLogin kiosk installed. Open http://127.0.0.1:8788/ locally to scan, enroll, and verify service state."
+echo "The kiosk can also open http://127.0.0.1:8788/ locally to scan, enroll, and verify service state."

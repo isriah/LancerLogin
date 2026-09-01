@@ -23,3 +23,5 @@ Start with the public [step-by-step installation guide](https://isriah.github.io
 ## Support
 
 Community support: robolancers@gmail.com (no SLA).
+
+LancerLogin is licensed under Apache-2.0. Bundled font attributions and licenses are listed in [Third-party notices](THIRD_PARTY_NOTICES.md).

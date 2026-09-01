@@ -8,6 +8,10 @@ const meetings = [
   { id: "active-meeting", title: "Build session", startsAt: iso(-30), endsAt: iso(60), attendanceClosesAt: iso(90), required: 1, isTest: 0 },
   { id: "next-week", title: "Studio night", startsAt: iso(7 * 24 * 60), endsAt: iso(7 * 24 * 60 + 120), attendanceClosesAt: iso(7 * 24 * 60 + 150), required: 1, isTest: 0 },
 ];
+const members = [
+  { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", email: "avery@example.org", active: 1, hasDashboardAccess: true },
+  { id: "member-2", memberId: "A-102", firstName: "Morgan", lastName: "Diaz", email: "morgan@example.org", active: 1, hasDashboardAccess: false },
+];
 
 const server = createServer((request, response) => {
   const origin = request.headers.origin ?? "http://127.0.0.1:5173";
@@ -20,7 +24,9 @@ const server = createServer((request, response) => {
     : path === "/meetings" ? { meetings, lateScanMinutes: 30 }
     : path === "/discord/contests" ? { contests: [{ meetingId: "active-meeting", meetingTitle: "Build session", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: iso(-5) }] }
     : path === "/attendance" ? { finalized: false, attendanceClosesAt: iso(90), attendance: [{ memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", disposition: "active", checkedInAt: iso(-20) }, { memberId: "member-2", externalId: "A-102", firstName: "Morgan", lastName: "Diaz", disposition: "present", checkedInAt: iso(-25), checkedOutAt: iso(-2) }, { memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", disposition: "absent" }] }
-    : path === "/admin/kiosks" ? { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.5.0", pairedAt: iso(-1440) }] }
+    : path === "/admin/members" ? request.method === "POST" ? { imported: 1, deactivated: 0, warnings: [] } : { members }
+    : path === "/admin/users" ? { users: [{ id: "user-1", localUsername: "admin", role: "admin", active: 1, memberId: "member-1", memberExternalId: "A-101", memberFirstName: "Avery", memberLastName: "Stone", createdAt: iso(-30 * 24 * 60) }] }
+    : path === "/admin/kiosks" ? { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.8.0", pairedAt: iso(-1440) }] }
     : path === "/admin/simulator" ? { simulator: { name: "Browser test", active: 1, online: 1, lastSeenAt: iso(0), readerOnline: false, releaseVersion: "browser simulator" } }
     : path === "/admin/integrations" ? { integrations: [{ provider: "google", saved: true, configured: true, state: "configured", verifiedAt: iso(-60) }, { provider: "resend", saved: true, configured: false, state: "verification_required" }, { provider: "discord", saved: false, configured: false, state: "not_configured" }] }
     : { error: "Preview route not implemented" };

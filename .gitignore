@@ -8,6 +8,8 @@ dist/
 *.sqlite
 *.sqlite-*
 coverage/
+playwright-report/
+test-results/
 .provision/
 .collector/
 .d1-migration-verify-*/

@@ -218,7 +218,8 @@ test("pairing returns a one-time code while D1 receives only its hash", async ()
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/admin/pairing-codes", { kioskName: "Front desk" }, { cookie: await sessionCookie("admin") }), env);
   assert.equal(result.status, 201);
-  const body = await result.json() as { code: string };
+  const body = await result.json() as { code: string; workerApiUrl: string };
+  assert.equal(body.workerApiUrl, "https://api.example.test");
   const insert = database.batches.at(-1)?.find((statement) => statement.sql.includes("INSERT INTO pairing_codes"));
   assert.ok(insert);
   assert.notEqual(insert.values[1], body.code);

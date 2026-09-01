@@ -6,6 +6,13 @@
   <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html" aria-current="page">Releases</a><a href="technical.html">Technical</a></nav></header>
   <header class="page-header"><div><p class="eyebrow">Patch notes</p><h1>LancerLogin releases</h1><p>Review user-visible changes and migration notes before manually authorizing an upgrade in your private deployment repository.</p></div></header>
   <main id="main" class="page"><article>
+    <p class="eyebrow">v0.8.0</p>
+    <h2>Roster polish and remote kiosk pairing</h2>
+    <p>The roster is now the page focus, organization theming is more consistent, and a fresh Pi can be paired from a phone or laptop without typing Cloudflare details on its touchscreen.</p>
+    <ul><li>Modal merge/replace roster preview plus one-at-a-time member entry.</li><li>Neutral dark surfaces, self-hosted Bebas Neue and Roboto, and themed Hex/RGB color controls.</li><li>One dashboard-generated, ten-minute pairing key pasted through the Pi's LAN setup page.</li><li>Parallel Playwright smoke and workflow-lint jobs alongside the full release gate.</li></ul>
+    <section class="notice"><strong>Before upgrading</strong>Download an Entire installation backup, then manually run <strong>Install or upgrade LancerLogin</strong> in the private deployment repository with <strong>Upgrade</strong> and <strong>Latest stable</strong>.</section>
+    <p><a class="button" href="https://github.com/isriah/LancerLogin/blob/main/docs/releases/v0.8.0.md">Read complete v0.8.0 notes</a></p>
+  </article><article>
     <p class="eyebrow">v0.7.0</p>
     <h2>Verified integrations</h2>
     <p>Google, Resend, and Discord now show Configured only after a real end-to-end proof; setup cards are quieter and guide each copy-and-paste action in place.</p>

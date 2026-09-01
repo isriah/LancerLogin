@@ -9,6 +9,7 @@ import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
 import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/src/r503.mjs";
 import { kioskApp, kioskHtml, kioskStyles } from "../apps/kiosk/src/ui.mjs";
+import { decodePairingKey } from "../apps/kiosk/src/pairing-key.mjs";
 
 test("pairing code is hashed, single-use, and expires", () => {
   const issued = issuePairingCode({ now: () => 0, random: () => Buffer.from("123456") });
@@ -43,10 +44,18 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.match(installer, /sha256sum --check/);
   assert.match(installer, /releases\/download\/v\$\{VERSION\}/);
   assert.match(installer, /Environment=LANCERLOGIN_VERSION=%s/);
-  assert.match(installer, /runuser --user lancerlogin -- \/usr\/bin\/node/);
+  assert.match(installer, /same network.*one-time pairing key/);
+  assert.doesNotMatch(installer, /Worker API URL from the GitHub workflow summary/);
   assert.match(installer, /node_major.*-ge 18/s);
   assert.doesNotMatch(installer, /sudo -u/);
   assert.doesNotMatch(installer, /git clone/i);
+});
+
+test("one-time pairing key carries self-hosted routing without central discovery", () => {
+  const value = { apiUrl: "https://example-api.example.workers.dev", code: "ABC123", kioskName: "Main kiosk" };
+  const key = `LL1.${Buffer.from(JSON.stringify(value)).toString("base64url")}`;
+  assert.deepEqual(decodePairingKey(key), value);
+  assert.throws(() => decodePairingKey("ABC123"), /valid LancerLogin/);
 });
 
 test("tagged release archive includes every kiosk runtime module", async () => {
@@ -60,6 +69,7 @@ test("tagged release archive includes every kiosk runtime module", async () => {
     "r503.mjs",
     "serial-transport.mjs",
     "pair-cli.mjs",
+    "pairing-key.mjs",
   ]) {
     assert.match(workflow, new RegExp(`apps/kiosk/src/${module.replace(".", "\\.")}`));
   }
@@ -142,9 +152,11 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskHtml, /<main id="main">/);
   assert.match(kioskHtml, /role="status" aria-live="polite"/);
   assert.match(kioskHtml, /Fingerprint images and templates stay inside the R503 sensor/);
+  assert.match(kioskHtml, /One-time pairing key/);
   assert.match(kioskHtml, /Roster member ID/);
   assert.match(kioskApp, /roster ID/);
   assert.match(kioskStyles, /min-height:88px/);
   assert.match(kioskApp, /\/enroll/);
+  assert.match(kioskApp, /\/pair/);
   assert.doesNotMatch(kioskHtml, /https?:\/\//);
 });

@@ -24,6 +24,8 @@ test("public release notes explain visible changes and the manual upgrade path",
   const releases = await readFile("docs-site/releases.html", "utf8");
   assert.match(releases, /v0\.5\.0/);
   assert.match(releases, /v0\.7\.0/);
+  assert.match(releases, /v0\.8\.0/);
+  assert.match(releases, /remote kiosk pairing/i);
   assert.match(releases, /Verified integrations/);
   assert.match(releases, /arrival and departure/);
   assert.match(releases, /manually run/);
@@ -83,6 +85,8 @@ test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", as
   assert.match(kiosk, /kiosk-touch-ui\.png/);
   assert.match(kiosk, /800 by 480 pixels/);
   assert.match(kiosk, /class="annotated kiosk-shot"/);
+  assert.match(kiosk, /phone or laptop/);
+  assert.doesNotMatch(kiosk, /Enter the Worker API URL/);
 });
 
 test("privacy page publishes the approved collector operator, retention, access, and deletion process", async () => {

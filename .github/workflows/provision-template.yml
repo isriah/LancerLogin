@@ -46,7 +46,7 @@ jobs:
       LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
       INPUT_OPERATION: ${{ inputs.operation }}
       RELEASE_SELECTION: ${{ inputs.release }}
-      TEMPLATE_RELEASE: v0.7.0
+      TEMPLATE_RELEASE: v0.8.0
       INSTALLATION_SLUG: ${{ inputs.installation_slug }}
       INPUT_CONFIRMATION: ${{ inputs.confirmation }}
       REPOSITORY_PRIVATE: ${{ github.event.repository.private }}

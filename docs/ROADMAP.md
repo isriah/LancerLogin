@@ -12,13 +12,14 @@ Each unit ended with targeted tests, full typecheck/build gates, a focused commi
 | 8 | Guided one-task setup, local error placement, optional Discord roster data, and browser simulator | Complete; simulator is Admin-only, credential-separated, and test-meeting-only |
 | 9 | Explicit existing-installation Upgrade operation | Complete; requires all adopter resources, applies migrations, preserves data and Worker secrets |
 | 10 | Routed dashboard, top-level roster/account linking, category backups/restores/deletes, onboarding celebration, responsive containment, and manual dashboard update assistant | Complete in local/mock verification; live upgrade intentionally left for user acceptance |
-| 11 | Complete attendance sessions, rolling operations Home, organization-wide cutoff, signed Discord contests, Kiosks page, and adaptive branding | Complete locally for v0.5.0; manual adopter Upgrade acceptance pending |
+| 11 | Complete attendance sessions, rolling operations Home, organization-wide cutoff, signed Discord contests, Kiosks page, and adaptive branding | Complete; accepted through subsequent adopter upgrades |
 | Release | Guarded adopter-owned GitHub/Cloudflare provisioning, version-matched release packaging, dashboard-linked installer, accessible GitHub Pages docs, annotated dashboard/GitHub/Cloudflare/OAuth/kiosk/integration visuals | Complete; no provisioning workflow executed by this project |
-| 11 | Manual feedback-release upgrade acceptance and Raspberry Pi hardware acceptance | GitHub upgrade intentionally pending user test; physical hardware pending |
-| 12 | Public-source/private-deployment separation, release-tag selection, authenticated updater routing, and one-time first-Admin setup code | Implemented and fully verified locally; private live Create acceptance pending |
-| 13 | Recurring meetings, searchable full meeting editor, roster preview/replace, persistent dark-first theme, streamlined onboarding, release notification, and in-dashboard integration guides | Complete locally for v0.6.0; manual adopter Upgrade acceptance pending |
-| 14 | End-to-end provider verification, collapsible integration setup, latest-stable update dropdown, and prior-month calendar shading | Complete locally for v0.7.0; manual adopter Upgrade acceptance pending |
-| Future | Full kiosk-screen simulator with a roster fingerprint-event dropdown and test-attendance effects | Deferred by product decision; keep the existing setup simulator, but do not expand it in v0.7.0 |
+| 12 | Public-source/private-deployment separation, release-tag selection, authenticated updater routing, and one-time first-Admin setup code | Complete; isolated private Create and Upgrade accepted |
+| 13 | Recurring meetings, searchable full meeting editor, roster preview/replace, persistent dark-first theme, streamlined onboarding, release notification, and in-dashboard integration guides | Complete and accepted through the adopter's v0.7.0 upgrade |
+| 14 | End-to-end provider verification, collapsible integration setup, latest-stable update dropdown, and prior-month calendar shading | Complete in v0.7.0; manual dashboard upgrade accepted, provider-specific manual checks continue |
+| 15 | Primary roster directory, individual member dialog, neutral themed UI, Hex/RGB colors, self-hosted fonts, LAN-assisted one-key Pi pairing, Playwright smoke tests, and actionlint | Complete locally for v0.8.0; manual adopter Upgrade and physical pairing acceptance pending |
+| Acceptance | Raspberry Pi display/UART/R503 installation and fingerprint workflow | In progress on dedicated user hardware; do not claim complete until recorded |
+| Future | A 1:1 browser simulator built from the same kiosk screen, state transitions, and attendance logic as the physical kiosk; substitute a roster-member event control for the R503 and simulate hardware-only responses | Deferred by product decision; keep the existing setup simulator, require simulator-origin audit data, and prevent the physical and browser implementations from drifting |
 
 ## Release exclusions
 

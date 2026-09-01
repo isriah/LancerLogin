@@ -217,7 +217,7 @@ async function pairingCodes(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO pairing_codes (id, installation_id, code_hash, expires_at, created_by, created_at, purpose) VALUES (?, 'primary', ?, ?, ?, ?, ?)").bind(id, await sha256(code), expiresAt, principal.userId, now.toISOString(), purpose),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'pairing_code.created', 'pairing_code', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ kioskName, purpose, replacesKioskId: activeKiosk?.id ?? null }), now.toISOString()),
   ]);
-  return response({ code, expiresAt, kioskName }, 201);
+  return response({ code, expiresAt, kioskName, workerApiUrl: new URL(request.url).origin }, 201);
 }
 async function redeemPairingCode(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); const input = await parseJson<{ code?: string; kioskName?: string }>(request); const code = input.code?.trim().toUpperCase(); const kioskName = input.kioskName?.trim();

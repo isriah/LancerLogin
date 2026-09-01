@@ -121,6 +121,9 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
   assert.match(importer, /requestAnimationFrame/);
   assert.match(importer, /Preview roster/);
   assert.match(importer, /Replace the active roster/);
+  assert.match(roster, /Add roster member/);
+  assert.match(roster, /roster-summary-card/);
+  assert.match(roster, /open=\{importOpen\}/);
   assert.match(users, /Roster link <span>\(optional\)<\/span>/);
   assert.match(users, /Non-rostered Admin or Operator/);
   assert.doesNotMatch(shell, /\["\/setup", "Setup"\]/);
@@ -161,4 +164,26 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /Verify with Google/);
   assert.match(source, /<details className="integration-card"/);
   assert.doesNotMatch(source, /Previous credentials were replaced|\/test"/);
+});
+
+test("dashboard styling uses self-hosted typography and themed organization controls", async () => {
+  const entry = await readFile("apps/dashboard/src/main.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  const organization = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
+  assert.match(entry, /@fontsource\/bebas-neue\/latin-400\.css/);
+  assert.match(entry, /@fontsource\/roboto\/latin-700\.css/);
+  assert.match(styles, /font-family: "Bebas Neue"/);
+  assert.match(styles, /--bg: #111315/);
+  assert.match(organization, /<ColorEditor label="Primary color"/);
+  assert.match(organization, /logo-backdrop-options/);
+});
+
+test("roster dialogs trap keyboard focus and restore it when closed", async () => {
+  const helper = await readFile("apps/dashboard/src/modal-focus.ts", "utf8");
+  const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
+  const importer = await readFile("apps/dashboard/src/roster-import-panel.tsx", "utf8");
+  assert.match(helper, /event\.key !== "Tab"/);
+  assert.match(helper, /previouslyFocused\?\.focus\(\)/);
+  assert.match(roster, /useModalFocus\(dialog, open/);
+  assert.match(importer, /useModalFocus\(dialog, modal && visible/);
 });

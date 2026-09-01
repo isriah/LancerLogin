@@ -473,6 +473,23 @@ test("first integration save encrypts secrets and requires verification", async 
   assert.ok(database.calls.some((call) => call.values.includes("integration.saved")));
 });
 
+test("kiosk attendance automatically resolves the one eligible meeting from the scan time", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
+  database.rows.set("FROM members", { id: "member-1", externalId: "ROSTER-001", firstName: "Avery", lastName: "Stone" });
+  database.rows.set("starts_at <= ?", { id: "meeting-1", title: "Build session", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z" });
+  database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
+  database.lists.set("FROM attendance_events", []);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(new Request("https://api.example.test/kiosk/attendance", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ eventId: "automatic-1", memberId: "ROSTER-001", occurredAt: "2026-09-01T20:02:00.000Z" }) }), env);
+  assert.equal(result.status, 202);
+  const payload = await result.json() as { action: string; meeting: { id: string; title: string }; member: { displayName: string } };
+  assert.equal(payload.action, "check_in");
+  assert.deepEqual(payload.meeting, { id: "meeting-1", title: "Build session" });
+  assert.equal(payload.member.displayName, "Avery Stone");
+  assert.ok(database.calls.find((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events"))?.values.includes("meeting-1"));
+});
+
 test("Resend becomes configured only after an actual email and one-time code", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ apiKey: "resend-secret", fromEmail: "attendance@example.test" }, sessionSecret);

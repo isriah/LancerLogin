@@ -127,6 +127,13 @@ test("attendance client sends only identifiers and operational timestamps", asyn
   assert.deepEqual(sent, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z" });
 });
 
+test("attendance client lets the Worker resolve a meeting and treats a rejected scan as delivered", async () => {
+  let sent;
+  const result = await sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { eventId: "event-2", memberId: "member-1", occurredAt: "2026-09-01T20:00:00Z" }, { fetchImpl: async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ error: "No meeting is accepting attendance scans at this time" }), { status: 409, headers: { "content-type": "application/json" } }); } });
+  assert.deepEqual(sent, { eventId: "event-2", memberId: "member-1", occurredAt: "2026-09-01T20:00:00Z" });
+  assert.deepEqual(result, { accepted: false, rejected: true, error: "No meeting is accepting attendance scans at this time" });
+});
+
 function acknowledgement(confirmation, parameters = []) {
   const length = parameters.length + 3; const content = [0x07, length >> 8, length & 0xff, confirmation, ...parameters]; const checksum = content.reduce((sum, value) => (sum + value) & 0xffff, 0);
   return Uint8Array.from([0xef, 0x01, 0xff, 0xff, 0xff, 0xff, ...content, checksum >> 8, checksum & 0xff]);

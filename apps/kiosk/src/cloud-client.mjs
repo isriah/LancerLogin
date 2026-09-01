@@ -36,8 +36,12 @@ export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) 
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/attendance`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
-    body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, meetingId: event.meetingId, occurredAt: event.occurredAt }),
+    body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt }),
   });
+  if (response.status >= 400 && response.status < 500 && response.status !== 401 && response.status !== 403) {
+    const body = await response.json().catch(() => ({}));
+    return { accepted: false, rejected: true, error: body.error ?? "The scan was not accepted" };
+  }
   return parseResponse(response);
 }
 

@@ -399,6 +399,13 @@ test("authenticated kiosk configuration returns current display branding", async
   assert.equal((await result.json() as { settings: { organizationName: string } }).settings.organizationName, "Example Arts");
 });
 
+test("authenticated kiosk can fetch active roster labels without biometric data", async () => {
+  const database = new FakeDatabase(); database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" }); database.lists.set("SELECT external_id AS memberId", [{ memberId: "R-1", firstName: "Avery", lastName: "Stone" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(new Request("https://api.example.test/kiosk/roster", { headers: { authorization: "Bearer very-secret" } }), env);
+  assert.equal(result.status, 200); const text = await result.text(); assert.match(text, /Avery/); assert.doesNotMatch(text, /fingerprint|template|biometric/i);
+});
+
 test("Operator can create a bounded recurring meeting series", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;

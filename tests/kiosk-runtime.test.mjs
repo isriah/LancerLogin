@@ -14,6 +14,7 @@ import { createScanner } from "../apps/kiosk/src/scanner.mjs";
 import { createNetworkManager } from "../apps/kiosk/src/network-manager.mjs";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
 import { networkApp } from "../apps/kiosk/src/network-ui.mjs";
+import { maintenanceApp, maintenanceHtml } from "../apps/kiosk/src/maintenance-ui.mjs";
 
 test("pairing code is hashed, single-use, and expires", () => {
   const issued = issuePairingCode({ now: () => 0, random: () => Buffer.from("123456") });
@@ -90,6 +91,7 @@ test("tagged release archive includes every kiosk runtime module", async () => {
     "network-manager.mjs",
     "network-pin.mjs",
     "network-ui.mjs",
+    "maintenance-ui.mjs",
   ]) {
     assert.match(workflow, new RegExp(`apps/kiosk/src/${module.replace(".", "\\.")}`));
   }
@@ -151,7 +153,7 @@ test("file queue survives restart, preserves order, and removes only delivered e
 
 test("slot mappings remain local and reject malformed records", async () => {
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-mapping-")); const path = join(directory, "mappings.json");
-  try { const store = createMappingStore(path); await store.replace({ "12": "member-1" }); assert.equal(await createMappingStore(path).memberForSlot(12), "member-1"); await assert.rejects(() => store.replace({ invalid: "member-2" }), /Invalid/); } finally { await rm(directory, { recursive: true }); }
+  try { const store = createMappingStore(path); const saved = await store.replace({ "12": { memberId: "member-1", finger: "right index" } }); assert.deepEqual(saved["12"], { memberId: "member-1", finger: "right index" }); assert.equal(await createMappingStore(path).memberForSlot(12), "member-1"); await assert.rejects(() => store.replace({ invalid: "member-2" }), /Invalid/); } finally { await rm(directory, { recursive: true }); }
 });
 
 test("attendance client sends only identifiers and operational timestamps", async () => {
@@ -234,5 +236,8 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskHtml, /\/network\.js/);
   assert.match(networkApp, /setTimeout\(openNetwork,3000\)/);
   assert.match(networkApp, /touch-keyboard/);
+  assert.match(kioskApp, /\/maintenance/);
+  assert.match(maintenanceHtml, /Fingerprint maintenance/);
+  assert.match(maintenanceApp, /Begin two-scan enrollment|\/enroll/);
   assert.doesNotMatch(kioskHtml, /https?:\/\//);
 });

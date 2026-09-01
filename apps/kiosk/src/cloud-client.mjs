@@ -37,6 +37,11 @@ export async function fetchKioskConfiguration(config, { fetchImpl = fetch } = {}
   return parseResponse(response);
 }
 
+export async function fetchKioskRoster(config, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/roster`, { headers: { authorization: `Bearer ${config.kioskToken}` } });
+  return parseResponse(response);
+}
+
 export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) {
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/attendance`, {
     method: "POST",

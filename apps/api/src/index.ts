@@ -260,6 +260,10 @@ async function kioskConfiguration(request: Request, env: Env): Promise<Response>
   const kiosk = await kioskFor(request, env); const settings = await requireDatabase(env).prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop FROM organization_settings WHERE installation_id = 'primary'").first();
   return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings });
 }
+async function kioskRoster(request: Request, env: Env): Promise<Response> {
+  await kioskFor(request, env); const result = await requireDatabase(env).prepare("SELECT external_id AS memberId, first_name AS firstName, last_name AS lastName FROM members WHERE installation_id = 'primary' AND active = 1 ORDER BY last_name, first_name").all();
+  return response({ members: result.results ?? [] });
+}
 async function manageKiosk(request: Request, env: Env, kioskId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   const kiosk = await db.prepare("SELECT id, name, active FROM kiosks WHERE installation_id = 'primary' AND id = ?").bind(kioskId).first<{ id: string; name: string; active: number }>();
@@ -1022,6 +1026,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env, context);
     else if (url.pathname === "/kiosk/config" && request.method === "GET") result = await kioskConfiguration(request, env);
+    else if (url.pathname === "/kiosk/roster" && request.method === "GET") result = await kioskRoster(request, env);
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);
     else result = response({ error: "Not found" }, 404);
   } catch (error) {

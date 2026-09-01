@@ -33,10 +33,10 @@ test("dashboard shell includes baseline accessibility and escapes branding", () 
   assert.doesNotMatch(html, /People/);
 });
 
-test("live Admin workspace uses the authorized kiosk route and hides a completed checklist", async () => {
+test("live Admin workspace uses the authorized kiosk route and exits completed onboarding", async () => {
   const source = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
   assert.match(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/admin\/kiosks"\)/);
-  assert.match(source, /setShowChecklist\(completedSet\.size < steps\.length\)/);
+  assert.match(source, /Finish and return to dashboard/);
   assert.doesNotMatch(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/kiosks"\)/);
   assert.match(source, /releases\/latest\/download\/install-lancerlogin\.sh/);
   assert.match(source, /Download guided Pi installer/);
@@ -60,7 +60,7 @@ test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", 
   assert.match(source, /Allow anonymous usage reporting/);
 });
 
-test("live branding stores an image locally and applies organization colors and appearance", async () => {
+test("live branding stores an image locally and applies colors with a browser theme preference", async () => {
   const workspace = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
   const entry = await readFile("apps/dashboard/src/main.tsx", "utf8");
   const settings = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
@@ -68,9 +68,10 @@ test("live branding stores an image locally and applies organization colors and 
   assert.match(workspace, /file\.size > 131_072/);
   assert.match(workspace, /stored in D1/);
   assert.match(entry, /brandTheme\(branding\.primaryColor, branding\.secondaryColor\)/);
-  assert.match(entry, /data-theme=\{appearance\}/);
+  assert.match(entry, /data-theme=\{theme\}/);
+  assert.match(entry, /lancerlogin-theme/);
   assert.match(workspace, /Logo contrast/);
-  assert.match(settings, /Organization and appearance/);
+  assert.match(settings, /id="organization-title">Organization/);
   assert.match(settings, /Save organization settings/);
   assert.match(settings, /Late scan allowance/);
   assert.match(settings, /individual meetings cannot override it/);
@@ -86,11 +87,12 @@ test("Operator workspace exposes kiosk monitoring and the complete Discord atten
   assert.match(source, /\/discord\/link/);
   assert.match(source, /\/discord\/contests\?meetingId=/);
   assert.match(source, /\/discord\/contests\/resolve/);
-  assert.match(meetings, /\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}/);
+  assert.match(meetings, /\/meetings\/\$\{encodeURIComponent\(editing\.id\)\}/);
   assert.match(source, /Kiosk meeting ID/);
   assert.match(source, /Copy ID/);
-  assert.match(meetings, /Meeting notes \(optional, up to 2,000 characters\)/);
-  assert.match(meetings, /Require attendance\? Enter yes or no/);
+  assert.match(meetings, /Notes <span>\(optional\)<\/span>/);
+  assert.match(meetings, /Attendance required/);
+  assert.match(meetings, /Create recurring series/);
 });
 
 test("data controls expose separate backup, restore, and deletion per category", async () => {
@@ -109,13 +111,16 @@ test("data controls expose separate backup, restore, and deletion per category",
 test("dashboard uses distinct routes and keeps roster accounts together", async () => {
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
+  const importer = await readFile("apps/dashboard/src/roster-import-panel.tsx", "utf8");
   const users = await readFile("apps/dashboard/src/user-settings.tsx", "utf8");
   for (const route of ["/dashboard", "/meetings", "/attendance", "/reports", "/roster", "/kiosks", "/settings/data", "/settings/updates"]) {
     assert.match(shell, new RegExp(route.replaceAll("/", "\\/")));
   }
-  assert.match(roster, /Dashboard access/);
-  assert.match(roster, /id="roster-import-errors" className="inline-messages error" role="alert"/);
-  assert.match(roster, /requestAnimationFrame/);
+  assert.match(users, /Dashboard access/);
+  assert.match(importer, /id="roster-import-errors" className="inline-messages error" role="alert"/);
+  assert.match(importer, /requestAnimationFrame/);
+  assert.match(importer, /Preview roster/);
+  assert.match(importer, /Replace the active roster/);
   assert.match(users, /Roster link <span>\(optional\)<\/span>/);
   assert.match(users, /Non-rostered Admin or Operator/);
   assert.doesNotMatch(shell, /\["\/setup", "Setup"\]/);
@@ -125,8 +130,10 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
 test("home shows a five-week rolling calendar, live attendance, and contest review", async () => {
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
   assert.match(home, /length: 35/);
-  assert.match(home, /Last week through the next three weeks/);
+  assert.doesNotMatch(home, /Last week through the next three weeks/);
   assert.match(home, /Meetings in progress/);
+  assert.match(home, /active\.length > 0.*live-pill/);
+  assert.match(home, /Date\.parse\(meeting\.endsAt\) >= now/);
   assert.match(home, /Active · not checked out/);
   assert.match(home, /Attendance contests/);
   assert.match(home, /reviewNote/);

@@ -54,7 +54,7 @@ try {
   }, null, 2)}\n`, { mode: 0o600 });
 
   await runWrangler(["d1", "migrations", "apply", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory]);
-  const output = await runWrangler(["d1", "execute", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory, "--json", "--command", "SELECT name FROM d1_migrations ORDER BY id; SELECT name, sql FROM sqlite_master WHERE name IN ('organization_settings', 'kiosks', 'meetings', 'pairing_codes', 'simulated_kiosk_sessions', 'users', 'idx_one_user_per_member', 'idx_meetings_series', 'attendance_events', 'discord_attendance_notifications', 'discord_attendance_recipients') ORDER BY name;"], { json: true });
+  const output = await runWrangler(["d1", "execute", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory, "--json", "--command", "SELECT name FROM d1_migrations ORDER BY id; SELECT name, sql FROM sqlite_master WHERE name IN ('organization_settings', 'kiosks', 'meetings', 'pairing_codes', 'simulated_kiosk_sessions', 'users', 'idx_one_user_per_member', 'idx_meetings_series', 'attendance_events', 'encrypted_integrations', 'integration_verification_challenges', 'idx_integration_verification_expiry', 'discord_attendance_notifications', 'discord_attendance_recipients') ORDER BY name;"], { json: true });
   const result = JSON.parse(output);
   const applied = result[0]?.results?.map((row) => row.name) ?? [];
   const expected = (await readdir(migrationsDirectory)).filter((name) => /^\d+_.+\.sql$/.test(name)).sort();
@@ -71,6 +71,8 @@ try {
   if (!usersSql.includes("member_id") || !memberUserIndexSql.includes("member_id")) throw new Error("Final D1 schema is missing the optional one-to-one roster account link");
   const attendanceSql = schema.get("attendance_events") ?? ""; const notificationSql = schema.get("discord_attendance_notifications") ?? ""; const recipientSql = schema.get("discord_attendance_recipients") ?? "";
   if (!brandingSql.includes("late_scan_minutes") || !brandingSql.includes("logo_backdrop") || !attendanceSql.includes("check_out") || !notificationSql.includes("message_id") || !recipientSql.includes("discord_user_id")) throw new Error("Final D1 schema is missing attendance lifecycle or durable Discord notification fields");
+  const integrationSql = schema.get("encrypted_integrations") ?? ""; const challengeSql = schema.get("integration_verification_challenges") ?? ""; const challengeIndexSql = schema.get("idx_integration_verification_expiry") ?? "";
+  if (!integrationSql.includes("verified_at") || !challengeSql.includes("challenge_hash") || !challengeSql.includes("expires_at") || !challengeIndexSql.includes("expires_at")) throw new Error("Final D1 schema is missing integration verification state or expiry index");
   const migrationText = (await Promise.all(expected.map((name) => readFile(join(migrationsDirectory, name), "utf8")))).join("\n");
   if (/fingerprint_template|raw_fingerprint|biometric_template/i.test(migrationText)) throw new Error("D1 migrations violate the biometric storage boundary");
   console.log(`Verified ${applied.length} D1 migration(s) on a fresh local database: ${applied.join(", ")}`);

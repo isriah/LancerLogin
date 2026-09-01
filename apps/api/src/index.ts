@@ -123,7 +123,7 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
     const encrypted = await encryptIntegration({ clientId: input.googleClientId!.trim(), clientSecret: input.googleClientSecret!.trim() }, env.INTEGRATION_KEY!);
     statements.push(
       db.prepare("INSERT INTO encrypted_integrations (id, installation_id, provider, ciphertext, iv, updated_at) VALUES (?, 'primary', 'google', ?, ?, ?)").bind(crypto.randomUUID(), encrypted.ciphertext, encrypted.iv, now),
-      db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, 'primary', ?, 'integration.configured', 'integration', 'google', ?)").bind(crypto.randomUUID(), adminId, now),
+      db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, 'primary', ?, 'integration.saved', 'integration', 'google', ?)").bind(crypto.randomUUID(), adminId, now),
     );
   }
   await db.batch(statements);
@@ -433,14 +433,15 @@ function validateIntegration(provider: IntegrationProvider, input: Record<string
   if (provider === "discord" && !/^[0-9a-f]{64}$/i.test(output.publicKey)) throw new HttpError(400, "Discord public key must contain 64 hexadecimal characters");
   return output;
 }
-async function integrationRecord(env: Env, provider: IntegrationProvider): Promise<{ id: string; ciphertext: string; iv: string; updatedAt: string } | null> {
-  return requireDatabase(env).prepare("SELECT id, ciphertext, iv, updated_at AS updatedAt FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider).first();
+type IntegrationRecord = { id: string; ciphertext: string; iv: string; updatedAt: string; verifiedAt?: string | null };
+async function integrationRecord(env: Env, provider: IntegrationProvider): Promise<IntegrationRecord | null> {
+  return requireDatabase(env).prepare("SELECT id, ciphertext, iv, updated_at AS updatedAt, verified_at AS verifiedAt FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider).first();
 }
 async function integrationsStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
-  const result = await requireDatabase(env).prepare("SELECT provider, updated_at AS updatedAt FROM encrypted_integrations WHERE installation_id = 'primary' ORDER BY provider").all<{ provider: IntegrationProvider; updatedAt: string }>();
-  const configured = new Map((result.results ?? []).map((item) => [item.provider, item.updatedAt]));
-  return response({ integrations: [...integrationProviders].map((provider) => ({ provider, configured: configured.has(provider), updatedAt: configured.get(provider) })) });
+  const result = await requireDatabase(env).prepare("SELECT i.provider, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, EXISTS(SELECT 1 FROM integration_verification_challenges c WHERE c.installation_id = i.installation_id AND c.provider = i.provider AND c.expires_at > ?) AS verificationPending FROM encrypted_integrations i WHERE i.installation_id = 'primary' ORDER BY i.provider").bind(new Date().toISOString()).all<{ provider: IntegrationProvider; updatedAt: string; verifiedAt?: string | null; verificationPending: number }>();
+  const saved = new Map((result.results ?? []).map((item) => [item.provider, item]));
+  return response({ integrations: [...integrationProviders].map((provider) => { const item = saved.get(provider); return { provider, saved: Boolean(item), configured: Boolean(item?.verifiedAt), state: !item ? "not_configured" : item.verifiedAt ? "configured" : "verification_required", updatedAt: item?.updatedAt, verifiedAt: item?.verifiedAt ?? undefined, verificationPending: Boolean(item?.verificationPending) }; }) });
 }
 async function integrationConfiguration(request: Request, env: Env, provider: IntegrationProvider): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -449,25 +450,41 @@ async function integrationConfiguration(request: Request, env: Env, provider: In
       const installation = await db.prepare("SELECT auth_mode AS authMode FROM installations WHERE id = 'primary'").first<{ authMode: AuthMode }>();
       if (installation?.authMode === "google") throw new HttpError(409, "Google OAuth is the only enabled sign-in method and cannot be removed");
     }
-    await db.prepare("DELETE FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider).run();
+    await db.batch([db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare("DELETE FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider), ...(provider === "google" ? [db.prepare("UPDATE installations SET auth_mode = 'local' WHERE id = 'primary' AND auth_mode = 'both'")] : [])]);
     await writeAudit(db, principal, "integration.removed", "integration", provider); return response({ configured: false, provider });
   }
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
-  const secret = validateIntegration(provider, await parseJson<Record<string, unknown>>(request)); const encrypted = await encryptIntegration(secret, env.INTEGRATION_KEY); const now = new Date().toISOString();
-  await db.prepare("INSERT INTO encrypted_integrations (id, installation_id, provider, ciphertext, iv, updated_at) VALUES (?, 'primary', ?, ?, ?, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET ciphertext = excluded.ciphertext, iv = excluded.iv, key_version = key_version + 1, updated_at = excluded.updated_at")
-    .bind(crypto.randomUUID(), provider, encrypted.ciphertext, encrypted.iv, now).run();
-  await writeAudit(db, principal, "integration.rotated", "integration", provider); return response({ configured: true, provider, updatedAt: now });
+  const existing = await integrationRecord(env, provider); const secret = validateIntegration(provider, await parseJson<Record<string, unknown>>(request)); const encrypted = await encryptIntegration(secret, env.INTEGRATION_KEY); const now = new Date().toISOString();
+  await db.batch([
+    db.prepare("INSERT INTO encrypted_integrations (id, installation_id, provider, ciphertext, iv, verified_at, updated_at) VALUES (?, 'primary', ?, ?, ?, NULL, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET ciphertext = excluded.ciphertext, iv = excluded.iv, verified_at = NULL, key_version = key_version + 1, updated_at = excluded.updated_at").bind(crypto.randomUUID(), provider, encrypted.ciphertext, encrypted.iv, now),
+    db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider),
+  ]);
+  if (provider === "google") await db.prepare("UPDATE installations SET auth_mode = CASE WHEN auth_mode = 'local' THEN 'both' ELSE auth_mode END WHERE id = 'primary'").run();
+  await writeAudit(db, principal, existing ? "integration.rotated" : "integration.saved", "integration", provider); return response({ saved: true, configured: false, created: !existing, provider, state: "verification_required", updatedAt: now });
 }
-async function testIntegration(request: Request, env: Env, provider: IntegrationProvider): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
-  const record = await integrationRecord(env, provider); if (!record) throw new HttpError(404, "Integration is not configured");
-  const secret = await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY); let result: globalThis.Response;
-  if (provider === "google") result = await fetch("https://accounts.google.com/.well-known/openid-configuration", { headers: { accept: "application/json" } });
-  else if (provider === "resend") result = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${secret.apiKey}`, "content-type": "application/json" }, body: JSON.stringify({ from: secret.fromEmail, subject: "LancerLogin connection test", text: "Connection test" }) });
-  else result = await fetch("https://discord.com/api/v10/users/@me", { headers: { authorization: `Bot ${secret.botToken}`, accept: "application/json" } });
-  const ok = result.ok || (provider === "resend" && result.status === 422); await writeAudit(requireDatabase(env), principal, "integration.tested", "integration", provider, { ok, status: result.status });
-  if (!ok) throw new HttpError(502, `${provider} rejected the saved configuration`);
-  return response({ provider, ok: true, testedAt: new Date().toISOString() });
+async function markIntegrationVerified(db: D1Database, provider: IntegrationProvider, actorUserId: string | null, metadata: Record<string, unknown> = {}) {
+  const now = new Date().toISOString(); await db.batch([
+    db.prepare("UPDATE encrypted_integrations SET verified_at = ? WHERE installation_id = 'primary' AND provider = ?").bind(now, provider),
+    db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'integration.verified', 'integration', ?, ?, ?)").bind(crypto.randomUUID(), actorUserId, provider, JSON.stringify(metadata), now),
+  ]); return now;
+}
+async function startResendVerification(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ email?: string }>(request); const target = input.email?.trim().toLowerCase();
+  if (!target || !validEmail(target)) throw new HttpError(400, "Enter a valid email address that you can open now");
+  if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured"); const record = await integrationRecord(env, "resend"); if (!record) throw new HttpError(404, "Save Resend credentials before verification"); const secret = await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
+  const digits = crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000; const code = digits.toString().padStart(6, "0"); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
+  const result = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${secret.apiKey}`, "content-type": "application/json", "idempotency-key": `lancerlogin-verify-${crypto.randomUUID()}` }, body: JSON.stringify({ from: secret.fromEmail, to: [target], subject: "Your LancerLogin verification code", text: `Your LancerLogin verification code is ${code}. It expires in 10 minutes.`, html: `<p>Your LancerLogin verification code is:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>It expires in 10 minutes.</p>` }) });
+  if (!result.ok) throw new HttpError(502, "Resend could not deliver the verification email"); const body = await result.json().catch(() => ({})) as { id?: string };
+  await db.prepare("INSERT INTO integration_verification_challenges (installation_id, provider, challenge_hash, target, external_id, expires_at, created_by, created_at) VALUES ('primary', 'resend', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET challenge_hash = excluded.challenge_hash, target = excluded.target, external_id = excluded.external_id, expires_at = excluded.expires_at, created_by = excluded.created_by, created_at = excluded.created_at").bind(await sha256(code), target, body.id ?? null, expiresAt, principal.userId, now.toISOString()).run();
+  await writeAudit(db, principal, "integration.verification_started", "integration", "resend", { target, deliveryId: body.id ?? null }); return response({ provider: "resend", verificationPending: true, expiresAt, target }, 202);
+}
+async function completeResendVerification(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ code?: string }>(request); const code = input.code?.trim();
+  if (!code || !/^\d{6}$/.test(code)) throw new HttpError(400, "Enter the six-digit code from the verification email");
+  const challenge = await db.prepare("SELECT challenge_hash AS challengeHash, target, expires_at AS expiresAt FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = 'resend'").first<{ challengeHash: string; target: string; expiresAt: string }>();
+  if (!challenge || challenge.expiresAt <= new Date().toISOString() || challenge.challengeHash !== await sha256(code)) throw new HttpError(400, "The verification code is invalid or expired");
+  const verifiedAt = await markIntegrationVerified(db, "resend", principal.userId, { target: challenge.target }); return response({ provider: "resend", configured: true, state: "configured", verifiedAt });
 }
 async function googleCredentials(env: Env): Promise<Record<string, string>> {
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
@@ -479,15 +496,20 @@ function googleRedirectUri(env: Env): string {
   if (origin.protocol !== "https:" || origin.origin !== env.ALLOWED_ORIGIN) throw new HttpError(503, "Public dashboard origin is invalid");
   return `${origin.origin}/api/auth/google/callback`;
 }
-async function googleStart(_request: Request, env: Env): Promise<Response> {
+async function googleStart(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
+  const verification = new URL(request.url).searchParams.get("verify") === "1";
+  if (verification) await requireRole(request, env, ["admin"]);
   const installation = await requireDatabase(env).prepare("SELECT auth_mode AS authMode FROM installations WHERE id = 'primary'").first<{ authMode: AuthMode }>();
   if (!installation || !["google", "both"].includes(installation.authMode)) throw new HttpError(404, "Google sign-in is not enabled");
   const credentials = await googleCredentials(env); const redirectUri = googleRedirectUri(env);
   const state = await createSessionCodec(env.SESSION_KEY).issue({ userId: crypto.randomUUID(), role: "operator" }, 10 * 60_000);
   const target = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   target.search = new URLSearchParams({ client_id: credentials.clientId, redirect_uri: redirectUri, response_type: "code", scope: "openid email profile", state, prompt: "select_account" }).toString();
-  return new Response(null, { status: 302, headers: { location: target.toString(), "cache-control": "no-store", "set-cookie": `lancerlogin_oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600` } });
+  const headers = new Headers({ location: target.toString(), "cache-control": "no-store" });
+  headers.append("set-cookie", `lancerlogin_oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`);
+  if (verification) headers.append("set-cookie", "lancerlogin_oauth_verify=1; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600");
+  return new Response(null, { status: 302, headers });
 }
 async function googleCallback(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
@@ -501,10 +523,13 @@ async function googleCallback(request: Request, env: Env): Promise<Response> {
   if (!validationResponse.ok || profile.aud !== credentials.clientId || profile.email_verified !== "true" || !profile.email || !["https://accounts.google.com", "accounts.google.com"].includes(profile.iss ?? "")) throw new HttpError(401, "Google identity validation failed");
   const user = await requireDatabase(env).prepare("SELECT id, role FROM users WHERE installation_id = 'primary' AND email = ? AND active = 1").bind(profile.email.toLowerCase()).first<{ id: string; role: Role }>();
   if (!user) throw new HttpError(403, "This Google account is not an active LancerLogin user");
+  await markIntegrationVerified(requireDatabase(env), "google", user.id, { email: profile.email.toLowerCase() });
   const session = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role });
-  const headers = new Headers({ location: env.ALLOWED_ORIGIN, "cache-control": "no-store" });
+  const verification = cookie(request, "lancerlogin_oauth_verify") === "1";
+  const headers = new Headers({ location: verification ? `${env.ALLOWED_ORIGIN}/settings/integrations?verified=google` : env.ALLOWED_ORIGIN, "cache-control": "no-store" });
   headers.append("set-cookie", `lancerlogin_session=${session}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`);
   headers.append("set-cookie", "lancerlogin_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
+  headers.append("set-cookie", "lancerlogin_oauth_verify=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
   return new Response(null, { status: 302, headers });
 }
 async function users(request: Request, env: Env): Promise<Response> {
@@ -550,6 +575,7 @@ function html(value: unknown): string { return String(value ?? "").replaceAll("&
 async function resendConfiguration(env: Env): Promise<Record<string, string>> {
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const record = await integrationRecord(env, "resend"); if (!record) throw new HttpError(503, "Resend is not configured");
+  if (!record.verifiedAt) throw new HttpError(503, "Resend verification is required before sending attendance email");
   return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
 }
 async function sendAttendanceEmail(request: Request, env: Env): Promise<Response> {
@@ -577,9 +603,10 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
   if (!delivery.ok) throw new HttpError(502, "Resend rejected the email");
   return response({ sent: true, kind: input.kind, memberId: member.id }, 202);
 }
-async function discordConfiguration(env: Env): Promise<Record<string, string>> {
+async function discordConfiguration(env: Env, allowUnverified = false): Promise<Record<string, string>> {
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const record = await integrationRecord(env, "discord"); if (!record) throw new HttpError(503, "Discord is not configured");
+  if (!allowUnverified && !record.verifiedAt) throw new HttpError(503, "Discord verification is required before using attendance workflows");
   return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
 }
 async function discordRequest(config: Record<string, string>, path: string, init: RequestInit): Promise<{ response: globalThis.Response; body: Record<string, unknown> }> {
@@ -587,6 +614,18 @@ async function discordRequest(config: Record<string, string>, path: string, init
   const body = await result.json().catch(() => ({})) as Record<string, unknown>;
   if (!result.ok) throw new HttpError(502, `Discord rejected the request (${result.status})`);
   return { response: result, body };
+}
+async function startDiscordVerification(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env, true);
+  await discordRequest(config, "/users/@me", { method: "GET" });
+  await discordRequest(config, `/guilds/${encodeURIComponent(config.guildId)}`, { method: "GET" });
+  const challenge = randomToken(24); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
+  const payload = { content: "LancerLogin is ready to verify this server and attendance channel. An Admin should click the button below within 10 minutes.", allowed_mentions: { parse: [] }, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Verify LancerLogin", custom_id: `lancerlogin-verify:${challenge}` }] }] };
+  const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }); const messageId = String(body.id ?? "");
+  if (!messageId) throw new HttpError(502, "Discord did not return a verification message identifier");
+  await db.prepare("INSERT INTO integration_verification_challenges (installation_id, provider, challenge_hash, target, external_id, expires_at, created_by, created_at) VALUES ('primary', 'discord', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET challenge_hash = excluded.challenge_hash, target = excluded.target, external_id = excluded.external_id, expires_at = excluded.expires_at, created_by = excluded.created_by, created_at = excluded.created_at").bind(await sha256(challenge), config.guildId, messageId, expiresAt, principal.userId, now.toISOString()).run();
+  await writeAudit(db, principal, "integration.verification_started", "integration", "discord", { guildId: config.guildId, channelId: config.channelId, messageId });
+  return response({ provider: "discord", verificationPending: true, expiresAt, messageId }, 202);
 }
 async function linkDiscordMember(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ memberId?: string; discordUserId?: string | null }>(request);
@@ -668,14 +707,24 @@ async function verifyDiscordInteraction(request: Request, config: Record<string,
 }
 const discordEphemeral = (content: string) => response({ type: 4, data: { content, flags: 64 } });
 async function discordInteraction(request: Request, env: Env): Promise<Response> {
-  const config = await discordConfiguration(env); const raw = await request.text();
+  const config = await discordConfiguration(env, true); const raw = await request.text();
   if (!await verifyDiscordInteraction(request, config, raw)) throw new HttpError(401, "Discord interaction signature is invalid");
-  let interaction: { type?: number; data?: { custom_id?: string }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
+  let interaction: { type?: number; guild_id?: string; data?: { custom_id?: string }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
   try { interaction = JSON.parse(raw); } catch { throw new HttpError(400, "Discord interaction body is invalid"); }
   if (interaction.type === 1) return response({ type: 1 });
-  const customId = interaction.data?.custom_id ?? ""; const meetingId = customId.startsWith("lancerlogin-attendance:") ? customId.slice("lancerlogin-attendance:".length) : ""; const discordUserId = interaction.member?.user?.id ?? interaction.user?.id; const messageId = interaction.message?.id;
+  const customId = interaction.data?.custom_id ?? ""; const discordUserId = interaction.member?.user?.id ?? interaction.user?.id; const messageId = interaction.message?.id; const db = requireDatabase(env);
+  if (interaction.type === 3 && customId.startsWith("lancerlogin-verify:") && discordUserId && messageId) {
+    const token = customId.slice("lancerlogin-verify:".length);
+    const challenge = await db.prepare("SELECT challenge_hash AS challengeHash, target, external_id AS externalId, expires_at AS expiresAt FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = 'discord'").first<{ challengeHash: string; target: string; externalId: string; expiresAt: string }>();
+    if (!challenge || challenge.expiresAt <= new Date().toISOString() || challenge.challengeHash !== await sha256(token) || challenge.externalId !== messageId || challenge.target !== interaction.guild_id) return discordEphemeral("This LancerLogin verification request is invalid or expired. Start verification again from the dashboard.");
+    await markIntegrationVerified(db, "discord", null, { discordUserId, guildId: interaction.guild_id, messageId });
+    return discordEphemeral("LancerLogin is verified. You can return to the dashboard.");
+  }
+  const record = await integrationRecord(env, "discord");
+  if (!record?.verifiedAt) return discordEphemeral("This LancerLogin Discord integration has not been verified by an Admin.");
+  const meetingId = customId.startsWith("lancerlogin-attendance:") ? customId.slice("lancerlogin-attendance:".length) : "";
   if (interaction.type !== 3 || !meetingId || !discordUserId || !messageId) return discordEphemeral("This attendance contest button is invalid or expired. Ask an Operator for help.");
-  const db = requireDatabase(env); const recipient = await db.prepare("SELECT r.member_id AS memberId FROM discord_attendance_recipients r JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE r.installation_id = 'primary' AND r.meeting_id = ? AND r.message_id = ? AND r.discord_user_id = ? AND m.discord_user_id = ? AND m.active = 1").bind(meetingId, messageId, discordUserId, discordUserId).first<{ memberId: string }>();
+  const recipient = await db.prepare("SELECT r.member_id AS memberId FROM discord_attendance_recipients r JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE r.installation_id = 'primary' AND r.meeting_id = ? AND r.message_id = ? AND r.discord_user_id = ? AND m.discord_user_id = ? AND m.active = 1").bind(meetingId, messageId, discordUserId, discordUserId).first<{ memberId: string }>();
   if (!recipient) return discordEphemeral("This absence notice was not delivered for your linked roster account. Ask an Operator for help.");
   if (!(await linkedAbsentMembers(db, meetingId)).some((member) => member.id === recipient.memberId)) return discordEphemeral("Attendance no longer shows you as absent, so no contest was created.");
   const now = new Date().toISOString(); await db.prepare("INSERT OR IGNORE INTO discord_attendance_contests (installation_id, meeting_id, member_id, message_id, status, created_at, submitted_by_discord_user_id) VALUES ('primary', ?, ?, ?, 'open', ?, ?)").bind(meetingId, recipient.memberId, messageId, now, discordUserId).run();
@@ -757,7 +806,7 @@ const tableColumns = {
   pairing_codes: ["id", "installation_id", "code_hash", "expires_at", "redeemed_at", "created_by", "created_at", "purpose"],
   kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version"],
   simulated_kiosk_sessions: ["installation_id", "pairing_code_id", "name", "active", "online", "last_seen_at", "created_by", "created_at"],
-  encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at"],
+  encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at", "verified_at"],
   integration_deliveries: ["id", "installation_id", "provider", "delivery_key", "status", "external_id", "created_at", "updated_at"],
   integration_state: ["installation_id", "provider", "state_key", "external_id", "content_hash", "updated_at"],
   discord_attendance_notifications: ["installation_id", "meeting_id", "status", "message_id", "attempts", "last_error", "processed_at", "updated_at"],
@@ -786,12 +835,12 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 3, scope, exportedAt, tables: Object.fromEntries(entries) };
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 3 });
+  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 4, scope, exportedAt, tables: Object.fromEntries(entries) };
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 4 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
   organization_settings: tableColumns.organization_settings.slice(0, -2),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
@@ -802,14 +851,14 @@ const legacyMeetingTables = meetingTables.filter((table) => table !== "discord_a
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
-  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3;
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4;
   const sourceTables = value.tables;
   const requiredTables = schemaVersion === 1 ? legacyTablesForScope(scope) : tablesForScope(scope);
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -4) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : tableColumns[table];
+    const columns = schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -4) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
@@ -817,6 +866,7 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   const tables = Object.fromEntries((Object.keys(tableColumns) as BackupTable[]).map((table) => [table, [] as Record<string, unknown>[]])) as Record<BackupTable, Record<string, unknown>[]>;
   for (const table of requiredTables) tables[table] = (sourceTables[table] as Record<string, unknown>[]).map((row) => ({ ...row }));
   if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", ...row }));
+  if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
   if (tables.meetings) tables.meetings = tables.meetings.map((row) => {
     const normalized: Record<string, unknown> = { series_id: null, recurrence_frequency: null, recurrence_until: null, recurrence_sequence: null, ...row };
     if (normalized.ends_at !== null) return normalized;
@@ -913,7 +963,9 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/exports/attendance.csv" && request.method === "GET") result = await attendanceExport(request, env);
     else if (url.pathname === "/admin/integrations" && request.method === "GET") result = await integrationsStatus(request, env);
     else if (/^\/admin\/integrations\/(google|resend|discord)$/.test(url.pathname) && ["PUT", "DELETE"].includes(request.method)) result = await integrationConfiguration(request, env, providerFrom(url.pathname));
-    else if (/^\/admin\/integrations\/(google|resend|discord)\/test$/.test(url.pathname) && request.method === "POST") result = await testIntegration(request, env, providerFrom(url.pathname));
+    else if (url.pathname === "/admin/integrations/resend/verify/start" && request.method === "POST") result = await startResendVerification(request, env);
+    else if (url.pathname === "/admin/integrations/resend/verify/complete" && request.method === "POST") result = await completeResendVerification(request, env);
+    else if (url.pathname === "/admin/integrations/discord/verify/start" && request.method === "POST") result = await startDiscordVerification(request, env);
     else if (url.pathname === "/admin/users" && ["GET", "POST"].includes(request.method)) result = await users(request, env);
     else if (/^\/admin\/users\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateUser(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/communications/email" && request.method === "POST") result = await sendAttendanceEmail(request, env);

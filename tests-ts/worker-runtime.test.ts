@@ -134,7 +134,7 @@ test("Google-only bootstrap encrypts OAuth credentials before the first sign-in"
   const integration = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO encrypted_integrations"));
   assert.ok(integration);
   assert.equal(integration.values.some((value) => String(value).includes("google-client-secret")), false);
-  assert.ok(database.batches[0].some((statement) => statement.sql.includes("integration.configured")));
+  assert.ok(database.batches[0].some((statement) => statement.sql.includes("integration.saved")));
   assert.equal((await result.text()).includes("google-client-secret"), false);
 });
 
@@ -333,7 +333,7 @@ test("kiosk heartbeats maintain one idempotent Discord status message and schedu
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: new Date().toISOString(), readerOnline: 1, releaseVersion: "0.1.3" });
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; const outbound: Array<{ input: string; init?: RequestInit }> = [];
   globalThis.fetch = async (input, init) => { outbound.push({ input: String(input), init }); return new Response(JSON.stringify({ id: "message-1" }), { headers: { "content-type": "application/json" } }); };
@@ -447,17 +447,69 @@ test("attendance export is authenticated, quoted, and safe to open in spreadshee
   assert.match(exportQuery?.sql ?? "", /e\.action = 'check_out'/);
 });
 
-test("integration rotation encrypts secrets and returns only redacted status", async () => {
+test("first integration save encrypts secrets and requires verification", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/admin/integrations/resend", { apiKey: "re_super_secret", fromEmail: "attendance@example.test" }, { method: "PUT", cookie: await sessionCookie("admin") }), env);
   assert.equal(result.status, 200);
   const text = await result.text();
   assert.equal(text.includes("re_super_secret"), false);
-  const saved = database.calls.find((call) => call.sql.includes("INSERT INTO encrypted_integrations"));
+  const saved = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO encrypted_integrations"));
   assert.ok(saved);
   assert.equal(saved.values.some((value) => String(value).includes("re_super_secret")), false);
-  assert.ok(database.calls.some((call) => call.values.includes("integration.rotated")));
+  assert.deepEqual(await new Response(text).json(), { saved: true, configured: false, created: true, provider: "resend", state: "verification_required", updatedAt: JSON.parse(text).updatedAt });
+  assert.ok(database.calls.some((call) => call.values.includes("integration.saved")));
+});
+
+test("Resend becomes configured only after an actual email and one-time code", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ apiKey: "resend-secret", fromEmail: "attendance@example.test" }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "resend-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: null });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let outbound: RequestInit | undefined;
+  globalThis.fetch = async (_input, init) => { outbound = init; return new Response(JSON.stringify({ id: "verification-email-1" }), { headers: { "content-type": "application/json" } }); };
+  try {
+    const started = await worker.fetch(request("/admin/integrations/resend/verify/start", { email: "admin@example.test" }, { cookie: await sessionCookie("admin") }), env);
+    assert.equal(started.status, 202);
+    const publicResult = JSON.stringify(await started.json());
+    const email = JSON.parse(String(outbound?.body)); const code = String(email.text).match(/\b\d{6}\b/)?.[0];
+    assert.ok(code); assert.equal(publicResult.includes(code), false); assert.deepEqual(email.to, ["admin@example.test"]);
+    const challengeWrite = database.calls.find((call) => call.sql.includes("INSERT INTO integration_verification_challenges"));
+    assert.ok(challengeWrite); assert.equal(challengeWrite.values[0], createHash("sha256").update(code).digest("base64url")); assert.equal(challengeWrite.values.includes(code), false);
+    database.rows.set("FROM integration_verification_challenges", { challengeHash: challengeWrite.values[0], target: "admin@example.test", expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    const completed = await worker.fetch(request("/admin/integrations/resend/verify/complete", { code }, { cookie: await sessionCookie("admin") }), env);
+    assert.equal(completed.status, 200); assert.equal((await completed.json() as { configured: boolean }).configured, true);
+    assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("UPDATE encrypted_integrations SET verified_at")));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("saved but unverified Resend credentials cannot send attendance email", async () => {
+  const database = new FakeDatabase(); const encrypted = await encryptIntegration({ apiKey: "resend-secret", fromEmail: "attendance@example.test" }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "resend-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: null });
+  database.rows.set("FROM members", { id: "member-1", firstName: "Avery", lastName: "Stone", email: "avery@example.test" }); database.rows.set("FROM meetings", { id: "meeting-1", title: "Studio", startsAt: "2026-09-01T20:00:00Z" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/communications/email", { kind: "missed-meeting", memberId: "member-1", meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 503); assert.match((await result.json() as { error: string }).error, /verification is required/);
+});
+
+test("Discord verification checks the bot, server, channel, and signed user click", async () => {
+  const database = new FakeDatabase(); const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: null });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const outbound: Array<{ input: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => { outbound.push({ input: String(input), init }); const id = String(input).includes("/channels/") ? "verification-message-1" : "validated"; return new Response(JSON.stringify({ id }), { headers: { "content-type": "application/json" } }); };
+  try {
+    const started = await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env);
+    assert.equal(started.status, 202); assert.match(outbound[0].input, /users\/@me$/); assert.match(outbound[1].input, /guilds\/123456789012345678$/); assert.match(outbound[2].input, /channels\/223456789012345678\/messages$/);
+    const payload = JSON.parse(String(outbound[2].init?.body)); const customId = payload.components[0].components[0].custom_id as string; const token = customId.slice("lancerlogin-verify:".length);
+    const challengeWrite = database.calls.find((call) => call.sql.includes("INSERT INTO integration_verification_challenges")); assert.ok(challengeWrite); assert.equal(challengeWrite.values[0], createHash("sha256").update(token).digest("base64url")); assert.equal(challengeWrite.values.includes(token), false);
+    database.rows.set("FROM integration_verification_challenges", { challengeHash: challengeWrite.values[0], target: "123456789012345678", externalId: "verification-message-1", expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    const body = JSON.stringify({ type: 3, guild_id: "123456789012345678", data: { custom_id: customId }, member: { user: { id: "323456789012345678" } }, message: { id: "verification-message-1" } }); const timestamp = String(Math.floor(Date.now() / 1000)); const signature = sign(null, Buffer.from(timestamp + body), privateKey).toString("hex");
+    const interaction = new Request("https://api.example.test/discord/interactions", { method: "POST", headers: { "content-type": "application/json", "x-signature-ed25519": signature, "x-signature-timestamp": timestamp }, body });
+    const verified = await worker.fetch(interaction, env); assert.equal(verified.status, 200); assert.match(JSON.stringify(await verified.json()), /LancerLogin is verified/); assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("UPDATE encrypted_integrations SET verified_at")));
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("Google-only installations cannot remove their sole sign-in integration", async () => {
@@ -467,6 +519,13 @@ test("Google-only installations cannot remove their sole sign-in integration", a
   const result = await worker.fetch(request("/admin/integrations/google", {}, { method: "DELETE", cookie: await sessionCookie("admin") }), env);
   assert.equal(result.status, 409);
   assert.equal(database.calls.some((call) => call.sql.includes("DELETE FROM encrypted_integrations")), false);
+});
+
+test("removing Google from a dual-auth installation retains local sign-in", async () => {
+  const database = new FakeDatabase(); database.rows.set("auth_mode AS authMode", { authMode: "both" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/integrations/google", {}, { method: "DELETE", cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 200); assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("SET auth_mode = 'local'")));
 });
 
 test("Google OAuth uses signed state and validates identity before issuing a session", async () => {
@@ -500,6 +559,7 @@ test("Google OAuth uses signed state and validates identity before issuing a ses
     assert.equal(callback.headers.get("location"), "https://dashboard.example.test");
     assert.match(callback.headers.get("set-cookie") ?? "", /lancerlogin_session=/);
     assert.equal(new URLSearchParams(tokenRequestBody).get("redirect_uri"), "https://dashboard.example.test/api/auth/google/callback");
+    assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("UPDATE encrypted_integrations SET verified_at")));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -527,7 +587,7 @@ test("Admin cannot deactivate the current account", async () => {
 test("missed-meeting email is D1-sourced, escaped, and idempotency keyed", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ apiKey: "resend-secret", fromEmail: "attendance@example.test" }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "resend-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  database.rows.set("FROM encrypted_integrations", { id: "resend-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z" });
   database.rows.set("FROM members", { id: "member-1", firstName: "<Avery>", lastName: "Stone", email: "avery@example.test" });
   database.rows.set("FROM meetings", { id: "meeting-1", title: "Studio & Safety", startsAt: "2026-09-01T20:00:00Z" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
@@ -548,7 +608,7 @@ test("missed-meeting email is D1-sourced, escaped, and idempotency keyed", async
 test("Discord missing-member workflow mentions only linked absent members and records recipients", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z" });
   database.rows.set("FROM meetings", { id: "meeting-1", title: "Studio" });
   database.lists.set("FROM members m WHERE", [{ id: "member-1", discordUserId: "323456789012345678" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
@@ -587,7 +647,7 @@ test("a signed Discord button creates a contest only for the delivered linked me
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z" });
   database.rows.set("FROM discord_attendance_recipients", { memberId: "member-1" });
   database.rows.set("FROM discord_attendance_contests WHERE", { status: "open" });
   database.lists.set("FROM members m WHERE", [{ id: "member-1", discordUserId: "323456789012345678" }]);

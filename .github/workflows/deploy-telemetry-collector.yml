@@ -139,7 +139,7 @@ jobs:
           mock_id=$(node -e 'process.stdout.write(crypto.randomUUID())')
           curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
             --header 'Content-Type: application/json' \
-            --data "{\"installId\":\"$mock_id\",\"releaseVersion\":\"0.2.0\",\"activeKioskCount\":0}" \
+            --data "{\"installId\":\"$mock_id\",\"releaseVersion\":\"0.3.0\",\"activeKioskCount\":0}" \
             "$COLLECTOR_URL/v1/report"
           summary=$(curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
             --header "Authorization: Bearer $ADMIN_BEARER_TOKEN" \

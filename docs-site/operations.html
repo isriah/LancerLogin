@@ -12,7 +12,9 @@
 <header class="page-header"><div><p class="eyebrow">Task 3</p><h1>Meetings, attendance, and reports</h1></div></header>
 <main id="main" class="page">
   <h2>Role boundary</h2>
-  <p><strong>Operators</strong> manage meetings, attendance, corrections, excuses, reports, and kiosk status. <strong>Admins</strong> can also manage users, security, integrations, branding, and destructive configuration.</p>
+  <p><strong>Operators</strong> manage meetings, attendance, corrections, excuses, reports, kiosk status, and can view the roster. <strong>Admins</strong> can also modify the roster, grant Admin/Operator credentials, and manage organization, security, integrations, privacy, updates, and destructive configuration.</p>
+  <h2>Navigate and manage people</h2>
+  <p>Home, Meetings, Attendance, Reports, Roster, and Setup are separate deep-linkable pages. Each Settings category also has its own URL. On the top-level Roster page, Admins may link a roster member to one dashboard account and assign Admin or Operator, or create a non-rostered staff account. Roster membership never grants sign-in by itself.</p>
   <h2>Run a meeting</h2>
   <ol class="steps">
     <li>Create the meeting with a title and start time.</li>
@@ -36,8 +38,8 @@
       <div class="callout"><span>3</span><h3>Rotate in place</h3><p>Replacement values overwrite the encrypted configuration without exposing the previous one.</p></div>
     </figcaption>
   </figure>
-  <h2>Back up and restore</h2>
-  <p>Use the repository’s <code>backup-d1</code> helper from your adopter-owned checkout. It verifies a scoped account-owned token against the selected <code>CLOUDFLARE_ACCOUNT_ID</code> and refuses to overwrite an existing export. Attendance CSV protects leading spreadsheet formula markers as text. Restore D1 only to the same installation with the exact confirmation phrase, verify row counts, and re-pair the kiosk only when pairing state is inconsistent. See <code>docs/BACKUP-RESTORE.md</code> for commands and checks.</p>
+  <h2>Back up, restore, delete, or reset</h2>
+  <p><strong>Settings → Data</strong> has independent backup, restore, and delete controls for Meetings and attendance, Roster, and Entire installation. Files restore only to their matching category. Entire-installation backups contain sensitive hashes and encrypted secrets, so protect them like administrator credentials. Reset onboarding clears only checklist progress. Attendance CSV protects spreadsheet formula markers as text. For files over 10 MiB or infrastructure recovery, use the repository’s token-neutral D1 helpers documented in <code>docs/BACKUP-RESTORE.md</code>.</p>
 </main>
 <footer><div><a href="index.html">Documentation home</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
 </body>

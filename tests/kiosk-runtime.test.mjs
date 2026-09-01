@@ -44,11 +44,21 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.match(installer, /sha256sum --check/);
   assert.match(installer, /releases\/download\/v\$\{VERSION\}/);
   assert.match(installer, /Environment=LANCERLOGIN_VERSION=%s/);
+  assert.match(installer, /Port 8788 is already used by another service/);
+  assert.match(installer, /curl --fail --silent --show-error http:\/\/127\.0\.0\.1:8788\/health/);
+  assert.match(installer, /systemctl restart lancerlogin-kiosk\.service/);
   assert.match(installer, /same network.*one-time pairing key/);
   assert.doesNotMatch(installer, /Worker API URL from the GitHub workflow summary/);
   assert.match(installer, /node_major.*-ge 18/s);
   assert.doesNotMatch(installer, /sudo -u/);
   assert.doesNotMatch(installer, /git clone/i);
+});
+
+test("systemd configures the R503 serial link on every service start", async () => {
+  const unit = await readFile("apps/kiosk/systemd/lancerlogin-kiosk.service", "utf8");
+  assert.match(unit, /SupplementaryGroups=dialout/);
+  assert.match(unit, /ExecStartPre=\/bin\/stty -F \$\{LANCERLOGIN_SENSOR_PATH\} 57600/);
+  assert.ok(unit.indexOf("ExecStartPre=") < unit.indexOf("ExecStart=/usr/bin/node"));
 });
 
 test("one-time pairing key carries self-hosted routing without central discovery", () => {

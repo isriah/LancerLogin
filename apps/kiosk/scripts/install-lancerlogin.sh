@@ -39,7 +39,7 @@ fi
 [[ "$MODE" == "--install" ]] || { echo "Use --dry-run to preview or --install to proceed." >&2; exit 2; }
 [[ "${EUID}" -eq 0 ]] || { echo "Run the installer as root with sudo." >&2; exit 2; }
 check_hardware
-for command in curl sha256sum tar systemctl runuser; do command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 2; }; done
+for command in curl sha256sum tar systemctl runuser ss; do command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 2; }; done
 [[ -x /usr/bin/node ]] || { echo "Node.js 18 or newer must be installed at /usr/bin/node." >&2; exit 2; }
 node_major="$(/usr/bin/node -p 'process.versions.node.split(".")[0]')"
 [[ "$node_major" -ge 18 ]] || { echo "Node.js 18 or newer is required." >&2; exit 2; }
@@ -54,7 +54,14 @@ curl --fail --location --proto '=https' --tlsv1.2 "$RELEASE_ROOT/$archive.sha256
 
 id lancerlogin >/dev/null 2>&1 || useradd --system --home /var/lib/lancerlogin --shell /usr/sbin/nologin lancerlogin
 usermod --append --groups dialout lancerlogin
-if [[ -e /dev/serial0 ]]; then stty -F /dev/serial0 57600 cs8 -cstopb -parenb raw -echo; else echo "Warning: /dev/serial0 is unavailable. Enable the Pi UART before the fingerprint test."; fi
+[[ -e /dev/serial0 ]] || echo "Warning: /dev/serial0 is unavailable. Enable the Pi UART before starting LancerLogin."
+systemctl stop lancerlogin-kiosk.service 2>/dev/null || true
+if ss -H -ltn 'sport = :8788' | grep -q .; then
+  echo "Port 8788 is already used by another service. LancerLogin did not disable or replace that service." >&2
+  echo "Stop the conflicting kiosk service, then run this installer again:" >&2
+  ss -H -ltnp 'sport = :8788' >&2 || true
+  exit 1
+fi
 install -d -m 0755 -o root -g root /opt/lancerlogin
 install -d -m 0700 -o lancerlogin -g lancerlogin /var/lib/lancerlogin
 tar --extract --gzip --file "$temporary/$archive" --directory /opt/lancerlogin --no-same-owner
@@ -64,10 +71,22 @@ install -d -m 0755 /etc/systemd/system/lancerlogin-kiosk.service.d
 printf '[Service]\nEnvironment=LANCERLOGIN_VERSION=%s\n' "$VERSION" > /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
 chmod 0644 /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
 systemctl daemon-reload
-systemctl enable --now lancerlogin-kiosk.service
+systemctl enable lancerlogin-kiosk.service
+systemctl restart lancerlogin-kiosk.service
+service_ready=false
+for _ in $(seq 1 20); do
+  if curl --fail --silent --show-error http://127.0.0.1:8788/health >/dev/null; then service_ready=true; break; fi
+  sleep 0.5
+done
+if [[ "$service_ready" != true ]]; then
+  echo "LancerLogin was installed, but its local service did not become healthy." >&2
+  systemctl status lancerlogin-kiosk.service --no-pager -l >&2 || true
+  journalctl -u lancerlogin-kiosk.service -n 30 --no-pager >&2 || true
+  exit 1
+fi
 host_name="$(hostname)"
 local_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-echo "LancerLogin is installed and waiting for pairing."
+echo "LancerLogin is installed, healthy, and waiting for pairing."
 echo "On a phone or computer connected to the same network, open http://${host_name}.local:8788/ and paste the one-time pairing key from the dashboard."
 [[ -z "$local_ip" ]] || echo "If the .local address does not open, use http://${local_ip}:8788/ instead."
 browser_path="$(command -v chromium || command -v chromium-browser || true)"

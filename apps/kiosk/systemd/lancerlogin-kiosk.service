@@ -7,9 +7,12 @@ Wants=network-online.target
 Type=simple
 User=lancerlogin
 Group=lancerlogin
+SupplementaryGroups=dialout
 WorkingDirectory=/opt/lancerlogin
 Environment=NODE_ENV=production
 Environment=LANCERLOGIN_CONFIG=/var/lib/lancerlogin/pairing.json
+Environment=LANCERLOGIN_SENSOR_PATH=/dev/serial0
+ExecStartPre=/bin/stty -F ${LANCERLOGIN_SENSOR_PATH} 57600 cs8 -cstopb -parenb raw -echo
 ExecStart=/usr/bin/node /opt/lancerlogin/src/service.mjs
 Restart=on-failure
 RestartSec=5

@@ -11,8 +11,4 @@ jobs:
       - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
       - run: npm ci
-      - run: npm run verify:migrations
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
-      - run: npm audit --audit-level=high
+      - run: npm run verify:release

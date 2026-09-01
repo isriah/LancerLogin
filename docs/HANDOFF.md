@@ -21,6 +21,7 @@
 - v0.5.0 adds complete arrival/departure attendance sessions, required meeting end times, one organization-wide late-scan allowance, automatic five-minute Discord absence processing, signed recipient-only contests with reasoned review, a rolling five-week Home calendar, live attendance, Home contest review, a top-level Kiosks page, temporary onboarding, organization colors in every appearance, adaptive transparent-logo presentation, and a documented release-note requirement.
 - v0.6.0 adds local-time-safe recurring meetings, a searchable full meeting editor, preview-first merge/replace roster imports, persistent dark-first browser themes, a stricter temporary onboarding shell, responsive/accessibility refinements, semantic update notifications, and in-dashboard setup guides for Google OAuth, Resend, and Discord.
 - v0.7.0 adds saved/verification-required/configured integration states, active-Admin Google proof, expiring hashed Resend codes, signed Discord channel proof, unverified workflow gating, collapsible setup cards, a latest-stable update dropdown, and subtle prior-month calendar shading.
+- Local verification is split into focused API, dashboard, docs, kiosk, provisioning, and anonymous-usage scopes. Each completed batch still receives one full local gate and one main-branch CI gate; tagged packaging requires that exact successful CI commit instead of rerunning the full suite.
 
 ## Verification boundary
 

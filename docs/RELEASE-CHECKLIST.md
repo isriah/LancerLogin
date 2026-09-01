@@ -38,4 +38,4 @@ The v0.4 private-deployment release has not yet been deployed. Its fresh private
 
 The detailed requirement-to-evidence matrix is maintained in `docs/COMPLETION-AUDIT.md`.
 
-Both `.github/workflows/ci.yml` and `.github/workflows/release.yml` run the account-neutral `verify:migrations` gate against a fresh local D1 database before accepting a commit or tag.
+Main-branch CI runs the complete `verify:release` gate, including the account-neutral migration chain against a fresh local D1 database. The tag workflow requires a successful **Verify** run on `main` for the exact tagged commit before packaging; it does not repeat the same tests a second time. See `docs/DEVELOPMENT.md` for the focused local commands used during implementation.

@@ -156,19 +156,25 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.doesNotMatch(workflow, /run:[\s\S]{0,300}\$\{\{ inputs\.(?:operation|confirmation|installation_slug) \}\}/);
 });
 
-test("CI and tagged releases apply the complete D1 migration chain locally", async () => {
+test("CI runs the complete release gate and tags require that exact verified commit", async () => {
   const packageDocument = JSON.parse(await readFile("package.json", "utf8"));
   assert.equal(packageDocument.scripts["verify:migrations"], "node scripts/verify-d1-migrations.mjs");
+  assert.match(packageDocument.scripts["verify:all"], /verify:migrations.*typecheck.*test.*build/);
+  assert.match(packageDocument.scripts["verify:release"], /verify:all.*npm audit --audit-level=high/);
   const verifier = await readFile("scripts/verify-d1-migrations.mjs", "utf8");
   assert.match(verifier, /d1", "migrations", "apply"/);
   assert.match(verifier, /"--local"/);
   assert.match(verifier, /SELECT name FROM d1_migrations/);
   assert.match(verifier, /fingerprint_template\|raw_fingerprint\|biometric_template/);
   assert.doesNotMatch(verifier, /--remote|CLOUDFLARE_API_TOKEN/);
-  for (const workflowPath of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
-    assert.match(await readFile(workflowPath, "utf8"), /npm run verify:migrations/);
-  }
+  const ciWorkflow = await readFile(".github/workflows/ci.yml", "utf8");
+  assert.match(ciWorkflow, /npm run verify:release/);
   const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
+  assert.match(releaseWorkflow, /actions: read/);
+  assert.match(releaseWorkflow, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$commit&status=success/);
+  assert.match(releaseWorkflow, /\.event == "push"/);
+  assert.match(releaseWorkflow, /\.head_branch == "main"/);
+  assert.doesNotMatch(releaseWorkflow, /npm (?:ci|test|audit)|npm run (?:verify:migrations|typecheck|build)/);
   assert.match(releaseWorkflow, /docs\/releases\/\$GITHUB_REF_NAME\.md/);
   assert.match(releaseWorkflow, /--notes-file/);
   assert.doesNotMatch(releaseWorkflow, /--generate-notes/);

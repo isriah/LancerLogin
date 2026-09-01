@@ -65,8 +65,8 @@ test("tagged release archive includes every kiosk runtime module", async () => {
   }
   assert.match(workflow, /LANCERLOGIN_VERSION:-\$\{version\}/);
   assert.match(workflow, /release\/artifacts\/install-lancerlogin\.sh/);
-  assert.match(workflow, /npm audit --audit-level=high/);
-  assert.match(workflow, /package_version=.*package\.json.*version/);
+  assert.match(workflow, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$commit&status=success/);
+  assert.match(workflow, /package_version=\$\(jq -r \.version package\.json\)/);
   assert.match(workflow, /GITHUB_REF_NAME.*v\$package_version/);
 });
 

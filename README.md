@@ -12,12 +12,11 @@ This public repository contains the runnable Worker, D1 schema, Pages dashboard,
 
 ```powershell
 npm.cmd install
-npm.cmd run typecheck
-npm.cmd test
-npm.cmd run build
+npm.cmd run verify:dashboard
+npm.cmd run verify:all
 ```
 
-Start an individual package with `npm run dev:api`, `npm run dev:dashboard`, or `npm run dev:kiosk`. The Worker starts unconfigured and cannot deploy or modify cloud resources through these commands.
+Use the smallest relevant `verify:<area>` command while iterating, then run `verify:all` once before handing off a completed batch. The available scopes and release gate are documented in [Local development and verification](docs/DEVELOPMENT.md). Start an individual package with `npm run dev:api`, `npm run dev:dashboard`, or `npm run dev:kiosk`. The Worker starts unconfigured and cannot deploy or modify cloud resources through these commands.
 
 Start with the public [step-by-step installation guide](https://isriah.github.io/LancerLogin/setup.html), which includes real, sanitized GitHub and Cloudflare screenshots. Then use the repository’s [browser-led quick start](docs/BOOTSTRAPPING.md), [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY.md), [release notes](docs/releases/README.md), and [release requirement checklist](docs/RELEASE-CHECKLIST.md).
 

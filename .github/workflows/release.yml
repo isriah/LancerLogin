@@ -6,6 +6,7 @@ on:
       - "v*"
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
@@ -13,21 +14,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run verify:migrations
       - name: Require the tag to match the package version
         shell: bash
         run: |
-          package_version=$(node -p "require('./package.json').version")
+          package_version=$(jq -r .version package.json)
           test "$GITHUB_REF_NAME" = "v$package_version"
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
-      - run: npm audit --audit-level=high
+      - name: Require successful main-branch verification for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          commit=$(git rev-list -n 1 "$GITHUB_REF_NAME")
+          successful_runs=$(gh api \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$commit&status=success&per_page=100" \
+            --jq '[.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .conclusion == "success")] | length')
+          test "$successful_runs" -gt 0 || {
+            echo "The tagged commit must first pass the Verify workflow on main." >&2
+            exit 1
+          }
       - name: Package architecture-neutral kiosk service
         shell: bash
         run: |

@@ -2,6 +2,13 @@
 
 Meaningful release notes are published in [`docs/releases`](docs/releases/) and attached verbatim to each GitHub Release. LancerLogin follows semantic versioning while the Community Edition matures.
 
+## 0.6.1 — Kiosk status badge spacing
+
+- Keep physical-kiosk and browser-simulator names consistently separated from their status badges.
+- Increase status-badge horizontal padding and preserve wrapping at narrow widths.
+
+See [`docs/releases/v0.6.1.md`](docs/releases/v0.6.1.md) for upgrade and verification details.
+
 ## 0.6.0 — Recurring meetings and dashboard refinement
 
 - Add daily, weekly, biweekly, and monthly meeting series that preserve local wall time across daylight-saving changes.

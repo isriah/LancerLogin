@@ -351,7 +351,8 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .attendance-state.active { color: #155eef; background: #eaf2ff; }
 .kiosk-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
 .kiosk-grid .task-card { min-width: 0; }
-.status-pill { display: inline-block; width: fit-content; padding: .3rem .55rem; border-radius: 2rem; font-size: .72rem; font-weight: 800; }
+.kiosk-state { display: flex; align-items: center; flex-wrap: wrap; gap: .45rem .7rem; }
+.status-pill { display: inline-block; width: fit-content; padding: .35rem .75rem; border-radius: 2rem; font-size: .72rem; font-weight: 800; white-space: nowrap; }
 .status-pill.online { color: #075c43; background: #d7f5e9; }
 .status-pill.offline { color: #843a32; background: #fae4e1; }
 .kiosk-grid dl { display: grid; gap: .4rem; }

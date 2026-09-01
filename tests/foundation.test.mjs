@@ -87,9 +87,11 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /Require a private deployment repository/);
+  assert.match(workflow, /release:\s+[\s\S]*type: choice[\s\S]*- latest[\s\S]*- specific tag/);
+  assert.match(workflow, /gh api repos\/isriah\/LancerLogin\/releases\/latest --jq \.tag_name/);
+  assert.match(workflow, /ref: \$\{\{ steps\.release\.outputs\.tag \}\}/);
   assert.match(workflow, /REPOSITORY_PRIVATE/);
   assert.match(workflow, /repository: isriah\/LancerLogin/);
-  assert.match(workflow, /ref: \$\{\{ inputs\.release_tag \}\}/);
   assert.match(workflow, /CLOUDFLARE_API_TOKEN/);
   assert.match(workflow, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
   assert.match(workflow, /secrets\.LANCERLOGIN_SETUP_CODE/);

@@ -12,9 +12,17 @@ on:
           - create
           - resume
           - upgrade
-      release_tag:
-        description: Reviewed public LancerLogin release tag, for example v0.4.0
+      release:
+        description: Install the latest release or enter a specific reviewed tag below
         required: true
+        default: latest
+        type: choice
+        options:
+          - latest
+          - specific tag
+      release_tag:
+        description: Specific release tag only when selected above, for example v0.5.0
+        required: false
         type: string
       installation_slug:
         description: Lowercase installation slug, for example example-club
@@ -41,7 +49,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
       INPUT_OPERATION: ${{ inputs.operation }}
-      RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_SELECTION: ${{ inputs.release }}
+      REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
       INSTALLATION_SLUG: ${{ inputs.installation_slug }}
       INPUT_CONFIRMATION: ${{ inputs.confirmation }}
       REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
@@ -72,10 +81,6 @@ jobs:
             echo "Installation slug must start with a lowercase letter and contain 3-41 lowercase letters, digits, or hyphens." >&2
             exit 1
           fi
-          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-            echo "Release tag must look like v0.4.0." >&2
-            exit 1
-          fi
           if [ -z "$CLOUDFLARE_API_TOKEN" ] || [[ "$CLOUDFLARE_API_TOKEN" != cfat_* ]]; then
             echo "CLOUDFLARE_API_TOKEN must be a Cloudflare account-owned API token." >&2
             exit 1
@@ -88,11 +93,30 @@ jobs:
             echo "LANCERLOGIN_SETUP_CODE must be an environment secret of at least 16 characters for Create or Resume." >&2
             exit 1
           fi
+      - name: Resolve the public release
+        id: release
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$RELEASE_SELECTION" = "latest" ]; then
+            tag=$(gh api repos/isriah/LancerLogin/releases/latest --jq .tag_name)
+          else
+            tag=$REQUESTED_RELEASE_TAG
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Choose latest or enter a release tag such as v0.5.0." >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "Using LancerLogin $tag."
       - name: Check out the selected public release
         uses: actions/checkout@v7
         with:
           repository: isriah/LancerLogin
-          ref: ${{ inputs.release_tag }}
+          ref: ${{ steps.release.outputs.tag }}
           path: lancerlogin-source
           persist-credentials: false
       - uses: actions/setup-node@v7

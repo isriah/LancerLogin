@@ -69,6 +69,7 @@ tar --extract --gzip --file "$temporary/$archive" --directory /opt/lancerlogin -
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-kiosk.service /etc/systemd/system/lancerlogin-kiosk.service
 install -d -m 0755 /etc/polkit-1/rules.d
 install -m 0644 /opt/lancerlogin/polkit/49-lancerlogin-network.rules /etc/polkit-1/rules.d/49-lancerlogin-network.rules
+install -m 0644 /opt/lancerlogin/polkit/49-lancerlogin-recovery.rules /etc/polkit-1/rules.d/49-lancerlogin-recovery.rules
 install -d -m 0755 /etc/systemd/system/lancerlogin-kiosk.service.d
 printf '[Service]\nEnvironment=LANCERLOGIN_VERSION=%s\n' "$VERSION" > /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
 chmod 0644 /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf

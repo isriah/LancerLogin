@@ -160,6 +160,11 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(source, /Replace kiosk/);
   assert.match(source, /Retire kiosk/);
   assert.match(source, /Device history/);
+  assert.match(source, /Reload display/);
+  assert.match(source, /Restart software/);
+  assert.match(source, /Reboot Pi/);
+  assert.match(source, /Reset network PIN/);
+  assert.match(source, /\/admin\/kiosks\/\$\{encodeURIComponent\(active\.id\)\}\/commands/);
   assert.doesNotMatch(source, /openSetup/);
 });
 

@@ -42,6 +42,20 @@ export async function fetchKioskRoster(config, { fetchImpl = fetch } = {}) {
   return parseResponse(response);
 }
 
+export async function fetchKioskCommand(config, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/commands`, { headers: { authorization: `Bearer ${config.kioskToken}` } });
+  return parseResponse(response);
+}
+
+export async function completeKioskCommand(config, commandId, result, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/commands/${encodeURIComponent(commandId)}/result`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
+    body: JSON.stringify({ success: Boolean(result.success), message: String(result.message || "").slice(0, 200) }),
+  });
+  return parseResponse(response);
+}
+
 export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) {
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/attendance`, {
     method: "POST",

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createOfflineQueue, createSensorAdapter, issuePairingCode, redeemPairingCode } from "../apps/kiosk/src/local-runtime.mjs";
-import { fetchKioskConfiguration, normalizeApiUrl, pairInstallation, sendAttendance, sendHeartbeat } from "../apps/kiosk/src/cloud-client.mjs";
+import { completeKioskCommand, fetchKioskCommand, fetchKioskConfiguration, normalizeApiUrl, pairInstallation, sendAttendance, sendHeartbeat } from "../apps/kiosk/src/cloud-client.mjs";
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
 import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/src/r503.mjs";
@@ -15,6 +15,7 @@ import { createNetworkManager } from "../apps/kiosk/src/network-manager.mjs";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
 import { networkApp } from "../apps/kiosk/src/network-ui.mjs";
 import { maintenanceApp, maintenanceHtml } from "../apps/kiosk/src/maintenance-ui.mjs";
+import { recoveryApp } from "../apps/kiosk/src/recovery-ui.mjs";
 
 test("pairing code is hashed, single-use, and expires", () => {
   const issued = issuePairingCode({ now: () => 0, random: () => Buffer.from("123456") });
@@ -53,6 +54,7 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.match(installer, /curl --fail --silent --show-error http:\/\/127\.0\.0\.1:8788\/health/);
   assert.match(installer, /systemctl restart lancerlogin-kiosk\.service/);
   assert.match(installer, /49-lancerlogin-network\.rules/);
+  assert.match(installer, /49-lancerlogin-recovery\.rules/);
   assert.match(installer, /same network.*one-time pairing key/);
   assert.doesNotMatch(installer, /Worker API URL from the GitHub workflow summary/);
   assert.match(installer, /node_major.*-ge 18/s);
@@ -92,6 +94,7 @@ test("tagged release archive includes every kiosk runtime module", async () => {
     "network-pin.mjs",
     "network-ui.mjs",
     "maintenance-ui.mjs",
+    "recovery-ui.mjs",
   ]) {
     assert.match(workflow, new RegExp(`apps/kiosk/src/${module.replace(".", "\\.")}`));
   }
@@ -105,6 +108,12 @@ test("tagged release archive includes every kiosk runtime module", async () => {
 test("network settings PIN is salted locally and rate limits repeated failures", async () => {
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-network-pin-")); const path = join(directory, "pin.json"); let time = 1_000;
   try { const store = createNetworkPinStore(path, { now: () => time }); await store.set("123456"); const saved = await readFile(path, "utf8"); assert.doesNotMatch(saved, /123456/); store.close(); for (let attempt = 0; attempt < 5; attempt += 1) await store.verify("654321"); const locked = await store.verify("123456"); assert.equal(locked.authorized, false); assert.ok(locked.lockedUntil); time += 31_000; assert.equal((await store.verify("123456")).authorized, true); } finally { await rm(directory, { recursive: true }); }
+});
+
+test("dashboard recovery can clear the local settings PIN without retaining a credential", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-network-reset-")); const path = join(directory, "pin.json");
+  try { const store = createNetworkPinStore(path); await store.set("123456"); assert.equal((await store.status()).configured, true); await store.reset(); assert.deepEqual(await store.status(), { configured: false, authorized: false, lockedUntil: null }); }
+  finally { await rm(directory, { recursive: true }); }
 });
 
 test("NetworkManager adapter lists Wi-Fi without retaining passwords", async () => {
@@ -140,6 +149,17 @@ test("kiosk configuration fetch is authenticated and contains no biometric reque
   assert.equal(request.url, "https://api.example.test/kiosk/config");
   assert.equal(request.init.headers.authorization, "Bearer secret");
   assert.deepEqual(result.settings, { organizationName: "Example" });
+});
+
+test("kiosk recovery client polls and completes fixed commands with its device credential", async () => {
+  const calls = [];
+  const config = { apiUrl: "https://api.example.test", kioskToken: "secret" };
+  const pending = await fetchKioskCommand(config, { fetchImpl: async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify({ command: { id: "one", type: "reload_display" } }), { headers: { "content-type": "application/json" } }); } });
+  assert.equal(pending.command.type, "reload_display");
+  await completeKioskCommand(config, "one", { success: true, message: "done" }, { fetchImpl: async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify({ completed: true }), { headers: { "content-type": "application/json" } }); } });
+  assert.equal(calls[0].init.headers.authorization, "Bearer secret");
+  assert.match(calls[1].url, /\/kiosk\/commands\/one\/result$/);
+  assert.deepEqual(JSON.parse(calls[1].init.body), { success: true, message: "done" });
 });
 
 test("file queue survives restart, preserves order, and removes only delivered events", async () => {
@@ -234,10 +254,12 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskApp, /\/display-state/);
   assert.match(kioskApp, /\/pair/);
   assert.match(kioskHtml, /\/network\.js/);
+  assert.match(kioskHtml, /\/recovery\.js/);
   assert.match(networkApp, /setTimeout\(openNetwork,3000\)/);
   assert.match(networkApp, /touch-keyboard/);
   assert.match(kioskApp, /\/maintenance/);
   assert.match(maintenanceHtml, /Fingerprint maintenance/);
   assert.match(maintenanceApp, /Begin two-scan enrollment|\/enroll/);
+  assert.match(recoveryApp, /displayReloadToken/);
   assert.doesNotMatch(kioskHtml, /https?:\/\//);
 });

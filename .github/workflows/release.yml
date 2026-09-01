@@ -38,9 +38,9 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           mkdir -p release/kiosk/src release/kiosk/systemd release/kiosk/polkit release/artifacts
-          cp apps/kiosk/src/service.mjs apps/kiosk/src/ui.mjs apps/kiosk/src/cloud-client.mjs apps/kiosk/src/file-queue.mjs apps/kiosk/src/mapping-store.mjs apps/kiosk/src/r503.mjs apps/kiosk/src/serial-transport.mjs apps/kiosk/src/pair-cli.mjs apps/kiosk/src/pairing-key.mjs apps/kiosk/src/kiosk-states.mjs apps/kiosk/src/scanner.mjs apps/kiosk/src/network-manager.mjs apps/kiosk/src/network-pin.mjs apps/kiosk/src/network-ui.mjs apps/kiosk/src/maintenance-ui.mjs release/kiosk/src/
+          cp apps/kiosk/src/service.mjs apps/kiosk/src/ui.mjs apps/kiosk/src/cloud-client.mjs apps/kiosk/src/file-queue.mjs apps/kiosk/src/mapping-store.mjs apps/kiosk/src/r503.mjs apps/kiosk/src/serial-transport.mjs apps/kiosk/src/pair-cli.mjs apps/kiosk/src/pairing-key.mjs apps/kiosk/src/kiosk-states.mjs apps/kiosk/src/scanner.mjs apps/kiosk/src/network-manager.mjs apps/kiosk/src/network-pin.mjs apps/kiosk/src/network-ui.mjs apps/kiosk/src/maintenance-ui.mjs apps/kiosk/src/recovery-ui.mjs release/kiosk/src/
           cp apps/kiosk/systemd/lancerlogin-kiosk.service release/kiosk/systemd/
-          cp apps/kiosk/polkit/49-lancerlogin-network.rules release/kiosk/polkit/
+          cp apps/kiosk/polkit/49-lancerlogin-network.rules apps/kiosk/polkit/49-lancerlogin-recovery.rules release/kiosk/polkit/
           for arch in arm64 armv7; do
             archive="lancerlogin-kiosk-${version}-linux-${arch}.tar.gz"
             tar --create --gzip --file "release/artifacts/$archive" --directory release/kiosk .

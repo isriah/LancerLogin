@@ -313,6 +313,28 @@ test("Admin can rename and retire a kiosk without returning to onboarding", asyn
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET active = 0") && call.values.includes("kiosk-1")));
 });
 
+test("Admin queues only fixed recovery commands and the paired kiosk completes its own command", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1 });
+  database.rows.set("FROM kiosk_commands", { id: "command-1", type: "reload_display", createdAt: "2026-09-01T20:00:00.000Z" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const operator = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "reboot" }, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(operator.status, 403);
+  const unsupported = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "run_shell" }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(unsupported.status, 400);
+  const queued = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "reload_display" }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(queued.status, 202);
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO kiosk_commands") && call.values.includes("reload_display")));
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("'kiosk.command_queued'")));
+
+  const headers = { authorization: "Bearer paired-secret" };
+  const pending = await worker.fetch(new Request("https://api.example.test/kiosk/commands", { headers }), env);
+  assert.deepEqual(await pending.json(), { command: { id: "command-1", type: "reload_display", createdAt: "2026-09-01T20:00:00.000Z" } });
+  const completed = await worker.fetch(new Request("https://api.example.test/kiosk/commands/command-1/result", { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ success: true, message: "Display reload requested" }) }), env);
+  assert.equal(completed.status, 200);
+  assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosk_commands SET completed_at") && call.values.includes("kiosk-1") && call.values.includes("command-1")));
+});
+
 test("replace roster deactivates omitted members without changing dashboard users", async () => {
   const database = new FakeDatabase();
   database.lists.set("SELECT external_id AS memberId", [{ memberId: "OLD", active: 1 }]);

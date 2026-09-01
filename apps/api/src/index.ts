@@ -244,9 +244,10 @@ async function kioskFor(request: Request, env: Env): Promise<{ id: string; name:
 }
 async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; releaseVersion?: string; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null }>(request);
-  if (typeof input.readerOnline !== "boolean" || !input.releaseVersion || input.releaseVersion.length > 40 || !Number.isInteger(input.pendingEvents) || input.pendingEvents! < 0 || input.pendingEvents! > 100_000 || input.lastSyncAt && !validTimestamp(input.lastSyncAt) || input.errorCategory && !["cloud_sync", "reader", "offline_queue"].includes(input.errorCategory)) throw new HttpError(400, "Reader status, release version, pending scan count, and valid operational health are required");
+  const pendingEvents = input.pendingEvents ?? 0;
+  if (typeof input.readerOnline !== "boolean" || !input.releaseVersion || input.releaseVersion.length > 40 || !Number.isInteger(pendingEvents) || pendingEvents < 0 || pendingEvents > 100_000 || input.lastSyncAt && !validTimestamp(input.lastSyncAt) || input.errorCategory && !["cloud_sync", "reader", "offline_queue"].includes(input.errorCategory)) throw new HttpError(400, "Reader status, release version, pending scan count, and valid operational health are required");
   const now = new Date().toISOString();
-  await requireDatabase(env).prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, release_version = ?, pending_events = ?, last_sync_at = ?, error_category = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.releaseVersion.trim(), input.pendingEvents, input.lastSyncAt || null, input.errorCategory || null, kiosk.id).run();
+  await requireDatabase(env).prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, release_version = ?, pending_events = ?, last_sync_at = ?, error_category = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.releaseVersion.trim(), pendingEvents, input.lastSyncAt || null, input.errorCategory || null, kiosk.id).run();
   const statusUpdate = syncDiscordKioskStatus(env).catch(() => undefined);
   if (context) context.waitUntil(statusUpdate); else await statusUpdate;
   return response({ ok: true, kioskId: kiosk.id, receivedAt: now });
@@ -280,6 +281,28 @@ async function manageKiosk(request: Request, env: Env, kioskId: string): Promise
   await db.prepare("UPDATE kiosks SET active = 0 WHERE installation_id = 'primary' AND id = ?").bind(kioskId).run();
   await writeAudit(db, principal, "kiosk.retired", "kiosk", kioskId, { name: kiosk.name });
   return response({ retired: true, kioskId });
+}
+async function queueKioskCommand(request: Request, env: Env, kioskId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ command?: "reload_display" | "restart_service" | "reboot" | "reset_network_pin" }>(request);
+  if (!input.command || !["reload_display", "restart_service", "reboot", "reset_network_pin"].includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command");
+  const kiosk = await db.prepare("SELECT id, name FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string }>();
+  if (!kiosk) throw new HttpError(404, "Active kiosk not found");
+  const id = crypto.randomUUID(); const now = new Date().toISOString();
+  await db.batch([
+    db.prepare("INSERT INTO kiosk_commands (id, installation_id, kiosk_id, command_type, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?)").bind(id, kioskId, input.command, principal.userId, now),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'kiosk.command_queued', 'kiosk', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, kioskId, JSON.stringify({ commandId: id, command: input.command }), now),
+  ]);
+  return response({ command: { id, type: input.command, kioskId, queuedAt: now } }, 202);
+}
+async function pendingKioskCommand(request: Request, env: Env): Promise<Response> {
+  const kiosk = await kioskFor(request, env); const notBefore = new Date(Date.now() - 15 * 60_000).toISOString(); const command = await requireDatabase(env).prepare("SELECT id, command_type AS type, created_at AS createdAt FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? AND completed_at IS NULL AND created_at >= ? ORDER BY created_at LIMIT 1").bind(kiosk.id, notBefore).first();
+  return response({ command: command ?? null });
+}
+async function completeKioskCommand(request: Request, env: Env, commandId: string): Promise<Response> {
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ success?: boolean; message?: string }>(request); if (typeof input.success !== "boolean" || (input.message?.length ?? 0) > 200) throw new HttpError(400, "Command result needs a success flag and optional short message");
+  const result = await requireDatabase(env).prepare("UPDATE kiosk_commands SET completed_at = ?, success = ?, result_message = ? WHERE installation_id = 'primary' AND kiosk_id = ? AND id = ? AND completed_at IS NULL").bind(new Date().toISOString(), input.success ? 1 : 0, input.message?.trim() || null, kiosk.id, commandId).run();
+  if ((result.meta?.changes ?? 1) < 1) throw new HttpError(404, "Pending kiosk command not found");
+  return response({ completed: true, commandId });
 }
 function validTimestamp(value: string | undefined): value is string { return Boolean(value && Number.isFinite(Date.parse(value))); }
 function validateMeetingInput(input: MeetingInput): asserts input is MeetingInput & { title: string; startsAt: string; endsAt: string } {
@@ -996,6 +1019,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/pairing-codes" && ["GET", "POST"].includes(request.method)) result = await pairingCodes(request, env);
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
     else if (/^\/admin\/kiosks\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageKiosk(request, env, decodeURIComponent(url.pathname.split("/")[3]));
+    else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "POST") result = await queueKioskCommand(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/admin/simulator" && ["GET", "POST"].includes(request.method)) result = await simulatedKiosk(request, env);
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeeting(request, env, decodeURIComponent(url.pathname.split("/")[2]));
@@ -1027,6 +1051,8 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env, context);
     else if (url.pathname === "/kiosk/config" && request.method === "GET") result = await kioskConfiguration(request, env);
     else if (url.pathname === "/kiosk/roster" && request.method === "GET") result = await kioskRoster(request, env);
+    else if (url.pathname === "/kiosk/commands" && request.method === "GET") result = await pendingKioskCommand(request, env);
+    else if (/^\/kiosk\/commands\/[^/]+\/result$/.test(url.pathname) && request.method === "POST") result = await completeKioskCommand(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);
     else result = response({ error: "Not found" }, 404);
   } catch (error) {

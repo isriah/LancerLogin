@@ -102,7 +102,7 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   if (await db.prepare("SELECT id FROM installations WHERE id = ?").bind("primary").first()) throw new HttpError(409, "Installation is already configured");
   const input = await parseJson<BootstrapInput>(request);
   if (!env.BOOTSTRAP_CODE_HASH) throw new HttpError(503, "First-Admin setup protection is not configured");
-  const suppliedCodeHash = await sha256(input.setupCode?.trim() ?? "");
+  const suppliedCodeHash = await sha256(input.setupCode ?? "");
   if (!constantTimeEqual(suppliedCodeHash, env.BOOTSTRAP_CODE_HASH)) throw new HttpError(403, "The one-time setup code is invalid");
   const errors = validateBootstrap(input);
   if (errors.length) throw new HttpError(400, "Invalid setup", errors);

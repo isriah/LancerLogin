@@ -139,6 +139,7 @@ jobs:
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify")
           if [ "$status" != "200" ]; then
+            # shellcheck disable=SC2016 -- JavaScript expands this template literal, not Bash.
             node -e 'const d=require("./.provision/token.json"); console.error(`Cloudflare account-token verification failed (HTTP ${process.argv[1]}; codes: ${(d.errors||[]).map(e=>e.code).join(",")||"none"})`)' "$status"
             exit 1
           fi
@@ -170,9 +171,11 @@ jobs:
             worker=missing
             worker_secrets=missing
           fi
-          echo "pages=$pages" >> "$GITHUB_OUTPUT"
-          echo "worker=$worker" >> "$GITHUB_OUTPUT"
-          echo "worker_secrets=$worker_secrets" >> "$GITHUB_OUTPUT"
+          {
+            echo "pages=$pages"
+            echo "worker=$worker"
+            echo "worker_secrets=$worker_secrets"
+          } >> "$GITHUB_OUTPUT"
           if [ "$INPUT_OPERATION" = "create" ]; then
             test "${{ steps.d1.outputs.state }}" = "missing"
             test "$pages" = "missing"
@@ -203,9 +206,11 @@ jobs:
           echo "::add-mask::$SESSION_KEY"
           echo "::add-mask::$INTEGRATION_KEY"
           echo "::add-mask::$BOOTSTRAP_CODE_HASH"
-          echo "SESSION_KEY=$SESSION_KEY" >> "$GITHUB_ENV"
-          echo "INTEGRATION_KEY=$INTEGRATION_KEY" >> "$GITHUB_ENV"
-          echo "BOOTSTRAP_CODE_HASH=$BOOTSTRAP_CODE_HASH" >> "$GITHUB_ENV"
+          {
+            echo "SESSION_KEY=$SESSION_KEY"
+            echo "INTEGRATION_KEY=$INTEGRATION_KEY"
+            echo "BOOTSTRAP_CODE_HASH=$BOOTSTRAP_CODE_HASH"
+          } >> "$GITHUB_ENV"
       - name: Deploy new or incomplete Worker API
         if: steps.resources.outputs.worker_secrets == 'missing'
         id: deploy-api-new

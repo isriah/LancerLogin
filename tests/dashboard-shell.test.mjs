@@ -7,11 +7,13 @@ const branding = { organizationName: "Example Club", subtitle: "Welcome", primar
 
 test("operator dashboard excludes protected administration", () => {
   const navigation = navigationFor("operator");
-  assert.deepEqual(navigation, ["Dashboard", "Meetings", "Attendance", "Reports", "Kiosk"]);
+  assert.deepEqual(navigation, ["Dashboard", "Meetings", "Attendance", "Reports", "Roster", "Kiosk"]);
 });
 
 test("admin dashboard includes protected administration", () => {
-  assert.deepEqual(navigationFor("admin").slice(-4), ["People", "Branding", "Integrations", "Security"]);
+  const navigation = navigationFor("admin");
+  assert.equal(navigation.includes("Roster"), true);
+  assert.deepEqual(navigation.slice(-2), ["Setup", "Settings"]);
 });
 
 test("checklist is shared, resumable, and hides after completion", () => {
@@ -41,6 +43,9 @@ test("live Admin workspace uses the authorized kiosk route and hides a completed
   assert.match(source, /aria-label="Core setup steps"/);
   assert.match(source, /Browser simulator/);
   assert.match(source, /inline-messages error/);
+  assert.match(source, /role="dialog"/);
+  assert.match(source, /Go to dashboard home/);
+  assert.doesNotMatch(source, /<details className="admin-tools"/);
 });
 
 test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", async () => {
@@ -58,6 +63,7 @@ test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", 
 test("live branding stores an image locally and applies organization colors and appearance", async () => {
   const workspace = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
   const entry = await readFile("apps/dashboard/src/main.tsx", "utf8");
+  const settings = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
   assert.match(workspace, /accept="image\/png,image\/jpeg,image\/webp"/);
   assert.match(workspace, /file\.size > 131_072/);
   assert.match(workspace, /stored in D1/);
@@ -66,10 +72,13 @@ test("live branding stores an image locally and applies organization colors and 
   assert.match(entry, /appearance === "themed"/);
   assert.match(entry, /data-theme=\{appearance\}/);
   assert.match(workspace, /value="themed">Organization colors/);
+  assert.match(settings, /Organization and appearance/);
+  assert.match(settings, /Save organization settings/);
 });
 
 test("Operator workspace exposes kiosk monitoring and the complete Discord attendance workflow", async () => {
   const source = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
+  const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
   assert.match(source, /\/admin\/kiosks/);
   assert.match(source, /Status refreshes every 30 seconds/);
   assert.match(source, /Reader \$\{activeKiosk\.readerOnline/);
@@ -77,17 +86,44 @@ test("Operator workspace exposes kiosk monitoring and the complete Discord atten
   assert.match(source, /\/discord\/link/);
   assert.match(source, /\/discord\/contests\?meetingId=/);
   assert.match(source, /\/discord\/contests\/resolve/);
-  assert.match(source, /\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}/);
+  assert.match(meetings, /\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}/);
   assert.match(source, /Kiosk meeting ID/);
   assert.match(source, /Copy ID/);
-  assert.match(source, /Meeting notes \(optional, up to 2,000 characters\)/);
-  assert.match(source, /Require attendance\? Enter yes or no/);
+  assert.match(meetings, /Meeting notes \(optional, up to 2,000 characters\)/);
+  assert.match(meetings, /Require attendance\? Enter yes or no/);
 });
 
-test("destructive data controls require backup acknowledgement before typed confirmation", async () => {
+test("data controls expose separate backup, restore, and deletion per category", async () => {
   const source = await readFile("apps/dashboard/src/data-settings.tsx", "utf8");
-  const backupPrompt = source.indexOf("Have you exported the data you need");
-  const typedPrompt = source.indexOf("Type ${details[scope].confirmation} exactly");
-  assert.ok(backupPrompt >= 0 && typedPrompt > backupPrompt);
-  assert.match(source, /Exporting creates a copy and does not remove/);
+  for (const scope of ["meetings", "roster", "installation"]) {
+    assert.match(source, new RegExp(`${scope}: \\{ title:`));
+  }
+  assert.match(source, /\/admin\/data\/backup\?scope=\$\{scope\}/);
+  assert.match(source, /\/admin\/data\/restore/);
+  assert.match(source, /\/admin\/setup\/reset/);
+  assert.match(source, /RESTORE \$\{scope\.toUpperCase\(\)\}/);
+  assert.match(source, /Sensitive backup/);
+  assert.match(source, /id=\{`data-error-\$\{scope\}`\} className="inline-messages error" role="alert"/);
+});
+
+test("dashboard uses distinct routes and keeps roster accounts together", async () => {
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
+  const users = await readFile("apps/dashboard/src/user-settings.tsx", "utf8");
+  for (const route of ["/dashboard", "/meetings", "/attendance", "/reports", "/roster", "/settings/data", "/settings/updates"]) {
+    assert.match(shell, new RegExp(route.replaceAll("/", "\\/")));
+  }
+  assert.match(roster, /Dashboard access/);
+  assert.match(roster, /id="roster-import-errors" className="inline-messages error" role="alert"/);
+  assert.match(roster, /requestAnimationFrame/);
+  assert.match(users, /Roster link <span>\(optional\)<\/span>/);
+  assert.match(users, /Non-rostered Admin or Operator/);
+});
+
+test("update assistant backs up before opening GitHub and cannot deploy automatically", async () => {
+  const source = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
+  assert.match(source, /\/admin\/data\/backup\?scope=installation/);
+  assert.match(source, /github\.com\/isriah\/LancerLogin\/actions\/workflows\/provision-template\.yml/);
+  assert.match(source, /run Upgrade manually/);
+  assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);
 });

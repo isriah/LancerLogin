@@ -1,9 +1,4 @@
 import { FormEvent, ReactNode, useEffect, useState } from "react";
-import { AttendanceWorkspace } from "./attendance-workspace";
-import { IntegrationSettings } from "./integration-settings";
-import { UserSettings } from "./user-settings";
-import { PrivacySettings } from "./privacy-settings";
-import { DataSettings } from "./data-settings";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 const installerUrl = "https://github.com/isriah/LancerLogin/releases/latest/download/install-lancerlogin.sh";
@@ -47,7 +42,7 @@ function StepFrame({ step, children, onBack, onSkip }: { step: typeof steps[numb
   </section>;
 }
 
-export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut }: { initialBranding: Branding; onBrandingChanged: (branding: Branding) => void; onSignedOut: () => void }) {
+export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut, embedded = false, onComplete }: { initialBranding: Branding; onBrandingChanged: (branding: Branding) => void; onSignedOut?: () => void; embedded?: boolean; onComplete?: () => void }) {
   const [completed, setCompleted] = useState<Set<StepId>>(new Set());
   const [currentStep, setCurrentStep] = useState<StepId>("branding");
   const [branding, setBranding] = useState<Branding>(initialBranding);
@@ -69,6 +64,7 @@ export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut
   const [messages, setMessages] = useState<Partial<Record<StepId, { errors?: string[]; warnings?: string[] }>>>({});
   const [notice, setNotice] = useState("Loading shared setup…");
   const [showChecklist, setShowChecklist] = useState(true);
+  const [showCelebration, setShowCelebration] = useState(false);
   const complete = completed.size === steps.length;
   const currentIndex = steps.findIndex(([id]) => id === currentStep);
   const progress = Math.round((completed.size / steps.length) * 100);
@@ -97,7 +93,7 @@ export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut
     setCompleted((current) => new Set([...current, step]));
   }
   function goToIndex(index: number) { setCurrentStep(steps[Math.max(0, Math.min(index, steps.length - 1))][0]); window.scrollTo({ top: 0, behavior: "smooth" }); }
-  async function finishStep(step: StepId, success: string) { await markComplete(step); showMessages(step, {}); setNotice(success); if (currentIndex < steps.length - 1) goToIndex(currentIndex + 1); }
+  async function finishStep(step: StepId, success: string) { await markComplete(step); showMessages(step, {}); setNotice(success); if (step === "confirm-attendance") setShowCelebration(true); else if (currentIndex < steps.length - 1) goToIndex(currentIndex + 1); }
   async function saveBranding(event: FormEvent) {
     event.preventDefault(); showMessages("branding", {});
     try { await api("/admin/branding", { method: "PATCH", body: JSON.stringify(branding) }); onBrandingChanged(branding); await finishStep("branding", "Organization and branding saved."); }
@@ -160,7 +156,7 @@ export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut
     try { if (!testMeetingId) throw new Error("Choose the test meeting you want to verify."); const result = await api<{ attendance: AttendanceRow[] }>(`/attendance?meetingId=${encodeURIComponent(testMeetingId)}`); setAttendanceRows(result.attendance); if (!result.attendance.some((row) => row.disposition === "present")) throw new Error("No present check-in is visible yet. Return to the kiosk input step and submit one."); setNotice("Test attendance is visible. Confirm it below when it matches what you expected."); }
     catch (error) { showMessages("confirm-attendance", { errors: [(error as Error).message] }); }
   }
-  async function signOut() { await api("/auth/logout", { method: "POST" }); onSignedOut(); }
+  async function signOut() { await api("/auth/logout", { method: "POST" }); onSignedOut?.(); }
 
   const activeStep = steps[currentIndex];
   const stepBody: Record<StepId, ReactNode> = {
@@ -173,16 +169,12 @@ export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut
   };
 
   return <div className="workspace-shell">
-    <header className="workspace-header"><div><p className="kicker">{branding.organizationName}</p><h1>{complete ? "Setup complete" : activeStep[1]}</h1></div><button className="theme-button" type="button" onClick={signOut}>Sign out</button></header>
+    {!embedded && <header className="workspace-header"><div><p className="kicker">{branding.organizationName}</p><h1>{complete ? "Setup complete" : activeStep[1]}</h1></div><button className="theme-button" type="button" onClick={signOut}>Sign out</button></header>}
     <div className="setup-status" role="status"><span>{notice}</span><strong>{progress}% complete</strong></div>
     {complete && !showChecklist ? <section className="completion-card"><span aria-hidden="true">✓</span><div><h2>Your kiosk-ready foundation is complete</h2><p>Setup remains available whenever you need to revisit branding, roster, pairing, or testing.</p></div><button type="button" onClick={() => setShowChecklist(true)}>Open Setup</button></section> : <div className="wizard-layout">
       <nav className="wizard-steps" aria-label="Core setup steps"><p className="kicker">Resumable onboarding</p><ol>{steps.map(([id, title], index) => <li key={id}><button type="button" className={id === currentStep ? "active" : ""} aria-current={id === currentStep ? "step" : undefined} onClick={() => setCurrentStep(id)}><span>{completed.has(id) ? "✓" : index + 1}</span>{title}</button></li>)}</ol>{complete && <button className="quiet-button" type="button" onClick={() => setShowChecklist(false)}>Hide completed setup</button>}</nav>
       <StepFrame step={activeStep} onBack={currentIndex > 0 ? () => goToIndex(currentIndex - 1) : undefined} onSkip={() => goToIndex(currentIndex + 1)}>{stepBody[currentStep]}</StepFrame>
     </div>}
-    <details className="admin-tools"><summary>Meetings, attendance, and reports</summary><AttendanceWorkspace embedded /></details>
-    <details className="admin-tools"><summary>Optional integrations</summary><IntegrationSettings /></details>
-    <details className="admin-tools"><summary>Users and security</summary><UserSettings /></details>
-    <details className="admin-tools"><summary>Anonymous usage reporting</summary><PrivacySettings /></details>
-    <details className="admin-tools"><summary>Data export and deletion</summary><DataSettings /></details>
+    {showCelebration && <div className="completion-overlay"><div className="confetti" aria-hidden="true">{Array.from({ length: 24 }, (_, index) => <i key={index} style={{ "--piece": index, "--left": `${(index * 37) % 100}%`, "--drift": `${(index % 5 - 2) * 2}rem` } as React.CSSProperties} />)}</div><section className="completion-dialog" role="dialog" aria-modal="true" aria-labelledby="setup-complete-title"><span className="completion-icon" aria-hidden="true">✓</span><h2 id="setup-complete-title">Setup complete</h2><p>Your roster, test meeting, kiosk path, and attendance confirmation are ready. You can revisit Setup at any time.</p><button className="primary-button" type="button" autoFocus onClick={() => { setShowCelebration(false); onComplete?.(); }}>Go to dashboard home</button></section></div>}
   </div>;
 }

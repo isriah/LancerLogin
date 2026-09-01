@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LancerLogin responsive fixture</title>
+  <link rel="stylesheet" href="/apps/dashboard/src/styles.css">
+</head>
+<body>
+  <div class="app" data-theme="light">
+    <div class="provisioned-main">
+      <header class="setup-header"><div class="brand-mark">L</div><div><strong>Example Organization With A Long Name</strong><span>Responsive dashboard fixture</span></div></header>
+      <div class="dashboard-shell">
+        <header class="dashboard-toolbar"><nav class="primary-navigation"><a>Home</a><a>Meetings</a><a>Attendance</a><a>Reports</a><a>Roster</a><a>Setup</a><a class="active">Settings</a></nav><button class="sign-out-button">Sign out</button></header>
+        <nav class="settings-navigation"><a>Organization</a><a>Integrations</a><a>Privacy</a><a class="active">Data</a><a>Updates</a></nav>
+        <main class="dashboard-page">
+          <section class="settings-page">
+            <div class="page-intro"><p class="kicker">Settings</p><h2>Data management</h2><p>Each category has its own backup, restore, and delete controls.</p></div>
+            <div class="data-category-list">
+              <article class="data-category"><div><h3>Meetings and attendance</h3><p>Meetings, check-ins, corrections, excuses, and attendance contests.</p></div><div class="data-control"><button>Download backup</button></div><div class="data-control"><label>Restore file<input type="file"></label><button>Validate and restore</button></div><div class="data-control danger"><p>Deletes meetings and attendance while keeping everything else.</p><button>Delete meetings and attendance</button></div></article>
+              <article class="data-category"><div><h3>Roster</h3><p>Roster identities, contact fields, Discord links, and active status.</p></div><div class="data-control"><button>Download backup</button></div><div class="data-control"><label>Restore file<input type="file"></label><button>Validate and restore</button></div><div class="data-control danger"><p>Deletes roster only.</p><button>Delete roster</button></div></article>
+              <article class="data-category sensitive"><div><h3>Entire installation</h3><p>All D1 state, including password hashes and encrypted integrations.</p><strong class="sensitive-note">Sensitive backup</strong></div><div class="data-control"><button>Download backup</button></div><div class="data-control"><label>Restore file<input type="file"></label><button>Validate and restore</button></div><div class="data-control danger"><p>Deletes the entire installation.</p><button>Delete entire installation</button></div></article>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

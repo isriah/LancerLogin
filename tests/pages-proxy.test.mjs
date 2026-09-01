@@ -25,3 +25,22 @@ test("Pages proxy rejects non-origin and non-HTTPS upstream values", () => {
   assert.throws(() => buildPagesProxy("https://api.example.test/path"), /HTTPS origin/);
   assert.throws(() => buildPagesProxy("https://user:secret@api.example.test/"), /HTTPS origin/);
 });
+
+test("Pages proxy serves the app shell for deep-link navigation", async () => {
+  const source = buildPagesProxy("https://api.example.test");
+  const module = await import(`data:text/javascript,${encodeURIComponent(source)}`);
+  const requested = [];
+  const response = await module.default.fetch(
+    new Request("https://dashboard.example.test/settings/data", { headers: { accept: "text/html" } }),
+    {
+      ASSETS: {
+        fetch(request) {
+          requested.push(new URL(request.url).pathname);
+          return Promise.resolve(requested.length === 1 ? new Response("missing", { status: 404 }) : new Response("app shell"));
+        }
+      }
+    }
+  );
+  assert.deepEqual(requested, ["/settings/data", "/index.html"]);
+  assert.equal(await response.text(), "app shell");
+});

@@ -14,7 +14,10 @@ export default {
       target.search = incoming.search;
       return fetch(new Request(target, request));
     }
-    return env.ASSETS.fetch(request);
+    const asset = await env.ASSETS.fetch(request);
+    if (asset.status !== 404 || request.method !== "GET" || !request.headers.get("accept")?.includes("text/html")) return asset;
+    const shell = new URL("/index.html", incoming.origin);
+    return env.ASSETS.fetch(new Request(shell, request));
   },
 };
 `;

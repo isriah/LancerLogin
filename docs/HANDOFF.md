@@ -4,6 +4,8 @@
 
 - Fresh public Apache-2.0 repository: `https://github.com/isriah/LancerLogin`; no source, credentials, configuration, resources, commits, or history from the reference installation were copied.
 - Runnable Cloudflare Worker/D1 API, Vite/React dashboard, Raspberry Pi service, shared domain package, CI, release workflow, and public documentation site.
+- Public source and deployment authority are now separated. The provisioning workflow refuses public repositories, a private template copy checks out an explicit public release tag, and authenticated Admin update metadata points back to that installation's private workflow without exposing it through `/health`.
+- First-Admin bootstrap now requires `LANCERLOGIN_SETUP_CODE`; GitHub stores the plaintext as a private environment secret while the Worker receives only its SHA-256 hash. An invalid code cannot create an installation record.
 - Guarded adopter-owned Cloudflare provisioning verifies an account-owned token against the selected `CLOUDFLARE_ACCOUNT_ID`, refuses Create collisions, supports explicit Resume including interrupted secret setup, generates installation secrets, migrates D1, and deploys Worker/Pages. The first live Create run passed against the user-approved `lancerlogin-test` target; no account identifier or credential is stored in the repository.
 - Local salted-scrypt and Google OAuth authentication; JSON/CORS-protected first-Admin bootstrap; immediate active-user/current-role session revalidation; Admin/Operator enforcement; user administration; Google-only lockout prevention; interactive local recovery.
 - Shared onboarding, explicit themed/light/dark branding, roster, explicit one-kiosk replacement, retained heartbeat/reader/release health, R503 in-sensor enrollment and slot-only matching, an 800×480 touch UI, atomic offline queue, meetings, attendance, reasoned corrections/excuses, formula-safe CSV, typed-confirmation deletion, and D1 backup/restore.
@@ -23,7 +25,7 @@ All current automated tests, workspace typechecks, sanitizer checks, dependency 
 
 ## Remaining acceptance
 
-1. Manually run the guarded GitHub Upgrade workflow against the isolated `lancerlogin-test` resources and acceptance-test this feedback batch. Then run the Raspberry Pi/R503 hardware smoke checklist when a dedicated test Pi is available. Never bind, route, migrate, or restore data from the existing attendance resources or collector-only account.
+1. Publish v0.4.0, create an adopter-owned private deployment repository, and perform a fresh private Create acceptance run. The obsolete public-workflow test resources may then be deleted because the user confirmed they contain no data to retain. Run the Raspberry Pi/R503 hardware smoke checklist when a dedicated test Pi is available. Never bind, route, migrate, or restore data from the existing attendance resources or collector-only account.
 
 ## Live adopter test boundary
 

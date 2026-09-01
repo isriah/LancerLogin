@@ -9,6 +9,7 @@ This checklist maps the approved Community Release Plan to durable implementatio
 | Pi 3B+/4/5, at least 1 GB; Waveshare 7-inch DSI LCD (E); R503; Wi-Fi/Ethernet | Implemented in guide/installer | `docs/KIOSK.md`, installer hardware checks, 800×480 browser visual; physical acceptance pending |
 | Fingerprint templates remain exclusively in the R503 | Implemented with mocked serial transport | R503 protocol, local slot mapping, schema/sanitizer tests; physical acceptance pending |
 | Browser-led GitHub template and adopter-owned Cloudflare setup | Implemented without an adopter target | Manual guarded workflow verifies a scoped account-owned token against the selected account ID, recovers interrupted secret setup, creates Worker/D1/Pages, and outputs the Pages URL |
+| Public source with private adopter deployment | Implemented locally | Workflow rejects public repositories, fetches an explicit public release tag, keeps Cloudflare/setup secrets in a private environment, and exposes the private updater URL only to authenticated Admins |
 | Guided Pi setup without clone or manual source edits; short-lived one-time pairing | Implemented | Dashboard installer link, version-matched checksummed installer, hashed ten-minute code, owner-only kiosk credential |
 | Local, Google, or both authentication modes | Implemented | JSON/CORS-protected first-Admin bootstrap, salted scrypt, OAuth state/claim validation, encrypted Google secret, local recovery tool, Google-only lockout guard |
 | Fixed Admin and Operator roles | Implemented | Worker route authorization, active-user/current-role revalidation, dashboard policy, and permission tests |
@@ -27,7 +28,7 @@ This checklist maps the approved Community Release Plan to durable implementatio
 
 Automated tests use fake D1 bindings, provider responses, Cloudflare resource lists, and R503 transport. The dedicated community collector workflow passed its live self-tests. The adopter provisioning workflow also created only the user-approved isolated `lancerlogin-test` Worker, D1, and Pages resources alongside—but without connecting to or modifying—the earlier attendance resources. Provider delivery, Pi installation, and physical sensor operation remain untested.
 
-The current feedback release has not been deployed. Its GitHub Upgrade run is deliberately reserved for manual user acceptance.
+The v0.4 private-deployment release has not yet been deployed. Its fresh private-repository Create run is deliberately reserved for live acceptance after the release tag is published.
 
 The detailed requirement-to-evidence matrix is maintained in `docs/COMPLETION-AUDIT.md`.
 

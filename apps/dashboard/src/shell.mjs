@@ -6,8 +6,8 @@ const baseNavigation = [
 ];
 const adminNavigation = [["People", "manage-users"], ["Branding", "manage-branding"], ["Integrations", "manage-integrations"], ["Security", "manage-security"]];
 const steps = [
-  ["branding", "Set organization branding"], ["roster", "Add your roster"], ["pair-kiosk", "Pair the kiosk"],
-  ["fingerprint-test", "Test the fingerprint reader"], ["test-meeting", "Create a test meeting"], ["confirm-attendance", "Confirm attendance"],
+  ["branding", "Set organization branding"], ["test-meeting", "Create a test meeting"], ["roster", "Add your roster"],
+  ["pair-kiosk", "Pair hardware or simulator"], ["fingerprint-test", "Test kiosk input"], ["confirm-attendance", "Confirm attendance"],
 ];
 
 export function navigationFor(role) {

@@ -34,18 +34,25 @@ test("dashboard shell includes baseline accessibility and escapes branding", () 
 test("live Admin workspace uses the authorized kiosk route and hides a completed checklist", async () => {
   const source = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
   assert.match(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/admin\/kiosks"\)/);
-  assert.match(source, /setShowChecklist\(setup\.completedSteps\.length < steps\.length\)/);
+  assert.match(source, /setShowChecklist\(completedSet\.size < steps\.length\)/);
   assert.doesNotMatch(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/kiosks"\)/);
   assert.match(source, /releases\/latest\/download\/install-lancerlogin\.sh/);
   assert.match(source, /Download guided Pi installer/);
+  assert.match(source, /aria-label="Core setup steps"/);
+  assert.match(source, /Browser simulator/);
+  assert.match(source, /inline-messages error/);
 });
 
 test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", async () => {
   const source = await readFile("apps/dashboard/src/main.tsx", "utf8");
-  assert.match(source, /Google OAuth bootstrap/);
+  assert.match(source, /Google OAuth guided setup/);
   assert.match(source, /googleClientId: usesGoogle/);
   assert.match(source, /googleClientSecret: usesGoogle/);
   assert.match(source, /\/api\/auth\/google\/callback/);
+  assert.match(source, /console\.cloud\.google\.com\/auth\/clients\/create/);
+  assert.match(source, /Confirm Admin password/);
+  assert.match(source, /localPassword !== localPasswordConfirmation/);
+  assert.match(source, /Allow anonymous usage reporting/);
 });
 
 test("live branding stores an image locally and applies organization colors and appearance", async () => {

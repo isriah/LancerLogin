@@ -5,7 +5,7 @@ export const cloudflareSetupSteps = Object.freeze([
   { id: "cloudflare-token", title: "Create a narrowly scoped Account API Token", href: "https://dash.cloudflare.com/", detail: "Open Manage account → Account API Tokens. Allow Account Settings read plus Workers Scripts, D1, and Pages edit." },
   { id: "cloudflare-account-id", title: "Copy the selected Account ID", detail: "Find it on the Cloudflare account overview. Do not put it in source code." },
   { id: "github-secrets", title: "Add both values to GitHub Actions", detail: "Save the ID as CLOUDFLARE_ACCOUNT_ID and the token as CLOUDFLARE_API_TOKEN in repository Actions secrets." },
-  { id: "provision", title: "Run Provision adopter installation", detail: "Review the generated resource names before creation." },
+  { id: "provision", title: "Run Install or upgrade LancerLogin", detail: "Review the generated resource names before creation." },
 ]);
 
 export function setupProgress(state = {}) {

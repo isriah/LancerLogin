@@ -17,11 +17,11 @@
   <p>Home, Meetings, Attendance, Reports, Roster, and Kiosks are separate deep-linkable pages. Guided setup temporarily replaces dashboard content until complete, then remains available from Organization settings and Kiosks instead of occupying permanent navigation. Each Settings category has its own URL. On Roster, Admins may link a roster member to one dashboard account and assign Admin or Operator, or create a non-rostered staff account.</p>
   <h2>Run a meeting</h2>
   <ol class="steps">
-    <li>Create a one-time meeting or a bounded daily, weekly, biweekly, or monthly series with a title, start time, and required end time.</li>
+    <li>Create a one-time meeting or a bounded daily, weekly, biweekly, or monthly series with a title, start time, and required end time. Attendance windows cannot overlap, including the shared late-scan allowance.</li>
     <li>Search the Meetings table by any displayed attribute. Edit all fields for one occurrence or that occurrence and the future series.</li>
-    <li>Each member scans on arrival and departure. One scan is active but not present; a complete pair is present. The organization-wide late-scan allowance defaults to 30 minutes after the end.</li>
+    <li>Each member scans on arrival and departure. The kiosk selects the eligible meeting automatically. One scan is active but not present; a complete pair is present. The organization-wide late-scan allowance defaults to 30 minutes after the end.</li>
     <li>Review absent records after scanning closes. Every correction or excuse requires a reason and creates an audit record.</li>
-    <li>Monitor the paired kiosk heartbeat, reader state, and installed release, which refresh every 30 seconds.</li>
+    <li>Monitor heartbeat, reader, pending queue, last sync, issue state, and installed release on Kiosks. Admins can use fixed display/service/reboot/PIN recovery actions there.</li>
     <li>Export all attendance as CSV whenever needed.</li>
   </ol>
   <h2>Import a roster safely</h2>

@@ -25,6 +25,8 @@ test("public release notes explain visible changes and the manual upgrade path",
   assert.match(releases, /v0\.5\.0/);
   assert.match(releases, /v0\.7\.0/);
   assert.match(releases, /v0\.8\.0/);
+  assert.match(releases, /v0\.9\.0/);
+  assert.match(releases, /Unattended kiosk operations/);
   assert.match(releases, /remote kiosk pairing/i);
   assert.match(releases, /Verified integrations/);
   assert.match(releases, /arrival and departure/);
@@ -75,7 +77,7 @@ test("setup and integration guides include sanitized annotated visual callouts",
   assert.match(operations, /integration-controls\.png/);
   assert.match(operations, /Check status, not secrets/);
   assert.match(operations, /Rotate in place/);
-  assert.match(operations, /reader state, and installed release/);
+  assert.match(operations, /pending queue, last sync, issue state, and installed release/);
   assert.match(operations, /spreadsheet formula markers as text/);
 });
 
@@ -86,6 +88,8 @@ test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", as
   assert.match(kiosk, /800 by 480 pixels/);
   assert.match(kiosk, /class="annotated kiosk-shot"/);
   assert.match(kiosk, /phone or laptop/);
+  assert.match(kiosk, /Scan without choosing a meeting/);
+  assert.match(kiosk, /Recovery accepts only those fixed/);
   assert.doesNotMatch(kiosk, /Enter the Worker API URL/);
 });
 

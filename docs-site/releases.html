@@ -6,6 +6,13 @@
   <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html" aria-current="page">Releases</a><a href="technical.html">Technical</a></nav></header>
   <header class="page-header"><div><p class="eyebrow">Patch notes</p><h1>LancerLogin releases</h1><p>Review user-visible changes and migration notes before manually authorizing an upgrade in your private deployment repository.</p></div></header>
   <main id="main" class="page"><article>
+    <p class="eyebrow">v0.9.0</p>
+    <h2>Unattended kiosk operations</h2>
+    <p>The physical kiosk now runs as a continuous member-facing scanner, chooses the eligible meeting automatically, and keeps protected maintenance and recovery out of the normal attendance screen.</p>
+    <ul><li>Non-overlapping one-time, recurring, edited, and late-scan meeting windows.</li><li>Full-screen R503 states, branded offline cache, semantic reader lighting, and ordered scan retry.</li><li>PIN-protected touch Wi-Fi and fingerprint maintenance with templates retained exclusively in the sensor.</li><li>Pairing, history, health, maintenance guidance, and fixed recovery commands on the dedicated Kiosks page.</li><li>Hardened serial startup, conflict detection, service health checks, and Pi upgrade diagnostics.</li></ul>
+    <section class="notice"><strong>Before upgrading</strong>Download an Entire installation backup and review meetings for overlaps. Manually upgrade the private deployment first, then run the matching v0.9.0 guided installer on the Pi. The cloud workflow does not replace Pi files.</section>
+    <p><a class="button" href="https://github.com/isriah/LancerLogin/blob/main/docs/releases/v0.9.0.md">Read complete v0.9.0 notes</a></p>
+  </article><article>
     <p class="eyebrow">v0.8.0</p>
     <h2>Roster polish and remote kiosk pairing</h2>
     <p>The roster is now the page focus, organization theming is more consistent, and a fresh Pi can be paired from a phone or laptop without typing Cloudflare details on its touchscreen.</p>

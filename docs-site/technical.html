@@ -15,7 +15,7 @@
   <div class="task-grid">
     <article class="task-card"><span>P</span><h3>Cloudflare Pages</h3><p>Static React dashboard plus a same-origin <code>/api</code> proxy. It holds no Cloudflare token, and browser credentials stay on the adopter’s Pages origin.</p></article>
     <article class="task-card"><span>W</span><h3>Worker + D1</h3><p>Authorization, validation, scrypt auth, AES-GCM integration secrets, audit trails, attendance, exports, and provider calls.</p></article>
-    <article class="task-card"><span>π</span><h3>Raspberry Pi + R503</h3><p>Loopback-only service, serial sensor I/O, local mappings, atomic offline queue, and hashed bearer pairing.</p></article>
+    <article class="task-card"><span>π</span><h3>Raspberry Pi + R503</h3><p>LAN-limited first pairing, loopback-only operational tools, serial sensor I/O, local mappings, atomic offline queue, protected networking/maintenance, and hashed bearer pairing.</p></article>
     <article class="task-card"><span>U</span><h3>Anonymous usage collector</h3><p>Isolated maintainer service with a strict field allowlist, HMAC install hashes, rate limits, daily deduplication, aggregate-only access, and scheduled retention.</p></article>
   </div>
   <h2>Security invariants</h2>
@@ -28,6 +28,8 @@
     <li>Integration credentials use AES-256-GCM with a per-installation Worker secret.</li>
     <li>Provider verification challenges expire after ten minutes and store only SHA-256 hashes; unverified credentials cannot run operational email or Discord workflows.</li>
     <li>Pairing codes and kiosk credentials are stored remotely only as SHA-256 hashes.</li>
+    <li>Meeting windows cannot overlap, allowing the Worker to resolve a kiosk scan to at most one meeting.</li>
+    <li>Remote kiosk recovery accepts four enumerated, device-scoped commands and no shell text or arbitrary arguments.</li>
     <li>CSV export neutralizes spreadsheet formula prefixes before quoting cells.</li>
   </ul>
   <h2>Verification and source reference</h2>

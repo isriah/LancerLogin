@@ -11,5 +11,6 @@ export default defineConfig({
   webServer: [
     { command: "node tests/fixtures/dashboard-preview-server.mjs", url: "http://127.0.0.1:8791/setup/status", env: { LANCERLOGIN_MOCK_PORT: "8791" }, reuseExistingServer: !process.env.CI },
     { command: "npm --workspace @lancerlogin/dashboard run dev -- --host 127.0.0.1 --port 43173 --strictPort", url: "http://127.0.0.1:43173", env: { VITE_API_BASE_URL: "http://127.0.0.1:8791" }, reuseExistingServer: false },
+    { command: "node tests/fixtures/kiosk-preview-server.mjs", url: "http://127.0.0.1:8792/health", env: { LANCERLOGIN_KIOSK_PREVIEW_PORT: "8792" }, reuseExistingServer: false },
   ],
 });

@@ -18,17 +18,23 @@ const delay = (milliseconds) => milliseconds > 0 ? new Promise((resolve) => setT
 
 export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
   const send = async (instruction, parameters = []) => parseAcknowledgement(await exchange(commandPacket(instruction, parameters)));
-  return {
+  const reader = {
     async status() {
       requireSuccess(await send(0x13, [(password >>> 24) & 0xff, (password >>> 16) & 0xff, (password >>> 8) & 0xff, password & 0xff]), "password verification");
       const count = requireSuccess(await send(0x1d), "template count");
       return { connected: true, templateCount: ((count[0] ?? 0) << 8) | (count[1] ?? 0) };
     },
-    async match() {
-      const image = await send(0x01); if (image.confirmation === 0x02) return undefined; requireSuccess(image, "image capture");
+    async scan() {
+      const image = await send(0x01); if (image.confirmation === 0x02) return { status: "no_finger" }; requireSuccess(image, "image capture");
       requireSuccess(await send(0x02, [0x01]), "image conversion");
-      const found = await send(0x04, [0x01, 0x00, 0x00, (capacity >> 8) & 0xff, capacity & 0xff]); if (found.confirmation === 0x09) return undefined;
-      const result = requireSuccess(found, "template search"); return { slot: ((result[0] ?? 0) << 8) | (result[1] ?? 0), score: ((result[2] ?? 0) << 8) | (result[3] ?? 0) };
+      const found = await send(0x04, [0x01, 0x00, 0x00, (capacity >> 8) & 0xff, capacity & 0xff]); if (found.confirmation === 0x09) return { status: "not_found" };
+      const result = requireSuccess(found, "template search"); return { status: "match", slot: ((result[0] ?? 0) << 8) | (result[1] ?? 0), score: ((result[2] ?? 0) << 8) | (result[3] ?? 0) };
+    },
+    async match() {
+      const result = await reader.scan(); return result.status === "match" ? { slot: result.slot, score: result.score } : undefined;
+    },
+    async led({ color = 2, mode = 3, speed = 64, cycles = 0 } = {}) {
+      requireSuccess(await send(0x35, [mode, speed, color, cycles]), "LED control");
     },
     async enroll(slot, { attempts = 60, delayMs = 250 } = {}) {
       if (!Number.isInteger(slot) || slot < 0 || slot >= capacity) throw new Error(`R503 slot must be between 0 and ${capacity - 1}`);
@@ -55,4 +61,5 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
       return { slot };
     },
   };
+  return reader;
 }

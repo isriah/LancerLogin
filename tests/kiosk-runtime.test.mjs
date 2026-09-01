@@ -10,6 +10,7 @@ import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
 import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/src/r503.mjs";
 import { kioskApp, kioskHtml, kioskStyles } from "../apps/kiosk/src/ui.mjs";
 import { decodePairingKey } from "../apps/kiosk/src/pairing-key.mjs";
+import { createScanner } from "../apps/kiosk/src/scanner.mjs";
 
 test("pairing code is hashed, single-use, and expires", () => {
   const issued = issuePairingCode({ now: () => 0, random: () => Buffer.from("123456") });
@@ -80,6 +81,8 @@ test("tagged release archive includes every kiosk runtime module", async () => {
     "serial-transport.mjs",
     "pair-cli.mjs",
     "pairing-key.mjs",
+    "kiosk-states.mjs",
+    "scanner.mjs",
   ]) {
     assert.match(workflow, new RegExp(`apps/kiosk/src/${module.replace(".", "\\.")}`));
   }
@@ -155,6 +158,30 @@ test("R503 no-finger response is a normal unmatched scan", async () => {
   assert.equal(await sensor.match(), undefined);
 });
 
+test("R503 semantic display states control only the reader aura LED", async () => {
+  let packet;
+  const sensor = createR503(async (value) => { packet = value; return acknowledgement(0); });
+  await sensor.led({ color: 2, mode: 1, speed: 128, cycles: 0 });
+  assert.equal(packet[9], 0x35);
+  assert.deepEqual([...packet.slice(10, 14)], [1, 128, 2, 0]);
+});
+
+test("continuous scanner records a mapped match without a meeting ID", async () => {
+  const displays = []; const queued = []; const led = [];
+  const scanner = createScanner({
+    scanSensor: async () => ({ status: "match", slot: 12, score: 80 }), setLed: async (state) => led.push(state), mappings: { memberForSlot: async () => "ROSTER-001" },
+    queue: { enqueue: async (event) => { queued.push(event); return true; } }, loadPairing: async () => ({ kioskToken: "secret" }),
+    flushAttendance: async () => ({ acknowledgements: [{ eventId: "scan-1", action: "check_in", member: { displayName: "Avery Stone" }, meeting: { title: "Build" } }] }),
+    onDisplay: async (state, values) => displays.push({ state, ...values }), onReader: () => undefined, onCloud: () => undefined,
+    now: () => Date.parse("2026-09-01T20:00:00.000Z"), delay: async () => undefined, eventId: () => "scan-1",
+  });
+  await scanner.tick();
+  assert.deepEqual(queued, [{ eventId: "scan-1", memberId: "ROSTER-001", occurredAt: "2026-09-01T20:00:00.000Z" }]);
+  assert.deepEqual(displays.map((item) => item.state), ["processing", "welcome"]);
+  assert.equal(displays.at(-1).name, "Avery Stone");
+  assert.deepEqual(led, ["processing", "welcome"]);
+});
+
 test("R503 enrollment creates and stores a template without returning biometric data", async () => {
   const replies = [acknowledgement(0), acknowledgement(0), acknowledgement(0x02), acknowledgement(0), acknowledgement(0), acknowledgement(0), acknowledgement(0)];
   const instructions = [];
@@ -166,14 +193,13 @@ test("R503 enrollment creates and stores a template without returning biometric 
 });
 
 test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
-  assert.match(kioskHtml, /<main id="main">/);
-  assert.match(kioskHtml, /role="status" aria-live="polite"/);
-  assert.match(kioskHtml, /Fingerprint images and templates stay inside the R503 sensor/);
+  assert.match(kioskHtml, /<main id="kiosk"/);
+  assert.match(kioskHtml, /aria-live="polite"/);
+  assert.match(kioskHtml, /Place finger on reader/);
   assert.match(kioskHtml, /One-time pairing key/);
-  assert.match(kioskHtml, /Roster member ID/);
-  assert.match(kioskApp, /roster ID/);
-  assert.match(kioskStyles, /min-height:88px/);
-  assert.match(kioskApp, /\/enroll/);
+  assert.doesNotMatch(kioskHtml, /Roster member ID|Meeting ID|Enroll fingerprint/);
+  assert.match(kioskStyles, /max-height:520px/);
+  assert.match(kioskApp, /\/display-state/);
   assert.match(kioskApp, /\/pair/);
   assert.doesNotMatch(kioskHtml, /https?:\/\//);
 });

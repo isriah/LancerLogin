@@ -54,7 +54,7 @@ try {
   }, null, 2)}\n`, { mode: 0o600 });
 
   await runWrangler(["d1", "migrations", "apply", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory]);
-  const output = await runWrangler(["d1", "execute", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory, "--json", "--command", "SELECT name FROM d1_migrations ORDER BY id; SELECT name, sql FROM sqlite_master WHERE name IN ('organization_settings', 'kiosks') ORDER BY name;"], { json: true });
+  const output = await runWrangler(["d1", "execute", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory, "--json", "--command", "SELECT name FROM d1_migrations ORDER BY id; SELECT name, sql FROM sqlite_master WHERE name IN ('organization_settings', 'kiosks', 'meetings', 'pairing_codes', 'simulated_kiosk_sessions') ORDER BY name;"], { json: true });
   const result = JSON.parse(output);
   const applied = result[0]?.results?.map((row) => row.name) ?? [];
   const expected = (await readdir(migrationsDirectory)).filter((name) => /^\d+_.+\.sql$/.test(name)).sort();
@@ -63,7 +63,9 @@ try {
   const schema = new Map((result[1]?.results ?? []).map((row) => [row.name, row.sql]));
   const brandingSql = schema.get("organization_settings") ?? "";
   const kioskSql = schema.get("kiosks") ?? "";
+  const meetingSql = schema.get("meetings") ?? ""; const pairingSql = schema.get("pairing_codes") ?? ""; const simulatorSql = schema.get("simulated_kiosk_sessions") ?? "";
   if (!brandingSql.includes("'themed'") || !kioskSql.includes("reader_online") || !kioskSql.includes("release_version")) throw new Error("Final D1 schema is missing themed branding or retained kiosk health fields");
+  if (!meetingSql.includes("is_test") || !pairingSql.includes("'simulator'") || !simulatorSql.includes("online")) throw new Error("Final D1 schema is missing isolated browser simulator fields");
   const migrationText = (await Promise.all(expected.map((name) => readFile(join(migrationsDirectory, name), "utf8")))).join("\n");
   if (/fingerprint_template|raw_fingerprint|biometric_template/i.test(migrationText)) throw new Error("D1 migrations violate the biometric storage boundary");
   console.log(`Verified ${applied.length} D1 migration(s) on a fresh local database: ${applied.join(", ")}`);

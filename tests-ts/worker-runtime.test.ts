@@ -222,6 +222,59 @@ test("single-kiosk pairing requires explicit replacement and disables the prior 
   assert.ok(deactivateIndex >= 0 && insertIndex > deactivateIndex);
 });
 
+test("browser simulator uses a distinct one-time code and never creates a hardware kiosk credential", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("admin");
+  const created = await worker.fetch(request("/admin/pairing-codes", { kioskName: "Browser test", purpose: "simulator" }, { cookie }), env);
+  assert.equal(created.status, 201);
+  const code = (await created.json() as { code: string }).code;
+  const pairingWrite = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO pairing_codes"));
+  assert.ok(pairingWrite?.values.includes("simulator"));
+  assert.equal(database.calls.some((call) => call.sql.includes("FROM kiosks WHERE")), false);
+
+  database.rows.set("purpose = 'simulator'", { id: "simulator-code" });
+  const paired = await worker.fetch(request("/admin/simulator", { action: "pair", code, kioskName: "Browser test" }, { cookie }), env);
+  assert.equal(paired.status, 201);
+  const batch = database.batches.at(-1) ?? [];
+  assert.ok(batch.some((call) => call.sql.includes("INSERT INTO simulated_kiosk_sessions")));
+  assert.equal(batch.some((call) => call.sql.includes("INSERT INTO kiosks")), false);
+  assert.equal((await paired.text()).includes("kioskToken"), false);
+});
+
+test("browser simulator check-ins are Admin-only and restricted to test meetings", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM simulated_kiosk_sessions", { name: "Browser test", active: 1, online: 1 });
+  database.rows.set("AND is_test = 1", { id: "test-meeting" });
+  database.rows.set("FROM members", { id: "member-1" });
+  database.rows.set("FROM meetings", { id: "test-meeting" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const body = { action: "check-in", memberId: "ROSTER-001", meetingId: "test-meeting" };
+  assert.equal((await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("operator") }), env)).status, 403);
+  const accepted = await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(accepted.status, 202);
+  assert.ok(database.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events") && call.values.includes("manual")));
+  assert.ok(database.calls.some((call) => call.values.includes("simulator.check_in")));
+
+  const normalDatabase = new FakeDatabase();
+  normalDatabase.rows.set("FROM simulated_kiosk_sessions", { name: "Browser test", active: 1, online: 1 });
+  const normalEnv = { ...env, DB: normalDatabase } as unknown as Env;
+  const rejected = await worker.fetch(request("/admin/simulator", { ...body, meetingId: "normal-meeting" }, { cookie: await sessionCookie("admin") }), normalEnv);
+  assert.equal(rejected.status, 400);
+  assert.equal(normalDatabase.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events")), false);
+});
+
+test("invalid optional Discord IDs do not block core roster import", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/members", { members: [{ memberId: "1", firstName: "Ada", lastName: "Lovelace", discordUserId: "bad" }] }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 201);
+  const body = await result.json() as { warnings: string[] };
+  assert.match(body.warnings[0], /ignored/);
+  const insert = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO members"));
+  assert.equal(insert?.values[5], null);
+});
+
 test("kiosk heartbeat hashes bearer credentials before D1 lookup", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });

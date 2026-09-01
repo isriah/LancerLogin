@@ -171,33 +171,34 @@ async function members(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET") { const result = await db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active FROM members WHERE installation_id = 'primary' ORDER BY last_name, first_name").all(); return response({ members: result.results ?? [] }); }
   const input = await parseJson<{ members?: MemberInput[] }>(request);
   if (!Array.isArray(input.members) || !input.members.length || input.members.length > 500) throw new HttpError(400, "Provide between 1 and 500 roster members");
-  const seen = new Set<string>(); const errors: string[] = [];
-  input.members.forEach((member, index) => { const prefix = `Member ${index + 1}`; if (!member.memberId?.trim() || !member.firstName?.trim() || !member.lastName?.trim()) errors.push(`${prefix} requires memberId, firstName, and lastName`); if (member.memberId && seen.has(member.memberId.trim())) errors.push(`${prefix} duplicates memberId ${member.memberId.trim()}`); if (member.memberId) seen.add(member.memberId.trim()); if (member.email && !validEmail(member.email)) errors.push(`${prefix} has an invalid email`); if (member.discordUserId && !/^\d{10,24}$/.test(member.discordUserId)) errors.push(`${prefix} has an invalid Discord user ID`); });
+  const seen = new Set<string>(); const errors: string[] = []; const warnings: string[] = [];
+  input.members.forEach((member, index) => { const prefix = `Member ${index + 1}`; if (!member.memberId?.trim() || !member.firstName?.trim() || !member.lastName?.trim()) errors.push(`${prefix} requires memberId, firstName, and lastName`); if (member.memberId && seen.has(member.memberId.trim())) errors.push(`${prefix} duplicates memberId ${member.memberId.trim()}`); if (member.memberId) seen.add(member.memberId.trim()); if (member.email && !validEmail(member.email)) errors.push(`${prefix} has an invalid email`); if (member.discordUserId && !/^\d{10,24}$/.test(member.discordUserId)) warnings.push(`${prefix} Discord user ID was ignored; link Discord later from Optional integrations.`); });
   if (errors.length) throw new HttpError(400, "Invalid roster", errors);
   const now = new Date().toISOString();
-  const statements = input.members.map((member) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = 1").bind(crypto.randomUUID(), member.memberId!.trim(), member.firstName!.trim(), member.lastName!.trim(), member.email?.trim().toLowerCase() || null, member.discordUserId?.trim() || null, now));
+  const statements = input.members.map((member) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = 1").bind(crypto.randomUUID(), member.memberId!.trim(), member.firstName!.trim(), member.lastName!.trim(), member.email?.trim().toLowerCase() || null, member.discordUserId && /^\d{10,24}$/.test(member.discordUserId) ? member.discordUserId.trim() : null, now));
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, metadata_json, created_at) VALUES (?, 'primary', ?, 'roster.imported', 'member', ?, ?)").bind(crypto.randomUUID(), principal.userId, JSON.stringify({ count: input.members.length }), now));
-  await db.batch(statements); return response({ imported: input.members.length }, 201);
+  await db.batch(statements); return response({ imported: input.members.length, warnings }, 201);
 }
 async function pairingCodes(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") { const active = await db.prepare("SELECT id, expires_at AS expiresAt FROM pairing_codes WHERE installation_id = 'primary' AND redeemed_at IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT 1").bind(new Date().toISOString()).first(); return response({ active }); }
-  const input = await parseJson<{ kioskName?: string; replaceExisting?: boolean }>(request); const kioskName = input.kioskName?.trim();
+  const input = await parseJson<{ kioskName?: string; replaceExisting?: boolean; purpose?: "hardware" | "simulator" }>(request); const kioskName = input.kioskName?.trim(); const purpose = input.purpose ?? "hardware";
   if (!kioskName || kioskName.length > 80) throw new HttpError(400, "Kiosk name is required and must be at most 80 characters");
-  const activeKiosk = await db.prepare("SELECT id, name FROM kiosks WHERE installation_id = 'primary' AND active = 1 LIMIT 1").first<{ id: string; name: string }>();
+  if (!["hardware", "simulator"].includes(purpose)) throw new HttpError(400, "Pairing purpose must be hardware or simulator");
+  const activeKiosk = purpose === "hardware" ? await db.prepare("SELECT id, name FROM kiosks WHERE installation_id = 'primary' AND active = 1 LIMIT 1").first<{ id: string; name: string }>() : null;
   if (activeKiosk && input.replaceExisting !== true) throw new HttpError(409, `This single-kiosk installation is already paired to ${activeKiosk.name}. Confirm replacement to continue.`);
   const code = randomToken(9).slice(0, 12).toUpperCase(); const id = crypto.randomUUID(); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
   await db.batch([
-    db.prepare("DELETE FROM pairing_codes WHERE installation_id = 'primary' AND redeemed_at IS NULL"),
-    db.prepare("INSERT INTO pairing_codes (id, installation_id, code_hash, expires_at, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?)").bind(id, await sha256(code), expiresAt, principal.userId, now.toISOString()),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'pairing_code.created', 'pairing_code', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ kioskName, replacesKioskId: activeKiosk?.id ?? null }), now.toISOString()),
+    db.prepare("DELETE FROM pairing_codes WHERE installation_id = 'primary' AND redeemed_at IS NULL AND purpose = ?").bind(purpose),
+    db.prepare("INSERT INTO pairing_codes (id, installation_id, code_hash, expires_at, created_by, created_at, purpose) VALUES (?, 'primary', ?, ?, ?, ?, ?)").bind(id, await sha256(code), expiresAt, principal.userId, now.toISOString(), purpose),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'pairing_code.created', 'pairing_code', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ kioskName, purpose, replacesKioskId: activeKiosk?.id ?? null }), now.toISOString()),
   ]);
   return response({ code, expiresAt, kioskName }, 201);
 }
 async function redeemPairingCode(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); const input = await parseJson<{ code?: string; kioskName?: string }>(request); const code = input.code?.trim().toUpperCase(); const kioskName = input.kioskName?.trim();
   if (!code || !kioskName || kioskName.length > 80) throw new HttpError(400, "Pairing code and kiosk name are required");
-  const now = new Date().toISOString(); const pairing = await db.prepare("SELECT id FROM pairing_codes WHERE installation_id = 'primary' AND code_hash = ? AND redeemed_at IS NULL AND expires_at > ?").bind(await sha256(code), now).first<{ id: string }>();
+  const now = new Date().toISOString(); const pairing = await db.prepare("SELECT id FROM pairing_codes WHERE installation_id = 'primary' AND purpose = 'hardware' AND code_hash = ? AND redeemed_at IS NULL AND expires_at > ?").bind(await sha256(code), now).first<{ id: string }>();
   if (!pairing) throw new HttpError(401, "Pairing code is invalid or expired");
   const kioskId = crypto.randomUUID(); const kioskToken = randomToken();
   const results = await db.batch([
@@ -233,15 +234,15 @@ async function kioskStatus(request: Request, env: Env): Promise<Response> {
 function validTimestamp(value: string | undefined): value is string { return Boolean(value && Number.isFinite(Date.parse(value))); }
 async function meetings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const result = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes FROM meetings WHERE installation_id = 'primary' ORDER BY starts_at DESC LIMIT 250").all(); return response({ meetings: result.results ?? [] }); }
-  const input = await parseJson<{ title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null }>(request);
+  if (request.method === "GET") { const result = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes, is_test AS isTest FROM meetings WHERE installation_id = 'primary' ORDER BY starts_at DESC LIMIT 250").all(); return response({ meetings: result.results ?? [] }); }
+  const input = await parseJson<{ title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; isTest?: boolean }>(request);
   if (!input.title?.trim() || input.title.length > 120 || (input.notes?.length ?? 0) > 2_000 || !validTimestamp(input.startsAt) || (input.endsAt && !validTimestamp(input.endsAt)) || (input.endsAt && Date.parse(input.endsAt) <= Date.parse(input.startsAt!))) throw new HttpError(400, "Meeting needs a title, valid start, optional notes under 2,000 characters, and an optional end after its start");
   const id = crypto.randomUUID(); const now = new Date().toISOString();
   await db.batch([
-    db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, input.title.trim(), input.startsAt, input.endsAt || null, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now),
+    db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at, is_test) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, input.title.trim(), input.startsAt, input.endsAt || null, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now, input.isTest === true ? 1 : 0),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, 'primary', ?, 'meeting.created', 'meeting', ?, ?)").bind(crypto.randomUUID(), principal.userId, id, now),
   ]);
-  return response({ meeting: { id, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt || null, required: input.required !== false } }, 201);
+  return response({ meeting: { id, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt || null, required: input.required !== false, isTest: input.isTest === true } }, 201);
 }
 async function updateMeeting(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
@@ -264,6 +265,47 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId }, 202);
 }
 async function kioskAttendance(request: Request, env: Env): Promise<Response> { await kioskFor(request, env); return recordAttendance(requireDatabase(env), await parseJson(request), "kiosk"); }
+async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (request.method === "GET") {
+    const simulator = await db.prepare("SELECT name, active, online, last_seen_at AS lastSeenAt, created_at AS pairedAt FROM simulated_kiosk_sessions WHERE installation_id = 'primary'").first();
+    return response({ simulator: simulator ? { ...simulator, readerOnline: false, releaseVersion: "browser simulator" } : null });
+  }
+  const input = await parseJson<{ action?: "pair" | "heartbeat" | "check-in" | "stop"; code?: string; kioskName?: string; online?: boolean; memberId?: string; meetingId?: string; eventId?: string }>(request);
+  if (input.action === "pair") {
+    const code = input.code?.trim().toUpperCase(); const kioskName = input.kioskName?.trim();
+    if (!code || !kioskName || kioskName.length > 80) throw new HttpError(400, "Simulator pairing code and name are required");
+    const now = new Date().toISOString(); const pairing = await db.prepare("SELECT id FROM pairing_codes WHERE installation_id = 'primary' AND purpose = 'simulator' AND code_hash = ? AND redeemed_at IS NULL AND expires_at > ?").bind(await sha256(code), now).first<{ id: string }>();
+    if (!pairing) throw new HttpError(401, "Simulator pairing code is invalid or expired");
+    const results = await db.batch([
+      db.prepare("UPDATE pairing_codes SET redeemed_at = ? WHERE id = ? AND redeemed_at IS NULL AND expires_at > ?").bind(now, pairing.id, now),
+      db.prepare("INSERT INTO simulated_kiosk_sessions (installation_id, pairing_code_id, name, active, online, last_seen_at, created_by, created_at) SELECT 'primary', ?, ?, 1, 1, ?, ?, ? WHERE EXISTS (SELECT 1 FROM pairing_codes WHERE id = ? AND redeemed_at = ?) ON CONFLICT(installation_id) DO UPDATE SET pairing_code_id = excluded.pairing_code_id, name = excluded.name, active = 1, online = 1, last_seen_at = excluded.last_seen_at, created_by = excluded.created_by, created_at = excluded.created_at").bind(pairing.id, kioskName, now, principal.userId, now, pairing.id, now),
+      db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) SELECT ?, 'primary', ?, 'simulator.paired', 'simulated_kiosk', 'browser', ? WHERE EXISTS (SELECT 1 FROM simulated_kiosk_sessions WHERE installation_id = 'primary' AND pairing_code_id = ?)").bind(crypto.randomUUID(), principal.userId, now, pairing.id),
+    ]);
+    if ((results[1]?.meta?.changes ?? 1) < 1) throw new HttpError(409, "Simulator pairing code was already used");
+    return response({ paired: true, name: kioskName, online: true, readerOnline: false }, 201);
+  }
+  const simulator = await db.prepare("SELECT name, active, online FROM simulated_kiosk_sessions WHERE installation_id = 'primary'").first<{ name: string; active: number; online: number }>();
+  if (!simulator?.active) throw new HttpError(409, "Pair the browser simulator before using it");
+  if (input.action === "heartbeat") {
+    if (typeof input.online !== "boolean") throw new HttpError(400, "Simulator online status is required");
+    const now = new Date().toISOString(); await db.prepare("UPDATE simulated_kiosk_sessions SET online = ?, last_seen_at = CASE WHEN ? = 1 THEN ? ELSE last_seen_at END WHERE installation_id = 'primary'").bind(input.online ? 1 : 0, input.online ? 1 : 0, now).run();
+    await writeAudit(db, principal, "simulator.status_changed", "simulated_kiosk", "browser", { online: input.online });
+    return response({ online: input.online, lastSeenAt: input.online ? now : undefined, readerOnline: false });
+  }
+  if (input.action === "stop") {
+    await db.prepare("UPDATE simulated_kiosk_sessions SET active = 0, online = 0 WHERE installation_id = 'primary'").run();
+    await writeAudit(db, principal, "simulator.stopped", "simulated_kiosk", "browser"); return response({ active: false });
+  }
+  if (input.action === "check-in") {
+    if (!simulator.online) throw new HttpError(409, "Bring the simulated kiosk online before checking in");
+    const meeting = input.meetingId ? await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND is_test = 1").bind(input.meetingId).first() : null;
+    if (!meeting) throw new HttpError(400, "The simulator can check in only to a meeting marked as a test");
+    const result = await recordAttendance(db, { eventId: input.eventId ?? `simulator-${crypto.randomUUID()}`, memberId: input.memberId, meetingId: input.meetingId, occurredAt: new Date().toISOString() }, "manual", principal.userId);
+    await writeAudit(db, principal, "simulator.check_in", "meeting", input.meetingId!, { memberId: input.memberId }); return result;
+  }
+  throw new HttpError(400, "Simulator action must be pair, heartbeat, check-in, or stop");
+}
 async function attendance(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const url = new URL(request.url);
   if (request.method === "GET") {
@@ -291,8 +333,8 @@ function csvCell(value: unknown): string {
 }
 async function attendanceExport(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
-  const result = await db.prepare("SELECT mt.title AS meeting, mt.starts_at AS meetingStart, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id) THEN 'present' ELSE 'absent' END) AS disposition, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id) AS occurredAt, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason FROM meetings mt CROSS JOIN members m WHERE mt.installation_id = 'primary' AND m.installation_id = 'primary' AND m.active = 1 ORDER BY mt.starts_at, m.last_name, m.first_name").all<Record<string, unknown>>();
-  const headers = ["meeting", "meetingStart", "memberId", "firstName", "lastName", "disposition", "occurredAt", "reason"];
+  const result = await db.prepare("SELECT mt.title AS meeting, CASE WHEN mt.is_test = 1 THEN 'test' ELSE 'normal' END AS meetingType, mt.starts_at AS meetingStart, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id) THEN 'present' ELSE 'absent' END) AS disposition, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id) AS occurredAt, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason FROM meetings mt CROSS JOIN members m WHERE mt.installation_id = 'primary' AND m.installation_id = 'primary' AND m.active = 1 ORDER BY mt.starts_at, m.last_name, m.first_name").all<Record<string, unknown>>();
+  const headers = ["meeting", "meetingType", "meetingStart", "memberId", "firstName", "lastName", "disposition", "occurredAt", "reason"];
   const csv = [headers.join(","), ...(result.results ?? []).map((row) => headers.map((header) => csvCell(row[header])).join(","))].join("\r\n") + "\r\n";
   return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-attendance-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
 }
@@ -546,7 +588,7 @@ async function recordTelemetryDiagnostic(env: Env, errorCategory: "worker-intern
 }
 async function privacySettings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const installation = await db.prepare("SELECT telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installationReference FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string; installationReference?: string }>(); return response({ telemetryAccepted: Boolean(installation?.acceptedAt), acceptedAt: installation?.acceptedAt, installationReference: installation?.acceptedAt ? installation.installationReference : undefined, notice: "Telemetry sends only a random installation ID, release version, active kiosk count, scrubbed diagnostics, and best-effort metro. It never sends organization, roster, attendance, fingerprint, or raw IP data." }); }
+  if (request.method === "GET") { const installation = await db.prepare("SELECT telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installationReference FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string; installationReference?: string }>(); return response({ telemetryAccepted: Boolean(installation?.acceptedAt), acceptedAt: installation?.acceptedAt, installationReference: installation?.acceptedAt ? installation.installationReference : undefined, notice: "Anonymous usage reporting sends only a random installation ID, release version, active kiosk count, scrubbed diagnostics, and best-effort metro. It never sends organization, roster, attendance, fingerprint, or raw IP data." }); }
   const input = await parseJson<{ telemetryAccepted?: boolean }>(request); if (typeof input.telemetryAccepted !== "boolean") throw new HttpError(400, "telemetryAccepted must be true or false"); const now = new Date().toISOString();
   await db.prepare("UPDATE installations SET telemetry_accepted_at = ?, telemetry_install_id = ? WHERE id = 'primary'").bind(input.telemetryAccepted ? now : null, input.telemetryAccepted ? crypto.randomUUID() : null).run();
   await writeAudit(db, principal, input.telemetryAccepted ? "telemetry.accepted" : "telemetry.declined", "installation", "primary");
@@ -586,6 +628,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/members" && ["GET", "POST"].includes(request.method)) result = await members(request, env);
     else if (url.pathname === "/admin/pairing-codes" && ["GET", "POST"].includes(request.method)) result = await pairingCodes(request, env);
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
+    else if (url.pathname === "/admin/simulator" && ["GET", "POST"].includes(request.method)) result = await simulatedKiosk(request, env);
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeeting(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (url.pathname === "/attendance" && ["GET", "POST"].includes(request.method)) result = await attendance(request, env);

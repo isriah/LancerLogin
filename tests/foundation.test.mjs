@@ -59,6 +59,14 @@ test("follow-up schema adds explicit themed branding and retained kiosk health",
   assert.doesNotMatch(migration, /fingerprint|template/i);
 });
 
+test("guided setup schema isolates simulator pairing and test meetings", async () => {
+  const migration = await readFile("apps/api/migrations/0003_guided_setup_simulator.sql", "utf8");
+  assert.match(migration, /is_test INTEGER NOT NULL DEFAULT 0/);
+  assert.match(migration, /purpose IN \('hardware', 'simulator'\)/);
+  assert.match(migration, /simulated_kiosk_sessions/);
+  assert.doesNotMatch(migration, /token_hash|fingerprint|template/i);
+});
+
 test("provisioning workflow is adopter-gated and account-neutral", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
   assert.match(workflow, /workflow_dispatch/);
@@ -68,6 +76,7 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /expected=.*inputs\.operation/);
   assert.match(workflow, /inputs\.confirmation.*expected.*inputs\.installation_slug/);
   assert.match(workflow, /RESUME|resume/);
+  assert.match(workflow, /UPGRADE|upgrade/);
   assert.match(workflow, /Generate installation session key\s+if: steps\.resources\.outputs\.worker_secrets == 'missing'/);
   assert.match(workflow, /wrangler secret list/);
   assert.match(workflow, /Deploy existing Worker API without rotating secrets/);

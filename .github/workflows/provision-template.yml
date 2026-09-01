@@ -139,7 +139,8 @@ jobs:
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify")
           if [ "$status" != "200" ]; then
-            # shellcheck disable=SC2016 -- JavaScript expands this template literal, not Bash.
+            # JavaScript expands this template literal, not Bash.
+            # shellcheck disable=SC2016
             node -e 'const d=require("./.provision/token.json"); console.error(`Cloudflare account-token verification failed (HTTP ${process.argv[1]}; codes: ${(d.errors||[]).map(e=>e.code).join(",")||"none"})`)' "$status"
             exit 1
           fi

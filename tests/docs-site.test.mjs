@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 
-const pages = ["index.html", "setup.html", "kiosk.html", "operations.html", "privacy.html", "technical.html"];
+const pages = ["index.html", "setup.html", "kiosk.html", "operations.html", "privacy.html", "releases.html", "technical.html"];
 
 test("public docs are task-first, keyboard-navigable, and consistently linked", async () => {
   for (const page of pages) {
@@ -18,6 +18,14 @@ test("public docs are task-first, keyboard-navigable, and consistently linked", 
   }
   const home = await readFile("docs-site/index.html", "utf8");
   assert.ok(home.indexOf("Choose what you need to do") < home.indexOf("Release boundaries"));
+});
+
+test("public release notes explain visible changes and the manual upgrade path", async () => {
+  const releases = await readFile("docs-site/releases.html", "utf8");
+  assert.match(releases, /v0\.5\.0/);
+  assert.match(releases, /arrival and departure/);
+  assert.match(releases, /manually run/);
+  assert.match(releases, /application public key/);
 });
 
 test("annotated dashboard screenshot is a real non-empty asset with text alternative", async () => {

@@ -12,7 +12,8 @@ Each unit ended with targeted tests, full typecheck/build gates, a focused commi
 | 8 | Guided one-task setup, local error placement, optional Discord roster data, and browser simulator | Complete; simulator is Admin-only, credential-separated, and test-meeting-only |
 | 9 | Explicit existing-installation Upgrade operation | Complete; requires all adopter resources, applies migrations, preserves data and Worker secrets |
 | 10 | Routed dashboard, top-level roster/account linking, category backups/restores/deletes, onboarding celebration, responsive containment, and manual dashboard update assistant | Complete in local/mock verification; live upgrade intentionally left for user acceptance |
-| 8 | Guarded adopter-owned GitHub/Cloudflare provisioning, version-matched release packaging, dashboard-linked installer, accessible GitHub Pages docs, annotated dashboard/GitHub/Cloudflare/OAuth/kiosk/integration visuals | Complete; no provisioning workflow executed by this project |
+| 11 | Complete attendance sessions, rolling operations Home, organization-wide cutoff, signed Discord contests, Kiosks page, and adaptive branding | Complete locally for v0.5.0; manual adopter Upgrade acceptance pending |
+| Release | Guarded adopter-owned GitHub/Cloudflare provisioning, version-matched release packaging, dashboard-linked installer, accessible GitHub Pages docs, annotated dashboard/GitHub/Cloudflare/OAuth/kiosk/integration visuals | Complete; no provisioning workflow executed by this project |
 | 11 | Manual feedback-release upgrade acceptance and Raspberry Pi hardware acceptance | GitHub upgrade intentionally pending user test; physical hardware pending |
 | 12 | Public-source/private-deployment separation, release-tag selection, authenticated updater routing, and one-time first-Admin setup code | Implemented and fully verified locally; private live Create acceptance pending |
 

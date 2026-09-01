@@ -19,7 +19,7 @@ npm.cmd run build
 
 Start an individual package with `npm run dev:api`, `npm run dev:dashboard`, or `npm run dev:kiosk`. The Worker starts unconfigured and cannot deploy or modify cloud resources through these commands.
 
-Start with the public [step-by-step installation guide](https://isriah.github.io/LancerLogin/setup.html), which includes real, sanitized GitHub and Cloudflare screenshots. Then use the repository’s [browser-led quick start](docs/BOOTSTRAPPING.md), [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY.md), and [release requirement checklist](docs/RELEASE-CHECKLIST.md).
+Start with the public [step-by-step installation guide](https://isriah.github.io/LancerLogin/setup.html), which includes real, sanitized GitHub and Cloudflare screenshots. Then use the repository’s [browser-led quick start](docs/BOOTSTRAPPING.md), [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY.md), [release notes](docs/releases/README.md), and [release requirement checklist](docs/RELEASE-CHECKLIST.md).
 
 ## Support
 

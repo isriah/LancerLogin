@@ -21,3 +21,7 @@ The guided setup is a paginated, cross-Admin wizard ordered to remove dependenci
 ## ADR-005: Retention and recovery
 
 Data remains until an admin exports or deletes it. CSV exports and documented D1 backup/restore are supported. There is no migration from other systems and no PDF or spreadsheet integration.
+
+## ADR-006: Complete attendance sessions
+
+Every meeting has a required start and end. A member scans once on arrival and once on departure; an arrival alone is active while the scan window remains open, a completed pair is present, and an incomplete or missing pair is absent after the window closes unless an audited correction or excuse overrides it. One organization-wide late-scan allowance applies after every scheduled end, defaults to 30 minutes, and cannot be overridden per meeting. Optional Discord absence processing runs every five minutes after that cutoff.

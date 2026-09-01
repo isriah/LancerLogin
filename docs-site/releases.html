@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Releases · LancerLogin</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html" aria-current="page">Releases</a><a href="technical.html">Technical</a></nav></header>
+  <header class="page-header"><div><p class="eyebrow">Patch notes</p><h1>LancerLogin releases</h1><p>Review user-visible changes and migration notes before manually authorizing an upgrade in your private deployment repository.</p></div></header>
+  <main id="main" class="page"><article>
+    <p class="eyebrow">v0.5.0</p>
+    <h2>Attendance lifecycle and operations home</h2>
+    <p>Meetings now require an end time. Members scan on arrival and departure; one scan is active, a pair is present, and incomplete attendance becomes absent after one organization-wide late-scan allowance.</p>
+    <ul>
+      <li>Rolling five-week Home calendar, live rosters, outstanding contest review, and a top-level Kiosks page.</li>
+      <li>Temporary guided onboarding that disappears after completion and remains reachable from settings.</li>
+      <li>Organization colors across light and dark appearances plus adaptive transparent-logo contrast.</li>
+      <li>Automatic five-minute Discord absence notices, signed recipient-only contest buttons, and reasoned audited review.</li>
+      <li>Legacy attendance credit preserved, missing legacy end times inferred at one hour, and v0.4 dashboard backups remain restorable.</li>
+      <li>Private deployment workflow defaults to the latest release and uses the supported first-secret upload path.</li>
+    </ul>
+    <section class="notice"><strong>Before upgrading</strong>Download an Entire installation backup. Then manually run <strong>Install or upgrade LancerLogin</strong> in the private deployment repository, choose <strong>Upgrade</strong>, keep <strong>latest</strong> selected, and verify the exact installation slug. Discord contest buttons require rotating the optional Discord configuration with its application public key and displayed Interactions Endpoint URL.</section>
+    <p><a class="button" href="https://github.com/isriah/LancerLogin/blob/main/docs/releases/v0.5.0.md">Read complete v0.5.0 notes</a></p>
+  </article></main>
+  <footer><div><a href="index.html">Documentation home</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
+</body>
+</html>

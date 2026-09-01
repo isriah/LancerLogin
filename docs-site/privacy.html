@@ -8,7 +8,7 @@
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="technical.html">Technical</a></nav></header>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html">Releases</a><a href="technical.html">Technical</a></nav></header>
 <header class="page-header"><div><p class="eyebrow">Plain-language notice</p><h1>Privacy boundaries</h1></div></header>
 <main id="main" class="page">
   <h2>Stored by your installation</h2>
@@ -30,7 +30,7 @@
   <p>Anonymous usage reporting is enabled by default on the first-Admin form and can be unchecked to opt out before setup completes. When enabled, LancerLogin may send a random installation ID, release version, active kiosk count, scrubbed error category, and best-effort city/metro derived from the connection. Raw IP is not read into the payload or stored. An Admin can turn reporting off later, which clears the anonymous installation ID.</p>
   <p>RoboLancers operates the isolated community collector. It hashes the random ID before storage, keeps at most one report per installation per UTC day, and deletes reports after 30 days. Only designated maintainers can access authenticated aggregates, which never expose installation references or hashes. Metro groups smaller than five installations stay hidden.</p>
   <h2>Deletion and incident contact</h2>
-  <p>While anonymous usage reporting is enabled, an Admin can copy the deletion-request reference shown in <strong>Setup → Anonymous usage reporting</strong> and email it to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. Maintainers verify the request and use the authenticated deletion route to remove matching reports and the pseudonymous installation row. Request deletion before turning reporting off if you want retained reports removed.</p>
+  <p>While anonymous usage reporting is enabled, an Admin can copy the deletion-request reference shown in <strong>Settings → Privacy</strong> and email it to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. Maintainers verify the request and use the authenticated deletion route to remove matching reports and the pseudonymous installation row. Request deletion before turning reporting off if you want retained reports removed.</p>
   <p>Send suspected reporting privacy or security incidents to the same address. RoboLancers will investigate, contain or disable the collector where needed, and publish a plain-language repository notice for incidents that could materially affect community installations. Support is best-effort without an SLA.</p>
   <p>Data remains in the adopter-owned installation until an Admin deletes it. Exporting creates a copy and does not remove the stored records. LancerLogin provides no migration path from earlier installations.</p>
 </main>

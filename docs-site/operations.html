@@ -8,26 +8,26 @@
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html" aria-current="page">Operate</a><a href="technical.html">Technical</a></nav></header>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html" aria-current="page">Operate</a><a href="releases.html">Releases</a><a href="technical.html">Technical</a></nav></header>
 <header class="page-header"><div><p class="eyebrow">Task 3</p><h1>Meetings, attendance, and reports</h1></div></header>
 <main id="main" class="page">
   <h2>Role boundary</h2>
   <p><strong>Operators</strong> manage meetings, attendance, corrections, excuses, reports, kiosk status, and can view the roster. <strong>Admins</strong> can also modify the roster, grant Admin/Operator credentials, and manage organization, security, integrations, privacy, updates, and destructive configuration.</p>
   <h2>Navigate and manage people</h2>
-  <p>Home, Meetings, Attendance, Reports, Roster, and Setup are separate deep-linkable pages. Each Settings category also has its own URL. On the top-level Roster page, Admins may link a roster member to one dashboard account and assign Admin or Operator, or create a non-rostered staff account. Roster membership never grants sign-in by itself.</p>
+  <p>Home, Meetings, Attendance, Reports, Roster, and Kiosks are separate deep-linkable pages. Guided setup temporarily replaces dashboard content until complete, then remains available from Organization settings and Kiosks instead of occupying permanent navigation. Each Settings category has its own URL. On Roster, Admins may link a roster member to one dashboard account and assign Admin or Operator, or create a non-rostered staff account.</p>
   <h2>Run a meeting</h2>
   <ol class="steps">
-    <li>Create the meeting with a title and start time.</li>
+    <li>Create the meeting with a title, start time, and required end time.</li>
     <li>Select it in the attendance workspace. Use <strong>Edit selected</strong> to correct its title, schedule, required status, or notes.</li>
-    <li>Use the kiosk scan screen. Offline scans remain queued in order and are idempotent when delivered.</li>
-    <li>Review absent records. Every correction or excuse requires a reason and creates an audit record.</li>
+    <li>Each member scans on arrival and departure. One scan is active but not present; a complete pair is present. The organization-wide late-scan allowance defaults to 30 minutes after the end.</li>
+    <li>Review absent records after scanning closes. Every correction or excuse requires a reason and creates an audit record.</li>
     <li>Monitor the paired kiosk heartbeat, reader state, and installed release, which refresh every 30 seconds.</li>
     <li>Export all attendance as CSV whenever needed.</li>
   </ol>
   <h2>Optional communication workflows</h2>
   <div class="task-grid">
     <article class="task-card"><span>R</span><h3>Resend</h3><p>Send one idempotent missed-meeting email or an individual attendance report to the email stored in the roster.</p></article>
-    <article class="task-card"><span>D</span><h3>Discord attendance</h3><p>Link or unlink Discord IDs, ping only linked missing members, review contests for the selected meeting, and resolve them with an audit trail.</p></article>
+    <article class="task-card"><span>D</span><h3>Discord attendance</h3><p>Every five minutes, eligible meetings can notify only linked absent members after scanning closes. A signed recipient button opens a contest; an Operator reviews it with a required note before attendance can change.</p></article>
     <article class="task-card"><span>K</span><h3>Discord status/calendar</h3><p>Upsert meeting calendar events. Authenticated heartbeats maintain one persistent kiosk-status message, and a five-minute reconciliation marks stale kiosks offline without blocking attendance.</p></article>
   </div>
   <figure class="annotated">

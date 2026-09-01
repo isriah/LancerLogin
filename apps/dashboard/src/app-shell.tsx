@@ -30,7 +30,7 @@ export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { r
   else if (path === "/attendance") page = <AttendanceWorkspace embedded />;
   else if (path === "/reports") page = <ReportsPage />;
   else if (path === "/roster") page = <RosterPage role={role} />;
-  else if (path === "/kiosks") page = <KiosksPage role={role} openSetup={openSetup} />;
+  else if (path === "/kiosks") page = <KiosksPage role={role} />;
   else if (role === "admin" && path === "/settings/organization") page = <OrganizationSettings initialBranding={branding} onChanged={onBrandingChanged} onOpenSetup={openSetup} />;
   else if (role === "admin" && path === "/settings/integrations") page = <IntegrationSettings />;
   else if (role === "admin" && path === "/settings/privacy") page = <PrivacySettings />;

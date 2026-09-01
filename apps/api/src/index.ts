@@ -256,6 +256,23 @@ async function kioskStatus(request: Request, env: Env): Promise<Response> {
   const result = await requireDatabase(env).prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
   return response({ kiosks: result.results ?? [] });
 }
+async function manageKiosk(request: Request, env: Env, kioskId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const kiosk = await db.prepare("SELECT id, name, active FROM kiosks WHERE installation_id = 'primary' AND id = ?").bind(kioskId).first<{ id: string; name: string; active: number }>();
+  if (!kiosk) throw new HttpError(404, "Kiosk not found");
+  if (request.method === "PATCH") {
+    const input = await parseJson<{ name?: string }>(request); const name = input.name?.trim();
+    if (!name || name.length > 80) throw new HttpError(400, "Kiosk name is required and must be at most 80 characters");
+    await db.prepare("UPDATE kiosks SET name = ? WHERE installation_id = 'primary' AND id = ?").bind(name, kioskId).run();
+    await writeAudit(db, principal, "kiosk.renamed", "kiosk", kioskId, { previousName: kiosk.name, name });
+    return response({ kiosk: { ...kiosk, name } });
+  }
+  const input = await parseJson<{ confirmation?: string }>(request);
+  if (input.confirmation !== "RETIRE KIOSK") throw new HttpError(400, "Type RETIRE KIOSK exactly to continue");
+  await db.prepare("UPDATE kiosks SET active = 0 WHERE installation_id = 'primary' AND id = ?").bind(kioskId).run();
+  await writeAudit(db, principal, "kiosk.retired", "kiosk", kioskId, { name: kiosk.name });
+  return response({ retired: true, kioskId });
+}
 function validTimestamp(value: string | undefined): value is string { return Boolean(value && Number.isFinite(Date.parse(value))); }
 function validateMeetingInput(input: MeetingInput): asserts input is MeetingInput & { title: string; startsAt: string; endsAt: string } {
   if (!input.title?.trim() || input.title.length > 120 || (input.notes?.length ?? 0) > 2_000 || !validTimestamp(input.startsAt) || !validTimestamp(input.endsAt ?? undefined) || Date.parse(input.endsAt!) <= Date.parse(input.startsAt!)) throw new HttpError(400, "Meeting needs a title, valid start and end times, an end after its start, and optional notes under 2,000 characters");
@@ -970,6 +987,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/members" && ["GET", "POST"].includes(request.method)) result = await members(request, env);
     else if (url.pathname === "/admin/pairing-codes" && ["GET", "POST"].includes(request.method)) result = await pairingCodes(request, env);
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
+    else if (/^\/admin\/kiosks\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageKiosk(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/admin/simulator" && ["GET", "POST"].includes(request.method)) result = await simulatedKiosk(request, env);
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeeting(request, env, decodeURIComponent(url.pathname.split("/")[2]));

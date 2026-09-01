@@ -301,6 +301,18 @@ test("invalid optional Discord IDs do not block core roster import", async () =>
   assert.equal(insert?.values[5], null);
 });
 
+test("Admin can rename and retire a kiosk without returning to onboarding", async () => {
+  const database = new FakeDatabase(); database.rows.set("SELECT id, name, active FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("admin");
+  const renamed = await worker.fetch(request("/admin/kiosks/kiosk-1", { name: "Event entrance" }, { method: "PATCH", cookie }), env);
+  assert.equal(renamed.status, 200);
+  assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET name") && call.values.includes("Event entrance")));
+  const retired = await worker.fetch(request("/admin/kiosks/kiosk-1", { confirmation: "RETIRE KIOSK" }, { method: "DELETE", cookie }), env);
+  assert.equal(retired.status, 200);
+  assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET active = 0") && call.values.includes("kiosk-1")));
+});
+
 test("replace roster deactivates omitted members without changing dashboard users", async () => {
   const database = new FakeDatabase();
   database.lists.set("SELECT external_id AS memberId", [{ memberId: "OLD", active: 1 }]);

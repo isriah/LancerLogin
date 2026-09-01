@@ -35,10 +35,11 @@ test("dashboard shell includes baseline accessibility and escapes branding", () 
 
 test("live Admin workspace uses the authorized kiosk route and exits completed onboarding", async () => {
   const source = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
+  const pairing = await readFile("apps/dashboard/src/hardware-pairing-key.ts", "utf8");
   assert.match(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/admin\/kiosks"\)/);
   assert.match(source, /Finish and return to dashboard/);
   assert.doesNotMatch(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/kiosks"\)/);
-  assert.match(source, /releases\/latest\/download\/install-lancerlogin\.sh/);
+  assert.match(pairing, /releases\/latest\/download\/install-lancerlogin\.sh/);
   assert.match(source, /Download guided Pi installer/);
   assert.match(source, /aria-label="Core setup steps"/);
   assert.match(source, /Browser simulator/);
@@ -151,6 +152,15 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
   assert.match(source, /private GitHub deployment repository/);
   assert.match(source, /authorize Upgrade manually/);
   assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);
+});
+
+test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding", async () => {
+  const source = await readFile("apps/dashboard/src/kiosks-page.tsx", "utf8");
+  assert.match(source, /\/admin\/pairing-codes/);
+  assert.match(source, /Replace kiosk/);
+  assert.match(source, /Retire kiosk/);
+  assert.match(source, /Device history/);
+  assert.doesNotMatch(source, /openSetup/);
 });
 
 test("integration setup distinguishes saved credentials from verified connections", async () => {

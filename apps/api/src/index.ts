@@ -1,6 +1,6 @@
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
-import { attendanceClosesAt, attendanceDisposition, nextAttendanceAction, scanWindowState, type AttendanceAction } from "./attendance-lifecycle.ts";
+import { attendanceClosesAt, attendanceDisposition, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 
 type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
@@ -172,6 +172,7 @@ async function branding(request: Request, env: Env): Promise<Response> {
   if (!input.logoBackdrop || !["auto", "light", "dark", "none"].includes(input.logoBackdrop)) errors.push("Logo background must be automatic, light, dark, or none");
   if (!Number.isInteger(input.lateScanMinutes) || input.lateScanMinutes! < 0 || input.lateScanMinutes! > 180) errors.push("Late scan window must be from 0 to 180 minutes");
   if (errors.length) throw new HttpError(400, "Invalid branding", errors);
+  await assertNoMeetingOverlap(db, [], input.lateScanMinutes!);
   await db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_data = ?, primary_color = ?, secondary_color = ?, appearance = ?, logo_backdrop = ?, late_scan_minutes = ? WHERE installation_id = 'primary'")
     .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoData || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance === "themed" ? "system" : input.appearance, input.logoBackdrop, input.lateScanMinutes).run();
   await writeAudit(db, principal, "branding.updated", "organization_settings", "primary"); return response({ ok: true });
@@ -285,10 +286,17 @@ function meetingOccurrences(input: MeetingInput & { startsAt: string; endsAt: st
   if (start.getTime() <= limit) throw new HttpError(400, "Recurring series is too large; shorten the date range to 500 meetings or fewer");
   return occurrences;
 }
+async function assertNoMeetingOverlap(db: D1Database, proposed: MeetingWindowLike[], lateScanMinutes: number, excludedIds: string[] = []): Promise<void> {
+  const existing = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary'").all<MeetingWindowLike>();
+  const excluded = new Set(excludedIds); const conflict = overlappingMeetingWindows([...(existing.results ?? []).filter((meeting) => !excluded.has(meeting.id ?? "")), ...proposed], lateScanMinutes);
+  if (!conflict) return;
+  const label = (meeting: MeetingWindowLike) => `${meeting.title?.trim() || "Meeting"} (${new Date(meeting.startsAt).toISOString()})`;
+  throw new HttpError(409, `Meeting attendance windows cannot overlap. ${label(conflict[0])} conflicts with ${label(conflict[1])}.`);
+}
 async function meetings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   if (request.method === "GET") { const [result, settings] = await Promise.all([db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes, is_test AS isTest, series_id AS seriesId, recurrence_frequency AS recurrenceFrequency, recurrence_until AS recurrenceUntil, recurrence_sequence AS recurrenceSequence FROM meetings WHERE installation_id = 'primary' ORDER BY starts_at DESC LIMIT 1000").all<{ id: string; title: string; startsAt: string; endsAt: string; required: number; notes?: string; isTest: number; seriesId?: string; recurrenceFrequency?: RecurrenceFrequency; recurrenceUntil?: string; recurrenceSequence?: number }>(), db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>()]); return response({ meetings: (result.results ?? []).map((meeting) => ({ ...meeting, attendanceClosesAt: attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30) })), lateScanMinutes: settings?.lateScanMinutes ?? 30 }); }
-  const input = await parseJson<MeetingInput>(request); validateMeetingInput(input); const settings = await db.prepare("SELECT time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone?: string }>(); const occurrences = meetingOccurrences(input, settings?.timeZone && validTimeZone(settings.timeZone) ? settings.timeZone : "UTC"); const seriesId = input.recurrence ? crypto.randomUUID() : null; const now = new Date().toISOString(); const ids = occurrences.map(() => crypto.randomUUID());
+  const input = await parseJson<MeetingInput>(request); validateMeetingInput(input); const settings = await db.prepare("SELECT time_zone AS timeZone, late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone?: string; lateScanMinutes?: number }>(); const occurrences = meetingOccurrences(input, settings?.timeZone && validTimeZone(settings.timeZone) ? settings.timeZone : "UTC"); await assertNoMeetingOverlap(db, occurrences.map((occurrence) => ({ ...occurrence, title: input.title })), settings?.lateScanMinutes ?? 30); const seriesId = input.recurrence ? crypto.randomUUID() : null; const now = new Date().toISOString(); const ids = occurrences.map(() => crypto.randomUUID());
   const statements = occurrences.map((occurrence, index) => db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at, is_test, series_id, recurrence_frequency, recurrence_until, recurrence_sequence) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(ids[index], input.title.trim(), occurrence.startsAt, occurrence.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now, input.isTest === true ? 1 : 0, seriesId, input.recurrence?.frequency ?? null, input.recurrence?.until ?? null, occurrence.sequence));
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.created', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, ids[0], JSON.stringify({ seriesId, occurrences: occurrences.length, frequency: input.recurrence?.frequency ?? null }), now));
   await db.batch(statements);
@@ -298,6 +306,8 @@ async function meetings(request: Request, env: Env): Promise<Response> {
 async function updateMeeting(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const input = await parseJson<MeetingInput>(request); validateMeetingInput(input);
+  const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes?: number }>();
+  await assertNoMeetingOverlap(db, [{ id: meetingId, title: input.title, startsAt: input.startsAt, endsAt: input.endsAt }], settings?.lateScanMinutes ?? 30, [meetingId]);
   const updated = await db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = ? WHERE installation_id = 'primary' AND id = ?").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, input.isTest === true ? 1 : 0, meetingId).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
   await writeAudit(db, principal, "meeting.updated", "meeting", meetingId);
@@ -309,7 +319,10 @@ async function updateMeetingSeries(request: Request, env: Env, seriesId: string)
   const anchor = await db.prepare("SELECT starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND id = ?").bind(seriesId, input.meetingId).first<{ startsAt: string }>();
   if (!anchor) throw new HttpError(404, "Recurring series occurrence not found");
   const future = await db.prepare("SELECT id, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? ORDER BY starts_at").bind(seriesId, anchor.startsAt).all<{ id: string; startsAt: string }>();
-  const duration = Date.parse(input.endsAt) - Date.parse(input.startsAt); const shift = Date.parse(input.startsAt) - Date.parse(anchor.startsAt); const statements = (future.results ?? []).map((meeting) => { const start = new Date(Date.parse(meeting.startsAt) + shift); return db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = ? WHERE installation_id = 'primary' AND id = ?").bind(input.title!.trim(), start.toISOString(), new Date(start.getTime() + duration).toISOString(), input.required === false ? 0 : 1, input.notes?.trim() || null, input.isTest === true ? 1 : 0, meeting.id); });
+  const duration = Date.parse(input.endsAt) - Date.parse(input.startsAt); const shift = Date.parse(input.startsAt) - Date.parse(anchor.startsAt); const proposed = (future.results ?? []).map((meeting) => { const start = new Date(Date.parse(meeting.startsAt) + shift); return { id: meeting.id, title: input.title, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + duration).toISOString() }; });
+  const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes?: number }>();
+  await assertNoMeetingOverlap(db, proposed, settings?.lateScanMinutes ?? 30, proposed.map((meeting) => meeting.id));
+  const statements = proposed.map((meeting) => db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = ? WHERE installation_id = 'primary' AND id = ?").bind(input.title!.trim(), meeting.startsAt, meeting.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, input.isTest === true ? 1 : 0, meeting.id));
   if (!statements.length) throw new HttpError(404, "No future series occurrences were found");
   const updatedCount = statements.length; statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.series_updated', 'meeting_series', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, seriesId, JSON.stringify({ fromMeetingId: input.meetingId, updated: updatedCount }), new Date().toISOString()));
   await db.batch(statements); return response({ seriesId, updated: updatedCount });

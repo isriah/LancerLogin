@@ -5,6 +5,7 @@ export const DUPLICATE_SCAN_WINDOW_MS = 90_000;
 export type AttendanceAction = "check_in" | "check_out";
 export type AttendanceDisposition = "absent" | "active" | "present" | "excused";
 export type AttendanceEventLike = { id?: string; action: AttendanceAction; occurredAt?: string };
+export type MeetingWindowLike = { id?: string; title?: string; startsAt: string; endsAt: string };
 
 export function attendanceClosesAt(endsAt: string, lateScanMinutes = DEFAULT_LATE_SCAN_MINUTES): string {
   const end = Date.parse(endsAt);
@@ -23,6 +24,16 @@ export function scanWindowState(meeting: { startsAt: string; endsAt: string }, o
   if (scan < start) return { accepted: false, reason: "This meeting has not started" };
   if (scan > close) return { accepted: false, reason: "Attendance is closed for this meeting" };
   return { accepted: true, closesAt };
+}
+
+export function overlappingMeetingWindows(meetings: MeetingWindowLike[], lateScanMinutes = DEFAULT_LATE_SCAN_MINUTES): [MeetingWindowLike, MeetingWindowLike] | undefined {
+  const ordered = meetings.map((meeting) => ({ meeting, start: Date.parse(meeting.startsAt), close: Date.parse(attendanceClosesAt(meeting.endsAt, lateScanMinutes)) }))
+    .sort((left, right) => left.start - right.start || left.close - right.close);
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1]; const current = ordered[index];
+    if (current.start <= previous.close) return [previous.meeting, current.meeting];
+  }
+  return undefined;
 }
 
 export function nextAttendanceAction(events: AttendanceEventLike[], occurredAt: string, duplicateWindowMs = DUPLICATE_SCAN_WINDOW_MS): { status: "complete" } | { status: "duplicate"; action: AttendanceAction } | { status: "accepted"; action: AttendanceAction } {

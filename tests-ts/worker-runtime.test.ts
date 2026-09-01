@@ -390,6 +390,17 @@ test("Operator can create a bounded recurring meeting series", async () => {
   assert.ok(batch.some((call) => call.values.includes("weekly")));
 });
 
+test("meeting creation rejects overlap with an existing attendance window before writing", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
+  database.lists.set("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings", [{ id: "existing", title: "Build", startsAt: "2026-09-01T18:00:00.000Z", endsAt: "2026-09-01T20:00:00.000Z" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/meetings", { title: "Rehearsal", startsAt: "2026-09-01T20:15:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", required: true }, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 409);
+  assert.match((await result.json() as { error: string }).error, /cannot overlap.*Build.*Rehearsal/i);
+  assert.equal(database.batches.length, 0);
+});
+
 test("recurring meetings preserve organization-local time across daylight saving changes", async () => {
   const database = new FakeDatabase(); database.rows.set("time_zone AS timeZone", { timeZone: "America/New_York" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;

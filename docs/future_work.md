@@ -117,7 +117,11 @@ Release: v0.12.8 attendance reporting and dashboard operations refinement.
 
 ### WU-005 — Roster discovery controls
 
-Status: ready
+Status: in progress
+
+Owner: LancerLogin coordinator
+Branch: `codex/wu-005-roster-discovery`
+Base: `f73d6df132297821acff51631e42d64e15bc40ba`
 
 Goal: make the roster quick to search and narrow during operations.
 Scope: one search field that matches member name, email, and ID; Active-only and All-members filtering.
@@ -139,7 +143,11 @@ Release: later roster and reports bundle.
 
 ### WU-007 — Settings configuration information architecture
 
-Status: ready
+Status: in progress
+
+Owner: LancerLogin coordinator
+Branch: `codex/wu-007-settings-ia`
+Base: `f73d6df132297821acff51631e42d64e15bc40ba`
 
 Goal: organize operational settings where administrators expect to find them.
 Scope: move Discord contest settings and late-scan allowance into Settings > Configuration; reshape the kiosk update area to the installed-versus-latest comparison pattern; move dashboard access/role-grant controls into Settings.
@@ -150,7 +158,11 @@ Release: later settings and operations bundle.
 
 ### WU-008 — Meeting duplication and templates
 
-Status: ready
+Status: in progress
+
+Owner: LancerLogin coordinator
+Branch: `codex/wu-008-meeting-templates`
+Base: `f73d6df132297821acff51631e42d64e15bc40ba`
 
 Goal: reduce repeated meeting setup work.
 Scope: duplicate an existing meeting or start from a reusable meeting template while preserving typical timing and recurrence choices.
@@ -161,7 +173,11 @@ Release: later scheduling bundle.
 
 ### WU-009 — Privacy-safe kiosk diagnostics snapshot
 
-Status: ready
+Status: in progress
+
+Owner: LancerLogin coordinator
+Branch: `codex/wu-009-kiosk-diagnostics`
+Base: `f73d6df132297821acff51631e42d64e15bc40ba`
 
 Goal: expose useful operational diagnostics without exposing sensitive device or member data.
 Scope: software version, uptime, reader state, network type/signal, last Wi-Fi scan, pending queue count, and actionable recovery guidance; explicitly exclude credentials, raw scan data, and unrestricted logs.

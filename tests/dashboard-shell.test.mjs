@@ -173,6 +173,7 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
 test("attendance actions preserve their layout and mute unavailable choices", async () => {
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  assert.match(attendance, /const latestCompleted = result\.meetings\.find\(\(meeting\) => Date\.parse\(meeting\.endsAt \?\? meeting\.startsAt\) <= Date\.now\(\)\)/);
   assert.match(attendance, /disabled=\{row\.disposition === "present"\}/);
   assert.match(attendance, /Send Discord absence notice/);
   assert.match(attendance, /className="primary-button" type="button" disabled=\{!selected\}/);

@@ -53,14 +53,14 @@ Release: later dashboard usability bundle; merged locally pending release select
 
 ### WU-002 — Attendance metrics and reporting baseline
 
-Status: ready
+Status: merged (`07cfeaf`)
 
 Goal: make attendance percentages understandable and prevent imported historical meetings from silently distorting current operational reporting.
 Scope: define and display primary attendance rate and excuse-adjusted class rate; establish an explicit reporting baseline/period that preserves historical records without silently including them in current-roster reporting.
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Attendance and Reports); pending task commit `4fdfbf6`.
 Acceptance: every surface using both rates has clear labels and definitions; report percentages use an explicit, verified meeting scope.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and `npm run verify:migrations` if data selection/storage changes.
-Release: later attendance and reports bundle.
+Release: later attendance and reports bundle; merged locally pending release selection.
 
 ### WU-003 — Operational Reports workspace
 
@@ -75,14 +75,14 @@ Release: later attendance and reports bundle; merged locally pending release sel
 
 ### WU-004 — Dashboard layout consistency
 
-Status: ready
+Status: merged (`df03406`)
 
 Goal: correct visible card and action layout defects without changing product behavior.
 Scope: standardize dashboard card vertical padding; place the Reports contest card directly beneath the trend card independent of leaderboard height; restore styled side-by-side desktop roster actions.
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Attendance, Reports, and Roster); pending task commits `ac33513` and `8621c2d`.
 Acceptance: affected cards align with the standard gap and roster actions remain readable and consistently styled at desktop and responsive widths.
 Verification: `npm run verify:dashboard` and relevant browser visual smoke checks.
-Release: later dashboard usability bundle.
+Release: later dashboard usability bundle; merged locally pending release selection.
 
 ### WU-005 — Roster discovery controls
 

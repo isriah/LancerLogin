@@ -128,11 +128,7 @@ Release: later roster and reports bundle.
 
 ### WU-006 — Member detail workspace and deep links
 
-Status: in progress
-
-Owner: LancerLogin coordinator
-Branch: `codex/wu-006-member-detail`
-Base: `108950cd66f4a684b5ec3a384899649564e9c176`
+Status: merged (`6b62e61`)
 
 Goal: give each roster member a durable, reusable operational workspace.
 Scope: stable member route, links from Reports and other roster-oriented surfaces, permitted member actions, and per-meeting attendance history including timestamps or absence/excuse outcomes.
@@ -154,7 +150,7 @@ Release: later settings and operations bundle.
 
 ### WU-008 — Meeting duplication and templates
 
-Status: merged (`e92c2e1`)
+Status: merged (`cd9d6ce`)
 
 Goal: reduce repeated meeting setup work.
 Scope: duplicate an existing meeting or start from a reusable meeting template while preserving typical timing and recurrence choices.

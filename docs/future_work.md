@@ -172,11 +172,7 @@ Release: later kiosk operations bundle.
 
 ### WU-010 — Browser kiosk emulator foundation
 
-Status: in progress
-
-Owner: LancerLogin coordinator
-Branch: `codex/wu-010-browser-emulator`
-Base: `108950cd66f4a684b5ec3a384899649564e9c176`
+Status: merged (`001af34`)
 
 Goal: replace the limited setup simulator with a visibly simulated browser kiosk that reuses physical kiosk presentation and behavior.
 Scope: establish the shared kiosk rendering/state contract, browser input adapter, simulator-origin audit labeling, and isolation from physical active-kiosk status. Later units will add all normal scanning, protected maintenance, enrollment/mapping, networking, and recovery/update flows.

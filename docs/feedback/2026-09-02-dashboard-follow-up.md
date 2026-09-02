@@ -17,6 +17,13 @@ Status: collecting. Do not implement until the user explicitly reconciles this r
 5. Remove the always-positive "meeting data is current" card. Reserve this space for real loading or error states only.
 6. Standardize card vertical padding across the dashboard, including the Attendance/Kiosk area, so adjacent cards align.
 
+## Home navigation
+
+1. Preserve the selected meeting when opening Attendance from the calendar.
+   - Affected area: Home calendar and Attendance route.
+   - Observation: selecting any meeting on Home currently opens Attendance at the same historical meeting instead of the meeting that was clicked.
+   - Expected behavior: a calendar meeting opens Attendance with that exact meeting selected.
+
 ## Kiosk simulator
 
 1. Build the real browser-simulated kiosk.

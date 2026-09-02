@@ -80,7 +80,7 @@ Scope: optional manual-present notes; member-local success/failure feedback; rem
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Attendance).
 Acceptance: the requested Attendance actions work without a note, report their result beside the member, and no longer show the listed obsolete or misleading UI.
 Verification: `npm run verify:dashboard`; add focused dashboard coverage for changed behavior.
-Release: later dashboard usability bundle; merged locally pending release selection.
+Release: v0.12.8 attendance reporting and dashboard operations refinement.
 
 ### WU-002 — Attendance metrics and reporting baseline
 
@@ -91,7 +91,7 @@ Scope: define and display primary attendance rate and excuse-adjusted class rate
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Attendance and Reports); pending task commit `4fdfbf6`.
 Acceptance: every surface using both rates has clear labels and definitions; report percentages use an explicit, verified meeting scope.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and `npm run verify:migrations` if data selection/storage changes.
-Release: later attendance and reports bundle; merged locally pending release selection.
+Release: v0.12.8 attendance reporting and dashboard operations refinement.
 
 ### WU-003 — Operational Reports workspace
 
@@ -102,7 +102,7 @@ Scope: sortable attendance leaderboard; team attendance trend; contests awaiting
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Reports and Additional approved refinements).
 Acceptance: operators can answer the requested attendance and contest questions in the dashboard, while CSV remains available as a secondary utility.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and browser coverage for charts/filters where appropriate.
-Release: later attendance and reports bundle; merged locally pending release selection.
+Release: v0.12.8 attendance reporting and dashboard operations refinement.
 
 ### WU-004 — Dashboard layout consistency
 
@@ -113,7 +113,7 @@ Scope: standardize dashboard card vertical padding; place the Reports contest ca
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Attendance, Reports, and Roster); pending task commits `ac33513` and `8621c2d`.
 Acceptance: affected cards align with the standard gap and roster actions remain readable and consistently styled at desktop and responsive widths.
 Verification: `npm run verify:dashboard` and relevant browser visual smoke checks.
-Release: later dashboard usability bundle; merged locally pending release selection.
+Release: v0.12.8 attendance reporting and dashboard operations refinement.
 
 ### WU-005 — Roster discovery controls
 

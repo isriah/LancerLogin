@@ -163,6 +163,16 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
   assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);
 });
 
+test("attendance actions preserve their layout and mute unavailable choices", async () => {
+  const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  assert.match(attendance, /disabled=\{row\.disposition === "present"\}/);
+  assert.match(attendance, /disabled=\{row\.disposition !== "absent"\}/);
+  assert.doesNotMatch(attendance, /row\.disposition === "absent" && <button/);
+  assert.match(styles, /grid-template-columns: minmax\(10rem,1fr\) 7rem 30rem/);
+  assert.match(styles, /\.correction-actions button:disabled/);
+});
+
 test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding", async () => {
   const source = await readFile("apps/dashboard/src/kiosks-page.tsx", "utf8");
   assert.match(source, /\/admin\/pairing-codes/);

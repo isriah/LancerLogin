@@ -42,7 +42,7 @@ export function ColorEditor({ label, value, onChange }: { label: string; value: 
     <div className="color-editor-panel">
       <div className="color-swatch" style={{ background: normalizedValue }} aria-label={`${label} preview`} />
       <label>Hex<input value={hex} onChange={(event) => changeHex(event.target.value)} spellCheck={false} aria-invalid={Boolean(error)} /></label>
-      <fieldset><legend>RGB channels</legend>{(["Red", "Green", "Blue"] as const).map((channel, index) => <div className="rgb-channel" key={channel}><label>{channel}<input type="number" min={0} max={255} step={1} value={rgb[index]} onChange={(event) => changeRgb(index, event.target.value)} aria-invalid={Boolean(error)} /></label><input aria-label={`${channel} slider`} type="range" min={0} max={255} step={1} value={Number(rgb[index]) || 0} onChange={(event) => slide(index, event.target.value)} /></div>)}</fieldset>
+      <fieldset><legend>RGB channels</legend>{(["Red", "Green", "Blue"] as const).map((channel, index) => <div className="rgb-channel" key={channel}><label>{channel}<input type="number" min={0} max={255} step={1} value={rgb[index]} placeholder="0" onChange={(event) => changeRgb(index, event.target.value)} aria-invalid={Boolean(error)} /></label><input aria-label={`${channel} slider`} type="range" min={0} max={255} step={1} value={Number(rgb[index]) || 0} onChange={(event) => slide(index, event.target.value)} /></div>)}</fieldset>
       {error && <p className="inline-field-error" role="alert">{error}</p>}
     </div>
   </details>;

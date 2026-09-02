@@ -173,6 +173,16 @@ test("attendance actions preserve their layout and mute unavailable choices", as
   assert.match(styles, /\.correction-actions button:disabled/);
 });
 
+test("numeric organization settings can be cleared before they are normalized on save", async () => {
+  const source = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
+  const colors = await readFile("apps/dashboard/src/color-editor.tsx", "utf8");
+  assert.match(source, /useState\(String\(initialBranding\.lateScanMinutes\)\)/);
+  assert.match(source, /lateScanMinutes\.trim\(\) === "" \? 0/);
+  assert.match(source, /placeholder="0"/);
+  assert.match(source, /discordContestWindowHours\.trim\(\) === "" \? 24/);
+  assert.match(colors, /type="number"[^>]+placeholder="0"/);
+});
+
 test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding", async () => {
   const source = await readFile("apps/dashboard/src/kiosks-page.tsx", "utf8");
   assert.match(source, /\/admin\/pairing-codes/);

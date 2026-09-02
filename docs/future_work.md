@@ -64,14 +64,14 @@ Release: later attendance and reports bundle.
 
 ### WU-003 — Operational Reports workspace
 
-Status: ready
+Status: merged (`48da2b7`)
 
 Goal: make Reports an operational workspace rather than primarily a CSV-export page.
 Scope: sortable attendance leaderboard; team attendance trend; contests awaiting review with direct action; useful date, meeting-type, active-roster filters, and saved views.
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Reports and Additional approved refinements).
 Acceptance: operators can answer the requested attendance and contest questions in the dashboard, while CSV remains available as a secondary utility.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and browser coverage for charts/filters where appropriate.
-Release: later attendance and reports bundle.
+Release: later attendance and reports bundle; merged locally pending release selection.
 
 ### WU-004 — Dashboard layout consistency
 

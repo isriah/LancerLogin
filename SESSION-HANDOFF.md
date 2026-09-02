@@ -1,6 +1,6 @@
 # LancerLogin session handoff
 
-Last updated: 2026-09-02 after publishing LancerLogin v0.10.4 durable Discord absence contests.
+Last updated: 2026-09-02 after publishing LancerLogin v0.10.5 meeting, attendance, and kiosk polish.
 
 ## Start the next session here
 
@@ -16,7 +16,7 @@ Public repository: <https://github.com/isriah/LancerLogin>
 
 Public documentation: <https://isriah.github.io/LancerLogin/>
 
-Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.4>
+Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.5>
 
 ## Non-negotiable boundaries
 
@@ -71,18 +71,26 @@ Authoritative detail:
 ## Current repository and release state
 
 - Branch: `main`
-- v0.10.4 code/tag commit: `6964c1571974541065e4411f3abc05050490f6f8` (`Preserve Discord absence notice history`)
-- Immutable v0.10.4 tag commit: `6964c1571974541065e4411f3abc05050490f6f8`
-- v0.10.4 is a published, non-draft, non-prerelease GitHub release with the guided installer, installer SHA-256, arm64/armv7 archives, and archive SHA-256 files.
-- GitHub **Verify** completed successfully on `main` for `6964c15` before the v0.10.4 tag, and the v0.10.4 release workflow completed successfully.
-- Local/full gate evidence for the v0.10.4 patch: `npm run verify:release` passed outside the sandbox after an esbuild sandbox filesystem-access failure. The release makes no physical Pi acceptance claim.
+- v0.10.5 code/tag commit: `a1a8c9b651f14e87f0cf997bbdff6b8a54fd3a7a` (`Polish meetings attendance and kiosk status`)
+- Immutable v0.10.5 tag commit: `a1a8c9b651f14e87f0cf997bbdff6b8a54fd3a7a`
+- v0.10.5 is a published, non-draft, non-prerelease GitHub release with the guided installer, installer SHA-256, arm64/armv7 archives, and archive SHA-256 files.
+- GitHub **Verify** completed successfully on `main` for `a1a8c9b` before the v0.10.5 tag, the v0.10.5 release workflow completed successfully, and public documentation published successfully with `actions/configure-pages@v6`.
+- Local/full gate evidence for the v0.10.5 patch: `npm run verify:release` and `npm run verify:browser` passed outside the sandbox after the expected esbuild/Vite sandbox filesystem-access failure. The browser gate covered the 800x480 kiosk and maintenance views. The release makes no physical Pi acceptance claim.
 - GitHub Pages emitted a non-blocking warning that `actions/configure-pages@v5` currently targets deprecated Node.js 20 on the runner. Publication succeeded. Treat checking for an official successor as low-priority cleanup; verify current official action guidance before changing it.
 
-Release notes: [`docs/releases/v0.10.4.md`](docs/releases/v0.10.4.md)
+Release notes: [`docs/releases/v0.10.5.md`](docs/releases/v0.10.5.md)
 
 Durable feature history: [`docs/HANDOFF.md`](docs/HANDOFF.md)
 
 Roadmap/evidence: [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md)
+
+## What v0.10.5 delivered
+
+- Meetings use separate Date, Start, and End columns, and one delete confirmation chooses selected occurrence or selected-and-future recurrence deletion. The soft delete has a dashboard-local immediate undo.
+- Bulk Discord calendar sync continues after individual failure, skips completed meetings, validates Discord event title/description limits, and reports meeting-level outcomes beside the related control without duplicating mapped events.
+- Attendance selectors show date then meeting title, the Discord absence-notice action is themed, unavailable corrections keep aligned muted controls, and per-row Discord linking/email commands are removed.
+- Kiosk NetworkManager scanning performs a device-specific rescan before listing nearby Wi-Fi, fingerprint slot/keypad controls remain inside the 800x480 maintenance surface, normal screen status uses Wi-Fi bars or Ethernet, and service uptime replaces the footer clock.
+- No D1 migration or Pi installer policy change is required. A compatible online kiosk can update through the existing Latest stable action after the dashboard upgrade.
 
 ## What v0.10.4 delivered
 

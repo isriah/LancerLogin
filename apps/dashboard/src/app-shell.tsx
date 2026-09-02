@@ -22,7 +22,7 @@ import { UpdateIndicator } from "./update-indicator";
 const setupStepIds = ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"];
 
 export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { role: "admin" | "operator"; branding: Branding; onBrandingChanged: (branding: Branding) => void; onSignedOut: () => void }) {
-  const { path, navigate } = usePath(); const [setupKey, setSetupKey] = useState(0); const [onboarding, setOnboarding] = useState(role === "admin" ? undefined as boolean | undefined : false); const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const { path, search, navigate } = usePath(); const [setupKey, setSetupKey] = useState(0); const [onboarding, setOnboarding] = useState(role === "admin" ? undefined as boolean | undefined : false); const [mobileNavOpen, setMobileNavOpen] = useState(false);
   useEffect(() => { if (role !== "admin") return; void api<{ completedSteps: { step: string }[] }>("/admin/setup/progress").then((result) => setOnboarding(!setupStepIds.every((step) => result.completedSteps.some((item) => item.step === step)))).catch(() => setOnboarding(false)); }, [role, setupKey]);
   useEffect(() => { if (onboarding) window.requestAnimationFrame(() => { window.scrollTo({ top: 0, behavior: "auto" }); document.getElementById("dashboard-content")?.focus(); }); }, [onboarding, setupKey]);
   useEffect(() => { setMobileNavOpen(false); }, [path]);
@@ -33,7 +33,7 @@ export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { r
   if (role === "admin" && onboarding) page = <SetupWorkspace key={setupKey} initialBranding={branding} onBrandingChanged={onBrandingChanged} onSignedOut={onSignedOut} embedded onComplete={() => { setOnboarding(false); navigate("/dashboard"); }} />;
   else if (path === "/dashboard") page = <HomePage role={role} navigate={navigate} />;
   else if (path === "/meetings") page = <MeetingsPage />;
-  else if (path === "/attendance") page = <AttendanceWorkspace embedded />;
+  else if (path === "/attendance") page = <AttendanceWorkspace embedded selectedMeetingId={new URLSearchParams(search).get("meetingId") ?? undefined} />;
   else if (path === "/reports") page = <ReportsPage />;
   else if (path === "/roster") page = <RosterPage role={role} />;
   else if (path === "/kiosks") page = <KiosksPage role={role} />;

@@ -23,6 +23,7 @@ Status: collecting. Do not implement until the user explicitly reconciles this r
    - Affected area: Home calendar and Attendance route.
    - Observation: selecting any meeting on Home currently opens Attendance at the same historical meeting instead of the meeting that was clicked.
    - Expected behavior: a calendar meeting opens Attendance with that exact meeting selected.
+   - Implemented in v0.12.6: Home now passes a meeting-specific Attendance deep link, and Attendance honors the selected meeting ID.
 
 ## Kiosk simulator
 

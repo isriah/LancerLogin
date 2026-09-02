@@ -144,6 +144,9 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
 
 test("home shows a five-week rolling calendar, live attendance, and contest review", async () => {
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
+  const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const router = await readFile("apps/dashboard/src/router.tsx", "utf8");
   assert.match(home, /length: 35/);
   assert.match(home, /previousMonth/);
   assert.match(home, /previous-month/);
@@ -154,6 +157,11 @@ test("home shows a five-week rolling calendar, live attendance, and contest revi
   assert.match(home, /Active · not checked out/);
   assert.match(home, /Attendance contests/);
   assert.match(home, /reviewNote/);
+  assert.match(home, /navigate\(`\/attendance\?meetingId=\$\{encodeURIComponent\(meeting\.id\)\}`\)/);
+  assert.match(attendance, /selectedMeetingId/);
+  assert.match(attendance, /const ordered = \[\.\.\.result\.meetings\]\.sort\(\(left, right\) => Date\.parse\(left\.startsAt\) - Date\.parse\(right\.startsAt\)\)/);
+  assert.match(shell, /new URLSearchParams\(search\)\.get\("meetingId"\)/);
+  assert.match(router, /search: window\.location\.search/);
 });
 
 test("update assistant backs up before opening GitHub and cannot deploy automatically", async () => {
@@ -173,7 +181,7 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
 test("attendance actions preserve their layout and mute unavailable choices", async () => {
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
-  assert.match(attendance, /const latestCompleted = result\.meetings\.find\(\(meeting\) => Date\.parse\(meeting\.endsAt \?\? meeting\.startsAt\) <= Date\.now\(\)\)/);
+  assert.match(attendance, /const latestCompleted = ordered\.filter\(\(meeting\) => Date\.parse\(meeting\.endsAt \?\? meeting\.startsAt\) <= Date\.now\(\)\)\.at\(-1\)/);
   assert.match(attendance, /disabled=\{row\.disposition === "present"\}/);
   assert.match(attendance, /Send Discord absence notice/);
   assert.match(attendance, /className="primary-button" type="button" disabled=\{!selected\}/);

@@ -3,10 +3,10 @@ import { MouseEvent, useEffect, useState } from "react";
 export function normalizePath(path: string) { const cleaned = path.replace(/\/+$/, "") || "/"; return cleaned === "/" ? "/dashboard" : cleaned; }
 
 export function usePath() {
-  const [path, setPath] = useState(() => normalizePath(window.location.pathname));
-  useEffect(() => { const update = () => setPath(normalizePath(window.location.pathname)); window.addEventListener("popstate", update); return () => window.removeEventListener("popstate", update); }, []);
-  function navigate(next: string, replace = false) { const pathName = normalizePath(next); window.history[replace ? "replaceState" : "pushState"]({}, "", pathName); setPath(pathName); window.scrollTo({ top: 0, behavior: "smooth" }); }
-  return { path, navigate };
+  const [location, setLocation] = useState(() => ({ path: normalizePath(window.location.pathname), search: window.location.search }));
+  useEffect(() => { const update = () => setLocation({ path: normalizePath(window.location.pathname), search: window.location.search }); window.addEventListener("popstate", update); return () => window.removeEventListener("popstate", update); }, []);
+  function navigate(next: string, replace = false) { const target = new URL(next, window.location.origin); const pathName = normalizePath(target.pathname); window.history[replace ? "replaceState" : "pushState"]({}, "", `${pathName}${target.search}`); setLocation({ path: pathName, search: target.search }); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  return { ...location, navigate };
 }
 
 export function RouteLink({ href, currentPath, navigate, children, className = "" }: { href: string; currentPath: string; navigate: (path: string) => void; children: React.ReactNode; className?: string }) {

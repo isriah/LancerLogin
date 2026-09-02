@@ -39,6 +39,9 @@ Status: collecting. Do not implement until the user explicitly reconciles this r
    - Screenshot: <https://i.imgur.com/3HPrkUB.png>
 2. Reshape the kiosk update area to match the dashboard installed-versus-latest release comparison instead of a full-width card.
 3. Move the dashboard access card that grants Operator/Admin powers into Settings.
+4. Show a prominent update-available popup across the dashboard, including Home.
+   - Observation: update availability is too easy to miss when a user remains on the Home screen.
+   - Expected behavior: display a highly visible, dismissible popup when a compatible dashboard or kiosk update is available, with a clear route to the relevant update action.
 
 ## Reports
 

@@ -45,6 +45,9 @@ Status: collecting. Do not implement until the user explicitly reconciles this r
 5. Add active feedback and reliable acknowledgement for dashboard-triggered kiosk updates.
    - Observation: after requesting the kiosk update from 0.10.5 to 0.12.6, the dashboard showed no queued, in-progress, success, or failure state. Pi inspection confirmed that `lancerlogin-update.service` was never invoked and the kiosk remains on 0.10.5.
    - Expected behavior: surface a durable per-kiosk update state near the action, including request accepted/queued, device received, installing, success (with installed version), or actionable failure. The state must remain available after navigation or refresh until completion.
+6. Move Guided Setup into its own Settings sub-tab.
+   - Observation: reopening Guided Setup is currently located in Organization settings.
+   - Expected behavior: expose Guided Setup as a dedicated Settings sub-tab and remove the redundant Organization placement.
 
 ## Reports
 

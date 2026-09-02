@@ -64,3 +64,38 @@ test("mobile controls retain a 44px touch target", async ({ page }) => {
   );
   for (const control of controls) expect(control.height, control.label).toBeGreaterThanOrEqual(44);
 });
+
+test("expanded mobile content only scrolls where data requires it", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const allowedScrollerSelectors = [".responsive-table", ".table-scroll"];
+
+  for (const route of routes) {
+    await page.goto(route);
+    for (const summary of await page.locator("details:not([open]) > summary").all()) await summary.click();
+    const unexpectedScrollers = await page.evaluate((allowed) => Array.from(document.querySelectorAll<HTMLElement>("*")).flatMap((element) => {
+      const style = getComputedStyle(element);
+      const isScrollable = element.scrollWidth > element.clientWidth + 1 && ["auto", "scroll"].includes(style.overflowX);
+      const isAllowed = allowed.some((selector) => element.matches(selector));
+      return isScrollable && !isAllowed ? [{ tag: element.tagName, className: element.className }] : [];
+    }), allowedScrollerSelectors);
+    expect(unexpectedScrollers, route).toEqual([]);
+  }
+});
+
+test("expanded mobile controls stay within reach", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  for (const route of routes) {
+    await page.goto(route);
+    for (const summary of await page.locator("details:not([open]) > summary").all()) await summary.click();
+    const clippedControls = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>("button, input, select, textarea, summary, [role='dialog']")).flatMap((element) => {
+      const style = getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      const visible = style.display !== "none" && style.visibility !== "hidden" && bounds.width > 0 && bounds.height > 0;
+      const inDataScroller = Boolean(element.closest(".responsive-table, .table-scroll"));
+      const clipped = bounds.left < -1 || bounds.right > window.innerWidth + 1;
+      return visible && clipped && !inDataScroller ? [{ label: element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName, left: bounds.left, right: bounds.right }] : [];
+    }));
+    expect(clippedControls, route).toEqual([]);
+  }
+});

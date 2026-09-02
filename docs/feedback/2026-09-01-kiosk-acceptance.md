@@ -197,3 +197,7 @@ Status: queued. Do not implement until the user explicitly reconciles this round
     - Likely validation sources: a past meeting, Discord's 100 active/scheduled-event limit, or a meeting title/notes exceeding Discord's 100-character name or 1,000-character description limits. The current UI permits 120-character titles and 2,000-character notes.
     - Expected behavior: continue through eligible meetings, preserve a per-meeting outcome, show partial success beside Sync all, identify the affected meeting, and safely surface actionable Discord validation detail. Skip historical meetings with an explicit reason and avoid duplicate events through the existing mapping table.
     - Acceptance notes: test a mixed historical/future set, a title over 100 characters, notes over 1,000 characters, an existing mapped event, a missing/deleted mapped event, and an event-limit rejection.
+16. Theme the Sync all to Discord action.
+    - Affected area: dashboard Meetings page.
+    - Observation: the Sync all to Discord button does not use the organization theme like other primary actions.
+    - Expected behavior: apply the standard primary button color, contrast, rounded profile, hover/focus states, and disabled/loading treatment used by other dashboard commands.

@@ -93,6 +93,19 @@ test("dashboard restore accepts and normalizes earlier backup schemas", async ()
   assert.match(source, /deleted_at: null/);
 });
 
+test("Discord absence recipient history preserves every sent notice", async () => {
+  const migration = await readFile("apps/api/migrations/0011_discord_notice_history.sql", "utf8");
+  assert.match(migration, /PRIMARY KEY \(installation_id, meeting_id, member_id, message_id\)/);
+  assert.match(migration, /idx_discord_attendance_recipients_message/);
+});
+
+test("Discord contest notices have a bounded organization-wide expiry", async () => {
+  const migration = await readFile("apps/api/migrations/0012_discord_contest_window.sql", "utf8");
+  const source = await readFile("apps/api/src/index.ts", "utf8");
+  assert.match(migration, /DEFAULT 24 CHECK \(discord_contest_window_hours BETWEEN 1 AND 168\)/);
+  assert.match(source, /Date\.parse\(recipient\.deliveredAt\).+discordContestWindowHours/);
+});
+
 test("recurring meeting migration stores series metadata without biometric data", async () => {
   const migration = await readFile("apps/api/migrations/0006_recurring_meetings.sql", "utf8");
   assert.match(migration, /recurrence_frequency/);

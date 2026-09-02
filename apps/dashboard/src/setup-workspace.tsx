@@ -14,7 +14,7 @@ const steps = [
   ["confirm-attendance", "Attendance confirmation", "Confirm the expected check-in reached the dashboard."],
 ] as const;
 type StepId = typeof steps[number][0];
-export type Branding = { organizationName: string; subtitle?: string; logoData?: string; primaryColor: string; secondaryColor: string; appearance: "system" | "light" | "dark"; logoBackdrop: LogoBackdrop; lateScanMinutes: number };
+export type Branding = { organizationName: string; subtitle?: string; logoData?: string; primaryColor: string; secondaryColor: string; appearance: "system" | "light" | "dark"; logoBackdrop: LogoBackdrop; lateScanMinutes: number; discordContestWindowHours: number };
 type Member = RosterMember;
 type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; pairedAt: string };
 type Meeting = { id: string; title: string; startsAt: string; endsAt: string };
@@ -78,7 +78,7 @@ export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut
       api<{ simulator: Simulator | null }>("/admin/simulator"),
     ]).then(([brand, setup, roster, kioskStatus, meetingStatus, simulatorStatus]) => {
       const completedSet = new Set(setup.completedSteps.map((item) => item.step).filter((step) => setupStepIds.includes(step)));
-      setBranding({ ...brand.settings, subtitle: brand.settings.subtitle ?? "", logoData: brand.settings.logoData ?? "", logoBackdrop: brand.settings.logoBackdrop ?? "auto", lateScanMinutes: brand.settings.lateScanMinutes ?? 30 }); setCompleted(completedSet);
+      setBranding({ ...brand.settings, subtitle: brand.settings.subtitle ?? "", logoData: brand.settings.logoData ?? "", logoBackdrop: brand.settings.logoBackdrop ?? "auto", lateScanMinutes: brand.settings.lateScanMinutes ?? 30, discordContestWindowHours: brand.settings.discordContestWindowHours ?? 24 }); setCompleted(completedSet);
       setMembers(roster.members); setSimulatedMemberId(roster.members[0]?.memberId ?? ""); setActiveKiosk(kioskStatus.kiosks.find((kiosk) => kiosk.active === 1));
       setMeetings(meetingStatus.meetings); if (meetingStatus.meetings[0]) setTestMeetingId(meetingStatus.meetings[0].id);
       setSimulator(simulatorStatus.simulator); setCurrentStep(steps.find(([id]) => !completedSet.has(id))?.[0] ?? "branding"); setNotice("Setup progress is synchronized for every Admin.");

@@ -14,7 +14,7 @@ type Principal = { userId: string; role: Role; expiresAt: number };
 type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "confirm-attendance";
 type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
-type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number };
+type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number; discordContestWindowHours?: number };
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null };
 type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
@@ -88,7 +88,7 @@ async function setupStatus(env: Env): Promise<Response> {
   const db = requireDatabase(env);
   const installation = await db.prepare("SELECT id, auth_mode AS authMode, telemetry_accepted_at AS telemetryAcceptedAt FROM installations WHERE id = ?").bind("primary").first<{ id: string; authMode: AuthMode; telemetryAcceptedAt?: string }>();
   if (!installation) return response({ configured: false });
-  const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone, logo_backdrop AS logoBackdrop, late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = ?").bind(installation.id).first();
+  const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone, logo_backdrop AS logoBackdrop, late_scan_minutes AS lateScanMinutes, discord_contest_window_hours AS discordContestWindowHours FROM organization_settings WHERE installation_id = ?").bind(installation.id).first();
   return response({ configured: true, installation: { ...installation, telemetryAccepted: Boolean(installation.telemetryAcceptedAt) }, settings });
 }
 function validateBootstrap(input: BootstrapInput): string[] {
@@ -161,7 +161,7 @@ async function authSession(request: Request, env: Env): Promise<Response> {
 async function branding(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") {
-    const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone, logo_backdrop AS logoBackdrop, late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first();
+    const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone, logo_backdrop AS logoBackdrop, late_scan_minutes AS lateScanMinutes, discord_contest_window_hours AS discordContestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first();
     return response({ settings });
   }
   const input = await parseJson<BrandingInput>(request); const errors: string[] = [];
@@ -172,10 +172,11 @@ async function branding(request: Request, env: Env): Promise<Response> {
   if (!input.appearance || !["system", "themed", "light", "dark"].includes(input.appearance)) errors.push("Appearance must be themed, light, dark, or follow the device");
   if (!input.logoBackdrop || !["auto", "light", "dark", "none"].includes(input.logoBackdrop)) errors.push("Logo background must be automatic, light, dark, or none");
   if (!Number.isInteger(input.lateScanMinutes) || input.lateScanMinutes! < 0 || input.lateScanMinutes! > 180) errors.push("Late scan window must be from 0 to 180 minutes");
+  if (!Number.isInteger(input.discordContestWindowHours) || input.discordContestWindowHours! < 1 || input.discordContestWindowHours! > 168) errors.push("Discord contest window must be from 1 to 168 hours");
   if (errors.length) throw new HttpError(400, "Invalid branding", errors);
   await assertNoMeetingOverlap(db, [], input.lateScanMinutes!);
-  await db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_data = ?, primary_color = ?, secondary_color = ?, appearance = ?, logo_backdrop = ?, late_scan_minutes = ? WHERE installation_id = 'primary'")
-    .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoData || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance === "themed" ? "system" : input.appearance, input.logoBackdrop, input.lateScanMinutes).run();
+  await db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_data = ?, primary_color = ?, secondary_color = ?, appearance = ?, logo_backdrop = ?, late_scan_minutes = ?, discord_contest_window_hours = ? WHERE installation_id = 'primary'")
+    .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoData || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance === "themed" ? "system" : input.appearance, input.logoBackdrop, input.lateScanMinutes, input.discordContestWindowHours).run();
   await writeAudit(db, principal, "branding.updated", "organization_settings", "primary"); return response({ ok: true });
 }
 async function setupProgress(request: Request, env: Env): Promise<Response> {
@@ -738,8 +739,7 @@ async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string
     const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }); const messageId = String(body.id ?? "");
     if (!messageId) throw new HttpError(502, "Discord did not return a message identifier");
     await db.batch([
-      db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary' AND meeting_id = ?").bind(meeting.id),
-      ...members.map((member) => db.prepare("INSERT INTO discord_attendance_recipients (installation_id, meeting_id, member_id, discord_user_id, message_id, delivered_at) VALUES ('primary', ?, ?, ?, ?, ?)").bind(meeting.id, member.id, member.discordUserId, messageId, now)),
+      ...members.map((member) => db.prepare("INSERT OR IGNORE INTO discord_attendance_recipients (installation_id, meeting_id, member_id, discord_user_id, message_id, delivered_at) VALUES ('primary', ?, ?, ?, ?, ?)").bind(meeting.id, member.id, member.discordUserId, messageId, now)),
       db.prepare("UPDATE discord_attendance_notifications SET status = 'delivered', message_id = ?, processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(messageId, now, now, meeting.id),
     ]);
     if (options.actor) await writeAudit(db, options.actor, "discord.missing_notified", "meeting", meeting.id, { linkedMissingCount: members.length, messageId, manual: true });
@@ -807,8 +807,10 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
   if (!record?.verifiedAt) return discordEphemeral("This LancerLogin Discord integration has not been verified by an Admin.");
   const meetingId = customId.startsWith("lancerlogin-attendance:") ? customId.slice("lancerlogin-attendance:".length) : "";
   if (interaction.type !== 3 || !meetingId || !discordUserId || !messageId) return discordEphemeral("This attendance contest button is invalid or expired. Ask an Operator for help.");
-  const recipient = await db.prepare("SELECT r.member_id AS memberId FROM discord_attendance_recipients r JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE r.installation_id = 'primary' AND r.meeting_id = ? AND r.message_id = ? AND r.discord_user_id = ? AND m.discord_user_id = ? AND m.active = 1").bind(meetingId, messageId, discordUserId, discordUserId).first<{ memberId: string }>();
-  if (!recipient) return discordEphemeral("This absence notice was not delivered for your linked roster account. Ask an Operator for help.");
+  const recipient = await db.prepare("SELECT r.member_id AS memberId, r.delivered_at AS deliveredAt FROM discord_attendance_recipients r JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE r.installation_id = 'primary' AND r.meeting_id = ? AND r.message_id = ? AND r.discord_user_id = ? AND m.discord_user_id = ? AND m.active = 1").bind(meetingId, messageId, discordUserId, discordUserId).first<{ memberId: string; deliveredAt: string }>();
+  if (!recipient) return discordEphemeral("This notice does not match your current linked roster account. Use a notice sent after your Discord link was saved, or ask an Operator for help.");
+  const contestWindow = await db.prepare("SELECT discord_contest_window_hours AS discordContestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ discordContestWindowHours?: number }>();
+  if (Date.now() > Date.parse(recipient.deliveredAt) + (contestWindow?.discordContestWindowHours ?? 24) * 3_600_000) return discordEphemeral("This absence notice has expired. Ask an Operator to review your attendance.");
   if (!(await linkedAbsentMembers(db, meetingId)).some((member) => member.id === recipient.memberId)) return discordEphemeral("Attendance no longer shows you as absent, so no contest was created.");
   const now = new Date().toISOString(); await db.prepare("INSERT OR IGNORE INTO discord_attendance_contests (installation_id, meeting_id, member_id, message_id, status, created_at, submitted_by_discord_user_id) VALUES ('primary', ?, ?, ?, 'open', ?, ?)").bind(meetingId, recipient.memberId, messageId, now, discordUserId).run();
   const contest = await db.prepare("SELECT status FROM discord_attendance_contests WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ?").bind(meetingId, recipient.memberId).first<{ status: string }>();
@@ -899,7 +901,7 @@ async function privacySettings(request: Request, env: Env): Promise<Response> {
 type BackupScope = "meetings" | "roster" | "installation";
 const tableColumns = {
   installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id"],
-  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop"],
+  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at"],
   meetings: ["id", "installation_id", "title", "starts_at", "ends_at", "required", "notes", "created_by", "created_at", "is_test", "series_id", "recurrence_frequency", "recurrence_until", "recurrence_sequence", "deleted_at"],
@@ -968,7 +970,7 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
 
   const tables = Object.fromEntries((Object.keys(tableColumns) as BackupTable[]).map((table) => [table, [] as Record<string, unknown>[]])) as Record<BackupTable, Record<string, unknown>[]>;
   for (const table of requiredTables) tables[table] = (sourceTables[table] as Record<string, unknown>[]).map((row) => ({ ...row }));
-  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", ...row }));
+  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
   if (tables.meetings) tables.meetings = tables.meetings.map((row) => {
     const normalized: Record<string, unknown> = { series_id: null, recurrence_frequency: null, recurrence_until: null, recurrence_sequence: null, deleted_at: null, ...row };

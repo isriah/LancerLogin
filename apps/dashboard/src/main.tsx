@@ -137,7 +137,7 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
     const response = await fetch(`${apiBaseUrl}/setup/bootstrap`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ setupCode, organizationName, timeZone, authMode, adminEmail: usesGoogle ? adminEmail : undefined, googleClientId: usesGoogle ? googleClientId : undefined, googleClientSecret: usesGoogle ? googleClientSecret : undefined, localUsername: usesLocal ? localUsername : undefined, localPassword: usesLocal ? localPassword : undefined, telemetryAccepted }) });
     const body = await response.json() as { error?: string; details?: string[] };
     if (!response.ok) { setResult({ error: body.details?.join(" ") ?? body.error ?? "Setup failed" }); return; }
-    onConfigured({ configured: true, installation: { authMode }, settings: { organizationName, subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } });
+    onConfigured({ configured: true, installation: { authMode }, settings: { organizationName, subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } });
   }
 
   return <section className="first-admin-card" aria-labelledby="first-admin-title"><div className="form-intro"><p className="kicker">First-time setup</p><h1 id="first-admin-title">Create your installation</h1><p>This creates the first Admin in your organization’s new database. You can change branding and add more users afterward.</p></div><form onSubmit={submit}>
@@ -156,7 +156,7 @@ function ConfiguredInstallation({ status, onStatusChange }: { status: SetupStatu
   const [checking, setChecking] = useState(true);
   useEffect(() => { fetch(`${apiBaseUrl}/auth/session`, { credentials: "include" }).then(async (result) => { if (result.ok) setSession((await result.json() as { user: { role: "admin" | "operator" } }).user); }).finally(() => setChecking(false)); }, []);
   if (checking) return <p className="auth-check" role="status">Checking your session…</p>;
-  if (session) return <AppShell role={session.role} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => setSession(undefined)); }} />;
+  if (session) return <AppShell role={session.role} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => setSession(undefined)); }} />;
   return <LocalLogin status={status} onSignedIn={(role) => setSession({ role })} />;
 }
 

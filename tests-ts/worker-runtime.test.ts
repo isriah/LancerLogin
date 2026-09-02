@@ -183,7 +183,7 @@ test("branding stores a bounded image asset in D1 and rejects remote logo URLs",
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const cookie = await sessionCookie("admin");
-  const base = { organizationName: "Example Arts Club", subtitle: "Create together", primaryColor: "#123456", secondaryColor: "#abcdef", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 };
+  const base = { organizationName: "Example Arts Club", subtitle: "Create together", primaryColor: "#123456", secondaryColor: "#abcdef", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 };
   const remote = await worker.fetch(request("/admin/branding", { ...base, logoData: "https://example.test/logo.png" }, { method: "PATCH", cookie }), env);
   assert.equal(remote.status, 400);
   const logoData = `data:image/png;base64,${Buffer.from("small-logo").toString("base64")}`;
@@ -720,7 +720,9 @@ test("Discord missing-member workflow mentions only linked absent members and re
     assert.match(payload.content, /<@323456789012345678>/);
     assert.deepEqual(payload.allowed_mentions, { parse: [], users: ["323456789012345678"] });
     assert.equal(payload.components[0].components[0].custom_id, "lancerlogin-attendance:meeting-1");
-    assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("discord_attendance_recipients")));
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("discord_attendance_recipients")));
+  assert.equal(database.batches.at(-1)?.some((call) => call.sql.includes("DELETE FROM discord_attendance_recipients")), false);
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT OR IGNORE INTO discord_attendance_recipients")));
     assert.equal(database.batches.at(-1)?.some((call) => call.sql.includes("discord_attendance_contests")), false);
     assert.equal(JSON.stringify(await result.json()).includes("discord-secret"), false);
   } finally { globalThis.fetch = originalFetch; }

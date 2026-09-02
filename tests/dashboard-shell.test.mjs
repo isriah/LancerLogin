@@ -198,6 +198,19 @@ test("attendance actions preserve their layout and mute unavailable choices", as
   assert.match(styles, /min-width: 4\.8rem/);
 });
 
+test("dashboard cards keep their spacing and operational actions aligned", async () => {
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
+  assert.match(styles, /--card-padding: 1\.35rem/);
+  assert.match(styles, /\.kiosk-monitor[^\n]*padding: var\(--card-padding\)/);
+  assert.match(styles, /\.attendance-card \.panel-heading \{ padding: var\(--card-padding\)/);
+  assert.match(styles, /\.report-grid \{ display: grid; grid-template-columns: minmax\(0,1\.5fr\) minmax\(18rem,1fr\)/);
+  assert.match(styles, /\.leaderboard-card \{ grid-row: span 2; \}/);
+  assert.match(styles, /\.roster-row-actions \{ display: flex/);
+  assert.match(styles, /\.roster-row-actions button \{ min-height: 2\.25rem/);
+  assert.match(roster, /className="roster-row-actions"/);
+});
+
 test("numeric organization settings can be cleared before they are normalized on save", async () => {
   const source = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   const colors = await readFile("apps/dashboard/src/color-editor.tsx", "utf8");

@@ -166,6 +166,16 @@ test("only an Admin can discover the private deployment updater", async () => {
   assert.deepEqual(await result.json(), { releaseVersion: "development", workflowUrl });
 });
 
+test("only an Admin can change settings, dashboard access, or queue kiosk updates", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("operator");
+  const branding = { organizationName: "Example Arts Club", primaryColor: "#123456", secondaryColor: "#abcdef", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 };
+  assert.equal((await worker.fetch(request("/admin/branding", branding, { method: "PATCH", cookie }), env)).status, 403);
+  assert.equal((await worker.fetch(request("/admin/users", undefined, { cookie }), env)).status, 403);
+  assert.equal((await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie }), env)).status, 403);
+});
+
 test("protected routes immediately honor account deactivation and role changes", async () => {
   const deactivated = new FakeDatabase();
   deactivated.rows.set("SELECT id, role FROM users", null);

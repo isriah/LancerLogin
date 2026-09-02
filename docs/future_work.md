@@ -117,11 +117,7 @@ Release: v0.12.8 attendance reporting and dashboard operations refinement.
 
 ### WU-005 — Roster discovery controls
 
-Status: in progress
-
-Owner: LancerLogin coordinator
-Branch: `codex/wu-005-roster-discovery`
-Base: `f73d6df132297821acff51631e42d64e15bc40ba`
+Status: merged (`88310ad`)
 
 Goal: make the roster quick to search and narrow during operations.
 Scope: one search field that matches member name, email, and ID; Active-only and All-members filtering.
@@ -196,17 +192,6 @@ Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Kiosk simulator); `d
 Acceptance: the foundation renders the shared kiosk experience in the browser, records simulator-origin activity distinctly, and cannot act as or count as a physical kiosk.
 Verification: `npm run verify:kiosk`, `npm run verify:dashboard`, and 800x480 browser smoke coverage.
 Release: later kiosk operations bundle; requires follow-on work units before the full emulator is complete.
-
-### WU-011 — Private deployment and physical kiosk acceptance
-
-Status: blocked pending explicit user authorization
-
-Goal: record real acceptance evidence for a user-selected released version without broadening the existing deployment boundary.
-Scope: private Upgrade workflow, pre-upgrade backup, kiosk update/health behavior, and the applicable physical kiosk checks; never touch the earlier attendance installation or erase R503 templates or local mappings.
-Sources: `AGENTS.md`, `docs/KIOSK.md`, the selected release notes, and `docs/COMPLETION-AUDIT.md`.
-Acceptance: the requested real-world checks have pass/fail evidence recorded in the completion audit, with any failures preserved as new work units.
-Verification: user-authorized private deployment and Pi acceptance only; no substitute local test may be represented as physical acceptance.
-Release: no new release impact; validates an existing release.
 
 ## Release bundling
 

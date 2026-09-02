@@ -154,11 +154,7 @@ Release: later settings and operations bundle.
 
 ### WU-008 — Meeting duplication and templates
 
-Status: in progress
-
-Owner: LancerLogin coordinator
-Branch: `codex/wu-008-meeting-templates`
-Base: `f73d6df132297821acff51631e42d64e15bc40ba`
+Status: merged (`e92c2e1`)
 
 Goal: reduce repeated meeting setup work.
 Scope: duplicate an existing meeting or start from a reusable meeting template while preserving typical timing and recurrence choices.

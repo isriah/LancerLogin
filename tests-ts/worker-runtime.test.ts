@@ -304,7 +304,7 @@ test("browser simulator check-ins are Admin-only and restricted to active meetin
   assert.equal((await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("operator") }), env)).status, 403);
   const accepted = await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("admin") }), env);
   assert.equal(accepted.status, 202);
-  assert.ok(database.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events") && call.values.includes("manual")));
+  assert.ok(database.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events") && call.values.includes("simulator")));
   assert.ok(database.calls.some((call) => call.values.includes("simulator.check_in")));
 
   const normalDatabase = new FakeDatabase();

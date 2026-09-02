@@ -112,6 +112,7 @@ test("tagged release archive includes every kiosk runtime module", async () => {
     "pair-cli.mjs",
     "pairing-key.mjs",
     "kiosk-states.mjs",
+    "kiosk-presentation.mjs",
     "scanner.mjs",
     "network-manager.mjs",
     "network-pin.mjs",

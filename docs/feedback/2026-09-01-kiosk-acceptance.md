@@ -190,3 +190,10 @@ Status: queued. Do not implement until the user explicitly reconciles this round
     - Current kiosk scan-screen rules: main message is 48px, supporting text 24px, member name 30px, meeting text 20px, footer 18px, with slightly smaller values under 520px height.
     - Current kiosk maintenance rules: headings are 28px and 20px, labels 14px, table text 13px, status message 15px, keypad buttons 20px, enrollment prompt 30px/18px, with smaller values under 520px height.
     - Design dependency: choose a standard typography scale for dashboard tables/forms, dashboard page content, kiosk scan state, kiosk maintenance forms, and kiosk modal/keypad controls before implementation.
+15. Make bulk Discord calendar sync resilient and explain partial results.
+    - Affected area: dashboard Meetings page and the Discord scheduled-event API adapter.
+    - Observation: Sync all to Discord displayed `Discord rejected the request (400)`, while some calendar events appeared to have been added.
+    - Current behavior: the server syncs meetings sequentially and aborts on the first Discord error. Successfully created/updated earlier events remain in Discord, but the UI receives only a generic status and no meeting-level result.
+    - Likely validation sources: a past meeting, Discord's 100 active/scheduled-event limit, or a meeting title/notes exceeding Discord's 100-character name or 1,000-character description limits. The current UI permits 120-character titles and 2,000-character notes.
+    - Expected behavior: continue through eligible meetings, preserve a per-meeting outcome, show partial success beside Sync all, identify the affected meeting, and safely surface actionable Discord validation detail. Skip historical meetings with an explicit reason and avoid duplicate events through the existing mapping table.
+    - Acceptance notes: test a mixed historical/future set, a title over 100 characters, notes over 1,000 characters, an existing mapped event, a missing/deleted mapped event, and an event-limit rejection.

@@ -21,6 +21,14 @@ export function createNetworkManager({ run = defaultRun, connectSecure = secureC
       const output = await run(["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"]); const devices = output.trim().split(/\r?\n/).filter(Boolean).map(splitNmcli).map(([device, type, state, connection]) => ({ device, type, state, connection }));
       const active = devices.find((device) => ["wifi", "ethernet"].includes(device.type) && device.state === "connected"); return { online: Boolean(active), connection: active?.connection || null, type: active?.type || null, devices };
     },
+    async diagnostics() {
+      const status = await this.status();
+      if (status.type !== "wifi") return { type: status.type === "ethernet" ? "ethernet" : "offline", signal: null };
+      const output = await run(["-t", "-f", "IN-USE,SIGNAL", "device", "wifi", "list", "--rescan", "no"]);
+      const active = output.trim().split(/\r?\n/).filter(Boolean).map(splitNmcli).find(([inUse]) => inUse === "*");
+      const signal = Number(active?.[1]);
+      return { type: "wifi", signal: Number.isInteger(signal) && signal >= 0 && signal <= 100 ? signal : null };
+    },
     async wifi() {
       const status = await this.status(); const device = status.devices.find((item) => item.type === "wifi")?.device;
       await run(["radio", "wifi", "on"]); await run(["device", "wifi", "rescan", ...(device ? ["ifname", device] : [])]); const output = await run(["-t", "--escape", "yes", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "no", ...(device ? ["ifname", device] : [])]); const seen = new Set(); const networks = [];

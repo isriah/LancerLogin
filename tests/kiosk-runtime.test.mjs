@@ -151,6 +151,15 @@ test("network policy grants only narrow NetworkManager actions to the kiosk acco
   assert.match(policy, /subject\.user === "lancerlogin"/); assert.match(policy, /NetworkManager\.network-control/); assert.doesNotMatch(policy, /polkit\.Result\.YES[\s\S]*return polkit\.Result\.YES/);
 });
 
+test("network diagnostics exposes only connection type and active Wi-Fi signal", async () => {
+  const manager = createNetworkManager({ run: async (args) => {
+    if (args.includes("status")) return "wlan0:wifi:connected:Private WiFi\n";
+    if (args.includes("IN-USE,SIGNAL")) return "*:73\n:41\n";
+    return "";
+  } });
+  assert.deepEqual(await manager.diagnostics(), { type: "wifi", signal: 73 });
+});
+
 test("pairing client requires HTTPS and does not persist the one-time code", async () => {
   assert.throws(() => normalizeApiUrl("http://example.test"), /HTTPS/);
   let sent;
@@ -163,9 +172,9 @@ test("pairing client requires HTTPS and does not persist the one-time code", asy
 
 test("heartbeat authenticates with the kiosk token and reports only operational state", async () => {
   let request;
-  await sendHeartbeat({ apiUrl: "https://api.example.test", kioskToken: "secret", kioskId: "kiosk-1" }, { readerOnline: true, releaseVersion: "1.0.0", fetchImpl: async (_url, init) => { request = init; return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }); } });
+  await sendHeartbeat({ apiUrl: "https://api.example.test", kioskToken: "secret", kioskId: "kiosk-1" }, { readerOnline: true, releaseVersion: "1.0.0", uptimeSeconds: 3_600, networkType: "wifi", networkSignal: 82, lastWifiScanAt: "2026-09-02T20:00:00.000Z", credential: "must-not-send", rawScan: "must-not-send", wifiNetworks: ["must-not-send"], fetchImpl: async (_url, init) => { request = init; return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }); } });
   assert.equal(request.headers.authorization, "Bearer secret");
-  assert.deepEqual(JSON.parse(request.body), { readerOnline: true, releaseVersion: "1.0.0", pendingEvents: 0, lastSyncAt: null, errorCategory: null });
+  assert.deepEqual(JSON.parse(request.body), { readerOnline: true, releaseVersion: "1.0.0", uptimeSeconds: 3_600, networkType: "wifi", networkSignal: 82, lastWifiScanAt: "2026-09-02T20:00:00.000Z", pendingEvents: 0, lastSyncAt: null, errorCategory: null });
 });
 
 test("kiosk configuration fetch is authenticated and contains no biometric request data", async () => {

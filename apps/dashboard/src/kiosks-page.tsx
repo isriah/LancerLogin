@@ -3,10 +3,24 @@ import { api } from "./dashboard-api";
 import { hardwarePairingKey, kioskInstallerUrl } from "./hardware-pairing-key";
 import { useModalFocus } from "./modal-focus";
 
-type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string; pendingEvents?: number; lastSyncAt?: string; errorCategory?: string; pairedAt: string };
+type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string; pendingEvents?: number; lastSyncAt?: string; errorCategory?: string; pairedAt: string };
 type Simulator = { name: string; active: number; online: number; lastSeenAt?: string; readerOnline: false; releaseVersion: string };
 type Pairing = { code: string; expiresAt: string; workerApiUrl: string; kioskName: string };
 type KioskCommand = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
+
+function formatUptime(seconds?: number) {
+  if (!Number.isFinite(seconds)) return "—";
+  const totalMinutes = Math.floor(Number(seconds) / 60); const days = Math.floor(totalMinutes / 1_440); const hours = Math.floor(totalMinutes % 1_440 / 60); const minutes = totalMinutes % 60;
+  return `${days ? `${days}d ` : ""}${hours}h ${minutes}m`;
+}
+
+function recoveryGuidance(kiosk: Kiosk, online: boolean) {
+  if (!kiosk.readerOnline) return "Reader offline: check the R503 cable and power, then use the physical kiosk’s protected maintenance reader test.";
+  if (!online || kiosk.networkType === "offline") return "Kiosk offline: check Ethernet or unlock local network settings from the physical kiosk’s network control.";
+  if ((kiosk.pendingEvents ?? 0) > 0) return "Scans are queued safely and will sync in order when the cloud connection returns.";
+  if (kiosk.errorCategory) return `Recovery: ${kiosk.errorCategory.replaceAll("_", " ")}. Check the physical kiosk status, then restart software if the issue persists.`;
+  return "Healthy: no recovery action is needed.";
+}
 
 function PairKioskDialog({ active, onClose, onPaired }: { active?: Kiosk; onClose: () => void; onPaired: () => Promise<void> }) {
   const [name, setName] = useState(active ? `${active.name} replacement` : "Main kiosk");
@@ -70,8 +84,8 @@ export function KiosksPage({ role }: { role: "admin" | "operator" }) {
         <h2>Physical kiosk</h2>
         <div className="kiosk-state"><strong>{active?.name ?? "No kiosk paired"}</strong><span className={`status-pill ${online ? "online" : "offline"}`}>{online ? "Online" : active ? "Offline" : "Not paired"}</span></div>
         {active ? <>
-          <dl><div><dt>Fingerprint reader</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div><div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Release</dt><dd>{active.releaseVersion ?? "—"}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div></dl>
-          {active.errorCategory && <p className="warning-callout" role="status">The kiosk reports an operational issue: {active.errorCategory.replaceAll("_", " ")}.</p>}
+          <dl><div><dt>Fingerprint reader</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div><div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Release</dt><dd>{active.releaseVersion ?? "—"}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div></dl>
+          <p className={active.errorCategory || !active.readerOnline || !online || active.networkType === "offline" ? "warning-callout" : "settings-callout"} role="status"><strong>Recovery guidance</strong><br />{recoveryGuidance(active, online)}</p>
           {role === "admin" && <>
             <div className="kiosk-actions">
               {editing ? <><label>Device name<input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="primary-button" type="button" onClick={() => void rename()}>Save name</button><button type="button" onClick={() => setEditing(false)}>Cancel</button></> : <button type="button" onClick={() => { setName(active.name); setEditing(true); }}>Rename</button>}

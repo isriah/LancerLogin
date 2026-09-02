@@ -371,13 +371,14 @@ test("kiosk heartbeat hashes bearer credentials before D1 lookup", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const heartbeat = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "0.1.0", pendingEvents: 2, lastSyncAt: "2026-09-01T20:00:00.000Z", errorCategory: null }) });
+  const heartbeat = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "0.1.0", uptimeSeconds: 3600, networkType: "wifi", networkSignal: 71, lastWifiScanAt: "2026-09-01T19:00:00.000Z", pendingEvents: 2, lastSyncAt: "2026-09-01T20:00:00.000Z", errorCategory: null, rawScan: "must-not-store", credential: "must-not-store" }) });
   const result = await worker.fetch(heartbeat, env);
   assert.equal(result.status, 200);
   const lookup = database.calls.find((call) => call.sql.includes("FROM kiosks"));
   assert.ok(lookup);
   assert.notEqual(lookup.values[0], "very-secret");
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET last_seen_at")));
+  assert.equal(database.calls.some((call) => call.values.includes("must-not-store")), false);
   const healthUpdate = database.calls.find((call) => call.sql.includes("reader_online"));
   assert.deepEqual(healthUpdate?.values.slice(1, 3), [1, "0.1.0"]);
 });

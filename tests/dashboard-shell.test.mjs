@@ -65,6 +65,7 @@ test("live branding stores an image locally and applies colors with a browser th
   const workspace = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
   const entry = await readFile("apps/dashboard/src/main.tsx", "utf8");
   const settings = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
+  const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   assert.match(workspace, /accept="image\/png,image\/jpeg,image\/webp"/);
   assert.match(workspace, /file\.size > 131_072/);
   assert.match(workspace, /stored in D1/);
@@ -74,8 +75,8 @@ test("live branding stores an image locally and applies colors with a browser th
   assert.match(workspace, /Logo contrast/);
   assert.match(settings, /id="organization-title">Organization/);
   assert.match(settings, /Save organization settings/);
-  assert.match(settings, /Late scan allowance/);
-  assert.match(settings, /individual meetings cannot override it/);
+  assert.match(configuration, /Late scan allowance/);
+  assert.match(configuration, /Changes apply to every meeting/);
 });
 
 test("Operator workspace exposes kiosk monitoring and the streamlined Discord attendance workflow", async () => {
@@ -96,8 +97,8 @@ test("Operator workspace exposes kiosk monitoring and the streamlined Discord at
   assert.match(meetings, /Sync all to Discord/);
   assert.match(meetings, /calendarOutcomes/);
   assert.match(meetings, /addMinutes\(value\.date, startTime, 150\)/);
-  assert.match(source, /Kiosk meeting ID/);
-  assert.match(source, /Copy ID/);
+  assert.doesNotMatch(source, /Kiosk meeting ID/);
+  assert.doesNotMatch(source, /Copy ID/);
   assert.match(meetings, /Notes <span>\(optional\)<\/span>/);
   assert.match(meetings, /Attendance required/);
   assert.match(meetings, /Create recurring series/);
@@ -161,9 +162,9 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
   assert.match(indicator, /formatVersion/);
   assert.match(source, /private GitHub deployment repository/);
   assert.match(source, /authorize Upgrade manually/);
-  assert.match(source, /Update kiosk to latest stable/);
+  assert.match(source, /Update to latest stable/);
   assert.match(source, /command: "install_latest"/);
-  assert.match(source, /Updates use Latest stable/);
+  assert.match(source, /Latest stable kiosk update queued/);
   assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);
 });
 
@@ -181,7 +182,7 @@ test("attendance actions preserve their layout and mute unavailable choices", as
 });
 
 test("numeric organization settings can be cleared before they are normalized on save", async () => {
-  const source = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
+  const source = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   const colors = await readFile("apps/dashboard/src/color-editor.tsx", "utf8");
   assert.match(source, /useState\(String\(initialBranding\.lateScanMinutes\)\)/);
   assert.match(source, /lateScanMinutes\.trim\(\) === "" \? 0/);

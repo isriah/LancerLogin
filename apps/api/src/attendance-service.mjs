@@ -40,8 +40,9 @@ export function createAttendanceService({ now = () => new Date().toISOString() }
     },
     correctAttendance(principal, correction) {
       requireCapability(principal, correction.disposition === "excused" ? "manage-excuses" : "manage-corrections");
-      if (!members.has(correction.memberId) || !meetings.has(correction.meetingId) || !correction.reason?.trim()) throw new Error("Invalid correction");
-      corrections.set(`${correction.memberId}:${correction.meetingId}`, { ...correction, createdBy: principal.userId, createdAt: now() });
+      const reason = correction.reason?.trim() ?? "";
+      if (!members.has(correction.memberId) || !meetings.has(correction.meetingId) || (correction.disposition !== "present" && !reason)) throw new Error("Invalid correction");
+      corrections.set(`${correction.memberId}:${correction.meetingId}`, { ...correction, reason, createdBy: principal.userId, createdAt: now() });
       writeAudit(principal, `attendance.${correction.disposition}`, "member", correction.memberId);
     },
     attendanceFor(meetingId) {

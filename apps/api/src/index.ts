@@ -497,13 +497,14 @@ async function attendance(request: Request, env: Env): Promise<Response> {
 async function correction(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const input = await parseJson<{ memberId?: string; meetingId?: string; disposition?: "present" | "absent" | "excused"; reason?: string }>(request);
-  if (!input.memberId || !input.meetingId || !input.disposition || !["present", "absent", "excused"].includes(input.disposition) || !input.reason?.trim() || input.reason.length > 300) throw new HttpError(400, "Member, meeting, disposition, and a correction reason are required");
+  const reason = input.reason?.trim() ?? "";
+  if (!input.memberId || !input.meetingId || !input.disposition || !["present", "absent", "excused"].includes(input.disposition) || (input.disposition !== "present" && !reason) || reason.length > 300) throw new HttpError(400, "Member, meeting, disposition, and a reason are required for absence or excuse corrections");
   const id = crypto.randomUUID(); const now = new Date().toISOString();
   await db.batch([
-    db.prepare("INSERT INTO attendance_corrections (id, installation_id, member_id, meeting_id, disposition, reason, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, input.memberId, input.meetingId, input.disposition, input.reason.trim(), principal.userId, now),
+    db.prepare("INSERT INTO attendance_corrections (id, installation_id, member_id, meeting_id, disposition, reason, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, input.memberId, input.meetingId, input.disposition, reason, principal.userId, now),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'attendance.corrected', 'attendance_correction', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ memberId: input.memberId, meetingId: input.meetingId, disposition: input.disposition }), now),
   ]);
-  return response({ correction: { id, ...input, reason: input.reason.trim(), createdAt: now } }, 201);
+  return response({ correction: { id, ...input, reason, createdAt: now } }, 201);
 }
 function csvCell(value: unknown): string {
   const text = value == null ? "" : String(value);

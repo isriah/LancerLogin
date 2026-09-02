@@ -490,7 +490,7 @@ async function restoreMeetings(request: Request, env: Env, meetingId: string): P
   await writeAudit(db, principal, "meeting.restored", "meeting", meeting.id);
   return response({ restored: 1, scope: "occurrence" });
 }
-async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual", actorId?: string): Promise<Response> {
+async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual" | "simulator", actorId?: string): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required");
   const existing = await db.prepare("SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?").bind(input.eventId.trim()).first<{ action: AttendanceAction }>();
   if (existing) return response({ accepted: false, duplicate: true, eventId: input.eventId, action: existing.action }, 200);
@@ -554,8 +554,8 @@ async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
     const meeting = input.meetingId ? await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first() : null;
     if (!meeting) throw new HttpError(400, "Choose an active meeting for the simulator scan");
     if (input.action === "scan" && !["check_in", "check_out"].includes(input.scanAction ?? "")) throw new HttpError(400, "Simulator scanAction must be check_in or check_out");
-    const result = await recordAttendance(db, { eventId: input.eventId ?? `simulator-${crypto.randomUUID()}`, memberId: input.memberId, meetingId: input.meetingId, occurredAt: new Date().toISOString(), desiredAction: input.action === "scan" ? input.scanAction : undefined }, "manual", principal.userId);
-    await writeAudit(db, principal, input.scanAction === "check_out" ? "simulator.check_out" : "simulator.check_in", "meeting", input.meetingId!, { memberId: input.memberId }); return result;
+    const result = await recordAttendance(db, { eventId: input.eventId ?? `simulator-${crypto.randomUUID()}`, memberId: input.memberId, meetingId: input.meetingId, occurredAt: new Date().toISOString(), desiredAction: input.action === "scan" ? input.scanAction : undefined }, "simulator", principal.userId);
+    await writeAudit(db, principal, input.scanAction === "check_out" ? "simulator.check_out" : "simulator.check_in", "meeting", input.meetingId!, { memberId: input.memberId, origin: "browser_simulator" }); return result;
   }
   throw new HttpError(400, "Simulator action must be pair, heartbeat, scan, or stop");
 }

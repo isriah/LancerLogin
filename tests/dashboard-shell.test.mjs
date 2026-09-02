@@ -49,6 +49,16 @@ test("live Admin workspace uses the authorized kiosk route and exits completed o
   assert.doesNotMatch(source, /<details className="admin-tools"/);
 });
 
+test("browser emulator uses the shared kiosk display contract and labels its input boundary", async () => {
+  const simulator = await readFile("apps/dashboard/src/simulator-page.tsx", "utf8");
+  const contract = await readFile("apps/kiosk/src/kiosk-presentation.mjs", "utf8");
+  assert.match(simulator, /kioskDisplayForAttendance/);
+  assert.match(simulator, /BrowserMemberInput/);
+  assert.match(simulator, /SIMULATED · BROWSER INPUT/);
+  assert.match(simulator, /Not a physical kiosk/);
+  assert.match(contract, /kioskDisplayForAttendance/);
+});
+
 test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", async () => {
   const source = await readFile("apps/dashboard/src/main.tsx", "utf8");
   assert.match(source, /Google OAuth guided setup/);

@@ -13,3 +13,4 @@ test-results/
 .provision/
 .collector/
 .d1-migration-verify-*/
+.codex/migration-artifacts/

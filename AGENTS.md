@@ -1,16 +1,49 @@
 # LancerLogin Agent Guidance
 
-This file supplements the repository documentation and is permanent guidance for every session in this workspace. Read it before changing product code, deployment state, or the feedback queue.
+This file supplements the repository documentation and is permanent guidance for every session in this workspace. Read it before changing product code, deployment state, or planned future work.
 
-## Feedback and planning
+## Future work and planning
 
-- Treat feedback, UI observations, defects, and feature requests as entries in a running feedback queue by default. Do **not** immediately implement them, create a release, or deploy them merely because they were reported.
-- Record each item with the affected area, observed behavior, expected behavior, and any supplied screenshot or link. Use the current dated file in `docs/feedback/`, or create a new dated file when a new round begins.
-- Ask clarifying questions only when needed to accurately record an item or when a material product, security, or design decision cannot be reasonably inferred.
-- Start implementation only when the user explicitly authorizes the item or a reconciled batch for execution.
-- Before implementation, inspect the current queue. If its scope, priority, desired behavior, or release boundary is uncertain, ask the necessary questions and provide a concise execution plan. Do not add planning friction when the request and queue are already clear.
-- Once an authorized, unambiguous batch begins, work through implementation, tests, documentation, release, and the requested deployment without arbitrary pauses. Pause only for genuine missing input, required approval, or a blocker.
-- Authorization for a change round includes the normal delivery sequence: testing, committing, merging/pushing to `main`, publishing the appropriate release, and updating the user-requested installation. Do not separately ask permission for those routine delivery steps.
+Read and follow [docs/future_work.md](docs/future_work.md) before recording future work, planning product work, or beginning a selected work unit.
+
+## Project orientation
+
+Before a change, identify the affected surface and read the relevant documentation:
+
+- Architecture and system boundaries: `docs/ARCHITECTURE.md`
+- Local setup and focused verification: `docs/DEVELOPMENT.md`
+- Product and operational decisions: `docs/DECISIONS.md`
+- Kiosk behavior and hardware constraints: `docs/KIOSK.md`
+- Release process: `docs/RELEASE-CHECKLIST.md`
+
+Do not read every document by default; read the documents relevant to the selected work unit.
+
+## Definition of done
+
+For each selected work unit:
+
+- Make only in-scope changes.
+- Add or update tests when behavior changes or a regression can be captured.
+- Run the focused verification documented in `docs/DEVELOPMENT.md`.
+- Review the final diff for regressions, unintended scope, security issues, and missing documentation.
+- For serial work, update the related work unit with merge and release-bundle status. For parallel work, report the outcome to the integration task; only that task updates the shared work-unit ledger after merge.
+- Report changed files, verification run, and any remaining risk or manual validation.
+
+## Repository safety
+
+- Never place credentials, tokens, personal data, or biometric data in source, fixtures, screenshots, commits, or documentation.
+- Do not change generated artifacts, lockfiles, migrations, environment configuration, or dependencies unless required by the selected work unit; explain why when you do.
+- Preserve unrelated working-tree changes. Do not reset, discard, broadly reformat, or overwrite another change without explicit approval.
+- Treat migrations, authentication/authorization, updater behavior, and Pi-facing changes as high risk: add focused verification and cite the relevant design documentation.
+
+## Git and review
+
+- Prefer small, single-purpose commits that correspond to one work unit.
+- Before committing, inspect `git diff` and `git status`; include only intended files.
+- Complete a selected work unit with the commit and merge process defined in `docs/future_work.md`. Do not include unrelated working-tree changes.
+- For parallel work units, use separate worktrees and branches. Implementation tasks do not modify the shared work-unit ledger or merge directly to `main`; the integration task merges one completed branch at a time.
+- For a behavior-changing change, review it against its acceptance criteria, not only whether tests pass.
+- When Codex makes the same kind of mistake twice, add a short, concrete rule to the closest applicable `AGENTS.md` or linked guide.
 
 ## GitHub CLI
 

@@ -1,8 +1,8 @@
 # Local development and verification
 
-LancerLogin uses focused checks during implementation and one complete gate at the end of a batch. All commands are local and use mocks or an isolated local D1 database; they do not contact or deploy to an adopter's Cloudflare account.
+LancerLogin uses focused checks during implementation and one complete gate when preparing a release. All commands are local and use mocks or an isolated local D1 database; they do not contact or deploy to an adopter's Cloudflare account.
 
-Feedback, UI observations, and feature additions are collected as an ongoing queue by default. Do not implement them one by one while the user is still gathering notes. Record each item in `SESSION-HANDOFF.md` or a dated file under `docs/feedback/`, reconcile the round with the user, then execute the approved batch in bulk.
+Planned development is organized as independently selectable work units in `docs/future_work.md`. A task implements a user-selected unit, using its listed documentation and acceptance criteria. Dated files in `docs/feedback/` preserve raw observations and supporting evidence; they are not the execution backlog.
 
 ## During implementation
 
@@ -19,7 +19,7 @@ Run the smallest command that covers the files being changed:
 
 If a change crosses areas, run each affected scope. Migration changes also require `npm run verify:migrations`.
 
-## Completed batches
+## Release preparation
 
 Run `npm run verify:all` once after the focused checks pass. It applies every D1 migration to a fresh isolated local database, typechecks all workspaces, runs the complete test suite, and produces all production builds.
 

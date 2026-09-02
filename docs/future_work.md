@@ -128,7 +128,11 @@ Release: later roster and reports bundle.
 
 ### WU-006 — Member detail workspace and deep links
 
-Status: ready
+Status: in progress
+
+Owner: LancerLogin coordinator
+Branch: `codex/wu-006-member-detail`
+Base: `108950cd66f4a684b5ec3a384899649564e9c176`
 
 Goal: give each roster member a durable, reusable operational workspace.
 Scope: stable member route, links from Reports and other roster-oriented surfaces, permitted member actions, and per-meeting attendance history including timestamps or absence/excuse outcomes.
@@ -176,7 +180,11 @@ Release: later kiosk operations bundle.
 
 ### WU-010 — Browser kiosk emulator foundation
 
-Status: ready
+Status: in progress
+
+Owner: LancerLogin coordinator
+Branch: `codex/wu-010-browser-emulator`
+Base: `108950cd66f4a684b5ec3a384899649564e9c176`
 
 Goal: replace the limited setup simulator with a visibly simulated browser kiosk that reuses physical kiosk presentation and behavior.
 Scope: establish the shared kiosk rendering/state contract, browser input adapter, simulator-origin audit labeling, and isolation from physical active-kiosk status. Later units will add all normal scanning, protected maintenance, enrollment/mapping, networking, and recovery/update flows.

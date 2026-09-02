@@ -114,7 +114,7 @@ test("recurring meeting migration stores series metadata without biometric data"
 });
 
 test("meeting-template migration stores only reusable scheduling defaults", async () => {
-  const migration = await readFile("apps/api/migrations/0016_meeting_templates.sql", "utf8");
+  const migration = await readFile("apps/api/migrations/0017_meeting_templates.sql", "utf8");
   assert.match(migration, /CREATE TABLE meeting_templates/);
   assert.match(migration, /duration_minutes/);
   assert.match(migration, /recurrence_duration_days/);

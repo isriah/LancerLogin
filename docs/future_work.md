@@ -124,7 +124,7 @@ Scope: one search field that matches member name, email, and ID; Active-only and
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Roster).
 Acceptance: both filter modes and every requested search field return the expected roster members without disrupting existing actions.
 Verification: `npm run verify:dashboard`; add focused search/filter tests.
-Release: later roster and reports bundle.
+Release: v0.13.0 roster, scheduling, and kiosk operations.
 
 ### WU-006 — Member detail workspace and deep links
 
@@ -135,7 +135,7 @@ Scope: stable member route, links from Reports and other roster-oriented surface
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Roster); pending task commit `c983f27`.
 Acceptance: a member can be opened from relevant product surfaces at a stable URL and the page accurately presents their complete attendance history.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and `npm run verify:migrations` if required.
-Release: later roster and reports bundle.
+Release: v0.13.0 roster, scheduling, and kiosk operations.
 
 ### WU-007 — Settings configuration information architecture
 
@@ -146,7 +146,7 @@ Scope: move Discord contest settings and late-scan allowance into Settings > Con
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Settings and updates).
 Acceptance: each setting appears only in its intended Settings location, preserves its policy and permissions, and uses the requested update presentation.
 Verification: `npm run verify:api` and `npm run verify:dashboard`.
-Release: later settings and operations bundle.
+Release: v0.13.0 roster, scheduling, and kiosk operations.
 
 ### WU-008 — Meeting duplication and templates
 
@@ -157,7 +157,7 @@ Scope: duplicate an existing meeting or start from a reusable meeting template w
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Additional approved refinements).
 Acceptance: an operator can create a correctly editable meeting from a chosen source without violating existing scheduling rules.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and `npm run verify:migrations` if storage changes.
-Release: later scheduling bundle.
+Release: v0.13.0 roster, scheduling, and kiosk operations.
 
 ### WU-009 — Privacy-safe kiosk diagnostics snapshot
 
@@ -168,7 +168,7 @@ Scope: software version, uptime, reader state, network type/signal, last Wi-Fi s
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Additional approved refinements); `docs/KIOSK.md` and `docs/SECURITY.md`.
 Acceptance: authorized operators can diagnose the listed kiosk state with no secret, biometric, or raw-scanning data exposed.
 Verification: `npm run verify:kiosk`, `npm run verify:api`, and focused security/sanitization tests.
-Release: later kiosk operations bundle.
+Release: v0.13.0 roster, scheduling, and kiosk operations.
 
 ### WU-010 — Browser kiosk emulator foundation
 
@@ -179,7 +179,7 @@ Scope: establish the shared kiosk rendering/state contract, browser input adapte
 Sources: `docs/feedback/2026-09-02-dashboard-follow-up.md` (Kiosk simulator); `docs/KIOSK.md`; `docs/ARCHITECTURE.md`.
 Acceptance: the foundation renders the shared kiosk experience in the browser, records simulator-origin activity distinctly, and cannot act as or count as a physical kiosk.
 Verification: `npm run verify:kiosk`, `npm run verify:dashboard`, and 800x480 browser smoke coverage.
-Release: later kiosk operations bundle; requires follow-on work units before the full emulator is complete.
+Release: v0.13.0 roster, scheduling, and kiosk operations; requires follow-on work units before the full emulator is complete.
 
 ## Release bundling
 

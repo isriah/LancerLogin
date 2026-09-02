@@ -89,11 +89,15 @@ test("Operator workspace exposes kiosk monitoring and the complete Discord atten
   assert.match(source, /\/discord\/contests\?meetingId=/);
   assert.match(source, /\/discord\/contests\/resolve/);
   assert.match(meetings, /\/meetings\/\$\{encodeURIComponent\(editing\.id\)\}/);
+  assert.match(meetings, /method: "DELETE"/);
+  assert.match(meetings, /Sync all to Discord/);
+  assert.match(meetings, /addMinutes\(value\.date, startTime, 150\)/);
   assert.match(source, /Kiosk meeting ID/);
   assert.match(source, /Copy ID/);
   assert.match(meetings, /Notes <span>\(optional\)<\/span>/);
   assert.match(meetings, /Attendance required/);
   assert.match(meetings, /Create recurring series/);
+  assert.doesNotMatch(meetings, /Test meeting/);
 });
 
 test("data controls expose separate backup, restore, and deletion per category", async () => {
@@ -128,7 +132,7 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
   assert.match(users, /Roster link <span>\(optional\)<\/span>/);
   assert.match(users, /Non-rostered Admin or Operator/);
   assert.doesNotMatch(shell, /\["\/setup", "Setup"\]/);
-  assert.match(shell, /completedSteps\.length < 6/);
+  assert.match(shell, /setupStepIds\.every/);
 });
 
 test("home shows a five-week rolling calendar, live attendance, and contest review", async () => {
@@ -147,8 +151,10 @@ test("home shows a five-week rolling calendar, live attendance, and contest revi
 
 test("update assistant backs up before opening GitHub and cannot deploy automatically", async () => {
   const source = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
+  const indicator = await readFile("apps/dashboard/src/update-indicator.tsx", "utf8");
   assert.match(source, /\/admin\/data\/backup\?scope=installation/);
   assert.match(source, /\/admin\/update-info/);
+  assert.match(indicator, /formatVersion/);
   assert.match(source, /private GitHub deployment repository/);
   assert.match(source, /authorize Upgrade manually/);
   assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);

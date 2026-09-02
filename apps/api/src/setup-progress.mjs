@@ -1,4 +1,4 @@
-const requiredSteps = ["branding", "test-meeting", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"];
+const requiredSteps = ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"];
 const optionalSteps = ["google-oauth", "resend", "discord"];
 
 export function createSetupProgress() {

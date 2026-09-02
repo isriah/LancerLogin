@@ -33,7 +33,7 @@ Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.9.0>
 ## Collaboration and development cadence
 
 - Work autonomously through an approved batch. Do not pause merely to report progress or ask the user to say “continue.” Stop only for genuine unresolved product/security design input, missing authorization for an external mutation, or completion.
-- If the user says feedback is incoming or asks to batch feedback, record each item without implementing it. Offer a short rationale when useful, maintain a consolidated queue, and wait until the user explicitly asks to execute the batch.
+- Treat all feedback, UI observations, and feature additions as an ongoing queue by default. Record each item without implementing it, unless the user explicitly says to execute the current item or batch now. Offer a short rationale when useful, maintain a consolidated queue, and wait until the user reconciles the feedback round and explicitly authorizes bulk execution.
 - Otherwise, implement requested product changes completely, using reasonable in-scope assumptions and asking only when alternatives would materially change behavior or security.
 - Use focused commits with descriptive messages. Preserve unrelated user changes in a dirty worktree.
 - Use `apply_patch` for source/document edits. Prefer `rg`/`rg --files` for discovery.
@@ -50,11 +50,11 @@ Detailed process: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
 - Hardware: Raspberry Pi 3B+, 4, or 5 with at least 1 GB RAM; Waveshare 7-inch DSI LCD (E); R503; Wi-Fi or Ethernet.
 - Authentication: Google OAuth, local username/password, or both. Local passwords use salted scrypt. Password recovery is the documented local setup-tool reset.
 - Roles: Admin has all powers. Operator manages meetings, attendance, corrections, excuses, reports, and kiosk status, but not users/security/integrations/branding/destructive configuration. Configurable roles remain out of scope.
-- Onboarding: temporary, paginated, resumable, cross-Admin, non-modal workflow covering brand, test meeting, roster, pairing, kiosk input, and attendance confirmation. Steps are skippable. Completion shows an accessible celebration and returns Home. Completed setup remains reachable from settings/help.
+- Onboarding: temporary, paginated, resumable, cross-Admin, non-modal workflow covering brand, roster, pairing, kiosk input, and attendance confirmation. Steps are skippable. Completion shows an accessible celebration and returns Home. Completed setup remains reachable from settings/help.
 - Branding: organization name, optional subtitle/logo, primary/secondary colors, themed/light/dark/follow-device appearances. Default LancerLogin.
 - Attendance: every meeting has start and end times. A member scans on arrival and departure. Arrival alone is active but not present; a completed pair is present; a missing/incomplete pair is absent after the shared cutoff. Corrections/excuses are reasoned and audited.
 - Meeting attendance windows may not overlap, including the one organization-wide late-scan allowance. The rule covers one-time creation, recurrence, occurrence/future-series edits, and changes to the shared allowance. There is no per-meeting late-scan override.
-- Data persists until Admin export/deletion. CSV and documented D1/JSON backup/restore are supported; PDF and Sheets are not.
+- Data persists until Admin export/deletion. Meeting deletion is a soft delete that hides active scheduling while retaining attendance/audit history. CSV and documented D1/JSON backup/restore are supported; PDF and Sheets are not.
 - Optional integrations: Google OAuth, Resend attendance mail, and the Discord linking/absence/contest/calendar/persistent-status workflow. Credentials are encrypted per installation and never redisplayed. An integration is Configured only after end-to-end verification.
 - Captive portals remain unsupported; normal Wi-Fi/Ethernet and offline-first queueing are supported.
 - User-facing privacy language is **anonymous usage reporting**, enabled by default with a clear opt-out. The strict payload allowlist excludes roster, attendance, fingerprint/biometric, organization, credentials, and raw IP.
@@ -163,7 +163,13 @@ There are no known uncommitted code defects in the approved v0.9 batch. The imme
 
 ## Feedback queue status
 
-All feedback explicitly approved for the v0.9 batch has been implemented. No unimplemented non-deferred UI feedback was recorded at handoff. If the user begins another feedback round:
+The current physical kiosk revision batch was implemented and applied to the test Pi during this session. The authorized dashboard/release-management follow-up was partly implemented locally: no test-meeting UI, same-day date/time meeting fields with 2.5-hour autofill, soft meeting deletion including future series occurrences, automatic and bulk Discord calendar sync using existing event mappings, wider operational cards, and plain `0.n.n` dashboard version display. Kiosk self-update management remains queued because a one-click Pi update requires explicitly approving a persistent root-level update path for the kiosk service. The private Upgrade workflow typed confirmation remains retained as a safety guard.
+
+A new feedback collection round is open at [`docs/feedback/2026-09-01-kiosk-acceptance.md`](docs/feedback/2026-09-01-kiosk-acceptance.md). Do not implement newly provided feedback while the user is still collecting it unless they explicitly switch to execution.
+
+Permanent project rule: feedback and feature additions are compiled first and executed in bulk only after the user reconciles a round of feedback/improvements and explicitly switches from collection to execution.
+
+If the user begins or continues another feedback round:
 
 1. Create or update a clearly labelled queue in this file or a new dated file under `docs/feedback/`.
 2. Record the exact observation, affected page/device, expected behavior, screenshot/link if supplied, and any design dependency.

@@ -4,7 +4,7 @@ import { createSetupProgress } from "../apps/api/src/setup-progress.mjs";
 
 test("setup completion is cross-admin and required steps control primary visibility", () => {
   const setup = createSetupProgress();
-  for (const step of ["branding", "roster", "pair-kiosk", "fingerprint-test", "test-meeting", "confirm-attendance"]) setup.complete({ step, actorUserId: step === "branding" ? "admin-a" : "admin-b", completedAt: "2026-08-30T00:00:00Z" });
+  for (const step of ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"]) setup.complete({ step, actorUserId: step === "branding" ? "admin-a" : "admin-b", completedAt: "2026-08-30T00:00:00Z" });
   const summary = setup.summary();
   assert.equal(summary.complete, true);
   assert.equal(summary.showPrimaryChecklist, false);

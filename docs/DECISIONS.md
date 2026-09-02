@@ -16,7 +16,7 @@ Setup selects Google OAuth, local username/password, or both. Local credentials 
 
 Integration credentials are encrypted with a per-installation key held as a Worker secret; APIs never return saved secret values. The first-Admin form calls community metrics **anonymous usage reporting**, enables it by default, and provides a direct opt-out checkbox. When enabled it contains only random installation ID, release version, active kiosk count, scrubbed errors, and a coarse city/metro derived transiently from the connection. It excludes roster, attendance, biometric, organization, and raw IP data.
 
-The guided setup is a paginated, cross-Admin wizard ordered to remove dependencies: organization and brand, initial test meeting, roster, kiosk pairing, kiosk input test, and attendance confirmation. Discord remains optional and malformed Discord IDs cannot block core roster import. A browser simulator uses its own pairing-code purpose, has no hardware kiosk credential, does not count as an active kiosk, and may submit attendance only to test-marked meetings.
+The guided setup is a paginated, cross-Admin wizard ordered to remove dependencies: organization and brand, roster, kiosk pairing, kiosk input test, and attendance confirmation. Discord remains optional and malformed Discord IDs cannot block core roster import. A browser simulator uses its own pairing-code purpose, has no hardware kiosk credential, does not count as an active kiosk, and may submit Admin-only attendance to an active selected meeting.
 
 ## ADR-005: Retention and recovery
 

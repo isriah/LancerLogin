@@ -36,7 +36,7 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
     async led({ color = 2, mode = 3, speed = 64, cycles = 0 } = {}) {
       requireSuccess(await send(0x35, [mode, speed, color, cycles]), "LED control");
     },
-    async enroll(slot, { attempts = 60, delayMs = 250 } = {}) {
+    async enroll(slot, { attempts = 60, delayMs = 250, onProgress = async () => undefined } = {}) {
       if (!Number.isInteger(slot) || slot < 0 || slot >= capacity) throw new Error(`R503 slot must be between 0 and ${capacity - 1}`);
       const capture = async (buffer) => {
         for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -47,7 +47,9 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
         }
         throw new Error("R503 enrollment timed out waiting for a finger");
       };
+      await onProgress("enroll_wait_first");
       await capture(0x01);
+      await onProgress("enroll_scan_accepted");
       let removed = false;
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         const image = await send(0x01);
@@ -55,9 +57,11 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
         requireSuccess(image, "finger removal check"); await delay(delayMs);
       }
       if (!removed) throw new Error("R503 enrollment timed out waiting for the finger to be removed");
+      await onProgress("enroll_wait_second");
       await capture(0x02);
       requireSuccess(await send(0x05), "template creation");
       requireSuccess(await send(0x06, [0x01, (slot >> 8) & 0xff, slot & 0xff]), "template storage");
+      await onProgress("enroll_success");
       return { slot };
     },
   };

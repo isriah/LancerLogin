@@ -6,7 +6,7 @@ const baseNavigation = [
 ];
 const adminNavigation = [["Settings", "manage-security"]];
 const steps = [
-  ["branding", "Set organization branding"], ["test-meeting", "Create a test meeting"], ["roster", "Add your roster"],
+  ["branding", "Set organization branding"], ["roster", "Add your roster"],
   ["pair-kiosk", "Pair hardware or simulator"], ["fingerprint-test", "Test kiosk input"], ["confirm-attendance", "Confirm attendance"],
 ];
 

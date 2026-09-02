@@ -59,7 +59,7 @@ test("follow-up schema adds explicit themed branding and retained kiosk health",
   assert.doesNotMatch(migration, /fingerprint|template/i);
 });
 
-test("guided setup schema isolates simulator pairing and test meetings", async () => {
+test("guided setup schema keeps simulator credentials isolated from hardware kiosks", async () => {
   const migration = await readFile("apps/api/migrations/0003_guided_setup_simulator.sql", "utf8");
   assert.match(migration, /is_test INTEGER NOT NULL DEFAULT 0/);
   assert.match(migration, /purpose IN \('hardware', 'simulator'\)/);
@@ -86,10 +86,11 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /recurrence_frequency: null/);
+  assert.match(source, /deleted_at: null/);
 });
 
 test("recurring meeting migration stores series metadata without biometric data", async () => {

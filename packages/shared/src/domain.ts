@@ -7,7 +7,6 @@ export type SetupStep =
   | "roster"
   | "pair-kiosk"
   | "fingerprint-test"
-  | "test-meeting"
   | "confirm-attendance";
 
 export interface OrganizationBranding {

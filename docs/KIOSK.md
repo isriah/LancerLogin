@@ -63,6 +63,6 @@ The paired kiosk polls for these commands every five seconds. Commands expire fr
 
 ## Browser simulator boundary
 
-The existing guided-setup simulator is Admin-only, credential-separated, and limited to marked test meetings. It verifies onboarding and test attendance without claiming fingerprint, UART, Pi, Chromium, or physical queue acceptance.
+The existing guided-setup simulator is Admin-only and credential-separated. It can submit simulated attendance to an Admin-selected active meeting without claiming fingerprint, UART, Pi, Chromium, or physical queue acceptance.
 
 The expanded 1:1 browser simulator is deferred. When implemented, it must render the same kiosk screen and reuse the same state transitions and attendance behavior, replacing only R503 input with a browser member-event adapter and marking resulting events as simulated.

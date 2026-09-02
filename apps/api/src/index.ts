@@ -12,15 +12,16 @@ type ScheduledController = { cron?: string };
 type Role = "admin" | "operator";
 type Principal = { userId: string; role: Role; expiresAt: number };
 type AuthMode = "google" | "local" | "both";
-type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "test-meeting" | "confirm-attendance";
+type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "confirm-attendance";
 type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
 type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number };
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null };
 type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
-type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; isTest?: boolean; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
+type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
+type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin";
 
 const baseHeaders = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
-const setupSteps = new Set<SetupStep>(["branding", "roster", "pair-kiosk", "fingerprint-test", "test-meeting", "confirm-attendance"]);
+const setupSteps = new Set<SetupStep>(["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"]);
 const validTimeZone = (value: string) => { try { new Intl.DateTimeFormat("en-US", { timeZone: value }); return true; } catch { return false; } };
 const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const validColor = (value: string) => /^#[0-9a-f]{6}$/i.test(value);
@@ -179,7 +180,7 @@ async function branding(request: Request, env: Env): Promise<Response> {
 }
 async function setupProgress(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const result = await db.prepare("SELECT step, completed_at AS completedAt, completed_by AS completedBy FROM setup_progress WHERE installation_id = 'primary' ORDER BY completed_at").all(); return response({ completedSteps: result.results ?? [] }); }
+  if (request.method === "GET") { const result = await db.prepare("SELECT step, completed_at AS completedAt, completed_by AS completedBy FROM setup_progress WHERE installation_id = 'primary' ORDER BY completed_at").all<{ step: SetupStep; completedAt: string; completedBy: string }>(); return response({ completedSteps: (result.results ?? []).filter((item) => setupSteps.has(item.step)) }); }
   const input = await parseJson<{ step?: SetupStep; completed?: boolean }>(request);
   if (!input.step || !setupSteps.has(input.step) || typeof input.completed !== "boolean") throw new HttpError(400, "A valid setup step and completed flag are required");
   if (input.completed) await db.prepare("INSERT INTO setup_progress (installation_id, step, completed_at, completed_by) VALUES ('primary', ?, ?, ?) ON CONFLICT(installation_id, step) DO UPDATE SET completed_at = excluded.completed_at, completed_by = excluded.completed_by").bind(input.step, new Date().toISOString(), principal.userId).run();
@@ -283,8 +284,9 @@ async function manageKiosk(request: Request, env: Env, kioskId: string): Promise
   return response({ retired: true, kioskId });
 }
 async function queueKioskCommand(request: Request, env: Env, kioskId: string): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ command?: "reload_display" | "restart_service" | "reboot" | "reset_network_pin" }>(request);
-  if (!input.command || !["reload_display", "restart_service", "reboot", "reset_network_pin"].includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command");
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ command?: KioskCommandType }>(request);
+  const supported: KioskCommandType[] = ["reload_display", "restart_service", "reboot", "reset_network_pin"];
+  if (!input.command || !supported.includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command");
   const kiosk = await db.prepare("SELECT id, name FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
   const id = crypto.randomUUID(); const now = new Date().toISOString();
@@ -335,7 +337,7 @@ function meetingOccurrences(input: MeetingInput & { startsAt: string; endsAt: st
   return occurrences;
 }
 async function assertNoMeetingOverlap(db: D1Database, proposed: MeetingWindowLike[], lateScanMinutes: number, excludedIds: string[] = []): Promise<void> {
-  const existing = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary'").all<MeetingWindowLike>();
+  const existing = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL").all<MeetingWindowLike>();
   const excluded = new Set(excludedIds); const conflict = overlappingMeetingWindows([...(existing.results ?? []).filter((meeting) => !excluded.has(meeting.id ?? "")), ...proposed], lateScanMinutes);
   if (!conflict) return;
   const label = (meeting: MeetingWindowLike) => `${meeting.title?.trim() || "Meeting"} (${new Date(meeting.startsAt).toISOString()})`;
@@ -343,12 +345,13 @@ async function assertNoMeetingOverlap(db: D1Database, proposed: MeetingWindowLik
 }
 async function meetings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const [result, settings] = await Promise.all([db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes, is_test AS isTest, series_id AS seriesId, recurrence_frequency AS recurrenceFrequency, recurrence_until AS recurrenceUntil, recurrence_sequence AS recurrenceSequence FROM meetings WHERE installation_id = 'primary' ORDER BY starts_at DESC LIMIT 1000").all<{ id: string; title: string; startsAt: string; endsAt: string; required: number; notes?: string; isTest: number; seriesId?: string; recurrenceFrequency?: RecurrenceFrequency; recurrenceUntil?: string; recurrenceSequence?: number }>(), db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>()]); return response({ meetings: (result.results ?? []).map((meeting) => ({ ...meeting, attendanceClosesAt: attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30) })), lateScanMinutes: settings?.lateScanMinutes ?? 30 }); }
+  if (request.method === "GET") { const [result, settings] = await Promise.all([db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes, is_test AS isTest, series_id AS seriesId, recurrence_frequency AS recurrenceFrequency, recurrence_until AS recurrenceUntil, recurrence_sequence AS recurrenceSequence FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at DESC LIMIT 1000").all<{ id: string; title: string; startsAt: string; endsAt: string; required: number; notes?: string; isTest: number; seriesId?: string; recurrenceFrequency?: RecurrenceFrequency; recurrenceUntil?: string; recurrenceSequence?: number }>(), db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>()]); return response({ meetings: (result.results ?? []).map((meeting) => ({ ...meeting, attendanceClosesAt: attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30) })), lateScanMinutes: settings?.lateScanMinutes ?? 30 }); }
   const input = await parseJson<MeetingInput>(request); validateMeetingInput(input); const settings = await db.prepare("SELECT time_zone AS timeZone, late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone?: string; lateScanMinutes?: number }>(); const occurrences = meetingOccurrences(input, settings?.timeZone && validTimeZone(settings.timeZone) ? settings.timeZone : "UTC"); await assertNoMeetingOverlap(db, occurrences.map((occurrence) => ({ ...occurrence, title: input.title })), settings?.lateScanMinutes ?? 30); const seriesId = input.recurrence ? crypto.randomUUID() : null; const now = new Date().toISOString(); const ids = occurrences.map(() => crypto.randomUUID());
-  const statements = occurrences.map((occurrence, index) => db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at, is_test, series_id, recurrence_frequency, recurrence_until, recurrence_sequence) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(ids[index], input.title.trim(), occurrence.startsAt, occurrence.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now, input.isTest === true ? 1 : 0, seriesId, input.recurrence?.frequency ?? null, input.recurrence?.until ?? null, occurrence.sequence));
+  const statements = occurrences.map((occurrence, index) => db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at, is_test, series_id, recurrence_frequency, recurrence_until, recurrence_sequence) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)").bind(ids[index], input.title.trim(), occurrence.startsAt, occurrence.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now, seriesId, input.recurrence?.frequency ?? null, input.recurrence?.until ?? null, occurrence.sequence));
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.created', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, ids[0], JSON.stringify({ seriesId, occurrences: occurrences.length, frequency: input.recurrence?.frequency ?? null }), now));
   await db.batch(statements);
-  const created = occurrences.map((occurrence, index) => ({ id: ids[index], title: input.title!.trim(), ...occurrence, required: input.required !== false, notes: input.notes?.trim() || null, isTest: input.isTest === true, seriesId, recurrenceFrequency: input.recurrence?.frequency ?? null, recurrenceUntil: input.recurrence?.until ?? null, recurrenceSequence: occurrence.sequence }));
+  try { await syncDiscordCalendarMeetings(db, env, principal, ids); } catch { /* Calendar sync is best-effort so meeting creation remains available without Discord. */ }
+  const created = occurrences.map((occurrence, index) => ({ id: ids[index], title: input.title!.trim(), ...occurrence, required: input.required !== false, notes: input.notes?.trim() || null, seriesId, recurrenceFrequency: input.recurrence?.frequency ?? null, recurrenceUntil: input.recurrence?.until ?? null, recurrenceSequence: occurrence.sequence }));
   return response({ meeting: created[0], meetings: created, seriesId }, 201);
 }
 async function updateMeeting(request: Request, env: Env, meetingId: string): Promise<Response> {
@@ -356,24 +359,40 @@ async function updateMeeting(request: Request, env: Env, meetingId: string): Pro
   const input = await parseJson<MeetingInput>(request); validateMeetingInput(input);
   const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes?: number }>();
   await assertNoMeetingOverlap(db, [{ id: meetingId, title: input.title, startsAt: input.startsAt, endsAt: input.endsAt }], settings?.lateScanMinutes ?? 30, [meetingId]);
-  const updated = await db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = ? WHERE installation_id = 'primary' AND id = ?").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, input.isTest === true ? 1 : 0, meetingId).run();
+  const updated = await db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = 0 WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, meetingId).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
   await writeAudit(db, principal, "meeting.updated", "meeting", meetingId);
-  return response({ meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null, isTest: input.isTest === true } });
+  return response({ meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null } });
 }
 async function updateMeetingSeries(request: Request, env: Env, seriesId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<MeetingInput & { meetingId?: string }>(request); validateMeetingInput(input);
   if (!input.meetingId) throw new HttpError(400, "Choose the first occurrence to update");
-  const anchor = await db.prepare("SELECT starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND id = ?").bind(seriesId, input.meetingId).first<{ startsAt: string }>();
+  const anchor = await db.prepare("SELECT starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND id = ? AND deleted_at IS NULL").bind(seriesId, input.meetingId).first<{ startsAt: string }>();
   if (!anchor) throw new HttpError(404, "Recurring series occurrence not found");
-  const future = await db.prepare("SELECT id, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? ORDER BY starts_at").bind(seriesId, anchor.startsAt).all<{ id: string; startsAt: string }>();
+  const future = await db.prepare("SELECT id, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL ORDER BY starts_at").bind(seriesId, anchor.startsAt).all<{ id: string; startsAt: string }>();
   const duration = Date.parse(input.endsAt) - Date.parse(input.startsAt); const shift = Date.parse(input.startsAt) - Date.parse(anchor.startsAt); const proposed = (future.results ?? []).map((meeting) => { const start = new Date(Date.parse(meeting.startsAt) + shift); return { id: meeting.id, title: input.title, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + duration).toISOString() }; });
   const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes?: number }>();
   await assertNoMeetingOverlap(db, proposed, settings?.lateScanMinutes ?? 30, proposed.map((meeting) => meeting.id));
-  const statements = proposed.map((meeting) => db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = ? WHERE installation_id = 'primary' AND id = ?").bind(input.title!.trim(), meeting.startsAt, meeting.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, input.isTest === true ? 1 : 0, meeting.id));
+  const statements = proposed.map((meeting) => db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = 0 WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title!.trim(), meeting.startsAt, meeting.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, meeting.id));
   if (!statements.length) throw new HttpError(404, "No future series occurrences were found");
   const updatedCount = statements.length; statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.series_updated', 'meeting_series', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, seriesId, JSON.stringify({ fromMeetingId: input.meetingId, updated: updatedCount }), new Date().toISOString()));
   await db.batch(statements); return response({ seriesId, updated: updatedCount });
+}
+async function deleteMeetings(request: Request, env: Env, meetingId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "occurrence" | "future" }>(request);
+  const meeting = await db.prepare("SELECT id, series_id AS seriesId, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(meetingId).first<{ id: string; seriesId?: string | null; startsAt: string }>();
+  if (!meeting) throw new HttpError(404, "Meeting not found");
+  const now = new Date().toISOString();
+  if (input.scope === "future" && meeting.seriesId) {
+    const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL").bind(now, meeting.seriesId, meeting.startsAt).run();
+    const count = updated.meta?.changes ?? 0; if (count < 1) throw new HttpError(404, "No future series occurrences were found");
+    await writeAudit(db, principal, "meeting.series_deleted", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, deleted: count });
+    return response({ deleted: count, scope: "future" });
+  }
+  const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, meeting.id).run();
+  if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
+  await writeAudit(db, principal, "meeting.deleted", "meeting", meeting.id);
+  return response({ deleted: 1, scope: "occurrence" });
 }
 async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual", actorId?: string): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required");
@@ -384,8 +403,8 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
     db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>(),
   ]);
   const meeting = input.meetingId
-    ? await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string; title: string; startsAt: string; endsAt: string }>()
-    : await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND starts_at <= ? ORDER BY starts_at DESC LIMIT 1").bind(input.occurredAt).first<{ id: string; title: string; startsAt: string; endsAt: string }>();
+    ? await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string; startsAt: string; endsAt: string }>()
+    : await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND starts_at <= ? ORDER BY starts_at DESC LIMIT 1").bind(input.occurredAt).first<{ id: string; title: string; startsAt: string; endsAt: string }>();
   if (!member) throw new HttpError(404, "This fingerprint is not linked to an active roster member");
   if (!meeting) throw new HttpError(409, "No meeting is accepting attendance scans at this time");
   const window = scanWindowState(meeting, input.occurredAt, settings?.lateScanMinutes ?? 30);
@@ -436,8 +455,8 @@ async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
   }
   if (input.action === "check-in" || input.action === "scan") {
     if (!simulator.online) throw new HttpError(409, "Bring the simulated kiosk online before checking in");
-    const meeting = input.meetingId ? await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND is_test = 1").bind(input.meetingId).first() : null;
-    if (!meeting) throw new HttpError(400, "The simulator can check in only to a meeting marked as a test");
+    const meeting = input.meetingId ? await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first() : null;
+    if (!meeting) throw new HttpError(400, "Choose an active meeting for the simulator scan");
     if (input.action === "scan" && !["check_in", "check_out"].includes(input.scanAction ?? "")) throw new HttpError(400, "Simulator scanAction must be check_in or check_out");
     const result = await recordAttendance(db, { eventId: input.eventId ?? `simulator-${crypto.randomUUID()}`, memberId: input.memberId, meetingId: input.meetingId, occurredAt: new Date().toISOString(), desiredAction: input.action === "scan" ? input.scanAction : undefined }, "manual", principal.userId);
     await writeAudit(db, principal, input.scanAction === "check_out" ? "simulator.check_out" : "simulator.check_in", "meeting", input.meetingId!, { memberId: input.memberId }); return result;
@@ -450,7 +469,7 @@ async function attendance(request: Request, env: Env): Promise<Response> {
     const meetingId = url.searchParams.get("meetingId"); if (!meetingId) throw new HttpError(400, "meetingId is required");
     const [rows, meeting, settings] = await Promise.all([
       db.prepare("SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, (SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 ORDER BY m.last_name, m.first_name").bind(meetingId, meetingId, meetingId, meetingId).all<{ memberId: string; externalId: string; firstName: string; lastName: string; discordUserId?: string; correction?: "present" | "absent" | "excused"; reason?: string; checkedInAt?: string; checkedOutAt?: string }>(),
-      db.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(meetingId).first<{ startsAt: string; endsAt: string }>(),
+      db.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(meetingId).first<{ startsAt: string; endsAt: string }>(),
       db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>(),
     ]);
     if (!meeting) throw new HttpError(404, "Meeting not found");
@@ -477,7 +496,7 @@ function csvCell(value: unknown): string {
 }
 async function attendanceExport(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
-  const result = await db.prepare("SELECT mt.title AS meeting, CASE WHEN mt.is_test = 1 THEN 'test' ELSE 'normal' END AS meetingType, mt.starts_at AS meetingStart, mt.ends_at AS meetingEnd, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_in') AND EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_out') THEN 'present' ELSE 'absent' END) AS disposition, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_out') AS checkedOutAt, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason FROM meetings mt CROSS JOIN members m WHERE mt.installation_id = 'primary' AND m.installation_id = 'primary' AND m.active = 1 ORDER BY mt.starts_at, m.last_name, m.first_name").all<Record<string, unknown>>();
+  const result = await db.prepare("SELECT mt.title AS meeting, CASE WHEN mt.is_test = 1 THEN 'test' ELSE 'normal' END AS meetingType, mt.starts_at AS meetingStart, mt.ends_at AS meetingEnd, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_in') AND EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_out') THEN 'present' ELSE 'absent' END) AS disposition, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = mt.id AND e.action = 'check_out') AS checkedOutAt, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason FROM meetings mt CROSS JOIN members m WHERE mt.installation_id = 'primary' AND mt.deleted_at IS NULL AND m.installation_id = 'primary' AND m.active = 1 ORDER BY mt.starts_at, m.last_name, m.first_name").all<Record<string, unknown>>();
   const headers = ["meeting", "meetingType", "meetingStart", "meetingEnd", "memberId", "firstName", "lastName", "disposition", "checkedInAt", "checkedOutAt", "reason"];
   const csv = [headers.join(","), ...(result.results ?? []).map((row) => headers.map((header) => csvCell(row[header])).join(","))].join("\r\n") + "\r\n";
   return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-attendance-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
@@ -650,11 +669,11 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
   if (!member?.email) throw new HttpError(400, "This member does not have an email address");
   let subject: string; let content: string; let deliveryKey: string;
   if (input.kind === "missed-meeting") {
-    const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string; title: string; startsAt: string }>();
+    const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string; startsAt: string }>();
     if (!meeting) throw new HttpError(404, "Meeting not found");
     subject = `Missed meeting: ${meeting.title}`; content = `<p>Hello ${html(member.firstName)},</p><p>Our records show you missed <strong>${html(meeting.title)}</strong> on ${html(new Date(meeting.startsAt).toISOString().slice(0, 10))}.</p><p>Please contact your organization if this should be corrected or excused.</p>`; deliveryKey = `missed:${meeting.id}:${member.id}`;
   } else {
-    const records = await db.prepare("SELECT mt.title, mt.starts_at AS startsAt, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.meeting_id = mt.id AND c.member_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.meeting_id = mt.id AND e.member_id = ? AND e.action = 'check_in') AND EXISTS (SELECT 1 FROM attendance_events e WHERE e.meeting_id = mt.id AND e.member_id = ? AND e.action = 'check_out') THEN 'present' ELSE 'absent' END) AS disposition FROM meetings mt WHERE mt.installation_id = 'primary' ORDER BY mt.starts_at DESC LIMIT 100").bind(member.id, member.id, member.id).all<{ title: string; startsAt: string; disposition: string }>();
+    const records = await db.prepare("SELECT mt.title, mt.starts_at AS startsAt, COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.meeting_id = mt.id AND c.member_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.meeting_id = mt.id AND e.member_id = ? AND e.action = 'check_in') AND EXISTS (SELECT 1 FROM attendance_events e WHERE e.meeting_id = mt.id AND e.member_id = ? AND e.action = 'check_out') THEN 'present' ELSE 'absent' END) AS disposition FROM meetings mt WHERE mt.installation_id = 'primary' AND mt.deleted_at IS NULL ORDER BY mt.starts_at DESC LIMIT 100").bind(member.id, member.id, member.id).all<{ title: string; startsAt: string; disposition: string }>();
     subject = "Your attendance report"; content = `<p>Hello ${html(member.firstName)},</p><p>Here is your current attendance report.</p><table><thead><tr><th>Meeting</th><th>Date</th><th>Status</th></tr></thead><tbody>${(records.results ?? []).map((row) => `<tr><td>${html(row.title)}</td><td>${html(row.startsAt.slice(0, 10))}</td><td>${html(row.disposition)}</td></tr>`).join("")}</tbody></table>`; deliveryKey = `report:${member.id}:${new Date().toISOString().slice(0, 10)}`;
   }
   if (await db.prepare("SELECT id FROM integration_deliveries WHERE installation_id = 'primary' AND provider = 'resend' AND delivery_key = ? AND status IN ('pending', 'delivered')").bind(deliveryKey).first()) throw new HttpError(409, "This email was already sent or is currently sending");
@@ -732,7 +751,7 @@ async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string
 }
 async function processDiscordAttendanceNotifications(env: Env, now = Date.now()): Promise<void> {
   const db = requireDatabase(env); const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>();
-  const meetings = await db.prepare("SELECT m.id, m.title, m.ends_at AS endsAt, n.status AS notificationStatus, n.updated_at AS notificationUpdatedAt FROM meetings m LEFT JOIN discord_attendance_notifications n ON n.installation_id = m.installation_id AND n.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.required = 1 AND m.is_test = 0 AND m.ends_at IS NOT NULL ORDER BY m.ends_at DESC LIMIT 100").all<{ id: string; title: string; endsAt: string; notificationStatus?: string; notificationUpdatedAt?: string }>();
+  const meetings = await db.prepare("SELECT m.id, m.title, m.ends_at AS endsAt, n.status AS notificationStatus, n.updated_at AS notificationUpdatedAt FROM meetings m LEFT JOIN discord_attendance_notifications n ON n.installation_id = m.installation_id AND n.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.required = 1 AND m.is_test = 0 AND m.ends_at IS NOT NULL ORDER BY m.ends_at DESC LIMIT 100").all<{ id: string; title: string; endsAt: string; notificationStatus?: string; notificationUpdatedAt?: string }>();
   for (const meeting of meetings.results ?? []) {
     const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30)); const newlyEligible = cutoff <= now && cutoff >= now - 15 * 60_000; const retry = meeting.notificationStatus === "failed";
     if ((!meeting.notificationStatus && newlyEligible) || retry) await sendDiscordAttendanceNotification(env, meeting);
@@ -741,7 +760,7 @@ async function processDiscordAttendanceNotifications(env: Env, now = Date.now())
 async function discordMissing(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string }>(request);
   if (!input.meetingId) throw new HttpError(400, "Meeting is required");
-  const meeting = await db.prepare("SELECT id, title FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string; title: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
+  const meeting = await db.prepare("SELECT id, title FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
   return response(await sendDiscordAttendanceNotification(env, meeting, { force: true, actor: principal }), 202);
 }
 async function discordContests(request: Request, env: Env): Promise<Response> {
@@ -795,14 +814,34 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
   const contest = await db.prepare("SELECT status FROM discord_attendance_contests WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ?").bind(meetingId, recipient.memberId).first<{ status: string }>();
   return contest?.status === "open" ? discordEphemeral("Your attendance contest was recorded for review. Your attendance has not been changed.") : discordEphemeral(`Your attendance contest was already reviewed with status ${contest?.status ?? "unknown"}.`);
 }
-async function discordCalendar(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string }>(request); if (!input.meetingId) throw new HttpError(400, "Meeting is required");
-  const config = await discordConfiguration(env); const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, notes FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string; title: string; startsAt: string; endsAt?: string; notes?: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
+async function syncDiscordCalendarMeeting(db: D1Database, env: Env, principal: Principal, meeting: { id: string; title: string; startsAt: string; endsAt?: string; notes?: string | null }): Promise<string> {
+  const config = await discordConfiguration(env);
   const stateKey = `calendar:${meeting.id}`; const existing = await db.prepare("SELECT external_id AS externalId FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?").bind(stateKey).first<{ externalId?: string }>();
   const payload = { name: meeting.title, description: meeting.notes || "LancerLogin meeting", privacy_level: 2, entity_type: 3, scheduled_start_time: meeting.startsAt, scheduled_end_time: meeting.endsAt || new Date(Date.parse(meeting.startsAt) + 3_600_000).toISOString(), entity_metadata: { location: "LancerLogin" } };
   const path = existing?.externalId ? `/guilds/${config.guildId}/scheduled-events/${existing.externalId}` : `/guilds/${config.guildId}/scheduled-events`; const { body } = await discordRequest(config, path, { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify(payload) }); const eventId = String(body.id ?? existing?.externalId ?? ""); const now = new Date().toISOString();
   await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, updated_at) VALUES ('primary', 'discord', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, updated_at = excluded.updated_at").bind(stateKey, eventId, now).run();
-  await writeAudit(db, principal, "discord.calendar_synced", "meeting", meeting.id, { eventId }); return response({ synced: true, eventId });
+  await writeAudit(db, principal, "discord.calendar_synced", "meeting", meeting.id, { eventId }); return eventId;
+}
+async function syncDiscordCalendarMeetings(db: D1Database, env: Env, principal: Principal, ids: string[]): Promise<{ synced: number; skipped: number }> {
+  let synced = 0; let skipped = 0;
+  for (const id of ids) {
+    const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, notes FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(id).first<{ id: string; title: string; startsAt: string; endsAt?: string; notes?: string }>();
+    if (!meeting) { skipped += 1; continue; }
+    await syncDiscordCalendarMeeting(db, env, principal, meeting); synced += 1;
+  }
+  return { synced, skipped };
+}
+async function discordCalendar(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; all?: boolean }>(request);
+  if (input.all) {
+    const result = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at DESC LIMIT 1000").all<{ id: string }>();
+    const summary = await syncDiscordCalendarMeetings(db, env, principal, (result.results ?? []).map((meeting) => meeting.id));
+    return response(summary);
+  }
+  if (!input.meetingId) throw new HttpError(400, "Meeting is required");
+  const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, notes FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string; startsAt: string; endsAt?: string; notes?: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
+  const eventId = await syncDiscordCalendarMeeting(db, env, principal, meeting);
+  return response({ synced: true, eventId });
 }
 async function syncDiscordKioskStatus(env: Env): Promise<{ changed: boolean; messageId?: string; online?: boolean; kioskId?: string }> {
   const db = requireDatabase(env); const config = await discordConfiguration(env);
@@ -863,7 +902,7 @@ const tableColumns = {
   organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at"],
-  meetings: ["id", "installation_id", "title", "starts_at", "ends_at", "required", "notes", "created_by", "created_at", "is_test", "series_id", "recurrence_frequency", "recurrence_until", "recurrence_sequence"],
+  meetings: ["id", "installation_id", "title", "starts_at", "ends_at", "required", "notes", "created_by", "created_at", "is_test", "series_id", "recurrence_frequency", "recurrence_until", "recurrence_sequence", "deleted_at"],
   attendance_events: ["id", "installation_id", "member_id", "meeting_id", "source", "occurred_at", "kiosk_event_id", "created_by", "action"],
   attendance_corrections: ["id", "installation_id", "member_id", "meeting_id", "disposition", "reason", "created_by", "created_at"],
   setup_progress: ["installation_id", "step", "completed_at", "completed_by"],
@@ -899,12 +938,12 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 4, scope, exportedAt, tables: Object.fromEntries(entries) };
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 4 });
+  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 5, scope, exportedAt, tables: Object.fromEntries(entries) };
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 5 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
   organization_settings: tableColumns.organization_settings.slice(0, -2),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
@@ -915,14 +954,14 @@ const legacyMeetingTables = meetingTables.filter((table) => table !== "discord_a
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
-  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4;
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5;
   const sourceTables = value.tables;
   const requiredTables = schemaVersion === 1 ? legacyTablesForScope(scope) : tablesForScope(scope);
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -4) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table];
+    const columns = schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -5) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
@@ -932,7 +971,7 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
   if (tables.meetings) tables.meetings = tables.meetings.map((row) => {
-    const normalized: Record<string, unknown> = { series_id: null, recurrence_frequency: null, recurrence_until: null, recurrence_sequence: null, ...row };
+    const normalized: Record<string, unknown> = { series_id: null, recurrence_frequency: null, recurrence_until: null, recurrence_sequence: null, deleted_at: null, ...row };
     if (normalized.ends_at !== null) return normalized;
     const start = Date.parse(String(row.starts_at));
     return { ...normalized, ends_at: Number.isFinite(start) ? new Date(start + 60 * 60_000).toISOString() : row.starts_at };
@@ -1023,6 +1062,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/simulator" && ["GET", "POST"].includes(request.method)) result = await simulatedKiosk(request, env);
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeeting(request, env, decodeURIComponent(url.pathname.split("/")[2]));
+    else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "DELETE") result = await deleteMeetings(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (/^\/meeting-series\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeetingSeries(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (url.pathname === "/attendance" && ["GET", "POST"].includes(request.method)) result = await attendance(request, env);
     else if (url.pathname === "/attendance/corrections" && request.method === "POST") result = await correction(request, env);

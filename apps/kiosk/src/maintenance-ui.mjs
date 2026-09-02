@@ -1,5 +1,224 @@
-export const maintenanceHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#101218"><title>LancerLogin maintenance</title><link rel="stylesheet" href="/maintenance.css"></head><body><main><header><div><p>LancerLogin local tools</p><h1>Fingerprint maintenance</h1></div><a href="/">Return to kiosk</a></header><p id="message" role="status">Checking local access…</p><section id="unlock" class="card" hidden><h2>Unlock maintenance</h2><p>Use the same local PIN that protects network settings.</p><form id="unlock-form"><label>Local settings PIN<input id="pin" inputmode="numeric" pattern="[0-9]{6,12}" maxlength="12" required></label><button type="submit">Unlock for five minutes</button></form></section><div id="workspace" hidden><section class="card"><div class="card-heading"><div><h2>Reader</h2><p>Fingerprint templates stay exclusively inside the R503.</p></div><button id="test-reader" type="button">Test reader</button></div><p id="reader-status">Reader status has not been tested.</p></section><section class="card"><h2>Enroll fingerprint</h2><form id="enroll-form"><label>Roster member<select id="member" required><option value="">Choose a member</option></select></label><label>Finger<select id="finger" required><option>right index</option><option>left index</option><option>right thumb</option><option>left thumb</option><option>right middle</option><option>left middle</option><option>other</option></select></label><label>Sensor slot<input id="slot" type="number" min="0" max="199" required></label><p id="slot-help"></p><label class="check"><input id="replace" type="checkbox"><span>Replace the local mapping in this slot. The sensor template will be overwritten during enrollment.</span></label><button type="submit">Begin two-scan enrollment</button></form></section><section class="card"><div class="card-heading"><div><h2>Current mappings</h2><p>Removing a mapping does not delete the fingerprint template from the sensor.</p></div><button id="refresh" type="button">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>Slot</th><th>Member</th><th>Finger</th><th></th></tr></thead><tbody id="mappings"></tbody></table></div></section></div></main><script type="module" src="/maintenance.js"></script></body></html>`;
+export const maintenanceHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><meta name="theme-color" content="#424a53"><title>LancerLogin maintenance</title><link rel="stylesheet" href="/maintenance.css"></head><body><main><header><div><p id="brand-subtitle">Local tools</p><h1 id="brand-title">Fingerprint maintenance</h1></div><a href="/">Return to kiosk</a></header><p id="message" role="status">Checking local access…</p><section id="unlock" class="card unlock-card" hidden><h2>Unlock maintenance</h2><p>Use the same local PIN that protects network settings.</p><form id="unlock-form"><label>Local settings PIN<input id="pin" class="pin-target" inputmode="none" pattern="[0-9]{6,12}" maxlength="12" required readonly></label><div id="pin-keypad" class="pin-keypad" aria-label="PIN keypad"></div><button class="primary" type="submit">Unlock for five minutes</button></form></section><div id="workspace" class="workspace" hidden><section class="card reader-card"><div class="card-heading"><div><h2>Reader</h2><p>Templates stay inside the R503.</p></div><button id="test-reader" type="button">Test</button></div><p id="reader-status">Reader status has not been tested.</p><article id="enroll-stage" class="enroll-stage stage-ready" aria-live="polite"><strong id="stage-title">Ready to enroll</strong><span id="stage-detail">Choose a member, finger, and slot.</span></article></section><section class="card enroll-card"><h2>Enroll fingerprint</h2><form id="enroll-form"><label>Roster member<select id="member" required><option value="">Choose a member</option></select></label><div class="form-row"><label>Finger<select id="finger" required><option>right index</option><option>left index</option><option>right thumb</option><option>left thumb</option><option>right middle</option><option>left middle</option><option>other</option></select></label><label>Slot<input id="slot" type="number" min="0" max="199" required></label></div><p id="slot-help"></p><label class="check"><input id="replace" type="checkbox"><span>Replace occupied slot</span></label><button class="primary" id="begin-enroll" type="submit">Begin two-scan enrollment</button></form></section><section class="card mappings-card"><div class="card-heading"><div><h2>Mappings</h2><p>Removal keeps sensor templates.</p></div><button id="refresh" type="button">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>Slot</th><th>Member</th><th>Finger</th><th></th></tr></thead><tbody id="mappings"></tbody></table></div></section></div></main><script type="module" src="/maintenance.js"></script></body></html>`;
 
-export const maintenanceStyles = `:root{font-family:Roboto,Arial,sans-serif;color:#f7f7f8;background:#101218;color-scheme:dark;--primary:#7c3aed}*{box-sizing:border-box}body{margin:0;background:#101218}button,input,select{font:inherit}main{width:min(980px,calc(100% - 2rem));margin:0 auto;padding:1rem 0 3rem}header,.card-heading{display:flex;align-items:start;justify-content:space-between;gap:1rem}header{align-items:center;margin-bottom:1rem}header p,header h1,.card h2,.card p{margin-top:0}h1,h2{font-family:"Bebas Neue",Impact,sans-serif;letter-spacing:.03em}h1{margin-bottom:0;font-size:2.5rem}header p{margin-bottom:.15rem;color:#bbb}header a{padding:.7rem .9rem;border:1px solid #ffffff33;border-radius:.6rem;color:#fff;text-decoration:none}.card{margin-top:1rem;padding:1.2rem;border:1px solid #ffffff24;border-radius:1rem;background:#1a1d24}.card form{display:grid;gap:.8rem}.card label{display:grid;gap:.35rem;font-weight:800}.card input,.card select{min-height:50px;padding:.7rem;border:1px solid #757b88;border-radius:.6rem;background:#0e1015;color:#fff}.card button{min-height:48px;padding:.65rem .8rem;border:1px solid #ffffff33;border-radius:.6rem;background:#292e39;color:#fff;font-weight:800}.card form>button{border-color:var(--primary);background:var(--primary)}.check{grid-template-columns:auto 1fr!important;align-items:start}.check input{width:1.3rem;min-height:1.3rem}#message{min-height:1.5rem;color:#f4c66a}.error{color:#ff9aa8!important}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:.65rem;text-align:left;border-bottom:1px solid #ffffff1f}td button{min-height:40px!important}@media(max-width:620px){header,.card-heading{display:grid}header a{width:fit-content}}`;
+export const maintenanceStyles = `:root{--primary:#b80100;--secondary:#f2c14e;--surface-bg:#424a53;--surface:#1a1d24;--text:#fff;--muted:#d3d8df;--line:#ffffff24;--success:#178f4f;--danger:#ff5b57;--notice:#f2c14e;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);background:var(--surface-bg);color-scheme:dark}*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--surface-bg)}button,input,select{font:inherit}main{width:100%;height:100vh;display:grid;grid-template-rows:auto auto minmax(0,1fr);gap:8px;padding:12px}header,.card-heading{display:flex;align-items:start;justify-content:space-between;gap:10px}header{align-items:center}header p,header h1,.card h2,.card p{margin:0}h1{font-size:28px;line-height:1.05}h2{font-size:20px;line-height:1.1}header p,.card p,#message{color:var(--muted)}header a{min-height:42px;display:inline-grid;place-items:center;padding:0 12px;border:1px solid #ffffff33;border-radius:8px;color:#fff;text-decoration:none;font-weight:800}.card{min-height:0;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden}.workspace{min-height:0;display:grid;grid-template-columns:.95fr 1.15fr 1.25fr;gap:10px}.card form{display:grid;gap:8px}.card label{display:grid;gap:4px;font-size:14px;font-weight:800}.card input,.card select{min-height:40px;padding:6px 9px;border:1px solid #757b88;border-radius:7px;background:#0e1015;color:#fff}.card button{min-height:40px;padding:6px 10px;border:1px solid #ffffff33;border-radius:7px;background:#292e39;color:#fff;font-weight:800}.card button.primary,.card form>button.primary{border-color:var(--primary);background:var(--primary);color:#fff}.form-row{display:grid;grid-template-columns:1fr 72px;gap:8px}.check{grid-template-columns:auto 1fr!important;align-items:center}.check input{width:20px;min-height:20px}#message{min-height:22px;font-size:15px}.error{color:#ffb3bd!important}.table-wrap{height:100%;min-height:0;overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:6px;text-align:left;border-bottom:1px solid #ffffff1f}td button{min-height:32px!important;padding:4px 7px!important}.reader-card{display:grid;grid-template-rows:auto auto 1fr;gap:10px}.enroll-stage{align-self:stretch;display:grid;place-items:center;text-align:center;gap:8px;padding:14px;border-radius:8px;background:#2a3039;border:2px solid #3d4652}.enroll-stage strong{font-size:30px;line-height:1}.enroll-stage span{font-size:18px;color:var(--muted)}.stage-enroll_wait_first,.stage-enroll_wait_second{border-color:var(--secondary);background:color-mix(in srgb,var(--secondary) 18%,#2a3039)}.stage-enroll_scan_accepted,.stage-enroll_success{border-color:var(--success);background:color-mix(in srgb,var(--success) 24%,#2a3039)}.stage-enroll_failure{border-color:var(--danger);background:color-mix(in srgb,var(--danger) 20%,#2a3039)}.unlock-card{width:min(430px,100%);justify-self:center;align-self:start}.pin-target{font-size:24px;letter-spacing:.28em;text-align:center}.pin-keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.pin-keypad button{min-height:44px;font-size:20px}.pin-keypad .wide{grid-column:span 2}@media(max-height:520px){main{padding:8px;gap:6px}h1{font-size:24px}h2{font-size:18px}.card{padding:9px}.workspace{gap:8px}.enroll-stage strong{font-size:25px}.enroll-stage span{font-size:16px}.card input,.card select,.card button{min-height:34px}.card form{gap:5px}#message{font-size:14px}.table-wrap{max-height:294px}}`;
 
-export const maintenanceApp = `const byId=(id)=>document.getElementById(id);async function call(path,options){const response=await fetch(path,{...options,headers:{...(options?.body?{"content-type":"application/json"}:{}),...options?.headers}});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error||"Request failed");return body}function message(value,error=false){byId("message").textContent=value;byId("message").className=error?"error":""}let members=[];let mappings={};function mappingValue(value){return typeof value==="string"?{memberId:value,finger:"unspecified"}:value}async function start(){try{const session=await call("/maintenance/session");if(!session.configured){byId("unlock").hidden=false;message("Create a local settings PIN from the kiosk network panel before opening maintenance.",true)}else if(session.authorized)await workspace();else{byId("unlock").hidden=false;message("Enter the local settings PIN.")}}catch(error){message(error.message,true)}}async function workspace(){byId("unlock").hidden=true;byId("workspace").hidden=false;const [roster,local]=await Promise.all([call("/maintenance/members"),call("/mappings")]);members=roster.members;mappings=local.mappings;const select=byId("member");select.replaceChildren(new Option("Choose a member",""));for(const member of members)select.append(new Option(member.lastName+", "+member.firstName+" · "+member.memberId,member.memberId));renderMappings();suggestSlot();message("Maintenance unlocked for five minutes.")}function suggestSlot(){const used=new Set(Object.keys(mappings).map(Number));let slot=0;while(used.has(slot)&&slot<200)slot+=1;byId("slot").value=String(Math.min(slot,199));byId("slot-help").textContent=slot<200?"Suggested next open slot: "+slot:"All sensor slots have local mappings."}function renderMappings(){const body=byId("mappings");body.replaceChildren();for(const [slot,raw] of Object.entries(mappings).sort((a,b)=>Number(a[0])-Number(b[0]))){const value=mappingValue(raw);const member=members.find((item)=>item.memberId===value.memberId);const row=document.createElement("tr");for(const text of [slot,member?member.firstName+" "+member.lastName+" · "+value.memberId:value.memberId,value.finger||"unspecified"]){const cell=document.createElement("td");cell.textContent=text;row.append(cell)}const actions=document.createElement("td");const remove=document.createElement("button");remove.type="button";remove.textContent="Remove mapping";remove.addEventListener("click",()=>removeMapping(slot));actions.append(remove);row.append(actions);body.append(row)}if(!Object.keys(mappings).length){const row=document.createElement("tr");const cell=document.createElement("td");cell.colSpan=4;cell.textContent="No local fingerprint mappings.";row.append(cell);body.append(row)}}async function removeMapping(slot){if(!confirm("Remove the local mapping for slot "+slot+"? The sensor template will remain stored."))return;try{const result=await call("/mappings/"+encodeURIComponent(slot),{method:"DELETE"});mappings=result.mappings;renderMappings();suggestSlot();message("Mapping removed; sensor template retained.")}catch(error){message(error.message,true)}}byId("unlock-form").addEventListener("submit",async(event)=>{event.preventDefault();try{await call("/network/unlock",{method:"POST",body:JSON.stringify({pin:byId("pin").value})});byId("pin").value="";await workspace()}catch(error){message(error.message,true)}});byId("test-reader").addEventListener("click",async()=>{message("Testing reader…");try{const value=await call("/sensor/test",{method:"POST"});byId("reader-status").textContent=value.readerOnline?"Reader online · "+value.templateCount+" templates stored":"Reader offline";message(value.readerOnline?"Reader test passed.":"Reader did not respond.",!value.readerOnline)}catch(error){message(error.message,true)}});byId("enroll-form").addEventListener("submit",async(event)=>{event.preventDefault();const slot=Number(byId("slot").value);if(mappings[String(slot)]&&!byId("replace").checked){message("Slot "+slot+" already has a mapping. Confirm replacement or choose another slot.",true);return}message("Place the selected finger on the reader twice, removing it between scans.");try{await call("/enroll",{method:"POST",body:JSON.stringify({memberId:byId("member").value,finger:byId("finger").value,slot,replaceExisting:byId("replace").checked})});mappings=(await call("/mappings")).mappings;renderMappings();suggestSlot();byId("replace").checked=false;message("Enrollment saved in sensor slot "+slot+".")}catch(error){message(error.message,true)}});byId("refresh").addEventListener("click",workspace);await start();`;
+export const maintenanceApp = `
+const byId = (id) => document.getElementById(id);
+let members = [];
+let mappings = {};
+let stagePolling;
+
+async function call(path, options) {
+  const response = await fetch(path, { ...options, headers: { ...(options?.body ? { "content-type": "application/json" } : {}), ...options?.headers } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || "Request failed");
+  return body;
+}
+
+function message(value, error = false) {
+  byId("message").textContent = value;
+  byId("message").className = error ? "error" : "";
+}
+
+function applyBranding(value) {
+  const brand = value?.branding || {};
+  if (/^#[0-9a-f]{6}$/i.test(brand.primaryColor || "")) document.documentElement.style.setProperty("--primary", brand.primaryColor);
+  if (/^#[0-9a-f]{6}$/i.test(brand.secondaryColor || "")) document.documentElement.style.setProperty("--secondary", brand.secondaryColor);
+  byId("brand-subtitle").textContent = brand.subtitle || "Local tools";
+  byId("brand-title").textContent = brand.organizationName ? brand.organizationName + " fingerprints" : "Fingerprint maintenance";
+}
+
+function stage(id, title, detail) {
+  const panel = byId("enroll-stage");
+  panel.className = "enroll-stage stage-" + id;
+  byId("stage-title").textContent = title;
+  byId("stage-detail").textContent = detail;
+}
+
+function stageFromDisplay(display) {
+  const id = display?.id || "ready";
+  stage(id, display?.message || "Ready to enroll", display?.detail || "Choose a member, finger, and slot.");
+}
+
+async function pollStage() {
+  try { stageFromDisplay((await call("/display-state")).display); } catch { /* Keep the last visible prompt. */ }
+}
+
+function startStagePolling() {
+  clearInterval(stagePolling);
+  void pollStage();
+  stagePolling = setInterval(pollStage, 350);
+}
+
+function stopStagePolling() {
+  clearInterval(stagePolling);
+  stagePolling = undefined;
+}
+
+function mappingValue(value) {
+  return typeof value === "string" ? { memberId: value, finger: "unspecified" } : value;
+}
+
+function appendPin(digit) {
+  const input = byId("pin");
+  input.value = (input.value + digit).replace(/\\D/g, "").slice(0, 12);
+  input.focus();
+}
+
+function buildPinKeypad() {
+  const keypad = byId("pin-keypad");
+  for (const digit of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = digit;
+    button.addEventListener("click", () => appendPin(digit));
+    keypad.append(button);
+  }
+  const back = document.createElement("button");
+  back.type = "button";
+  back.textContent = "⌫";
+  back.className = "wide";
+  back.setAttribute("aria-label", "Backspace");
+  back.addEventListener("click", () => { byId("pin").value = byId("pin").value.slice(0, -1); byId("pin").focus(); });
+  keypad.append(back);
+}
+
+async function start() {
+  try { applyBranding(await call("/display-state")); } catch { /* Branding may not be available before pairing. */ }
+  try {
+    const session = await call("/maintenance/session");
+    if (!session.configured) {
+      byId("unlock").hidden = false;
+      message("Create a local settings PIN from the kiosk network panel before opening maintenance.", true);
+    } else if (session.authorized) await workspace();
+    else {
+      byId("unlock").hidden = false;
+      message("Enter the local settings PIN.");
+    }
+  } catch (error) {
+    message(error.message, true);
+  }
+}
+
+async function workspace() {
+  byId("unlock").hidden = true;
+  byId("workspace").hidden = false;
+  const [roster, local] = await Promise.all([call("/maintenance/members"), call("/mappings")]);
+  members = roster.members;
+  mappings = local.mappings;
+  const select = byId("member");
+  select.replaceChildren(new Option("Choose a member", ""));
+  for (const member of members) select.append(new Option(member.lastName + ", " + member.firstName + " · " + member.memberId, member.memberId));
+  renderMappings();
+  suggestSlot();
+  stage("ready", "Ready to enroll", "Choose a member, finger, and slot.");
+  message("Maintenance unlocked for five minutes.");
+}
+
+function suggestSlot() {
+  const used = new Set(Object.keys(mappings).map(Number));
+  let slot = 0;
+  while (used.has(slot) && slot < 200) slot += 1;
+  byId("slot").value = String(Math.min(slot, 199));
+  byId("slot-help").textContent = slot < 200 ? "Suggested next open slot: " + slot : "All sensor slots have local mappings.";
+}
+
+function renderMappings() {
+  const body = byId("mappings");
+  body.replaceChildren();
+  for (const [slot, raw] of Object.entries(mappings).sort((a, b) => Number(a[0]) - Number(b[0]))) {
+    const value = mappingValue(raw);
+    const member = members.find((item) => item.memberId === value.memberId);
+    const row = document.createElement("tr");
+    for (const text of [slot, member ? member.firstName + " " + member.lastName : value.memberId, value.finger || "unspecified"]) {
+      const cell = document.createElement("td");
+      cell.textContent = text;
+      row.append(cell);
+    }
+    const actions = document.createElement("td");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => removeMapping(slot));
+    actions.append(remove);
+    row.append(actions);
+    body.append(row);
+  }
+  if (!Object.keys(mappings).length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.textContent = "No local fingerprint mappings.";
+    row.append(cell);
+    body.append(row);
+  }
+}
+
+async function removeMapping(slot) {
+  if (!confirm("Remove the local mapping for slot " + slot + "? The sensor template will remain stored.")) return;
+  try {
+    const result = await call("/mappings/" + encodeURIComponent(slot), { method: "DELETE" });
+    mappings = result.mappings;
+    renderMappings();
+    suggestSlot();
+    message("Mapping removed; sensor template retained.");
+  } catch (error) {
+    message(error.message, true);
+  }
+}
+
+byId("unlock-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await call("/network/unlock", { method: "POST", body: JSON.stringify({ pin: byId("pin").value }) });
+    byId("pin").value = "";
+    await workspace();
+  } catch (error) {
+    message(error.message, true);
+  }
+});
+
+byId("test-reader").addEventListener("click", async () => {
+  message("Testing reader…");
+  try {
+    const value = await call("/sensor/test", { method: "POST" });
+    byId("reader-status").textContent = value.readerOnline ? "Reader online · " + value.templateCount + " templates stored" : "Reader offline";
+    message(value.readerOnline ? "Reader test passed." : "Reader did not respond.", !value.readerOnline);
+  } catch (error) {
+    message(error.message, true);
+  }
+});
+
+byId("enroll-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const slot = Number(byId("slot").value);
+  if (mappings[String(slot)] && !byId("replace").checked) {
+    message("Slot " + slot + " already has a mapping. Confirm replacement or choose another slot.", true);
+    return;
+  }
+  const button = byId("begin-enroll");
+  button.disabled = true;
+  startStagePolling();
+  stage("enroll_wait_first", "Place finger", "Enrollment scan 1 of 2");
+  message("Enrollment is listening on the reader.");
+  try {
+    await call("/enroll", { method: "POST", body: JSON.stringify({ memberId: byId("member").value, finger: byId("finger").value, slot, replaceExisting: byId("replace").checked }) });
+    mappings = (await call("/mappings")).mappings;
+    renderMappings();
+    suggestSlot();
+    byId("replace").checked = false;
+    await pollStage();
+    message("Enrollment saved in sensor slot " + slot + ".");
+  } catch (error) {
+    await pollStage();
+    message(error.message, true);
+  } finally {
+    stopStagePolling();
+    button.disabled = false;
+  }
+});
+
+byId("refresh").addEventListener("click", workspace);
+buildPinKeypad();
+await start();
+`;

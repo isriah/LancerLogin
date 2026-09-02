@@ -266,16 +266,15 @@ test("browser simulator uses a distinct one-time code and never creates a hardwa
   assert.equal((await paired.text()).includes("kioskToken"), false);
 });
 
-test("browser simulator check-ins are Admin-only and restricted to test meetings", async () => {
+test("browser simulator check-ins are Admin-only and restricted to active meetings", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM simulated_kiosk_sessions", { name: "Browser test", active: 1, online: 1 });
-  database.rows.set("AND is_test = 1", { id: "test-meeting" });
   database.rows.set("FROM members", { id: "member-1" });
-  database.rows.set("FROM meetings", { id: "test-meeting", startsAt: "2020-01-01T00:00:00.000Z", endsAt: "2030-01-01T00:00:00.000Z" });
+  database.rows.set("FROM meetings", { id: "meeting-1", startsAt: "2020-01-01T00:00:00.000Z", endsAt: "2030-01-01T00:00:00.000Z" });
   database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
   database.lists.set("FROM attendance_events", []);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const body = { action: "check-in", memberId: "ROSTER-001", meetingId: "test-meeting" };
+  const body = { action: "check-in", memberId: "ROSTER-001", meetingId: "meeting-1" };
   assert.equal((await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("operator") }), env)).status, 403);
   const accepted = await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("admin") }), env);
   assert.equal(accepted.status, 202);
@@ -285,7 +284,7 @@ test("browser simulator check-ins are Admin-only and restricted to test meetings
   const normalDatabase = new FakeDatabase();
   normalDatabase.rows.set("FROM simulated_kiosk_sessions", { name: "Browser test", active: 1, online: 1 });
   const normalEnv = { ...env, DB: normalDatabase } as unknown as Env;
-  const rejected = await worker.fetch(request("/admin/simulator", { ...body, meetingId: "normal-meeting" }, { cookie: await sessionCookie("admin") }), normalEnv);
+  const rejected = await worker.fetch(request("/admin/simulator", { ...body, meetingId: "deleted-meeting" }, { cookie: await sessionCookie("admin") }), normalEnv);
   assert.equal(rejected.status, 400);
   assert.equal(normalDatabase.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events")), false);
 });
@@ -470,6 +469,23 @@ test("Operator can update meeting details without destructive access", async () 
   assert.ok(database.calls.some((call) => call.values.includes("meeting.updated")));
   assert.equal((await worker.fetch(request("/meetings/meeting-1", { title: "Too much", startsAt: "2026-09-02T20:00:00.000Z", endsAt: "2026-09-02T22:00:00.000Z", notes: "x".repeat(2_001) }, { method: "PATCH", cookie: await sessionCookie("operator") }), env)).status, 400);
   assert.equal((await worker.fetch(request("/admin/data", { scope: "attendance", confirmation: "DELETE ATTENDANCE" }, { method: "DELETE", cookie: await sessionCookie("operator") }), env)).status, 403);
+});
+
+test("Operator can hide one meeting or this and future series occurrences", async () => {
+  const single = new FakeDatabase();
+  single.rows.set("series_id AS seriesId", { id: "meeting-1", seriesId: null, startsAt: "2026-09-01T20:00:00.000Z" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: single } as unknown as Env;
+  const occurrence = await worker.fetch(request("/meetings/meeting-1", { scope: "occurrence" }, { method: "DELETE", cookie: await sessionCookie("operator") }), env);
+  assert.equal(occurrence.status, 200);
+  assert.ok(single.calls.some((call) => call.sql.includes("UPDATE meetings SET deleted_at") && call.values.includes("meeting-1")));
+  assert.ok(single.calls.some((call) => call.values.includes("meeting.deleted")));
+
+  const future = new FakeDatabase();
+  future.rows.set("series_id AS seriesId", { id: "meeting-3", seriesId: "series-1", startsAt: "2026-09-15T20:00:00.000Z" });
+  const futureResult = await worker.fetch(request("/meetings/meeting-3", { scope: "future" }, { method: "DELETE", cookie: await sessionCookie("operator") }), { ...env, DB: future } as unknown as Env);
+  assert.equal(futureResult.status, 200);
+  assert.ok(future.calls.some((call) => call.sql.includes("series_id = ?") && call.sql.includes("starts_at >= ?") && call.values.includes("series-1")));
+  assert.ok(future.calls.some((call) => call.values.includes("meeting.series_deleted")));
 });
 
 test("kiosk attendance is installation-scoped and idempotent by event ID", async () => {

@@ -8,6 +8,11 @@ export const kioskStates = Object.freeze({
   unknown: { message: "Fingerprint not recognized", detail: "Try the same finger again, or ask an operator for help", tone: "error", durationMs: 2600, led: { color: 1, mode: 2, speed: 48, cycles: 2 } },
   offline: { message: "Saved for sync", detail: "This scan is stored on the kiosk and will sync automatically", tone: "offline", durationMs: 2600, led: { color: 1, mode: 2, speed: 64, cycles: 1 } },
   reader_offline: { message: "Reader offline", detail: "The fingerprint reader is not responding", tone: "error", led: { color: 1, mode: 1, speed: 128, cycles: 0 } },
+  enroll_wait_first: { message: "Place finger", detail: "Enrollment scan 1 of 2", tone: "processing", led: { color: 3, mode: 1, speed: 96, cycles: 0 } },
+  enroll_scan_accepted: { message: "Scan captured", detail: "Remove finger", tone: "success", led: { color: 2, mode: 2, speed: 48, cycles: 2 } },
+  enroll_wait_second: { message: "Place same finger", detail: "Enrollment scan 2 of 2", tone: "processing", led: { color: 3, mode: 1, speed: 96, cycles: 0 } },
+  enroll_success: { message: "Enrollment saved", detail: "Fingerprint slot mapped", tone: "success", durationMs: 2600, led: { color: 2, mode: 2, speed: 48, cycles: 3 } },
+  enroll_failure: { message: "Enrollment failed", detail: "Try again", tone: "error", durationMs: 2800, led: { color: 1, mode: 2, speed: 48, cycles: 3 } },
   unpaired: { message: "Setup required", detail: "Pair this kiosk from the LancerLogin dashboard", tone: "notice" },
 });
 

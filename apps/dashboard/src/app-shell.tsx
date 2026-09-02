@@ -16,9 +16,11 @@ import { api } from "./dashboard-api";
 import { RouteLink, usePath } from "./router";
 import { UpdateIndicator } from "./update-indicator";
 
+const setupStepIds = ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"];
+
 export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { role: "admin" | "operator"; branding: Branding; onBrandingChanged: (branding: Branding) => void; onSignedOut: () => void }) {
   const { path, navigate } = usePath(); const [setupKey, setSetupKey] = useState(0); const [onboarding, setOnboarding] = useState(role === "admin" ? undefined as boolean | undefined : false);
-  useEffect(() => { if (role !== "admin") return; void api<{ completedSteps: unknown[] }>("/admin/setup/progress").then((result) => setOnboarding(result.completedSteps.length < 6)).catch(() => setOnboarding(false)); }, [role, setupKey]);
+  useEffect(() => { if (role !== "admin") return; void api<{ completedSteps: { step: string }[] }>("/admin/setup/progress").then((result) => setOnboarding(!setupStepIds.every((step) => result.completedSteps.some((item) => item.step === step)))).catch(() => setOnboarding(false)); }, [role, setupKey]);
   useEffect(() => { if (onboarding) window.requestAnimationFrame(() => { window.scrollTo({ top: 0, behavior: "auto" }); document.getElementById("dashboard-content")?.focus(); }); }, [onboarding, setupKey]);
   function openSetup() { setOnboarding(true); window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" })); }
   const primary = [["/dashboard", "Home"], ["/meetings", "Meetings"], ["/attendance", "Attendance"], ["/reports", "Reports"], ["/roster", "Roster"], ["/kiosks", "Kiosks"], ...(role === "admin" ? [["/settings/organization", "Settings"]] : [])] as [string, string][];

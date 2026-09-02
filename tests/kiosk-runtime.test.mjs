@@ -14,7 +14,7 @@ import { createScanner } from "../apps/kiosk/src/scanner.mjs";
 import { createNetworkManager } from "../apps/kiosk/src/network-manager.mjs";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
 import { networkApp, networkStyles } from "../apps/kiosk/src/network-ui.mjs";
-import { maintenanceApp, maintenanceHtml } from "../apps/kiosk/src/maintenance-ui.mjs";
+import { maintenanceApp, maintenanceHtml, maintenanceStyles } from "../apps/kiosk/src/maintenance-ui.mjs";
 import { recoveryApp } from "../apps/kiosk/src/recovery-ui.mjs";
 
 test("pairing code is hashed, single-use, and expires", () => {
@@ -237,10 +237,12 @@ test("continuous scanner records a mapped match without a meeting ID", async () 
 test("R503 enrollment creates and stores a template without returning biometric data", async () => {
   const replies = [acknowledgement(0), acknowledgement(0), acknowledgement(0x02), acknowledgement(0), acknowledgement(0), acknowledgement(0), acknowledgement(0)];
   const instructions = [];
+  const progress = [];
   const sensor = createR503(async (packet) => { instructions.push(packet[9]); return replies.shift(); });
-  const enrolled = await sensor.enroll(12, { attempts: 2, delayMs: 0 });
+  const enrolled = await sensor.enroll(12, { attempts: 2, delayMs: 0, onProgress: async (state) => progress.push(state) });
   assert.deepEqual(enrolled, { slot: 12 });
   assert.deepEqual(instructions, [0x01, 0x02, 0x01, 0x01, 0x02, 0x05, 0x06]);
+  assert.deepEqual(progress, ["enroll_wait_first", "enroll_scan_accepted", "enroll_wait_second", "enroll_success"]);
   assert.equal(JSON.stringify(enrolled).includes("template"), false);
 });
 
@@ -248,11 +250,15 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskHtml, /<main id="kiosk"/);
   assert.match(kioskHtml, /aria-live="polite"/);
   assert.match(kioskHtml, /Place finger on reader/);
+  assert.match(kioskHtml, /maintenance-status/);
   assert.match(kioskHtml, /One-time pairing key/);
   assert.doesNotMatch(kioskHtml, /Roster member ID|Meeting ID|Enroll fingerprint/);
   assert.match(kioskStyles, /max-height:520px/);
+  assert.match(kioskStyles, /adaptive-logo/);
   assert.match(kioskApp, /\/display-state/);
   assert.match(kioskApp, /\/pair/);
+  assert.match(kioskApp, /adaptLogo/);
+  assert.match(kioskApp, /brand-logo-frame/);
   assert.match(kioskHtml, /\/network\.js/);
   assert.match(kioskHtml, /\/recovery\.js/);
   assert.match(networkApp, /setTimeout\(openNetwork,3000\)/);
@@ -262,7 +268,11 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(networkStyles, /pin-keypad/);
   assert.match(kioskApp, /\/maintenance/);
   assert.match(maintenanceHtml, /Fingerprint maintenance/);
+  assert.match(maintenanceHtml, /pin-keypad/);
+  assert.match(maintenanceStyles, /100vh/);
+  assert.match(maintenanceStyles, /stage-enroll_wait_first/);
   assert.match(maintenanceApp, /Begin two-scan enrollment|\/enroll/);
+  assert.match(maintenanceApp, /startStagePolling/);
   assert.match(recoveryApp, /displayReloadToken/);
   assert.doesNotMatch(kioskHtml, /https?:\/\//);
 });

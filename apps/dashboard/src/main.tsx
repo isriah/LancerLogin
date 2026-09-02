@@ -21,7 +21,7 @@ const cloudflareSteps: CloudflareStep[] = [
   { id: "provision", title: "Run the private setup workflow", detail: "Keep Latest stable selected. GitHub validates the account and resource names before it creates anything." },
 ];
 
-const installationSteps = ["Organization & brand", "Initial test meeting", "Roster", "Pair hardware or simulator", "Kiosk input test", "Confirm attendance"];
+const installationSteps = ["Organization & brand", "Roster", "Pair hardware or simulator", "Kiosk input test", "Confirm attendance"];
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
 type SetupStatus = { configured: boolean; installation?: { authMode: "google" | "local" | "both" }; settings?: Branding };

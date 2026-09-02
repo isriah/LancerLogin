@@ -2,6 +2,8 @@
 
 LancerLogin uses focused checks during implementation and one complete gate at the end of a batch. All commands are local and use mocks or an isolated local D1 database; they do not contact or deploy to an adopter's Cloudflare account.
 
+Feedback, UI observations, and feature additions are collected as an ongoing queue by default. Do not implement them one by one while the user is still gathering notes. Record each item in `SESSION-HANDOFF.md` or a dated file under `docs/feedback/`, reconcile the round with the user, then execute the approved batch in bulk.
+
 ## During implementation
 
 Run the smallest command that covers the files being changed:

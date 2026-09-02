@@ -10,7 +10,7 @@ Use this prompt in a new Codex session opened on this repository:
 
 Repository workspace:
 
-`C:\Users\Izz\Documents\Codex\2026-08-30\lancerlogin`
+`C:\Users\Izz\Documents\ChatGPT\LancerLogin Workspace`
 
 Public repository: <https://github.com/isriah/LancerLogin>
 

@@ -230,6 +230,19 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   assert.match(roster, /className="roster-row-actions"/);
 });
 
+test("roster discovery searches every requested member field and scopes active members", async () => {
+  const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  assert.match(roster, /const \[query, setQuery\] = useState\(""\)/);
+  assert.match(roster, /const \[scope, setScope\] = useState<"active" \| "all">\("active"\)/);
+  assert.match(roster, /\$\{member\.firstName\} \$\{member\.lastName\} \$\{member\.email \?\? ""\} \$\{member\.memberId\}/);
+  assert.match(roster, /scope === "all" \|\| member\.active/);
+  assert.match(roster, /placeholder="Name, email, or member ID"/);
+  assert.match(roster, /<option value="active">Active members<\/option>/);
+  assert.match(roster, /<option value="all">All members<\/option>/);
+  assert.match(styles, /\.roster-filters/);
+});
+
 test("numeric organization settings can be cleared before they are normalized on save", async () => {
   const source = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   const colors = await readFile("apps/dashboard/src/color-editor.tsx", "utf8");

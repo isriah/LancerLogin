@@ -13,7 +13,32 @@ export function parseAcknowledgement(packet) {
   return { confirmation: bytes[9], parameters: bytes.slice(10, -2) };
 }
 
-const requireSuccess = (acknowledgement, operation) => { if (acknowledgement.confirmation !== 0) throw new Error(`R503 ${operation} failed with code 0x${acknowledgement.confirmation.toString(16).padStart(2, "0")}`); return acknowledgement.parameters; };
+const resultMessages = new Map([
+  [0x01, "The fingerprint reader could not receive the request. Try again."],
+  [0x03, "The fingerprint image was too faint. Press the same finger flat on the reader and try again."],
+  [0x06, "The fingerprint image was too messy. Wipe the reader, place the same finger flat, and try again."],
+  [0x07, "The reader could not turn that scan into a usable fingerprint. Try again with a steady finger."],
+  [0x08, "The two scans did not match clearly. Use the same finger for both scans and try again."],
+  [0x09, "No matching fingerprint was found."],
+  [0x0a, "The reader could not combine those scans. The finger may already be stored, or the two scans may have been different. Choose the existing mapping, use the same finger twice, or try a different slot."],
+  [0x0b, "That sensor slot is outside the reader's storage range."],
+  [0x18, "The reader could not write to that sensor slot. Choose a different slot and try again."],
+  [0x1a, "The reader could not clear that sensor slot."],
+]);
+
+export function r503ErrorMessage(code, operation = "operation") {
+  return resultMessages.get(code) ?? `The fingerprint reader could not complete ${operation}. Try again, or test the reader from maintenance.`;
+}
+
+const requireSuccess = (acknowledgement, operation) => {
+  if (acknowledgement.confirmation !== 0) {
+    const error = new Error(r503ErrorMessage(acknowledgement.confirmation, operation));
+    error.code = acknowledgement.confirmation;
+    error.operation = operation;
+    throw error;
+  }
+  return acknowledgement.parameters;
+};
 const delay = (milliseconds) => milliseconds > 0 ? new Promise((resolve) => setTimeout(resolve, milliseconds)) : Promise.resolve();
 
 export function createR503(exchange, { capacity = 200, password = 0 } = {}) {

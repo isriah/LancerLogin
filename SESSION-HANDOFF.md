@@ -28,7 +28,7 @@ Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.9.0>
 6. Never expose or persist credentials in source, notes, commands, screenshots, logs, or chat. Discover private repository/resource identifiers at operation time rather than adding them here.
 7. Fingerprint templates and raw scans stay exclusively inside the R503. The application stores only local slot-to-roster-ID mappings and finger labels. No biometric synchronization exists.
 8. LancerLogin remains a self-hosted single-active-kiosk release. Multi-kiosk behavior is future work; do not accidentally relax the one-active-kiosk invariant while improving lifecycle UX.
-9. There is no migration path from the earlier attendance installation.
+9. There is no live migration, resource connection, database migration, or biometric-template transfer path from the earlier attendance installation. Exported roster rows and local R503 slot mappings may be prepared for import with the reviewed file-based helper.
 
 ## Collaboration and development cadence
 
@@ -163,7 +163,7 @@ There are no known uncommitted code defects in the approved v0.9 batch. The imme
 
 ## Feedback queue status
 
-The current physical kiosk revision batch was implemented and applied to the test Pi during this session. The authorized dashboard/release-management follow-up was partly implemented locally: no test-meeting UI, same-day date/time meeting fields with 2.5-hour autofill, soft meeting deletion including future series occurrences, automatic and bulk Discord calendar sync using existing event mappings, wider operational cards, and plain `0.n.n` dashboard version display. Kiosk self-update management remains queued because a one-click Pi update requires explicitly approving a persistent root-level update path for the kiosk service. The private Upgrade workflow typed confirmation remains retained as a safety guard.
+The current physical kiosk revision batch was implemented and applied to the test Pi during this session. The authorized dashboard/release-management follow-up was implemented locally: no test-meeting UI, same-day date/time meeting fields with 2.5-hour autofill, soft meeting deletion including future series occurrences, automatic and bulk Discord calendar sync using existing event mappings, wider operational cards, and plain `0.n.n` dashboard version display. A subsequent kiosk-polish execution removed the visible FP shortcut, restored hidden brand long-press maintenance access, enforced a PIN-only maintenance lock screen, added touch-friendly member and slot pickers, translated R503 errors into plain language, and added a file-based legacy roster/slot-mapping import helper. Kiosk self-update management remains queued because the safety reviewer blocked a persistent root-level Pi update path pending exact explicit approval of the privilege and supply-chain risk. The private Upgrade workflow typed confirmation remains retained because removing it weakens an account-changing safety guard and was also blocked pending exact explicit approval.
 
 A new feedback collection round is open at [`docs/feedback/2026-09-01-kiosk-acceptance.md`](docs/feedback/2026-09-01-kiosk-acceptance.md). Do not implement newly provided feedback while the user is still collecting it unless they explicitly switch to execution.
 

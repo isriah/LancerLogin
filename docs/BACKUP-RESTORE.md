@@ -32,4 +32,4 @@ npm run restore-d1 -- --database sample-club-data --file lancerlogin-backup.sql 
 
 The exact confirmation phrase is required. Verify row counts for members, meetings, attendance events, corrections, audit records, and settings before opening the dashboard. Encrypted integration values require the same installation's `INTEGRATION_KEY`; rotate integrations if that secret changed. Re-pair a kiosk only if its pairing record was restored inconsistently. Never restore data into another organization without an explicit privacy and retention review.
 
-Each category delete action is separate and requires its own typed confirmation. Deleting an entire installation returns it to first-Admin setup. There is no migration path from another attendance installation.
+Each category delete action is separate and requires its own typed confirmation. Deleting an entire installation returns it to first-Admin setup. There is no live migration path from another attendance installation. Exported roster rows and local R503 slot mappings can be prepared with the kiosk helper described in `docs/KIOSK.md`; biometric templates are not exported or transferred.

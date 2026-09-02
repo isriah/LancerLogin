@@ -20,7 +20,7 @@ The guided setup is a paginated, cross-Admin wizard ordered to remove dependenci
 
 ## ADR-005: Retention and recovery
 
-Data remains until an admin exports or deletes it. CSV exports and documented D1 backup/restore are supported. There is no migration from other systems and no PDF or spreadsheet integration.
+Data remains until an admin exports or deletes it. CSV exports and documented D1 backup/restore are supported. There is no live migration from other systems and no PDF or spreadsheet integration. A local helper may prepare exported roster rows and R503 slot mappings for import without touching old cloud resources or moving biometric templates.
 
 ## ADR-006: Complete attendance sessions
 

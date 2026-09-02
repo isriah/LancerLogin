@@ -4,7 +4,7 @@ This checklist maps the approved Community Release Plan to durable implementatio
 
 | Requirement | Status | Evidence |
 | --- | --- | --- |
-| Standalone LancerLogin project, Apache-2.0, clean history, no migration or legacy connection | Implemented | `LICENSE`, `docs/DECISIONS.md`, sanitizer tests in `tests/foundation.test.mjs` |
+| Standalone LancerLogin project, Apache-2.0, clean history, no live legacy connection | Implemented | `LICENSE`, `docs/DECISIONS.md`, sanitizer tests in `tests/foundation.test.mjs`; exported roster/slot-mapping preparation is file-based and biometric-free |
 | Clubs, classrooms, teams, and arts groups; one kiosk only | Implemented | `README.md`, shared product policy, one-active-kiosk D1 constraint, replacement tests |
 | Pi 3B+/4/5, at least 1 GB; Waveshare 7-inch DSI LCD (E); R503; Wi-Fi/Ethernet | Implemented in guide/installer | `docs/KIOSK.md`, installer hardware checks, 800×480 browser visual; physical acceptance pending |
 | Fingerprint templates remain exclusively in the R503 | Implemented with mocked serial transport | R503 protocol, local slot mapping, schema/sanitizer tests; physical acceptance pending |

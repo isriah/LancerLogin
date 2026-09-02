@@ -77,3 +77,45 @@ Status: partly implemented during the authorized follow-up pass, then paused by 
 ## Holding queue
 
 The user is still gathering the next feedback round. Record new observations here, but do not begin implementing another round until the user explicitly says the feedback is reconciled and ready for bulk execution.
+
+### Next physical kiosk polish batch
+
+1. Remove the visible `FP` shortcut.
+   - Observation: the physical kiosk currently shows an `FP` icon in the top-right corner.
+   - Expected behavior: fingerprint enrollment should return to a secret long-press on the logo/brand area, without a visible fingerprint shortcut.
+   - Implemented: the visible shortcut is removed, and the organization brand shows a held-state outline during the three-second long-press.
+   - Acceptance notes: verify the hidden gesture is reliable on the 800x480 touch display.
+2. Hide maintenance content until the PIN is accepted.
+   - Observation: the reader, enroll, and mappings cards are visible before entering the maintenance PIN.
+   - Expected behavior: before unlock, the only visible maintenance UI should be PIN entry.
+   - Implemented: the maintenance screen now enforces hidden content with CSS and keeps the pre-unlock view centered on PIN entry only.
+   - Acceptance notes: no reader state, member names, mapping slots, or enrollment controls should be visible before successful PIN entry.
+3. Replace the member dropdown with a touch-friendly selector.
+   - Observation: the scrolling dropdown for member selection in fingerprint enrollment is not touch friendly.
+   - Expected behavior: member selection should behave like a mobile-friendly picker with large rows, clear selected state, and natural scrolling.
+   - Implemented: roster member selection now opens a touch-sized picker sheet with large rows and search.
+   - Acceptance notes: verify touch scrolling, row selection, search/filter behavior, and no accidental page scroll on the Waveshare display.
+4. Use a popup numeric keypad for slot entry.
+   - Observation: the slot number text input does not open an on-screen keyboard and browser increment/decrement arrows are awkward on touch.
+   - Expected behavior: remove number-stepper arrows and show a numeral-only popup keypad for slot entry.
+   - Implemented: slot entry uses a read-only input and popup numeral keypad with browser stepper arrows removed.
+   - Acceptance notes: verify slot 0-199 entry on the physical kiosk.
+5. Translate fingerprint enrollment errors into user-friendly language.
+   - Observation: reenrolling a finger that is already saved/recognized can surface a raw sensor error such as `0x0a`.
+   - Expected behavior: non-technical users should see plain-language recovery guidance without needing sensor protocol context.
+   - Implemented: known R503 codes now map to plain-language enrollment guidance; the `0x0a` case is covered by a regression test.
+   - Acceptance notes: verify real reader failures show recovery guidance instead of protocol codes.
+6. Investigate pre-community roster and fingerprint mapping migration.
+   - Question: can the roster and fingerprint mappings be ported from the pre-community-edition installation into a LancerLogin installation when using the same physical fingerprint sensor?
+   - Expected behavior: provide a migration path if the old install has roster/member identifiers and slot mappings that can be matched to the new roster.
+   - Implemented: added a file-based helper that converts exported roster CSV and legacy slot mapping JSON into dashboard roster CSV, kiosk `slot-mappings.json`, and an import review report.
+   - Acceptance notes: do not extract or transfer biometric templates from the sensor. Preserve the templates already stored on the same R503 sensor slots and manually review unmatched member IDs before copying mappings onto the Pi.
+
+### Safety-gated items not completed in this pass
+
+1. One-click kiosk self-update remains blocked.
+   - Requested behavior: queue a dashboard command that lets the kiosk pull and apply the latest compatible GitHub release automatically.
+   - Blocker: the implementation requires a persistent Polkit-approved root execution path that downloads and executes release code on the Pi. The safety reviewer rejected the patch pending exact explicit approval of that privilege and supply-chain risk.
+2. Removing the private deployment workflow typed confirmation remains blocked.
+   - Requested behavior: calculate the final confirmation from selected operation and slug.
+   - Blocker: the workflow changes Cloudflare account resources, and removing the typed confirmation weakens a persistent safety guard. The safety reviewer rejected the patch pending exact explicit approval.

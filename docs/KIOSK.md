@@ -44,11 +44,21 @@ Captive-portal automation is unsupported. Complete a portal outside LancerLogin 
 
 ## Fingerprint maintenance
 
-Press and hold the organization logo or name for three seconds, then enter the same local settings PIN. Maintenance is deliberately available only on the physical kiosk.
+Press and hold the organization logo or name for three seconds, then enter the same local settings PIN. There is no visible fingerprint shortcut on the attendance screen. Before unlock, the maintenance page shows only PIN entry. Maintenance is deliberately available only on the physical kiosk.
 
-The page can test the reader, load active roster labels through the paired Worker, suggest the next open slot, and guide enrollment. Choose a member, a fixed finger label, and a slot from 0–199. The member presents the same finger twice; the R503 creates and stores the template internally. Replacing an occupied slot requires explicit confirmation.
+The page can test the reader, load active roster labels through the paired Worker, suggest the next open slot, and guide enrollment. Choose a member from the touch-friendly roster picker, choose a fixed finger label, and enter a slot from 0–199 with the on-screen number pad. The member presents the same finger twice; the R503 creates and stores the template internally. Replacing an occupied slot requires explicit confirmation. Reader errors are shown as plain recovery guidance rather than protocol codes.
 
 The owner-only local mapping records only the sensor slot, roster member ID, and finger label. Removing a mapping does not delete the sensor template. LancerLogin never reads, serializes, logs, syncs, backs up, or stores a fingerprint template outside the R503.
+
+## File-based roster and slot-mapping import
+
+If an older kiosk used the same physical R503 sensor, its stored fingerprint templates can stay in place. Export the old roster to CSV and the old slot mapping to JSON, then run:
+
+```bash
+node apps/kiosk/scripts/prepare-legacy-fingerprint-import.mjs --roster old-roster.csv --mappings old-mappings.json --out-dir ./legacy-import
+```
+
+The helper writes `lancerlogin-roster-import.csv` for the dashboard roster importer, `slot-mappings.json` for the Pi's local mapping store, and `import-report.json` listing mappings whose member IDs were not found in the roster export. Review that report before copying mappings onto a Pi. The helper reads exported files only; it does not connect to an older deployment, modify Cloudflare resources, or extract biometric templates.
 
 ## Dashboard management and recovery
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createOfflineQueue, createSensorAdapter, issuePairingCode, redeemPairingCode } from "../apps/kiosk/src/local-runtime.mjs";
@@ -13,6 +13,7 @@ import { decodePairingKey } from "../apps/kiosk/src/pairing-key.mjs";
 import { createScanner } from "../apps/kiosk/src/scanner.mjs";
 import { createNetworkManager } from "../apps/kiosk/src/network-manager.mjs";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
+import { prepareLegacyFingerprintImport } from "../apps/kiosk/scripts/prepare-legacy-fingerprint-import.mjs";
 import { networkApp, networkStyles } from "../apps/kiosk/src/network-ui.mjs";
 import { maintenanceApp, maintenanceHtml, maintenanceStyles } from "../apps/kiosk/src/maintenance-ui.mjs";
 import { recoveryApp } from "../apps/kiosk/src/recovery-ui.mjs";
@@ -176,6 +177,26 @@ test("slot mappings remain local and reject malformed records", async () => {
   try { const store = createMappingStore(path); const saved = await store.replace({ "12": { memberId: "member-1", finger: "right index" } }); assert.deepEqual(saved["12"], { memberId: "member-1", finger: "right index" }); assert.equal(await createMappingStore(path).memberForSlot(12), "member-1"); await assert.rejects(() => store.replace({ invalid: "member-2" }), /Invalid/); } finally { await rm(directory, { recursive: true }); }
 });
 
+test("legacy fingerprint import prepares roster and slot mappings without templates", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-legacy-import-"));
+  try {
+    const rosterPath = join(directory, "old-roster.csv");
+    const mappingsPath = join(directory, "old-mappings.json");
+    const outDir = join(directory, "out");
+    await writeFile(rosterPath, "student id,first,last,email\n321,Ada,Lovelace,ada@example.test\n322,Grace,Hopper,\n", "utf8");
+    await writeFile(mappingsPath, JSON.stringify([{ slot: 12, memberId: "321", finger: "right index", template: "must-not-copy" }, { slot: 13, memberId: "missing", finger: "left thumb" }]), "utf8");
+    const result = await prepareLegacyFingerprintImport({ rosterPath, mappingsPath, outDir });
+    assert.equal(result.rosterCount, 2);
+    assert.equal(result.mappingCount, 2);
+    assert.deepEqual(result.unmapped, [{ slot: "13", memberId: "missing" }]);
+    assert.match(await readFile(result.rosterOut, "utf8"), /memberId,firstName,lastName,email,discordUserId\n321,Ada,Lovelace,ada@example.test,/);
+    assert.deepEqual(JSON.parse(await readFile(result.mappingsOut, "utf8")), { "12": { memberId: "321", finger: "right index" }, "13": { memberId: "missing", finger: "left thumb" } });
+    assert.doesNotMatch(await readFile(result.mappingsOut, "utf8"), /must-not-copy/);
+  } finally {
+    await rm(directory, { recursive: true });
+  }
+});
+
 test("attendance client sends only identifiers and operational timestamps", async () => {
   let sent;
   await sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z", fingerprint: "must-not-send" }, { fetchImpl: async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ accepted: true }), { headers: { "content-type": "application/json" } }); } });
@@ -246,15 +267,25 @@ test("R503 enrollment creates and stores a template without returning biometric 
   assert.equal(JSON.stringify(enrolled).includes("template"), false);
 });
 
+test("R503 enrollment errors are plain language for touch users", async () => {
+  const sensor = createR503(async () => acknowledgement(0x0a));
+  await assert.rejects(() => sensor.enroll(12, { attempts: 1, delayMs: 0 }), (error) => {
+    assert.match(error.message, /finger may already be stored|same finger/i);
+    assert.doesNotMatch(error.message, /0x0a|R503/);
+    return true;
+  });
+});
+
 test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskHtml, /<main id="kiosk"/);
   assert.match(kioskHtml, /aria-live="polite"/);
   assert.match(kioskHtml, /Place finger on reader/);
-  assert.match(kioskHtml, /maintenance-status/);
+  assert.doesNotMatch(kioskHtml, /maintenance-status|>FP</);
   assert.match(kioskHtml, /One-time pairing key/);
   assert.doesNotMatch(kioskHtml, /Roster member ID|Meeting ID|Enroll fingerprint/);
   assert.match(kioskStyles, /max-height:520px/);
   assert.match(kioskStyles, /adaptive-logo/);
+  assert.match(kioskStyles, /\.kiosk-brand\.holding/);
   assert.match(kioskApp, /\/display-state/);
   assert.match(kioskApp, /\/pair/);
   assert.match(kioskApp, /adaptLogo/);
@@ -269,10 +300,16 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskApp, /\/maintenance/);
   assert.match(maintenanceHtml, /Fingerprint maintenance/);
   assert.match(maintenanceHtml, /pin-keypad/);
+  assert.match(maintenanceHtml, /member-picker/);
+  assert.match(maintenanceHtml, /slot-keypad/);
   assert.match(maintenanceStyles, /100vh/);
+  assert.match(maintenanceStyles, /\[hidden\]\{display:none!important\}/);
+  assert.match(maintenanceStyles, /option-list/);
   assert.match(maintenanceStyles, /stage-enroll_wait_first/);
   assert.match(maintenanceApp, /Begin two-scan enrollment|\/enroll/);
   assert.match(maintenanceApp, /startStagePolling/);
+  assert.match(maintenanceApp, /friendlyError/);
+  assert.match(maintenanceApp, /buildSlotKeypad/);
   assert.match(recoveryApp, /displayReloadToken/);
   assert.doesNotMatch(kioskHtml, /https?:\/\//);
 });

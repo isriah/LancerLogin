@@ -24,4 +24,4 @@ Each unit ended with targeted tests, full typecheck/build gates, a focused commi
 
 ## Release exclusions
 
-No multi-kiosk operation, biometric synchronization, migration from another installation, PDF export, Sheets export, captive-portal automation, or connection to an existing deployment.
+No multi-kiosk operation, biometric synchronization, live migration from another installation, PDF export, Sheets export, captive-portal automation, or connection to an existing deployment. Exported roster rows and local R503 slot mappings may be prepared for import without moving biometric templates.

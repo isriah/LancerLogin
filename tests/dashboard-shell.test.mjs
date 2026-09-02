@@ -79,7 +79,7 @@ test("live branding stores an image locally and applies colors with a browser th
   assert.match(configuration, /Changes apply to every meeting/);
 });
 
-test("Operator workspace exposes kiosk monitoring and the streamlined Discord attendance workflow", async () => {
+test("Operator workspace exposes kiosk monitoring without an Attendance contest-audit panel", async () => {
   const source = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
   assert.match(source, /\/admin\/kiosks/);
@@ -87,8 +87,8 @@ test("Operator workspace exposes kiosk monitoring and the streamlined Discord at
   assert.match(source, /Reader \$\{activeKiosk\.readerOnline/);
   assert.match(source, /Release \$\{activeKiosk\.releaseVersion/);
   assert.doesNotMatch(source, /\/discord\/link|Email missed|Email report/);
-  assert.match(source, /\/discord\/contests\?meetingId=/);
-  assert.match(source, /\/discord\/contests\/resolve/);
+  assert.doesNotMatch(source, /\/discord\/contests/);
+  assert.doesNotMatch(source, /Missing-member contests/);
   assert.match(meetings, /\/meetings\/\$\{encodeURIComponent\(editing\.id\)\}/);
   assert.match(meetings, /method: "DELETE"/);
   assert.match(meetings, /\/restore/);
@@ -184,6 +184,11 @@ test("attendance actions preserve their layout and mute unavailable choices", as
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(attendance, /const latestCompleted = ordered\.filter\(\(meeting\) => Date\.parse\(meeting\.endsAt \?\? meeting\.startsAt\) <= Date\.now\(\)\)\.at\(-1\)/);
   assert.match(attendance, /disabled=\{row\.disposition === "present"\}/);
+  assert.match(attendance, /Optional note for marking \$\{row\.firstName\} present/);
+  assert.match(attendance, /disposition !== "present" && !reason\.trim\(\)/);
+  assert.match(attendance, /memberNotices\[row\.memberId\]/);
+  assert.match(attendance, /window\.setTimeout/);
+  assert.doesNotMatch(attendance, /Kiosk meeting ID|Copy ID|meeting data is current/i);
   assert.match(attendance, /Send Discord absence notice/);
   assert.match(attendance, /className="primary-button" type="button" disabled=\{!selected\}/);
   assert.match(attendance, /toLocaleDateString\(\).*meeting\.title/);

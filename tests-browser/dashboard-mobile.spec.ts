@@ -78,6 +78,28 @@ test("mobile navigation opens as a dismissible side drawer", async ({ page }) =>
   await expect(navigation).not.toBeVisible();
 });
 
+test("meeting actions move below meeting data on a narrow screen", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/meetings");
+  const row = page.locator(".meeting-directory tbody tr").first();
+  const title = row.locator(".meeting-title-cell");
+  const actions = row.locator(".meeting-actions-cell");
+  await expect(row).toBeVisible();
+  await expect(row.locator(".meeting-mobile-details")).toBeVisible();
+  const [titleBounds, actionsBounds] = await Promise.all([title.boundingBox(), actions.boundingBox()]);
+  expect(actionsBounds!.y).toBeGreaterThan(titleBounds!.y + titleBounds!.height);
+  for (const button of await actions.getByRole("button").all()) expect((await button.boundingBox())!.width).toBeGreaterThan(80);
+});
+
+test("data deletion requires an exact typed confirmation", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/settings/data");
+  const deletion = page.getByRole("button", { name: "Delete roster" });
+  await expect(deletion).toBeDisabled();
+  await page.getByLabel("Type DELETE ROSTER to confirm").fill("DELETE ROSTER");
+  await expect(deletion).toBeEnabled();
+});
+
 test("expanded mobile content only scrolls where data requires it", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const allowedScrollerSelectors = [".responsive-table", ".table-scroll"];

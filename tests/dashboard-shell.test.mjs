@@ -133,7 +133,9 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
   assert.match(importer, /Replace the active roster/);
   assert.match(roster, /Add roster member/);
   assert.match(roster, /roster-summary-card/);
-  assert.match(roster, /open=\{importOpen\}/);
+  assert.match(roster, /Import CSV instead/);
+  assert.match(roster, /RosterImportPanel members=\{members\}/);
+  assert.doesNotMatch(roster, /importOpen/);
   assert.match(users, /Roster link <span>\(optional\)<\/span>/);
   assert.match(users, /Non-rostered Admin or Operator/);
   assert.doesNotMatch(shell, /\["\/setup", "Setup"\]/);

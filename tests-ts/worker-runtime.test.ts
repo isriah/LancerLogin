@@ -460,6 +460,23 @@ test("Reports may request inactive roster history without changing the default a
   assert.equal(attendanceQuery?.values.at(-1), 1);
 });
 
+test("member history is stable by roster ID and available to Operators", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("external_id = ?", { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: 0 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
+  database.lists.set("FROM meetings meeting", [{ meetingId: "meeting-1", title: "Build session", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", checkedInAt: "2026-09-01T20:05:00.000Z", checkedOutAt: "2026-09-01T21:10:00.000Z" }, { meetingId: "meeting-2", title: "Practice", startsAt: "2026-09-02T20:00:00.000Z", endsAt: "2026-09-02T22:00:00.000Z", correction: "excused", reason: "Medical appointment" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/members/A-101/history", undefined, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 200);
+  const body = await result.json() as { member: { active: boolean; memberId: string }; history: Array<{ disposition: string; checkedInAt?: string; checkedOutAt?: string; reason?: string }> };
+  assert.deepEqual(body.member, { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: false });
+  assert.equal(body.history[0].disposition, "present");
+  assert.equal(body.history[0].checkedInAt, "2026-09-01T20:05:00.000Z");
+  assert.equal(body.history[0].checkedOutAt, "2026-09-01T21:10:00.000Z");
+  assert.equal(body.history[1].disposition, "excused");
+  assert.equal(body.history[1].reason, "Medical appointment");
+});
+
 test("authenticated kiosk configuration returns current display branding", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });

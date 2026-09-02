@@ -65,6 +65,9 @@ Status: collecting. Do not implement until the user explicitly reconciles this r
    - Screenshot: <https://i.imgur.com/sr3gjcD.png>
    - Observation: the roster action buttons are improperly formatted on desktop.
    - Expected behavior: show the related action buttons side by side on desktop and apply the established styled-button treatment consistently.
+4. Add durable roster-member deep links and a member detail workspace.
+   - Observation: selecting a member in Reports or another roster-oriented view does not open a reusable member-specific page.
+   - Expected behavior: member names link to a stable route such as `/roster/<member-id>`. The page provides allowed member actions and detailed per-meeting attendance history, including check-in/check-out timestamps or an absence/excuse result for each completed meeting.
 
 ## Additional approved refinements
 

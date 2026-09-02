@@ -174,7 +174,8 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
   assert.match(source, /authorize Upgrade manually/);
   assert.match(source, /Update to latest stable/);
   assert.match(source, /command: "install_latest"/);
-  assert.match(source, /Latest stable kiosk update queued/);
+  assert.match(source, /Waiting for the kiosk to receive the request/);
+  assert.match(source, /\/commands`\); setCommands/);
   assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);
 });
 

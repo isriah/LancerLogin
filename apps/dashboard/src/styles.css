@@ -522,6 +522,13 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .verification-panel h3,.verification-panel p,.verification-panel label,.verification-panel button { margin: 0; }
 .verification-panel button:not(.primary-button) { padding: .65rem .75rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .55rem; cursor: pointer; }
 .action-link { display: block; box-sizing: border-box; text-align: center; text-decoration: none; }
+.update-available-popup { position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 80; width: min(34rem,calc(100vw - 2rem)); display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: .85rem; align-items: center; padding: 1rem; border: 2px solid var(--primary); border-radius: .7rem; color: var(--ink); background: var(--surface); box-shadow: 0 1.25rem 3rem rgba(0,0,0,.3); }
+.update-available-popup div { display: grid; gap: .2rem; }
+.update-available-popup span { color: var(--muted); font-size: .86rem; }
+.update-available-popup .primary-button { margin: 0; white-space: nowrap; }
+.popup-dismiss { width: 2.25rem; height: 2.25rem; padding: 0; border: 0; color: var(--muted); background: transparent; font-size: 1.5rem; cursor: pointer; }
+.kiosk-update-status { margin: .9rem 0 0; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: .5rem; color: var(--muted); background: var(--surface-soft); }
+.kiosk-update-status.failed { border-color: #b42318; color: #b42318; }
 
 @media (max-width: 760px) {
   .toolbar-end { justify-content: space-between; }
@@ -561,6 +568,9 @@ label { font-size: .9rem; }
 
 /* Phone layouts use the available screen instead of nesting horizontal scrollers. */
 @media (max-width: 760px) {
+  .update-available-popup { right: 1rem; bottom: 1rem; grid-template-columns: minmax(0,1fr) auto; }
+  .update-available-popup .primary-button { grid-column: 1 / -1; width: 100%; }
+  .popup-dismiss { grid-column: 2; grid-row: 1; }
   .provisioned-main { padding: 1rem; }
   .dashboard-toolbar { grid-template-columns: 2.75rem minmax(0,1fr); gap: .65rem; }
   .mobile-menu-toggle { z-index: 92; width: 2.75rem; height: 2.75rem; display: grid; place-content: center; gap: .28rem; padding: 0; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .6rem; cursor: pointer; }

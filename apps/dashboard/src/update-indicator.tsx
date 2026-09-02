@@ -16,7 +16,7 @@ export function isNewerRelease(candidate: string, installed: string) {
 }
 export const formatVersion = (value?: string) => value ? value.replace(/^v/, "") : "";
 
-async function checkForUpdate(): Promise<Check> {
+export async function checkForUpdate(): Promise<Check> {
   const cached = localStorage.getItem(cacheKey);
   if (cached) { try { const value = JSON.parse(cached) as Check & { checkedAt: number }; if (Date.now() - value.checkedAt < 6 * 60 * 60_000) return value; } catch { localStorage.removeItem(cacheKey); } }
   const [installation, releaseResponse] = await Promise.all([api<{ releaseVersion: string }>("/admin/update-info"), fetch(latestReleaseUrl, { headers: { accept: "application/vnd.github+json" } })]);
@@ -28,6 +28,16 @@ export function UpdateIndicator({ openUpdates }: { openUpdates: () => void }) {
   useEffect(() => { void checkForUpdate().then(setCheck).catch(() => undefined); }, []);
   if (!check?.available) return null;
   return <button className="update-indicator" type="button" onClick={openUpdates} aria-label={`LancerLogin ${check.latest} is available. Open Updates.`}><span aria-hidden="true">↑</span> Update available <strong>{check.latest}</strong></button>;
+}
+
+export function UpdateAvailablePopup({ openUpdates }: { openUpdates: () => void }) {
+  const [check, setCheck] = useState<Check>();
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => { void checkForUpdate().then((next) => { setCheck(next); setDismissed(localStorage.getItem(`lancerlogin-update-dismissed:${next.latest}`) === "true"); }).catch(() => undefined); }, []);
+  if (!check?.available || dismissed) return null;
+  const available = check;
+  function dismiss() { localStorage.setItem(`lancerlogin-update-dismissed:${available.latest}`, "true"); setDismissed(true); }
+  return <aside className="update-available-popup" role="status" aria-label="Update available"><div><strong>LancerLogin {check.latest} is ready</strong><span>This dashboard is running {check.current}. Review and install the available update.</span></div><button className="primary-button" type="button" onClick={openUpdates}>Open Updates</button><button className="popup-dismiss" type="button" aria-label="Dismiss update notice" onClick={dismiss}>×</button></aside>;
 }
 
 export function clearUpdateCheckCache() { localStorage.removeItem(cacheKey); }

@@ -318,6 +318,13 @@ async function queueKioskCommand(request: Request, env: Env, kioskId: string): P
   ]);
   return response({ command: { id, type: input.command, kioskId, queuedAt: now } }, 202);
 }
+async function kioskCommandStatus(request: Request, env: Env, kioskId: string): Promise<Response> {
+  await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const kiosk = await db.prepare("SELECT id FROM kiosks WHERE installation_id = 'primary' AND id = ?").bind(kioskId).first<{ id: string }>();
+  if (!kiosk) throw new HttpError(404, "Kiosk not found");
+  const commands = await db.prepare("SELECT id, command_type AS type, created_at AS createdAt, completed_at AS completedAt, success, result_message AS resultMessage FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? ORDER BY created_at DESC LIMIT 12").bind(kioskId).all<{ id: string; type: KioskCommandType; createdAt: string; completedAt?: string; success?: number; resultMessage?: string }>();
+  return response({ commands: commands.results ?? [] });
+}
 async function pendingKioskCommand(request: Request, env: Env): Promise<Response> {
   const kiosk = await kioskFor(request, env); const notBefore = new Date(Date.now() - 15 * 60_000).toISOString(); const command = await requireDatabase(env).prepare("SELECT id, command_type AS type, created_at AS createdAt FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? AND completed_at IS NULL AND created_at >= ? ORDER BY created_at LIMIT 1").bind(kiosk.id, notBefore).first();
   return response({ command: command ?? null });
@@ -1127,6 +1134,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
     else if (/^\/admin\/kiosks\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageKiosk(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "POST") result = await queueKioskCommand(request, env, decodeURIComponent(url.pathname.split("/")[3]));
+    else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "GET") result = await kioskCommandStatus(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/admin/simulator" && ["GET", "POST"].includes(request.method)) result = await simulatedKiosk(request, env);
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
     else if (url.pathname === "/meetings/bulk-delete" && request.method === "POST") result = await bulkDeleteMeetings(request, env);

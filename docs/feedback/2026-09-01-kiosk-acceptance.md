@@ -119,3 +119,74 @@ The user is still gathering the next feedback round. Record new observations her
 2. Removing the private deployment workflow typed confirmation remains blocked.
    - Requested behavior: calculate the final confirmation from selected operation and slug.
    - Blocker: the workflow changes Cloudflare account resources, and removing the typed confirmation weakens a persistent safety guard. The safety reviewer rejected the patch pending exact explicit approval.
+
+### Next feedback collection - layout, meetings, attendance, kiosk status, typography
+
+Status: queued. Do not implement until the user explicitly reconciles this round and switches to execution.
+
+1. Fingerprint maintenance slot selector overflows its card.
+   - Affected area: physical kiosk fingerprint maintenance enrollment form.
+   - Observation: the slot selector box extends off the side of the card.
+   - Expected behavior: the slot control should stay inside the card at 800x480, preserve touch-sized hit targets, and avoid horizontal overflow.
+   - Acceptance notes: verify on the physical Waveshare display and in the 800x480 browser smoke test.
+2. Slot number keypad popup overflows its popup card.
+   - Affected area: physical kiosk fingerprint maintenance numeric slot keypad.
+   - Observation: the input keypad for the slot number extends off the side of the popup card.
+   - Expected behavior: the keypad should fit inside its dialog, keep readable/touchable keys, and remain usable without page scrolling.
+   - Acceptance notes: test one-, two-, and three-digit slots, including 0 and 199.
+3. Wi-Fi network list still only shows the connected network.
+   - Affected area: physical kiosk network settings.
+   - Observation: the selector still shows only the single Wi-Fi network already connected, even though other networks are available and were previously visible.
+   - Expected behavior: the list should rescan and show all nearby visible networks, with the active network marked.
+   - Acceptance notes: diagnose with NetworkManager on the Pi, comparing raw `nmcli` output to the kiosk API response before changing parsing or permissions.
+4. Discord sync confirmation appears at the top of the Meetings page.
+   - Affected area: dashboard Meetings page.
+   - Observation: the sync-to-Discord confirmation can appear off screen at the top.
+   - Expected behavior: success and error messages should appear next to the item or action they relate to, especially for off-screen table/card actions.
+   - Acceptance notes: test sync-one, sync-all, success, and failure states.
+5. Consolidate meeting deletion actions.
+   - Affected area: dashboard Meetings page.
+   - Observation: meetings currently expose separate Delete and Delete future buttons.
+   - Expected behavior: one-time meetings should delete after confirmation. Recurring meetings should open a confirmation dialog with Delete this meeting and Delete this and future meetings options, listing affected future events.
+   - Acceptance notes: confirm a non-recurring delete, a single occurrence delete, and a future-series delete, with prior occurrences preserved.
+6. Split meeting table start information into separate columns.
+   - Affected area: dashboard Meetings page.
+   - Observation: the Start column contains both date and time.
+   - Expected behavior: show Date, Start, and End as separate columns.
+   - Acceptance notes: ensure responsive behavior remains readable on narrow screens.
+7. Add immediate undo after meeting deletion.
+   - Affected area: dashboard Meetings page.
+   - Expected behavior: after deleting a meeting or future series occurrences, show an immediate undo affordance that restores the deleted meeting(s). The undo can disappear after refresh or the next action.
+   - Acceptance notes: verify undo restores table visibility and Discord sync state does not duplicate events.
+8. Attendance meeting selector text is cut off.
+   - Affected area: dashboard Attendance page.
+   - Observation: the View attendance for selector cuts text off the edge.
+   - Expected behavior: each option should show the date, then the meeting name, without the meeting time. Long date/name text should truncate cleanly with an ellipsis.
+   - Acceptance notes: test long meeting names and narrow viewport widths.
+9. Theme the Send Discord absence notice button.
+   - Affected area: dashboard Attendance page.
+   - Observation: the button is still unthemed.
+   - Expected behavior: use the same primary color and rounded profile as other primary dashboard buttons.
+10. Remove Link Discord from individual meeting attendance actions.
+    - Affected area: dashboard Attendance page.
+    - Expected behavior: Discord linking should be handled from the Roster page, not per-member attendance rows.
+11. Remove per-member email actions from Attendance.
+    - Affected area: dashboard Attendance page.
+    - Expected behavior: remove Email missed and Email report actions from each member row.
+12. Restore traditional kiosk network status icon.
+    - Affected area: physical kiosk normal scan screen.
+    - Observation: the circular network status symbol looks odd.
+    - Expected behavior: return to the pre-community-style Wi-Fi reception bars with color state and a small adjacent icon. Show an Ethernet icon instead of Wi-Fi when connected by Ethernet.
+    - Acceptance notes: verify Wi-Fi online, Ethernet online, cloud offline, and queued/offline states.
+13. Replace bottom clock with kiosk uptime.
+    - Affected area: physical kiosk normal scan screen footer.
+    - Observation: the third bottom item currently shows the time of day.
+    - Expected behavior: show kiosk uptime instead. The counter should reset when the display/runtime service restarts, the system crashes, or the kiosk process restarts.
+    - Acceptance notes: define whether uptime starts at browser load, kiosk service start, or successful service health start before implementation.
+14. Establish a larger typography scale.
+    - Affected area: dashboard and physical kiosk surfaces.
+    - Request: increase font sizes across the board after reviewing current styling rules.
+    - Current dashboard rules: base text inherits browser default, page `h1` uses responsive clamps around 2.1rem to 3.6rem, `h2` is about 1.55rem, table text is about .78rem, table headers about .68rem, labels about .82rem, and standard controls have at least 2.75rem height.
+    - Current kiosk scan-screen rules: main message is 48px, supporting text 24px, member name 30px, meeting text 20px, footer 18px, with slightly smaller values under 520px height.
+    - Current kiosk maintenance rules: headings are 28px and 20px, labels 14px, table text 13px, status message 15px, keypad buttons 20px, enrollment prompt 30px/18px, with smaller values under 520px height.
+    - Design dependency: choose a standard typography scale for dashboard tables/forms, dashboard page content, kiosk scan state, kiosk maintenance forms, and kiosk modal/keypad controls before implementation.

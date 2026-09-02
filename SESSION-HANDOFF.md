@@ -1,6 +1,6 @@
 # LancerLogin session handoff
 
-Last updated: 2026-09-02 after publishing LancerLogin v0.10.1 and confirming the Pi desktop kiosk relaunch shortcut.
+Last updated: 2026-09-02 after publishing LancerLogin v0.10.2 typography improvements.
 
 ## Start the next session here
 
@@ -16,7 +16,7 @@ Public repository: <https://github.com/isriah/LancerLogin>
 
 Public documentation: <https://isriah.github.io/LancerLogin/>
 
-Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.1>
+Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.2>
 
 ## Non-negotiable boundaries
 
@@ -71,20 +71,26 @@ Authoritative detail:
 ## Current repository and release state
 
 - Branch: `main`
-- v0.10.1 code/tag commit: `e7ebff798f73369b0b1de3c504679934f2b6e38b` (`Prepare v0.10.1 kiosk shortcut release`)
-- Immutable v0.10.1 tag commit: `e7ebff798f73369b0b1de3c504679934f2b6e38b`
+- v0.10.2 code/tag commit: `591c140295707312aa1c46e185bb8f1539e44067` (`Keep installer source unchanged for v0.10.2`)
+- Immutable v0.10.2 tag commit: `591c140295707312aa1c46e185bb8f1539e44067`
 - Working tree was clean at handoff.
-- v0.10.1 is a published, non-draft, non-prerelease GitHub release with the guided installer, arm64/armv7 archives, and SHA-256 files.
-- The public Pages documentation successfully deployed and visibly includes v0.10.1.
-- Latest GitHub **Verify** completed successfully on `main` for `e7ebff7` before the v0.10.1 tag, and the v0.10.1 release workflow completed successfully.
-- Local/full gate evidence for the v0.10.1 patch: `npm run verify:release` passed outside the sandbox after an esbuild sandbox filesystem-access failure; the physical Pi desktop shortcut was clicked and reopened Chromium in full-screen kiosk mode.
+- v0.10.2 is a published, non-draft, non-prerelease GitHub release with the guided installer, arm64/armv7 archives, and SHA-256 files.
+- Latest GitHub **Verify** completed successfully on `main` for `591c140` before the v0.10.2 tag, and the v0.10.2 release workflow completed successfully.
+- Local/full gate evidence for the v0.10.2 patch: `npm run verify:release` passed outside the sandbox after an esbuild sandbox filesystem-access failure. The release makes no physical Pi acceptance claim.
 - GitHub Pages emitted a non-blocking warning that `actions/configure-pages@v5` currently targets deprecated Node.js 20 on the runner. Publication succeeded. Treat checking for an official successor as low-priority cleanup; verify current official action guidance before changing it.
 
-Release notes: [`docs/releases/v0.10.1.md`](docs/releases/v0.10.1.md)
+Release notes: [`docs/releases/v0.10.2.md`](docs/releases/v0.10.2.md)
 
 Durable feature history: [`docs/HANDOFF.md`](docs/HANDOFF.md)
 
 Roadmap/evidence: [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md)
+
+## What v0.10.2 delivered
+
+- Readability increase across the desktop dashboard, member-facing kiosk, and protected fingerprint maintenance UI.
+- Dashboard now has a 17px desktop base and larger dense operational table, label, helper, and action text.
+- Kiosk and maintenance panels use larger status/prompts/control text while keeping their existing 800x480 compact fallbacks.
+- No Pi installer source change was made; release packaging stamps the matching immutable release version into its generated installer artifact.
 
 ## What v0.10.1 delivered
 

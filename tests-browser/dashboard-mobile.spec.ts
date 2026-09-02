@@ -72,7 +72,12 @@ test("mobile navigation opens as a dismissible side drawer", async ({ page }) =>
   await menu.click();
   const navigation = page.getByRole("navigation", { name: "Primary dashboard navigation" });
   await expect(navigation).toBeVisible();
-  await expect(page.getByRole("button", { name: "Close navigation" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open navigation" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Close navigation" })).toBeVisible();
+  await page.getByRole("button", { name: "Close navigation" }).click({ force: true });
+  await expect(navigation).not.toBeVisible();
+  await menu.waitFor({ state: "visible" });
+  await menu.click();
   await navigation.getByRole("link", { name: "Reports" }).click();
   await expect(page.getByRole("heading", { name: "Reports" })).toBeVisible();
   await expect(navigation).not.toBeVisible();

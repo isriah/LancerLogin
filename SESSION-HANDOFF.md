@@ -1,6 +1,6 @@
 # LancerLogin session handoff
 
-Last updated: 2026-09-02 after publishing LancerLogin v0.10.0 and staging kiosk polish for physical acceptance.
+Last updated: 2026-09-02 after publishing LancerLogin v0.10.1 and confirming the Pi desktop kiosk relaunch shortcut.
 
 ## Start the next session here
 
@@ -16,7 +16,7 @@ Public repository: <https://github.com/isriah/LancerLogin>
 
 Public documentation: <https://isriah.github.io/LancerLogin/>
 
-Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.0>
+Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.1>
 
 ## Non-negotiable boundaries
 
@@ -71,20 +71,26 @@ Authoritative detail:
 ## Current repository and release state
 
 - Branch: `main`
-- v0.10.0 code/tag commit: `0152d5164f1f77fd712817c4901a02731c176b39` (`Polish kiosk fingerprint maintenance`)
-- Immutable v0.10.0 tag commit: `0152d5164f1f77fd712817c4901a02731c176b39`
+- v0.10.1 code/tag commit: `e7ebff798f73369b0b1de3c504679934f2b6e38b` (`Prepare v0.10.1 kiosk shortcut release`)
+- Immutable v0.10.1 tag commit: `e7ebff798f73369b0b1de3c504679934f2b6e38b`
 - Working tree was clean at handoff.
-- v0.10.0 is a published, non-draft, non-prerelease GitHub release with the guided installer, arm64/armv7 archives, and SHA-256 files.
-- The public Pages documentation should be refreshed from `docs-site/` after this post-release docs cleanup so it visibly includes v0.10.0.
-- Latest GitHub **Verify** completed successfully on `main` for `0152d51` before the v0.10.0 tag, and the v0.10.0 release workflow completed successfully.
-- Local/full gate evidence for the v0.10.0 batch: kiosk tests/typecheck, dashboard tests/typecheck, API tests, migrations through `0010_meeting_soft_delete.sql`, docs/provisioning verification, production builds, workspace typecheck, and Chromium kiosk smoke tests all passed.
+- v0.10.1 is a published, non-draft, non-prerelease GitHub release with the guided installer, arm64/armv7 archives, and SHA-256 files.
+- The public Pages documentation successfully deployed and visibly includes v0.10.1.
+- Latest GitHub **Verify** completed successfully on `main` for `e7ebff7` before the v0.10.1 tag, and the v0.10.1 release workflow completed successfully.
+- Local/full gate evidence for the v0.10.1 patch: `npm run verify:release` passed outside the sandbox after an esbuild sandbox filesystem-access failure; the physical Pi desktop shortcut was clicked and reopened Chromium in full-screen kiosk mode.
 - GitHub Pages emitted a non-blocking warning that `actions/configure-pages@v5` currently targets deprecated Node.js 20 on the runner. Publication succeeded. Treat checking for an official successor as low-priority cleanup; verify current official action guidance before changing it.
 
-Release notes: [`docs/releases/v0.10.0.md`](docs/releases/v0.10.0.md)
+Release notes: [`docs/releases/v0.10.1.md`](docs/releases/v0.10.1.md)
 
 Durable feature history: [`docs/HANDOFF.md`](docs/HANDOFF.md)
 
 Roadmap/evidence: [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md)
+
+## What v0.10.1 delivered
+
+- Pi installer patch: future installs create a **LancerLogin Kiosk** desktop shortcut for the installing desktop user when Chromium is available.
+- The shortcut and desktop-login autostart use the same launcher to reopen the local attendance screen in full-screen kiosk mode.
+- Physical acceptance confirmed the shortcut reopened the kiosk in full-screen mode on the test Pi.
 
 ## What v0.10.0 delivered
 
@@ -129,7 +135,7 @@ Provisioning detail: [`docs/BOOTSTRAPPING.md`](docs/BOOTSTRAPPING.md) and [`docs
 - The older service was not silently deleted. Conversion work disabled conflicting old user services recoverably, and LancerLogin subsequently ran on the device.
 - Manual serial configuration confirmed the R503 online with 49 templates. The v0.9 systemd unit now reapplies the required `/dev/serial0` settings before every start so this does not depend on a one-time shell command.
 - v0.10 kiosk polish files were staged on the test Pi, but root installation still requires the user to run the provided `sudo install ... && sudo systemctl restart lancerlogin-kiosk.service` command locally or through an actual sudo prompt. Do not send the sudo password as an SSH command.
-- Do not assume the v0.10 release has been fully accepted on the Pi. The user must complete end-to-end acceptance after applying the staged files or running the published v0.10.0 installer.
+- Do not assume the v0.10.x release has been fully accepted on the Pi. The user must complete end-to-end acceptance after applying the staged files or running the published v0.10.1 installer.
 - Do not erase R503 templates or local mappings during acceptance. Back up application data first and use a nonessential sensor slot for enrollment testing.
 
 ## Remaining work, in order
@@ -137,11 +143,11 @@ Provisioning detail: [`docs/BOOTSTRAPPING.md`](docs/BOOTSTRAPPING.md) and [`docs
 There are no known uncommitted code defects in the approved v0.10 batch. The immediate remaining work is manual acceptance:
 
 1. In the adopter-owned private deployment repository, manually run **Install or upgrade LancerLogin** with **Upgrade** and **Latest stable**, using the existing isolated LancerLogin installation slug and exact confirmation. Download an Entire installation backup first.
-2. Confirm the private workflow deploys v0.10.0 only to the isolated LancerLogin Worker/D1/Pages resources. Do not inspect or alter earlier attendance resources.
-3. On the Pi, either apply the staged v0.10 kiosk polish files already copied to the temporary staging directory, or download the v0.10.0 installer, run `--dry-run`, then `--install`:
+2. Confirm the private workflow deploys v0.10.1 only to the isolated LancerLogin Worker/D1/Pages resources. Do not inspect or alter earlier attendance resources.
+3. On the Pi, either keep the already applied staged kiosk polish plus desktop shortcut, or download the v0.10.1 installer, run `--dry-run`, then `--install`:
 
    ```bash
-   curl -fL https://github.com/isriah/LancerLogin/releases/download/v0.10.0/install-lancerlogin.sh -o /tmp/install-lancerlogin.sh
+   curl -fL https://github.com/isriah/LancerLogin/releases/download/v0.10.1/install-lancerlogin.sh -o /tmp/install-lancerlogin.sh
    sudo bash /tmp/install-lancerlogin.sh --dry-run
    sudo bash /tmp/install-lancerlogin.sh --install
    ```

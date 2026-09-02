@@ -1,6 +1,6 @@
 # LancerLogin session handoff
 
-Last updated: 2026-09-02 after publishing LancerLogin v0.10.2 typography improvements.
+Last updated: 2026-09-02 after publishing LancerLogin v0.10.3 verified kiosk updates.
 
 ## Start the next session here
 
@@ -16,7 +16,7 @@ Public repository: <https://github.com/isriah/LancerLogin>
 
 Public documentation: <https://isriah.github.io/LancerLogin/>
 
-Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.2>
+Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.3>
 
 ## Non-negotiable boundaries
 
@@ -71,19 +71,25 @@ Authoritative detail:
 ## Current repository and release state
 
 - Branch: `main`
-- v0.10.2 code/tag commit: `591c140295707312aa1c46e185bb8f1539e44067` (`Keep installer source unchanged for v0.10.2`)
-- Immutable v0.10.2 tag commit: `591c140295707312aa1c46e185bb8f1539e44067`
-- Working tree was clean at handoff.
-- v0.10.2 is a published, non-draft, non-prerelease GitHub release with the guided installer, arm64/armv7 archives, and SHA-256 files.
-- Latest GitHub **Verify** completed successfully on `main` for `591c140` before the v0.10.2 tag, and the v0.10.2 release workflow completed successfully.
-- Local/full gate evidence for the v0.10.2 patch: `npm run verify:release` passed outside the sandbox after an esbuild sandbox filesystem-access failure. The release makes no physical Pi acceptance claim.
+- v0.10.3 code/tag commit: `423fc713ec3cb3b96f1ddf7e41ea1f1d488448c0` (`Add verified kiosk self-updates`)
+- Immutable v0.10.3 tag commit: `423fc713ec3cb3b96f1ddf7e41ea1f1d488448c0`
+- v0.10.3 is a published, non-draft, non-prerelease GitHub release with the guided installer, installer SHA-256, arm64/armv7 archives, and archive SHA-256 files.
+- GitHub **Verify** completed successfully on `main` for `423fc71` before the v0.10.3 tag, and the v0.10.3 release workflow completed successfully.
+- Local/full gate evidence for the v0.10.3 patch: `npm run verify:release` passed outside the sandbox after an esbuild sandbox filesystem-access failure. The release makes no physical Pi acceptance claim.
 - GitHub Pages emitted a non-blocking warning that `actions/configure-pages@v5` currently targets deprecated Node.js 20 on the runner. Publication succeeded. Treat checking for an official successor as low-priority cleanup; verify current official action guidance before changing it.
 
-Release notes: [`docs/releases/v0.10.2.md`](docs/releases/v0.10.2.md)
+Release notes: [`docs/releases/v0.10.3.md`](docs/releases/v0.10.3.md)
 
 Durable feature history: [`docs/HANDOFF.md`](docs/HANDOFF.md)
 
 Roadmap/evidence: [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md)
+
+## What v0.10.3 delivered
+
+- Admins can queue an online kiosk to install **Latest stable** from **Kiosks** or **Settings → Updates**.
+- The root update route is limited to one argument-free systemd unit and a fixed official GitHub release feed; both the installer and kiosk archive are checksum-verified.
+- The private deployment workflow retains operation selection, slug validation, private-repository and resource checks, but removes the redundant typed confirmation before GitHub's final dispatch button.
+- The first Pi update must still use the `v0.10.3` guided installer to provision this constrained updater. Future compatible updates are dashboard-managed.
 
 ## What v0.10.2 delivered
 

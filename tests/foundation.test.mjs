@@ -113,6 +113,15 @@ test("recurring meeting migration stores series metadata without biometric data"
   assert.doesNotMatch(migration, /fingerprint|template|biometric/i);
 });
 
+test("meeting-template migration stores only reusable scheduling defaults", async () => {
+  const migration = await readFile("apps/api/migrations/0016_meeting_templates.sql", "utf8");
+  assert.match(migration, /CREATE TABLE meeting_templates/);
+  assert.match(migration, /duration_minutes/);
+  assert.match(migration, /recurrence_duration_days/);
+  assert.match(migration, /installation_id/);
+  assert.doesNotMatch(migration, /fingerprint|biometric/i);
+});
+
 test("integration verification migration stores only proof state and hashed challenges", async () => {
   const migration = await readFile("apps/api/migrations/0007_integration_verification.sql", "utf8");
   assert.match(migration, /verified_at TEXT/);

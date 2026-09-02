@@ -18,6 +18,7 @@ type BrandingInput = { organizationName?: string; subtitle?: string | null; logo
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null; attendanceRequiredFrom?: string | null };
 type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
+type MeetingTemplateInput = { name?: string; title?: string; startTime?: string; durationMinutes?: number; required?: boolean; notes?: string | null; recurrenceFrequency?: RecurrenceFrequency | null; recurrenceDurationDays?: number | null };
 type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
 
 const baseHeaders = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
@@ -337,6 +338,10 @@ async function completeKioskCommand(request: Request, env: Env, commandId: strin
   return response({ completed: true, commandId });
 }
 function validTimestamp(value: string | undefined): value is string { return Boolean(value && Number.isFinite(Date.parse(value))); }
+function validateMeetingTemplateInput(input: MeetingTemplateInput): asserts input is MeetingTemplateInput & { name: string; title: string; startTime: string; durationMinutes: number } {
+  if (!input.name?.trim() || input.name.length > 120 || !input.title?.trim() || input.title.length > 120 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(input.startTime ?? "") || !Number.isInteger(input.durationMinutes) || input.durationMinutes! < 1 || input.durationMinutes! > 1440 || (input.notes?.length ?? 0) > 2_000 || (input.recurrenceFrequency !== null && input.recurrenceFrequency !== undefined && !["daily", "weekly", "biweekly", "monthly"].includes(input.recurrenceFrequency)) || (input.recurrenceDurationDays !== null && input.recurrenceDurationDays !== undefined && (!Number.isInteger(input.recurrenceDurationDays) || input.recurrenceDurationDays < 1 || input.recurrenceDurationDays > 3650))) throw new HttpError(400, "Template needs a name, meeting title, valid start time and duration, and valid optional recurrence settings");
+  if (!input.recurrenceFrequency && input.recurrenceDurationDays !== null && input.recurrenceDurationDays !== undefined) throw new HttpError(400, "A recurrence duration requires a recurrence frequency");
+}
 function validateMeetingInput(input: MeetingInput): asserts input is MeetingInput & { title: string; startsAt: string; endsAt: string } {
   if (!input.title?.trim() || input.title.length > 120 || (input.notes?.length ?? 0) > 2_000 || !validTimestamp(input.startsAt) || !validTimestamp(input.endsAt ?? undefined) || Date.parse(input.endsAt!) <= Date.parse(input.startsAt!)) throw new HttpError(400, "Meeting needs a title, valid start and end times, an end after its start, and optional notes under 2,000 characters");
 }
@@ -383,6 +388,24 @@ async function meetings(request: Request, env: Env): Promise<Response> {
   try { await syncDiscordCalendarMeetings(db, env, principal, ids); } catch { /* Calendar sync is best-effort so meeting creation remains available without Discord. */ }
   const created = occurrences.map((occurrence, index) => ({ id: ids[index], title: input.title!.trim(), ...occurrence, required: input.required !== false, notes: input.notes?.trim() || null, seriesId, recurrenceFrequency: input.recurrence?.frequency ?? null, recurrenceUntil: input.recurrence?.until ?? null, recurrenceSequence: occurrence.sequence }));
   return response({ meeting: created[0], meetings: created, seriesId }, 201);
+}
+async function meetingTemplates(request: Request, env: Env, templateId?: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
+  if (request.method === "GET") {
+    const result = await db.prepare("SELECT id, name, title, start_time AS startTime, duration_minutes AS durationMinutes, required, notes, recurrence_frequency AS recurrenceFrequency, recurrence_duration_days AS recurrenceDurationDays, created_at AS createdAt, updated_at AS updatedAt FROM meeting_templates WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE LIMIT 200").all();
+    return response({ templates: result.results ?? [] });
+  }
+  if (!templateId) {
+    const input = await parseJson<MeetingTemplateInput>(request); validateMeetingTemplateInput(input); const id = crypto.randomUUID(); const now = new Date().toISOString();
+    try { await db.prepare("INSERT INTO meeting_templates (id, installation_id, name, title, start_time, duration_minutes, required, notes, recurrence_frequency, recurrence_duration_days, created_by, created_at, updated_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, input.name.trim(), input.title.trim(), input.startTime, input.durationMinutes, input.required === false ? 0 : 1, input.notes?.trim() || null, input.recurrenceFrequency ?? null, input.recurrenceDurationDays ?? null, principal.userId, now, now).run(); } catch (error) { if ((error as Error).message.includes("UNIQUE")) throw new HttpError(409, "A meeting template already uses that name"); throw error; }
+    await writeAudit(db, principal, "meeting_template.created", "meeting_template", id, { name: input.name.trim() }); return response({ id }, 201);
+  }
+  if (request.method === "DELETE") {
+    const result = await db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary' AND id = ?").bind(templateId).run(); if ((result.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting template not found"); await writeAudit(db, principal, "meeting_template.deleted", "meeting_template", templateId); return response({ deleted: true });
+  }
+  const input = await parseJson<MeetingTemplateInput>(request); validateMeetingTemplateInput(input);
+  try { const result = await db.prepare("UPDATE meeting_templates SET name = ?, title = ?, start_time = ?, duration_minutes = ?, required = ?, notes = ?, recurrence_frequency = ?, recurrence_duration_days = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ?").bind(input.name.trim(), input.title.trim(), input.startTime, input.durationMinutes, input.required === false ? 0 : 1, input.notes?.trim() || null, input.recurrenceFrequency ?? null, input.recurrenceDurationDays ?? null, new Date().toISOString(), templateId).run(); if ((result.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting template not found"); } catch (error) { if ((error as Error).message.includes("UNIQUE")) throw new HttpError(409, "A meeting template already uses that name"); throw error; }
+  await writeAudit(db, principal, "meeting_template.updated", "meeting_template", templateId, { name: input.name.trim() }); return response({ updated: true });
 }
 async function updateMeeting(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
@@ -978,6 +1001,7 @@ const tableColumns = {
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at"],
   meetings: ["id", "installation_id", "title", "starts_at", "ends_at", "required", "notes", "created_by", "created_at", "is_test", "series_id", "recurrence_frequency", "recurrence_until", "recurrence_sequence", "deleted_at"],
+  meeting_templates: ["id", "installation_id", "name", "title", "start_time", "duration_minutes", "required", "notes", "recurrence_frequency", "recurrence_duration_days", "created_by", "created_at", "updated_at"],
   attendance_events: ["id", "installation_id", "member_id", "meeting_id", "source", "occurred_at", "kiosk_event_id", "created_by", "action"],
   attendance_corrections: ["id", "installation_id", "member_id", "meeting_id", "disposition", "reason", "created_by", "created_at"],
   setup_progress: ["installation_id", "step", "completed_at", "completed_by"],
@@ -996,12 +1020,12 @@ const tableColumns = {
 type BackupTable = keyof typeof tableColumns;
 // Restore parents before children so SQLite's immediate foreign-key checks remain valid.
 const installationTables: BackupTable[] = [
-  "installations", "organization_settings", "members", "users", "meetings",
+  "installations", "organization_settings", "members", "users", "meetings", "meeting_templates",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
   "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "audit_log", "telemetry_diagnostics",
 ];
-const meetingTables: BackupTable[] = ["meetings", "attendance_events", "attendance_corrections", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests"];
+const meetingTables: BackupTable[] = ["meetings", "meeting_templates", "attendance_events", "attendance_corrections", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests"];
 const rosterTables: BackupTable[] = ["members"];
 const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -1013,26 +1037,26 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 5, scope, exportedAt, tables: Object.fromEntries(entries) };
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 5 });
+  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 6, scope, exportedAt, tables: Object.fromEntries(entries) };
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 6 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
   organization_settings: tableColumns.organization_settings.slice(0, -2),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
   discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -2),
 };
-const legacyInstallationTables = installationTables.filter((table) => table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients");
-const legacyMeetingTables = meetingTables.filter((table) => table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients");
+const legacyInstallationTables = installationTables.filter((table) => table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients");
+const legacyMeetingTables = meetingTables.filter((table) => table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients");
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
-  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5;
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5 | 6;
   const sourceTables = value.tables;
-  const requiredTables = schemaVersion === 1 ? legacyTablesForScope(scope) : tablesForScope(scope);
+  const requiredTables = schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope);
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
@@ -1076,8 +1100,8 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
   const expected = `RESTORE ${scope.toUpperCase()}`; if (input.confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`); const backup = normalizeBackup(input.backup, scope); const tables = backup.tables;
   let statements: D1Statement[];
   if (scope === "meetings") statements = [
-    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"),
-    ...insertBackupRows(db, "meetings", tables.meetings), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_notifications", tables.discord_attendance_notifications), ...insertBackupRows(db, "discord_attendance_recipients", tables.discord_attendance_recipients), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests),
+    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"),
+    ...insertBackupRows(db, "meetings", tables.meetings), ...insertBackupRows(db, "meeting_templates", tables.meeting_templates), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_notifications", tables.discord_attendance_notifications), ...insertBackupRows(db, "discord_attendance_recipients", tables.discord_attendance_recipients), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests),
   ];
   else if (scope === "roster") statements = [
     db.prepare("UPDATE members SET active = 0 WHERE installation_id = 'primary'"),
@@ -1102,7 +1126,7 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
   const expected = input.scope === "attendance" ? "DELETE ATTENDANCE" : input.scope === "roster" ? "DELETE ROSTER" : input.scope === "installation" ? "DELETE INSTALLATION" : undefined;
   if (!expected || input.confirmation !== expected) throw new HttpError(400, `Type ${expected ?? "a valid confirmation"} exactly to continue`);
   if (input.scope === "attendance") await db.batch([
-    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"),
+    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.attendance_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString()),
   ]);
   else if (input.scope === "roster") {
@@ -1138,6 +1162,8 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "GET") result = await kioskCommandStatus(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/admin/simulator" && ["GET", "POST"].includes(request.method)) result = await simulatedKiosk(request, env);
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
+    else if (url.pathname === "/meeting-templates" && ["GET", "POST"].includes(request.method)) result = await meetingTemplates(request, env);
+    else if (/^\/meeting-templates\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await meetingTemplates(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (url.pathname === "/meetings/bulk-delete" && request.method === "POST") result = await bulkDeleteMeetings(request, env);
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeeting(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "DELETE") result = await deleteMeetings(request, env, decodeURIComponent(url.pathname.split("/")[2]));

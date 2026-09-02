@@ -440,6 +440,13 @@ test("Operator can create meetings and reasoned attendance corrections", async (
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("attendance.corrected")));
 });
 
+test("Operator can save reusable meeting timing defaults", async () => {
+  const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/meeting-templates", { name: "Weekly build", title: "Build", startTime: "18:30", durationMinutes: 150, required: true, recurrenceFrequency: "weekly", recurrenceDurationDays: 84 }, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 201); assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO meeting_templates") && call.values.includes("18:30") && call.values.includes(150))); assert.ok(database.calls.some((call) => call.values.includes("meeting_template.created")));
+  const invalid = await worker.fetch(request("/meeting-templates", { name: "Broken", title: "Build", startTime: "25:00", durationMinutes: 150 }, { cookie: await sessionCookie("operator") }), env); assert.equal(invalid.status, 400);
+});
+
 test("Reports may request inactive roster history without changing the default attendance roster", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM meetings WHERE installation_id = 'primary' AND id = ?", { startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z" });
@@ -924,10 +931,10 @@ test("Admin can link roster members to dashboard accounts while non-rostered acc
   const unlinked = await worker.fetch(request("/admin/users", { email: "staff@example.test", memberId: null, role: "admin" }, { cookie: await sessionCookie("admin") }), env); assert.equal(unlinked.status, 201);
 });
 
-test("category backups are scope-labelled and never mix unrelated tables", async () => {
-  const database = new FakeDatabase(); database.lists.set("FROM meetings", [{ id: "meeting-1" }]); database.lists.set("FROM attendance_events", []); database.lists.set("FROM attendance_corrections", []); database.lists.set("FROM discord_attendance_notifications", []); database.lists.set("FROM discord_attendance_recipients", []); database.lists.set("FROM discord_attendance_contests", []);
+test("category backups include reusable meeting templates without mixing unrelated tables", async () => {
+  const database = new FakeDatabase(); database.lists.set("FROM meetings", [{ id: "meeting-1" }]); database.lists.set("FROM meeting_templates", [{ id: "template-1" }]); database.lists.set("FROM attendance_events", []); database.lists.set("FROM attendance_corrections", []); database.lists.set("FROM discord_attendance_notifications", []); database.lists.set("FROM discord_attendance_recipients", []); database.lists.set("FROM discord_attendance_contests", []);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 200); const backup = await result.json() as { scope: string; tables: Record<string, unknown> }; assert.equal(backup.scope, "meetings"); assert.deepEqual(Object.keys(backup.tables).sort(), ["attendance_corrections", "attendance_events", "discord_attendance_contests", "discord_attendance_notifications", "discord_attendance_recipients", "meetings"]); assert.equal("members" in backup.tables, false); assert.match(result.headers.get("content-disposition") ?? "", /meetings-backup/);
+  const result = await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 200); const backup = await result.json() as { scope: string; tables: Record<string, unknown> }; assert.equal(backup.scope, "meetings"); assert.deepEqual(Object.keys(backup.tables).sort(), ["attendance_corrections", "attendance_events", "discord_attendance_contests", "discord_attendance_notifications", "discord_attendance_recipients", "meeting_templates", "meetings"]); assert.equal("members" in backup.tables, false); assert.match(result.headers.get("content-disposition") ?? "", /meetings-backup/);
 });
 
 test("restore rejects a backup from another category before executing a batch", async () => {

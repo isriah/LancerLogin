@@ -102,6 +102,10 @@ test("Operator workspace exposes kiosk monitoring without an Attendance contest-
   assert.match(meetings, /Notes <span>\(optional\)<\/span>/);
   assert.match(meetings, /Attendance required/);
   assert.match(meetings, /Create recurring series/);
+  assert.match(meetings, /Start from a template/);
+  assert.match(meetings, /Duplicate an existing meeting/);
+  assert.match(meetings, /Save as template/);
+  assert.match(meetings, /\/meeting-templates/);
   assert.doesNotMatch(meetings, /Test meeting/);
 });
 

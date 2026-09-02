@@ -443,6 +443,12 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 
 /* Meeting directory */
 .meeting-create-form,.meeting-edit-form { width: 100%; }
+.meeting-template-picker { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .9rem; align-items: end; }
+.meeting-template-picker > div,.meeting-template-list { grid-column: 1 / -1; }
+.meeting-template-list { display: grid; gap: .45rem; margin: 0; padding: 0; list-style: none; }
+.meeting-template-list li { display: flex; justify-content: space-between; gap: .8rem; align-items: center; padding: .6rem .7rem; border: 1px solid var(--line); border-radius: .5rem; }
+.meeting-template-list span { display: grid; gap: .1rem; }.meeting-template-list small { color: var(--muted); }
+.meeting-create-actions { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1rem; }
 .meeting-create-form > label,.meeting-edit-form > label { margin: .9rem 0 .35rem; }
 .meeting-create-form > .form-grid,.meeting-edit-form > .form-grid { margin-top: .85rem; }
 .meeting-create-form .form-grid label,.meeting-edit-form .form-grid label { margin: 0; }
@@ -534,6 +540,7 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .kiosk-update-status.failed { border-color: #b42318; color: #b42318; }
 
 @media (max-width: 760px) {
+.meeting-template-picker { grid-template-columns: 1fr; }
   .toolbar-end { justify-content: space-between; }
   .update-indicator { white-space: normal; }
   .table-toolbar { display: grid; align-items: start; }

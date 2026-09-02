@@ -1,6 +1,6 @@
 :root { font-family: "Roboto", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #16211d; background: #f3f5f2; font-synthesis: none; }
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+html { font-size: 17px; scroll-behavior: smooth; }
 body { margin: 0; min-width: 320px; overflow-x: hidden; }
 button, input, select, textarea { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
@@ -443,9 +443,9 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .table-toolbar h2 { margin: 0; }
 .table-toolbar label { width: min(25rem,100%); margin: 0; }
 .responsive-table,.table-scroll { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: .65rem; }
-.responsive-table table,.data-table { width: 100%; border-collapse: collapse; background: var(--surface); font-size: .78rem; }
+.responsive-table table,.data-table { width: 100%; border-collapse: collapse; background: var(--surface); font-size: .9rem; }
 .responsive-table th,.responsive-table td,.data-table th,.data-table td { min-width: 7.5rem; padding: .65rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-.responsive-table th,.data-table th { color: var(--muted); background: var(--surface-soft); font-size: .68rem; letter-spacing: .04em; text-transform: uppercase; }
+.responsive-table th,.data-table th { color: var(--muted); background: var(--surface-soft); font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; }
 .responsive-table td small { display: block; margin-top: .25rem; color: var(--muted); }
 .table-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
 .table-actions button { padding: .45rem .55rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface-soft); border-radius: .45rem; cursor: pointer; }
@@ -503,3 +503,9 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
   .integration-title { grid-template-columns: 1fr; }
   .integration-title > span:last-child { justify-self: start; }
 }
+
+/* Dense operational views need a readable floor on shared displays and tablets. */
+label { font-size: .9rem; }
+.field-help,.button-note { font-size: .82rem; }
+.table-actions button,.correction-actions button { font-size: .82rem; }
+@media (max-width: 620px) { html { font-size: 16px; } }

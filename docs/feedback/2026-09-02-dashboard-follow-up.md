@@ -42,6 +42,9 @@ Status: collecting. Do not implement until the user explicitly reconciles this r
 4. Show a prominent update-available popup across the dashboard, including Home.
    - Observation: update availability is too easy to miss when a user remains on the Home screen.
    - Expected behavior: display a highly visible, dismissible popup when a compatible dashboard or kiosk update is available, with a clear route to the relevant update action.
+5. Add active feedback and reliable acknowledgement for dashboard-triggered kiosk updates.
+   - Observation: after requesting the kiosk update from 0.10.5 to 0.12.6, the dashboard showed no queued, in-progress, success, or failure state. Pi inspection confirmed that `lancerlogin-update.service` was never invoked and the kiosk remains on 0.10.5.
+   - Expected behavior: surface a durable per-kiosk update state near the action, including request accepted/queued, device received, installing, success (with installed version), or actionable failure. The state must remain available after navigation or refresh until completion.
 
 ## Reports
 

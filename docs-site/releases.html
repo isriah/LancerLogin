@@ -6,6 +6,13 @@
   <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html" aria-current="page">Releases</a><a href="technical.html">Technical</a></nav></header>
   <header class="page-header"><div><p class="eyebrow">Patch notes</p><h1>LancerLogin releases</h1><p>Review user-visible changes and migration notes before manually authorizing an upgrade in your private deployment repository.</p></div></header>
   <main id="main" class="page"><article>
+    <p class="eyebrow">v0.10.1</p>
+    <h2>Pi desktop kiosk relaunch shortcut</h2>
+    <p>This patch adds a desktop shortcut for reopening the local attendance screen full-screen when a Pi is sitting at the desktop.</p>
+    <ul><li>The installer creates a <strong>LancerLogin Kiosk</strong> shortcut for the installing desktop user when Chromium is available.</li><li>The shortcut and desktop-login autostart use the same local kiosk launcher.</li><li>No roster, meeting, attendance, integration, pairing, queue, fingerprint mapping, or settings data changes are required.</li></ul>
+    <section class="notice"><strong>Before upgrading</strong>This is a small kiosk installer patch. Existing v0.10.0 deployments can keep running; use it for fresh Pi installs or when you want the desktop relaunch shortcut created by the installer.</section>
+    <p><a class="button" href="https://github.com/isriah/LancerLogin/blob/main/docs/releases/v0.10.1.md">Read complete v0.10.1 notes</a></p>
+  </article><article>
     <p class="eyebrow">v0.10.0</p>
     <h2>Physical kiosk restoration and meeting workflow cleanup</h2>
     <p>The physical kiosk now more closely matches the pre-community appliance, fingerprint enrollment is touch-first again, and meeting creation/deletion handles the everyday schedule flow with less ceremony.</p>

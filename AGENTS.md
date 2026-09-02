@@ -40,6 +40,7 @@ For each selected work unit:
 
 - Prefer small, single-purpose commits that correspond to one work unit.
 - Before committing, inspect `git diff` and `git status`; include only intended files.
+- For dependent shell steps, run each mutation and its verification as separate commands and check the result before continuing. Do not use PowerShell semicolon chaining for dependent Git operations or for a mutation followed by verification.
 - Complete a selected work unit with the commit and merge process defined in `docs/future_work.md`. Do not include unrelated working-tree changes.
 - For parallel work units, use separate worktrees and branches. Implementation tasks do not modify the shared work-unit ledger or merge directly to `main`; the integration task merges one completed branch at a time.
 - For a behavior-changing change, review it against its acceptance criteria, not only whether tests pass.

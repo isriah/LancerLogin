@@ -16,6 +16,14 @@ Interpret the user's requested mode from the remaining prompt text:
 
 Use branch names of the form `codex/wu-<id>-<short-name>`. Only this coordinator may edit `docs/future_work.md` for active parallel work or merge to `main`.
 
+Before reserving or spawning tasks, classify the named units by both their declared scope and possible shared substrates. Treat a unit that may change a migration/schema, shared contract, authorization policy, deployment configuration, or shared documentation file as overlapping until source-level inspection establishes otherwise. In particular, “if needed” migration work is not safe to parallelize with another unit that changes migrations or the same schema. Run dependent units in later cohorts from the updated `main` base.
+
+After creating implementation tasks, retain their task IDs and wait for completion or attention with the task waiting mechanism. Do not repeatedly poll task lists or worktree state unless a completion event, timeout, or a specific integration question requires inspection.
+
+An explicit `orchestrate` authorization permits routine, in-scope integration repairs such as rebasing, resolving mechanical conflicts, and renumbering a not-yet-applied migration with its directly affected references and tests. Confirm that the migration has not been applied outside the branch and that its semantics do not change; otherwise leave the unit blocked for a user decision.
+
+Execute dependent Git and verification steps as separate commands and check each result before proceeding. Do not use PowerShell semicolon chaining for a mutation followed by another mutation or verification.
+
 Never create implementation tasks, reserve work, merge, or push merely because units exist. Those mutations require the user to name and authorize the applicable unit(s). Never release, deploy, invoke the private Upgrade workflow, mutate cloud resources, or update the Pi unless the user separately authorizes that action.
 
 When implementation tasks finish, report their commit SHA, changed files, verification, integration result, and remaining risks. Do not claim mocked or local verification as external acceptance.

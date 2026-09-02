@@ -1,11 +1,11 @@
 ---
-name: lancerlogin-wu
-description: "Create one proposed LancerLogin work unit from a short feature request, defect report, or documentation need. Use when the user explicitly invokes $lancerlogin-wu; do not use to implement or coordinate work."
+name: lancerlogin-wu-create
+description: "Create one proposed LancerLogin work unit from a short feature request, defect report, or documentation need. Use when the user explicitly invokes $lancerlogin-wu-create; do not use to implement or coordinate work."
 ---
 
 # LancerLogin Work-Unit Intake
 
-Turn the text following `$lancerlogin-wu` into one well-scoped entry in `docs/future_work.md`. This is planning intake only: do not modify product code, tests, deployment state, existing work-unit status, or release state.
+Turn the text following `$lancerlogin-wu-create` into one well-scoped entry in `docs/future_work.md`. This is planning intake only: do not modify product code, tests, deployment state, existing work-unit status, or release state.
 
 Read `AGENTS.md` and `docs/future_work.md` first. Inspect only the relevant product documentation and code needed to make the proposed unit specific and to avoid duplicating or overlapping an existing unit.
 

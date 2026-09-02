@@ -33,3 +33,14 @@ test("half-width dashboard does not overflow", async ({ page }) => {
   const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
   expect(widths.scroll).toBeLessThanOrEqual(widths.client);
 });
+
+test("Reports exposes operational filters and direct contest review", async ({ page }) => {
+  await page.goto("/reports");
+  await expect(page.getByRole("heading", { name: "Reports", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Meeting type")).toBeVisible();
+  await expect(page.getByLabel("Roster")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Contests awaiting review" })).toBeVisible();
+  await page.getByRole("button", { name: "Review contest" }).click();
+  await expect(page.getByRole("heading", { name: "Review contest" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve and mark present" })).toBeVisible();
+});

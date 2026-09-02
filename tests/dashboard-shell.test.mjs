@@ -198,6 +198,22 @@ test("attendance actions preserve their layout and mute unavailable choices", as
   assert.match(styles, /min-width: 4\.8rem/);
 });
 
+test("reports are an operational workspace with filters, trend, saved views, and direct contest review", async () => {
+  const reports = await readFile("apps/dashboard/src/reports-page.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  assert.match(reports, /includeInactive=1/);
+  assert.match(reports, /From<input type="date"/);
+  assert.match(reports, /Meeting type<select/);
+  assert.match(reports, /Active roster/);
+  assert.match(reports, /Team attendance trend/);
+  assert.match(reports, /role="img" aria-label=\{`Team attendance trend/);
+  assert.match(reports, /Review contest/);
+  assert.match(reports, /Approve and mark present/);
+  assert.match(reports, /\/discord\/contests\/resolve/);
+  assert.match(reports, /lancerlogin-reports-view/);
+  assert.match(styles, /\.report-filters/);
+});
+
 test("dashboard cards keep their spacing and operational actions aligned", async () => {
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");

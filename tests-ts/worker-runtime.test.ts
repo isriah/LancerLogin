@@ -413,6 +413,19 @@ test("Operator can create meetings and reasoned attendance corrections", async (
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("attendance.corrected")));
 });
 
+test("Reports may request inactive roster history without changing the default attendance roster", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM meetings WHERE installation_id = 'primary' AND id = ?", { startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z" });
+  database.rows.set("SELECT late_scan_minutes", { lateScanMinutes: 30 });
+  database.lists.set("SELECT m.id AS memberId", [{ memberId: "inactive-member", externalId: "OLD-1", firstName: "Former", lastName: "Member" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/attendance?meetingId=meeting-1&includeInactive=1", undefined, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 200);
+  const attendanceQuery = database.calls.find((call) => call.sql.includes("SELECT m.id AS memberId"));
+  assert.ok(attendanceQuery?.sql.includes("m.active = 1 OR ? = 1"));
+  assert.equal(attendanceQuery?.values.at(-1), 1);
+});
+
 test("authenticated kiosk configuration returns current display branding", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });

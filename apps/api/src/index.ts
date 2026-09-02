@@ -229,6 +229,22 @@ async function manageMember(request: Request, env: Env, memberId: string): Promi
   await db.prepare("UPDATE members SET first_name = ?, last_name = ?, email = ?, active = ?, attendance_required_from = ? WHERE installation_id = 'primary' AND id = ?").bind(next.firstName, next.lastName, next.email, next.active, next.attendanceRequiredFrom, member.id).run();
   await writeAudit(db, principal, "roster.member_updated", "member", member.id, { active: Boolean(next.active), attendanceRequiredFrom: next.attendanceRequiredFrom }); return response({ member: { ...member, ...next, active: Boolean(next.active) } });
 }
+async function memberHistory(request: Request, env: Env, externalId: string): Promise<Response> {
+  await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
+  const [member, settings] = await Promise.all([
+    db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, active, attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id = 'primary' AND external_id = ?").bind(externalId).first<{ id: string; memberId: string; firstName: string; lastName: string; email?: string; active: number; attendanceRequiredFrom?: string }>(),
+    db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>(),
+  ]);
+  if (!member) throw new HttpError(404, "Member not found");
+  const rows = await db.prepare("SELECT meeting.id AS meetingId, meeting.title, meeting.starts_at AS startsAt, meeting.ends_at AS endsAt, (SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = ? AND c.meeting_id = meeting.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = ? AND c.meeting_id = meeting.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = ? AND e.meeting_id = meeting.id AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = ? AND e.meeting_id = meeting.id AND e.action = 'check_out') AS checkedOutAt FROM meetings meeting WHERE meeting.installation_id = 'primary' AND meeting.deleted_at IS NULL AND meeting.ends_at <= ? ORDER BY meeting.starts_at DESC").bind(member.id, member.id, member.id, member.id, new Date().toISOString()).all<{ meetingId: string; title: string; startsAt: string; endsAt: string; correction?: "present" | "absent" | "excused"; reason?: string; checkedInAt?: string; checkedOutAt?: string }>();
+  const history = (rows.results ?? []).map((row) => {
+    const events = [{ action: "check_in" as const, occurredAt: row.checkedInAt }, ...(row.checkedOutAt ? [{ action: "check_out" as const, occurredAt: row.checkedOutAt }] : [])].filter((event) => event.occurredAt);
+    const required = !member.attendanceRequiredFrom || row.startsAt.slice(0, 10) >= member.attendanceRequiredFrom;
+    const derived = attendanceDisposition(events, row.correction);
+    return { ...row, disposition: required ? (derived === "active" ? "absent" : derived) : "not_required" };
+  });
+  return response({ member: { ...member, active: Boolean(member.active) }, history });
+}
 async function pairingCodes(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") { const active = await db.prepare("SELECT id, expires_at AS expiresAt FROM pairing_codes WHERE installation_id = 'primary' AND redeemed_at IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT 1").bind(new Date().toISOString()).first(); return response({ active }); }
@@ -1154,6 +1170,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/branding" && ["GET", "PATCH"].includes(request.method)) result = await branding(request, env);
     else if (url.pathname === "/admin/setup/progress" && ["GET", "PATCH"].includes(request.method)) result = await setupProgress(request, env);
     else if (url.pathname === "/admin/members" && ["GET", "POST"].includes(request.method)) result = await members(request, env);
+    else if (/^\/admin\/members\/[^/]+\/history$/.test(url.pathname) && request.method === "GET") result = await memberHistory(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/members\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageMember(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/admin/pairing-codes" && ["GET", "POST"].includes(request.method)) result = await pairingCodes(request, env);
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);

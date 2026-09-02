@@ -265,6 +265,21 @@ test("roster discovery searches every requested member field and scopes active m
   assert.match(styles, /\.roster-filters/);
 });
 
+test("member detail routes preserve deep links, history, and role-limited actions", async () => {
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
+  const reports = await readFile("apps/dashboard/src/reports-page.tsx", "utf8");
+  const detail = await readFile("apps/dashboard/src/member-detail-page.tsx", "utf8");
+  assert.match(shell, /path\.startsWith\("\/roster\/"\)/);
+  assert.match(roster, /RouteLink href=\{`\/roster\/\$\{encodeURIComponent\(current\.memberId\)/);
+  assert.match(reports, /href=\{`\/roster\/\$\{encodeURIComponent\(member\.externalId\)/);
+  assert.match(detail, /\/admin\/members\/\$\{encodeURIComponent\(memberId\)\}\/history/);
+  assert.match(detail, /Complete attendance history/);
+  assert.match(detail, /Check-in/);
+  assert.match(detail, /Check-out/);
+  assert.match(detail, /role === "admin"/);
+});
+
 test("numeric organization settings can be cleared before they are normalized on save", async () => {
   const source = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   const colors = await readFile("apps/dashboard/src/color-editor.tsx", "utf8");

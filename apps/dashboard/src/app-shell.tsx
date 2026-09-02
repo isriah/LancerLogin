@@ -6,6 +6,7 @@ import { HomePage } from "./home-page";
 import { MeetingsPage } from "./meetings-page";
 import { ReportsPage } from "./reports-page";
 import { RosterPage } from "./roster-page";
+import { MemberDetailPage } from "./member-detail-page";
 import { OrganizationSettings } from "./organization-settings";
 import { ConfigurationSettings } from "./configuration-settings";
 import { IntegrationSettings } from "./integration-settings";
@@ -36,6 +37,7 @@ export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { r
   else if (path === "/attendance") page = <AttendanceWorkspace embedded selectedMeetingId={new URLSearchParams(search).get("meetingId") ?? undefined} />;
   else if (path === "/reports") page = <ReportsPage />;
   else if (path === "/roster") page = <RosterPage role={role} />;
+  else if (path.startsWith("/roster/")) page = <MemberDetailPage role={role} memberId={decodeURIComponent(path.slice("/roster/".length))} />;
   else if (path === "/kiosks") page = <KiosksPage role={role} />;
   else if (role === "admin" && path === "/simulator") page = <SimulatorPage />;
   else if (role === "admin" && path === "/settings/organization") page = <OrganizationSettings initialBranding={branding} onChanged={onBrandingChanged} />;

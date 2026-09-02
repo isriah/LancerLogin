@@ -142,6 +142,24 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
   assert.match(shell, /setupStepIds\.every/);
 });
 
+test("Settings separates operational configuration, access, and kiosk update comparisons", async () => {
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const organization = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
+  const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
+  const updates = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
+  assert.match(shell, /\["\/settings\/configuration", "Configuration"\]/);
+  assert.match(shell, /\["\/settings\/access", "Access"\]/);
+  assert.match(shell, /\["\/settings\/updates", "Updates"\]/);
+  assert.match(shell, /role === "admin" && path === "\/settings\/access"/);
+  assert.match(configuration, /Late scan allowance \(minutes\)/);
+  assert.match(configuration, /Discord contest window \(hours\)/);
+  assert.doesNotMatch(organization, /Late scan allowance|Discord contest window/);
+  assert.match(updates, /<h2>Physical kiosk<\/h2>/);
+  assert.match(updates, /<span>Installed<\/span>/);
+  assert.match(updates, /<span>Latest compatible<\/span>/);
+  assert.match(updates, /className="version-grid"/);
+});
+
 test("home shows a five-week rolling calendar, live attendance, and contest review", async () => {
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");

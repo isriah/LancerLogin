@@ -56,6 +56,10 @@ Status: collecting. Do not implement until the user explicitly reconciles this r
    - line graph of team primary attendance over a selectable meeting count or date period;
    - outstanding attendance contests with direct review action.
    - Show excuse-adjusted rate as a secondary class-oriented metric in the leaderboard.
+2. Correct the attendance-report meeting scope.
+   - Observation: member `9453898` is present for the three current meetings on Aug. 26, Aug. 28, and Aug. 31, but Reports shows 60%.
+   - Investigation: Reports also includes two imported historical attendance meetings from May 28 and May 31 in the denominator, producing three present records out of five. The live trend chart confirms all five meetings are included.
+   - Expected behavior: define the operational attendance-report baseline so imported historical records do not silently lower current-roster percentages. Preserve historical records and make the selected reporting period/baseline explicit.
 
 ## Roster
 

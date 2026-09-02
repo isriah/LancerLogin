@@ -165,11 +165,7 @@ Release: later scheduling bundle.
 
 ### WU-009 — Privacy-safe kiosk diagnostics snapshot
 
-Status: in progress
-
-Owner: LancerLogin coordinator
-Branch: `codex/wu-009-kiosk-diagnostics`
-Base: `f73d6df132297821acff51631e42d64e15bc40ba`
+Status: merged (`d37c021`)
 
 Goal: expose useful operational diagnostics without exposing sensitive device or member data.
 Scope: software version, uptime, reader state, network type/signal, last Wi-Fi scan, pending queue count, and actionable recovery guidance; explicitly exclude credentials, raw scan data, and unrestricted logs.

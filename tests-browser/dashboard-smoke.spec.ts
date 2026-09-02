@@ -7,12 +7,12 @@ test("roster stays primary and Admin actions open focused dialogs", async ({ pag
   await expect(page.getByText("Active roster")).toBeVisible();
   await expect(page.getByRole("table", { name: "Roster members" })).toContainText("Avery Stone");
 
-  await page.getByRole("button", { name: "Import roster" }).click();
-  await expect(page.getByRole("dialog", { name: "Import roster" })).toBeVisible();
-  await page.getByRole("button", { name: "Close roster import" }).click();
-
   await page.getByRole("button", { name: "Add member" }).click();
-  await expect(page.getByRole("dialog", { name: "Add roster member" })).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: "Add roster member" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Import CSV instead" }).click();
+  await expect(dialog.getByRole("heading", { name: "Import roster" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Back to one member" }).click();
   await page.getByRole("button", { name: "Close add member dialog" }).click();
 });
 

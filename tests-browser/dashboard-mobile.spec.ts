@@ -106,7 +106,7 @@ test("expanded mobile content only scrolls where data requires it", async ({ pag
 
   for (const route of routes) {
     await page.goto(route);
-    for (const summary of await page.locator("details:not([open]) > summary").all()) await summary.click();
+    while (await page.locator("details:not([open]) > summary").count()) await page.locator("details:not([open]) > summary").first().click();
     const unexpectedScrollers = await page.evaluate((allowed) => Array.from(document.querySelectorAll<HTMLElement>("*")).flatMap((element) => {
       const style = getComputedStyle(element);
       const isScrollable = element.scrollWidth > element.clientWidth + 1 && ["auto", "scroll"].includes(style.overflowX);
@@ -122,7 +122,7 @@ test("expanded mobile controls stay within reach", async ({ page }) => {
 
   for (const route of routes) {
     await page.goto(route);
-    for (const summary of await page.locator("details:not([open]) > summary").all()) await summary.click();
+    while (await page.locator("details:not([open]) > summary").count()) await page.locator("details:not([open]) > summary").first().click();
     const clippedControls = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>("button, input, select, textarea, summary, [role='dialog']")).flatMap((element) => {
       const style = getComputedStyle(element);
       const bounds = element.getBoundingClientRect();

@@ -194,6 +194,22 @@ test("branding stores a bounded image asset in D1 and rejects remote logo URLs",
   assert.ok(update?.values.includes(logoData));
 });
 
+test("Admin can set a dated attendance reporting baseline and it is returned with meetings", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("admin");
+  const base = { organizationName: "Example Arts Club", primaryColor: "#123456", secondaryColor: "#abcdef", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 };
+  const invalid = await worker.fetch(request("/admin/branding", { ...base, attendanceReportingStartsOn: "08/26/2026" }, { method: "PATCH", cookie }), env);
+  assert.equal(invalid.status, 400);
+  const saved = await worker.fetch(request("/admin/branding", { ...base, attendanceReportingStartsOn: "2026-08-26" }, { method: "PATCH", cookie }), env);
+  assert.equal(saved.status, 200);
+  assert.ok(database.calls.some((call) => call.values.includes("2026-08-26")));
+  assert.ok(database.calls.some((call) => call.values.includes("branding.updated")));
+  const meetings = await worker.fetch(request("/meetings", undefined, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(meetings.status, 200);
+  assert.ok(database.calls.some((call) => call.sql.includes("attendance_reporting_starts_on")));
+});
+
 test("Admin can persist shared checklist progress with an audit record", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;

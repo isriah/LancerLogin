@@ -211,6 +211,9 @@ test("reports are an operational workspace with filters, trend, saved views, and
   assert.match(reports, /Approve and mark present/);
   assert.match(reports, /\/discord\/contests\/resolve/);
   assert.match(reports, /lancerlogin-reports-view/);
+  assert.match(reports, /attendanceReportingStartsOn/);
+  assert.match(reports, /Operational baseline/);
+  assert.match(reports, /All preserved history/);
   assert.match(styles, /\.report-filters/);
 });
 
@@ -234,6 +237,8 @@ test("numeric organization settings can be cleared before they are normalized on
   assert.match(source, /lateScanMinutes\.trim\(\) === "" \? 0/);
   assert.match(source, /placeholder="0"/);
   assert.match(source, /discordContestWindowHours\.trim\(\) === "" \? 24/);
+  assert.match(source, /Attendance reporting baseline/);
+  assert.match(source, /attendanceReportingStartsOn: attendanceReportingStartsOn \|\| null/);
   assert.match(colors, /type="number"[^>]+placeholder="0"/);
 });
 

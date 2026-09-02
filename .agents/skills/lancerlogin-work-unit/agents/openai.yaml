@@ -1,0 +1,7 @@
+interface:
+  display_name: "LancerLogin Work Unit"
+  short_description: "Implement one reserved work unit"
+  default_prompt: "Use $lancerlogin-work-unit to implement the selected reserved work unit."
+
+policy:
+  allow_implicit_invocation: false

@@ -15,7 +15,7 @@ type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "confirm-attendance";
 type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
 type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number; discordContestWindowHours?: number };
-type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null };
+type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null; attendanceRequiredFrom?: string | null };
 type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
 type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
@@ -190,21 +190,42 @@ async function setupProgress(request: Request, env: Env): Promise<Response> {
 }
 async function members(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, request.method === "GET" ? ["admin", "operator"] : ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const result = await db.prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.email, m.discord_user_id AS discordUserId, m.active, EXISTS(SELECT 1 FROM users u WHERE u.installation_id = m.installation_id AND u.member_id = m.id AND u.active = 1) AS hasDashboardAccess FROM members m WHERE m.installation_id = 'primary' ORDER BY m.last_name, m.first_name").all(); return response({ members: result.results ?? [] }); }
+  if (request.method === "GET") { const result = await db.prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.email, m.discord_user_id AS discordUserId, m.active, m.attendance_required_from AS attendanceRequiredFrom, EXISTS(SELECT 1 FROM users u WHERE u.installation_id = m.installation_id AND u.member_id = m.id AND u.active = 1) AS hasDashboardAccess FROM members m WHERE m.installation_id = 'primary' ORDER BY m.last_name, m.first_name").all(); return response({ members: result.results ?? [] }); }
   const input = await parseJson<{ members?: MemberInput[]; mode?: "merge" | "replace" }>(request); const mode = input.mode ?? "merge";
   if (!["merge", "replace"].includes(mode)) throw new HttpError(400, "Roster import mode must be merge or replace");
   if (!Array.isArray(input.members) || !input.members.length || input.members.length > 500) throw new HttpError(400, "Provide between 1 and 500 roster members");
   const seen = new Set<string>(); const errors: string[] = []; const warnings: string[] = [];
-  input.members.forEach((member, index) => { const prefix = `Member ${index + 1}`; if (!member.memberId?.trim() || !member.firstName?.trim() || !member.lastName?.trim()) errors.push(`${prefix} requires memberId, firstName, and lastName`); if (member.memberId && seen.has(member.memberId.trim())) errors.push(`${prefix} duplicates memberId ${member.memberId.trim()}`); if (member.memberId) seen.add(member.memberId.trim()); if (member.email && !validEmail(member.email)) errors.push(`${prefix} has an invalid email`); if (member.discordUserId && !/^\d{10,24}$/.test(member.discordUserId)) warnings.push(`${prefix} Discord user ID was ignored; link Discord later from Optional integrations.`); });
+  input.members.forEach((member, index) => { const prefix = `Member ${index + 1}`; if (!member.memberId?.trim() || !member.firstName?.trim() || !member.lastName?.trim()) errors.push(`${prefix} requires memberId, firstName, and lastName`); if (member.memberId && seen.has(member.memberId.trim())) errors.push(`${prefix} duplicates memberId ${member.memberId.trim()}`); if (member.memberId) seen.add(member.memberId.trim()); if (member.email && !validEmail(member.email)) errors.push(`${prefix} has an invalid email`); if (member.discordUserId && !/^\d{10,24}$/.test(member.discordUserId)) warnings.push(`${prefix} Discord user ID was ignored; link Discord later from Optional integrations.`); if (member.attendanceRequiredFrom !== undefined && member.attendanceRequiredFrom !== null && !/^\d{4}-\d{2}-\d{2}$/.test(member.attendanceRequiredFrom)) errors.push(`${prefix} has an invalid attendance-required date`); });
   if (errors.length) throw new HttpError(400, "Invalid roster", errors);
   const now = new Date().toISOString();
   const importedIds = input.members.map((member) => member.memberId!.trim());
   const existing = await db.prepare("SELECT external_id AS memberId, active FROM members WHERE installation_id = 'primary'").all<{ memberId: string; active: number }>();
   const incoming = new Set(importedIds); const deactivated = mode === "replace" ? (existing.results ?? []).filter((member) => member.active && !incoming.has(member.memberId)).length : 0;
   const statements: D1Statement[] = mode === "replace" ? [db.prepare("UPDATE members SET active = 0 WHERE installation_id = 'primary'")] : [];
-  statements.push(...input.members.map((member) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = 1").bind(crypto.randomUUID(), member.memberId!.trim(), member.firstName!.trim(), member.lastName!.trim(), member.email?.trim().toLowerCase() || null, member.discordUserId && /^\d{10,24}$/.test(member.discordUserId) ? member.discordUserId.trim() : null, now)));
+  statements.push(...input.members.map((member) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at, attendance_required_from) VALUES (?, 'primary', ?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = 1, attendance_required_from = COALESCE(excluded.attendance_required_from, members.attendance_required_from)").bind(crypto.randomUUID(), member.memberId!.trim(), member.firstName!.trim(), member.lastName!.trim(), member.email?.trim().toLowerCase() || null, member.discordUserId && /^\d{10,24}$/.test(member.discordUserId) ? member.discordUserId.trim() : null, now, member.attendanceRequiredFrom ?? null)));
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, metadata_json, created_at) VALUES (?, 'primary', ?, 'roster.imported', 'member', ?, ?)").bind(crypto.randomUUID(), principal.userId, JSON.stringify({ count: input.members.length, mode, deactivated }), now));
   await db.batch(statements); return response({ imported: input.members.length, deactivated, mode, warnings }, 201);
+}
+async function manageMember(request: Request, env: Env, memberId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const member = await db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, active, attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id = 'primary' AND id = ?").bind(memberId).first<{ id: string; memberId: string; firstName: string; lastName: string; email?: string; active: number; attendanceRequiredFrom?: string }>();
+  if (!member) throw new HttpError(404, "Member not found");
+  if (request.method === "DELETE") {
+    const input = await parseJson<{ confirmation?: string }>(request);
+    if (input.confirmation !== `DELETE MEMBER ${member.memberId}`) throw new HttpError(400, `Type DELETE MEMBER ${member.memberId} exactly to continue`);
+    const references = await db.prepare("SELECT (SELECT COUNT(*) FROM attendance_events WHERE member_id = ?) + (SELECT COUNT(*) FROM attendance_corrections WHERE member_id = ?) AS count").bind(member.id, member.id).first<{ count: number }>();
+    if (references?.count) throw new HttpError(409, "This member has attendance history. Deactivate them instead to preserve the record.");
+    await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id = ?").bind(member.id), db.prepare("DELETE FROM members WHERE installation_id = 'primary' AND id = ?").bind(member.id)]);
+    await writeAudit(db, principal, "roster.member_deleted", "member", member.id, { memberId: member.memberId }); return response({ deleted: true, memberId: member.id });
+  }
+  const input = await parseJson<{ firstName?: string; lastName?: string; email?: string | null; active?: boolean; attendanceRequiredFrom?: string | null }>(request);
+  if (input.firstName !== undefined && (!input.firstName.trim() || input.firstName.length > 100)) throw new HttpError(400, "First name must be 1 to 100 characters");
+  if (input.lastName !== undefined && (!input.lastName.trim() || input.lastName.length > 100)) throw new HttpError(400, "Last name must be 1 to 100 characters");
+  if (input.email !== undefined && input.email !== null && !validEmail(input.email.trim())) throw new HttpError(400, "Email must be valid");
+  if (input.attendanceRequiredFrom !== undefined && input.attendanceRequiredFrom !== null && !/^\d{4}-\d{2}-\d{2}$/.test(input.attendanceRequiredFrom)) throw new HttpError(400, "Attendance-required date must be YYYY-MM-DD");
+  const next = { firstName: input.firstName?.trim() ?? member.firstName, lastName: input.lastName?.trim() ?? member.lastName, email: input.email === undefined ? member.email ?? null : input.email?.trim().toLowerCase() || null, active: input.active === undefined ? member.active : input.active ? 1 : 0, attendanceRequiredFrom: input.attendanceRequiredFrom === undefined ? member.attendanceRequiredFrom ?? null : input.attendanceRequiredFrom };
+  await db.prepare("UPDATE members SET first_name = ?, last_name = ?, email = ?, active = ?, attendance_required_from = ? WHERE installation_id = 'primary' AND id = ?").bind(next.firstName, next.lastName, next.email, next.active, next.attendanceRequiredFrom, member.id).run();
+  await writeAudit(db, principal, "roster.member_updated", "member", member.id, { active: Boolean(next.active), attendanceRequiredFrom: next.attendanceRequiredFrom }); return response({ member: { ...member, ...next, active: Boolean(next.active) } });
 }
 async function pairingCodes(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -395,6 +416,18 @@ async function deleteMeetings(request: Request, env: Env, meetingId: string): Pr
   await writeAudit(db, principal, "meeting.deleted", "meeting", meeting.id);
   return response({ deleted: 1, scope: "occurrence" });
 }
+async function bulkDeleteMeetings(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingIds?: string[]; confirmation?: string }>(request);
+  const ids = [...new Set((input.meetingIds ?? []).filter((id): id is string => typeof id === "string" && id.length > 0))];
+  if (!ids.length || ids.length > 100) throw new HttpError(400, "Select between 1 and 100 meetings");
+  if (input.confirmation !== "DELETE SELECTED MEETINGS") throw new HttpError(400, "Type DELETE SELECTED MEETINGS exactly to continue");
+  const now = new Date().toISOString(); const statements = ids.map((id) => db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, id)); const results = await db.batch(statements); const deleted = results.reduce((total, item) => total + (item.meta?.changes ?? 0), 0);
+  await writeAudit(db, principal, "meetings.bulk_deleted", "meeting", null, { selected: ids.length, deleted }); return response({ deleted });
+}
+async function rosterHistory(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin"]); const result = await requireDatabase(env).prepare("SELECT created_at AS createdAt, metadata_json AS metadata FROM audit_log WHERE installation_id = 'primary' AND action = 'roster.imported' ORDER BY created_at DESC LIMIT 20").all<{ createdAt: string; metadata: string }>();
+  return response({ imports: (result.results ?? []).map((item) => { let metadata: { count?: number; mode?: string; deactivated?: number } = {}; try { metadata = JSON.parse(item.metadata); } catch { /* Historical audit metadata is optional. */ } return { createdAt: item.createdAt, count: metadata.count ?? 0, mode: metadata.mode ?? "merge", deactivated: metadata.deactivated ?? 0 }; }) });
+}
 async function restoreMeetings(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "occurrence" | "future" }>(request);
   const meeting = await db.prepare("SELECT id, series_id AS seriesId, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NOT NULL").bind(meetingId).first<{ id: string; seriesId?: string | null; startsAt: string }>();
@@ -484,13 +517,14 @@ async function attendance(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET") {
     const meetingId = url.searchParams.get("meetingId"); if (!meetingId) throw new HttpError(400, "meetingId is required");
     const [rows, meeting, settings] = await Promise.all([
-      db.prepare("SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, (SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 ORDER BY m.last_name, m.first_name").bind(meetingId, meetingId, meetingId, meetingId).all<{ memberId: string; externalId: string; firstName: string; lastName: string; discordUserId?: string; correction?: "present" | "absent" | "excused"; reason?: string; checkedInAt?: string; checkedOutAt?: string }>(),
+      db.prepare("SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, m.attendance_required_from AS attendanceRequiredFrom, (SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 ORDER BY m.last_name, m.first_name").bind(meetingId, meetingId, meetingId, meetingId).all<{ memberId: string; externalId: string; firstName: string; lastName: string; discordUserId?: string; attendanceRequiredFrom?: string; correction?: "present" | "absent" | "excused"; reason?: string; checkedInAt?: string; checkedOutAt?: string }>(),
       db.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(meetingId).first<{ startsAt: string; endsAt: string }>(),
       db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>(),
     ]);
     if (!meeting) throw new HttpError(404, "Meeting not found");
     const closesAt = attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30); const finalized = Date.now() > Date.parse(closesAt);
-    return response({ attendance: (rows.results ?? []).map((row) => { const events = [{ action: "check_in" as const, occurredAt: row.checkedInAt }, ...(row.checkedOutAt ? [{ action: "check_out" as const, occurredAt: row.checkedOutAt }] : [])].filter((event) => event.occurredAt); const derived = attendanceDisposition(events, row.correction); return { ...row, disposition: finalized && derived === "active" ? "absent" : derived }; }), attendanceClosesAt: closesAt, finalized });
+    const meetingDate = meeting.startsAt.slice(0, 10);
+    return response({ attendance: (rows.results ?? []).map((row) => { const events = [{ action: "check_in" as const, occurredAt: row.checkedInAt }, ...(row.checkedOutAt ? [{ action: "check_out" as const, occurredAt: row.checkedOutAt }] : [])].filter((event) => event.occurredAt); const derived = attendanceDisposition(events, row.correction); return { ...row, disposition: row.attendanceRequiredFrom && meetingDate < row.attendanceRequiredFrom ? "not_required" : finalized && derived === "active" ? "absent" : derived }; }), attendanceClosesAt: closesAt, finalized });
   }
   return recordAttendance(db, await parseJson(request), "manual", principal.userId);
 }
@@ -505,6 +539,17 @@ async function correction(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'attendance.corrected', 'attendance_correction', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ memberId: input.memberId, meetingId: input.meetingId, disposition: input.disposition }), now),
   ]);
   return response({ correction: { id, ...input, reason, createdAt: now } }, 201);
+}
+async function cleanupAttendance(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const input = await parseJson<{ memberId?: string; meetingId?: string; confirmation?: string }>(request);
+  if (!input.memberId || !input.meetingId) throw new HttpError(400, "Member and meeting are required");
+  if (input.confirmation !== "CLEAR ATTENDANCE") throw new HttpError(400, "Type CLEAR ATTENDANCE exactly to continue");
+  const member = await db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ?").bind(input.memberId).first<{ id: string }>();
+  const meeting = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string }>();
+  if (!member || !meeting) throw new HttpError(404, "Member or meeting not found");
+  const results = await db.batch([db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ?").bind(member.id, meeting.id), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ?").bind(member.id, meeting.id)]);
+  const cleared = (results[0]?.meta?.changes ?? 0) + (results[1]?.meta?.changes ?? 0); await writeAudit(db, principal, "attendance.member_meeting_cleared", "meeting", meeting.id, { memberId: member.id, cleared }); return response({ cleared });
 }
 function csvCell(value: unknown): string {
   const text = value == null ? "" : String(value);
@@ -1077,18 +1122,21 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/branding" && ["GET", "PATCH"].includes(request.method)) result = await branding(request, env);
     else if (url.pathname === "/admin/setup/progress" && ["GET", "PATCH"].includes(request.method)) result = await setupProgress(request, env);
     else if (url.pathname === "/admin/members" && ["GET", "POST"].includes(request.method)) result = await members(request, env);
+    else if (/^\/admin\/members\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageMember(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/admin/pairing-codes" && ["GET", "POST"].includes(request.method)) result = await pairingCodes(request, env);
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
     else if (/^\/admin\/kiosks\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageKiosk(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "POST") result = await queueKioskCommand(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/admin/simulator" && ["GET", "POST"].includes(request.method)) result = await simulatedKiosk(request, env);
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
+    else if (url.pathname === "/meetings/bulk-delete" && request.method === "POST") result = await bulkDeleteMeetings(request, env);
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeeting(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "DELETE") result = await deleteMeetings(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (/^\/meetings\/[^/]+\/restore$/.test(url.pathname) && request.method === "POST") result = await restoreMeetings(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (/^\/meeting-series\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeetingSeries(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (url.pathname === "/attendance" && ["GET", "POST"].includes(request.method)) result = await attendance(request, env);
     else if (url.pathname === "/attendance/corrections" && request.method === "POST") result = await correction(request, env);
+    else if (url.pathname === "/attendance/cleanup" && request.method === "POST") result = await cleanupAttendance(request, env);
     else if (url.pathname === "/exports/attendance.csv" && request.method === "GET") result = await attendanceExport(request, env);
     else if (url.pathname === "/admin/integrations" && request.method === "GET") result = await integrationsStatus(request, env);
     else if (/^\/admin\/integrations\/(google|resend|discord)$/.test(url.pathname) && ["PUT", "DELETE"].includes(request.method)) result = await integrationConfiguration(request, env, providerFrom(url.pathname));
@@ -1106,6 +1154,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/discord/calendar" && request.method === "POST") result = await discordCalendar(request, env);
     else if (url.pathname === "/discord/kiosk-status" && request.method === "POST") result = await discordKioskStatus(request, env);
     else if (url.pathname === "/admin/privacy" && ["GET", "PATCH"].includes(request.method)) result = await privacySettings(request, env);
+    else if (url.pathname === "/admin/roster/history" && request.method === "GET") result = await rosterHistory(request, env);
     else if (url.pathname === "/admin/data/backup" && request.method === "GET") result = await backupData(request, env);
     else if (url.pathname === "/admin/data/restore" && request.method === "POST") result = await restoreData(request, env);
     else if (url.pathname === "/admin/setup/reset" && request.method === "POST") result = await resetOnboarding(request, env);

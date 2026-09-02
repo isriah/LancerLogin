@@ -2,7 +2,9 @@
 
 Admins add and manage roster members. Operators can view the roster. Admins can separately link a roster member to an Admin or Operator dashboard account, or retain non-rostered dashboard accounts. Operators and Admins create meetings, record attendance, apply reasoned corrections or excuses, and export reports as CSV. Every write and export produces an audit record. Kiosk-originated attendance is idempotent by a locally generated kiosk event ID, so an offline queue can safely retry.
 
-Roster CSV imports require `memberId`, `firstName`, and `lastName`; `email` and `discordUserId` are optional. The importer validates required columns, duplicate IDs, and email format before applying any rows, returning a row-numbered error list for correction.
+Roster CSV imports require `memberId`, `firstName`, and `lastName`; `email`, `discordUserId`, and `attendanceRequiredFrom` (`YYYY-MM-DD`) are optional. The importer validates required columns, duplicate IDs, email format, and the optional date before applying any rows, returning a row-numbered error list for correction. Admins can also add or edit an individual member, deactivate a member while preserving history, or permanently delete only a member with no attendance history.
+
+`attendanceRequiredFrom` excludes earlier meetings from both attendance-rate denominators. It does not erase earlier scans or corrections. Members without a date remain required for all meetings. Admins can clear one member's attendance events and corrections for one meeting with the exact **CLEAR ATTENDANCE** confirmation; that recovery action is audited and does not affect other meetings.
 
 Every meeting requires a scheduled end. Members scan once on arrival and once on departure. One arrival scan is active but not yet present; a completed pair is present. At the scheduled end plus the single organization-wide late-scan allowance (30 minutes by default), an incomplete pair is absent. A reasoned correction or excuse overrides the derived result without deleting the source scans. Source events remain retained for auditability.
 

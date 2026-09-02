@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "./dashboard-api";
 
-export type RosterMember = { id: string; memberId: string; firstName: string; lastName: string; email?: string; discordUserId?: string; active: boolean | number; hasDashboardAccess?: boolean | number };
+export type RosterMember = { id: string; memberId: string; firstName: string; lastName: string; email?: string; discordUserId?: string; active: boolean | number; attendanceRequiredFrom?: string | null; hasDashboardAccess?: boolean | number };
 type User = { id: string; email?: string; localUsername?: string; memberId?: string | null; memberExternalId?: string; memberFirstName?: string; memberLastName?: string; role: "admin" | "operator"; active: boolean | number; createdAt: string };
 
 export function UserSettings({ members }: { members: RosterMember[] }) {

@@ -1,6 +1,6 @@
 # LancerLogin session handoff
 
-Last updated: 2026-09-01 after publishing LancerLogin v0.9.0 and the matching public documentation.
+Last updated: 2026-09-02 after publishing LancerLogin v0.10.0 and staging kiosk polish for physical acceptance.
 
 ## Start the next session here
 
@@ -16,7 +16,7 @@ Public repository: <https://github.com/isriah/LancerLogin>
 
 Public documentation: <https://isriah.github.io/LancerLogin/>
 
-Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.9.0>
+Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.0>
 
 ## Non-negotiable boundaries
 
@@ -71,20 +71,28 @@ Authoritative detail:
 ## Current repository and release state
 
 - Branch: `main`
-- Current main HEAD at handoff: `cb1720d051499f5d186cc89cb1857475f7fd86a1` (`Publish v0.9 kiosk documentation`)
-- Immutable v0.9.0 tag commit: `3b7abcd0bf2eaff4684968df09d2efe28a121de1`
+- v0.10.0 code/tag commit: `0152d5164f1f77fd712817c4901a02731c176b39` (`Polish kiosk fingerprint maintenance`)
+- Immutable v0.10.0 tag commit: `0152d5164f1f77fd712817c4901a02731c176b39`
 - Working tree was clean at handoff.
-- v0.9.0 is a published, non-draft, non-prerelease GitHub release with the guided installer, arm64/armv7 archives, and SHA-256 files.
-- The public Pages documentation successfully deployed after the release and visibly includes v0.9.0.
-- Latest GitHub **Verify** completed successfully on `main`: actionlint, full release gate, and four Chromium smoke tests.
-- Local/full gate evidence: all nine D1 migrations, all workspace typechecks, 180 Node tests, production builds, template sanitization, zero audit vulnerabilities, and four Chromium tests.
+- v0.10.0 is a published, non-draft, non-prerelease GitHub release with the guided installer, arm64/armv7 archives, and SHA-256 files.
+- The public Pages documentation should be refreshed from `docs-site/` after this post-release docs cleanup so it visibly includes v0.10.0.
+- Latest GitHub **Verify** completed successfully on `main` for `0152d51` before the v0.10.0 tag, and the v0.10.0 release workflow completed successfully.
+- Local/full gate evidence for the v0.10.0 batch: kiosk tests/typecheck, dashboard tests/typecheck, API tests, migrations through `0010_meeting_soft_delete.sql`, docs/provisioning verification, production builds, workspace typecheck, and Chromium kiosk smoke tests all passed.
 - GitHub Pages emitted a non-blocking warning that `actions/configure-pages@v5` currently targets deprecated Node.js 20 on the runner. Publication succeeded. Treat checking for an official successor as low-priority cleanup; verify current official action guidance before changing it.
 
-Release notes: [`docs/releases/v0.9.0.md`](docs/releases/v0.9.0.md)
+Release notes: [`docs/releases/v0.10.0.md`](docs/releases/v0.10.0.md)
 
 Durable feature history: [`docs/HANDOFF.md`](docs/HANDOFF.md)
 
 Roadmap/evidence: [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md)
+
+## What v0.10.0 delivered
+
+- Dashboard meeting cleanup: removed test-meeting UI, simplified meetings to one date plus start/end times with a 2.5-hour end-time autofill, added soft deletion for an occurrence or future series occurrences, and added automatic/bulk Discord calendar sync using existing event mappings.
+- Dashboard/release polish: operational cards fill available dead space more consistently and dashboard version display uses plain `0.n.n` formatting while Git tags and release-note filenames keep the existing `v0.n.n` convention.
+- Physical kiosk restoration: copied the pre-community layout more closely, fixed the top-half screen issue, improved adaptive organization name/logo/subtitle placement, preserved themed logo contrast logic, and restored the hidden brand long-press for protected fingerprint maintenance.
+- Maintenance UI polish: PIN-only locked screen, no normal-screen FP shortcut, touch-friendly member picker, on-screen numeric slot keypad, themed action buttons, no-scroll 800x480 target, and plain-language R503 enrollment errors.
+- File-based legacy import helper: exported roster rows and local R503 slot mappings can be prepared for LancerLogin while fingerprint templates remain on the same physical sensor.
 
 ## What v0.9.0 delivered
 
@@ -120,19 +128,20 @@ Provisioning detail: [`docs/BOOTSTRAPPING.md`](docs/BOOTSTRAPPING.md) and [`docs
 - The initial LancerLogin service failed with `EADDRINUSE` because the retained pre-community kiosk already owned `0.0.0.0:8788`.
 - The older service was not silently deleted. Conversion work disabled conflicting old user services recoverably, and LancerLogin subsequently ran on the device.
 - Manual serial configuration confirmed the R503 online with 49 templates. The v0.9 systemd unit now reapplies the required `/dev/serial0` settings before every start so this does not depend on a one-time shell command.
-- Do not assume the v0.9 release has been installed on the Pi. The user must run the published v0.9 installer and complete end-to-end acceptance.
+- v0.10 kiosk polish files were staged on the test Pi, but root installation still requires the user to run the provided `sudo install ... && sudo systemctl restart lancerlogin-kiosk.service` command locally or through an actual sudo prompt. Do not send the sudo password as an SSH command.
+- Do not assume the v0.10 release has been fully accepted on the Pi. The user must complete end-to-end acceptance after applying the staged files or running the published v0.10.0 installer.
 - Do not erase R503 templates or local mappings during acceptance. Back up application data first and use a nonessential sensor slot for enrollment testing.
 
 ## Remaining work, in order
 
-There are no known uncommitted code defects in the approved v0.9 batch. The immediate remaining work is manual acceptance:
+There are no known uncommitted code defects in the approved v0.10 batch. The immediate remaining work is manual acceptance:
 
 1. In the adopter-owned private deployment repository, manually run **Install or upgrade LancerLogin** with **Upgrade** and **Latest stable**, using the existing isolated LancerLogin installation slug and exact confirmation. Download an Entire installation backup first.
-2. Confirm the private workflow deploys v0.9.0 only to the isolated LancerLogin Worker/D1/Pages resources. Do not inspect or alter earlier attendance resources.
-3. On the Pi, download the v0.9.0 installer, run `--dry-run`, then `--install`:
+2. Confirm the private workflow deploys v0.10.0 only to the isolated LancerLogin Worker/D1/Pages resources. Do not inspect or alter earlier attendance resources.
+3. On the Pi, either apply the staged v0.10 kiosk polish files already copied to the temporary staging directory, or download the v0.10.0 installer, run `--dry-run`, then `--install`:
 
    ```bash
-   curl -fL https://github.com/isriah/LancerLogin/releases/download/v0.9.0/install-lancerlogin.sh -o /tmp/install-lancerlogin.sh
+   curl -fL https://github.com/isriah/LancerLogin/releases/download/v0.10.0/install-lancerlogin.sh -o /tmp/install-lancerlogin.sh
    sudo bash /tmp/install-lancerlogin.sh --dry-run
    sudo bash /tmp/install-lancerlogin.sh --install
    ```

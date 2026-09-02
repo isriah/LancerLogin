@@ -10,6 +10,7 @@ This file supplements the repository documentation and is permanent guidance for
 - Start implementation only when the user explicitly authorizes the item or a reconciled batch for execution.
 - Before implementation, inspect the current queue. If its scope, priority, desired behavior, or release boundary is uncertain, ask the necessary questions and provide a concise execution plan. Do not add planning friction when the request and queue are already clear.
 - Once an authorized, unambiguous batch begins, work through implementation, tests, documentation, release, and the requested deployment without arbitrary pauses. Pause only for genuine missing input, required approval, or a blocker.
+- Authorization for a change round includes the normal delivery sequence: testing, committing, merging/pushing to `main`, publishing the appropriate release, and updating the user-requested installation. Do not separately ask permission for those routine delivery steps.
 
 ## GitHub CLI
 
@@ -38,5 +39,5 @@ This file supplements the repository documentation and is permanent guidance for
 
 - Keep releases in the `0.n.n` namespace. Use `0.n.X` for narrowly scoped fixes; reserve `1.0.0` for a user-approved major release.
 - For a release: run focused verification, run the complete release gate, commit/push, wait for the exact-commit public GitHub Verify workflow, then create/push the matching `v0.n.n` tag and wait for the immutable public release build.
-- Only run the private adopter deployment workflow when the user explicitly requests deployment. When dispatching it in a browser, prepare the form first and ask for confirmation immediately before the final **Run workflow** click.
+- Only run the private adopter deployment workflow when the user explicitly requests deployment or has authorized the current change round to update the installation. When dispatching it in a browser, prepare the form first and ask for confirmation immediately before the final **Run workflow** click only because browser safety requires that action-time confirmation.
 - Do not update the Pi unless the user specifically includes it in the requested deployment.

@@ -19,7 +19,7 @@ Application upgrades do not rewrite the private repository's workflow file. A pr
 
 ## Deployment safety
 
-Local tests use fake bindings and fake integration clients. The provisioning workflow is the only account-changing path. It fails before credential use when the repository is public, runs only from a manual private-repository dispatch, rejects resource collisions in `create` mode, and requires a separate typed confirmation for every operation.
+Local tests use fake bindings and fake integration clients. The provisioning workflow is the only account-changing path. It fails before credential use when the repository is public, runs only from a manual private-repository dispatch, validates the selected `create`, `resume`, or `upgrade` operation and installation slug, and rejects resource collisions in `create` mode.
 
 ## Required first-run inputs
 

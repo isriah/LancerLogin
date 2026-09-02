@@ -67,9 +67,12 @@ install -d -m 0700 -o lancerlogin -g lancerlogin /var/lib/lancerlogin
 tar --extract --gzip --file "$temporary/$archive" --directory /opt/lancerlogin --no-same-owner
 
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-kiosk.service /etc/systemd/system/lancerlogin-kiosk.service
+install -m 0644 /opt/lancerlogin/systemd/lancerlogin-update.service /etc/systemd/system/lancerlogin-update.service
+install -m 0755 /opt/lancerlogin/scripts/lancerlogin-install-release.sh /usr/local/sbin/lancerlogin-install-release
 install -d -m 0755 /etc/polkit-1/rules.d
 install -m 0644 /opt/lancerlogin/polkit/49-lancerlogin-network.rules /etc/polkit-1/rules.d/49-lancerlogin-network.rules
 install -m 0644 /opt/lancerlogin/polkit/49-lancerlogin-recovery.rules /etc/polkit-1/rules.d/49-lancerlogin-recovery.rules
+install -m 0644 /opt/lancerlogin/polkit/49-lancerlogin-update.rules /etc/polkit-1/rules.d/49-lancerlogin-update.rules
 install -d -m 0755 /etc/systemd/system/lancerlogin-kiosk.service.d
 printf '[Service]\nEnvironment=LANCERLOGIN_VERSION=%s\n' "$VERSION" > /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
 chmod 0644 /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf

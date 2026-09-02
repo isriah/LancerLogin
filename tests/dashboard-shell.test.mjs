@@ -157,6 +157,9 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
   assert.match(indicator, /formatVersion/);
   assert.match(source, /private GitHub deployment repository/);
   assert.match(source, /authorize Upgrade manually/);
+  assert.match(source, /Update kiosk to latest stable/);
+  assert.match(source, /command: "install_latest"/);
+  assert.match(source, /Updates use Latest stable/);
   assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);
 });
 
@@ -165,6 +168,7 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(source, /\/admin\/pairing-codes/);
   assert.match(source, /Replace kiosk/);
   assert.match(source, /Retire kiosk/);
+  assert.match(source, /Update to latest stable/);
   assert.match(source, /Device history/);
   assert.match(source, /Reload display/);
   assert.match(source, /Restart software/);

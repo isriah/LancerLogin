@@ -111,14 +111,14 @@ The user is still gathering the next feedback round. Record new observations her
    - Implemented: added a file-based helper that converts exported roster CSV and legacy slot mapping JSON into dashboard roster CSV, kiosk `slot-mappings.json`, and an import review report.
    - Acceptance notes: do not extract or transfer biometric templates from the sensor. Preserve the templates already stored on the same R503 sensor slots and manually review unmatched member IDs before copying mappings onto the Pi.
 
-### Safety-gated items not completed in this pass
+### Safety-gated items completed with explicit approval
 
-1. One-click kiosk self-update remains blocked.
-   - Requested behavior: queue a dashboard command that lets the kiosk pull and apply the latest compatible GitHub release automatically.
-   - Blocker: the implementation requires a persistent Polkit-approved root execution path that downloads and executes release code on the Pi. The safety reviewer rejected the patch pending exact explicit approval of that privilege and supply-chain risk.
-2. Removing the private deployment workflow typed confirmation remains blocked.
-   - Requested behavior: calculate the final confirmation from selected operation and slug.
-   - Blocker: the workflow changes Cloudflare account resources, and removing the typed confirmation weakens a persistent safety guard. The safety reviewer rejected the patch pending exact explicit approval.
+1. One-click kiosk self-update is available from **Kiosks** and **Settings → Updates** when the paired Pi is online.
+   - The dashboard can queue only `install_latest`; the Pi invokes a root-owned, argument-free systemd unit through a unit-specific Polkit rule.
+   - That unit resolves only the official `isriah/LancerLogin` latest `v0.n.n` GitHub release, verifies the published installer SHA-256, and the installer verifies the kiosk archive SHA-256 before restarting the kiosk service.
+   - It has no general root shell, URL, release-tag, or command argument path. The first Pi update must install this updater-capable release through the guided installer; later compatible updates are managed from the dashboard.
+2. The private deployment workflow no longer requests a typed confirmation.
+   - It still requires the selected operation, validates the exact allowed operation and installation slug before credential use, retains resource-collision checks, and leaves GitHub's final **Run workflow** action as the authorization step.
 
 ### Next feedback collection - layout, meetings, attendance, kiosk status, typography
 

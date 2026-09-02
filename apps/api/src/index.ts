@@ -18,7 +18,7 @@ type BrandingInput = { organizationName?: string; subtitle?: string | null; logo
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null };
 type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
-type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin";
+type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
 
 const baseHeaders = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const setupSteps = new Set<SetupStep>(["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"]);
@@ -285,7 +285,7 @@ async function manageKiosk(request: Request, env: Env, kioskId: string): Promise
 }
 async function queueKioskCommand(request: Request, env: Env, kioskId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ command?: KioskCommandType }>(request);
-  const supported: KioskCommandType[] = ["reload_display", "restart_service", "reboot", "reset_network_pin"];
+  const supported: KioskCommandType[] = ["reload_display", "restart_service", "reboot", "reset_network_pin", "install_latest"];
   if (!input.command || !supported.includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command");
   const kiosk = await db.prepare("SELECT id, name FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");

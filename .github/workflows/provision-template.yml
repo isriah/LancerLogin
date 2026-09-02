@@ -24,10 +24,6 @@ on:
         description: Lowercase installation slug, for example example-club
         required: true
         type: string
-      confirmation:
-        description: Type CREATE, RESUME, or UPGRADE followed by a space and the installation slug
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -48,7 +44,6 @@ jobs:
       RELEASE_SELECTION: ${{ inputs.release }}
       TEMPLATE_RELEASE: v0.8.0
       INSTALLATION_SLUG: ${{ inputs.installation_slug }}
-      INPUT_CONFIRMATION: ${{ inputs.confirmation }}
       REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
       LANCERLOGIN_UPDATE_WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/workflows/provision-template.yml
       WRANGLER_SEND_METRICS: "false"
@@ -68,9 +63,8 @@ jobs:
         shell: bash
         working-directory: .
         run: |
-          expected=$(printf '%s' "$INPUT_OPERATION" | tr '[:lower:]' '[:upper:]')
-          if [ "$INPUT_CONFIRMATION" != "$expected $INSTALLATION_SLUG" ]; then
-            echo "Confirmation must be exactly: $expected $INSTALLATION_SLUG" >&2
+          if ! printf '%s' "$INPUT_OPERATION" | grep -Eq '^(create|resume|upgrade)$'; then
+            echo "Choose create, resume, or upgrade." >&2
             exit 1
           fi
           if ! printf '%s' "$INSTALLATION_SLUG" | grep -Eq '^[a-z][a-z0-9-]{2,40}$'; then

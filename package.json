@@ -2,7 +2,7 @@
   "name": "lancerlogin",
   "private": true,
   "type": "module",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Self-hosted single-kiosk attendance",
   "license": "Apache-2.0",
   "workspaces": [

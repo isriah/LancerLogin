@@ -312,7 +312,7 @@ test("Admin can rename and retire a kiosk without returning to onboarding", asyn
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET active = 0") && call.values.includes("kiosk-1")));
 });
 
-test("Admin queues only fixed recovery commands and the paired kiosk completes its own command", async () => {
+test("Admin queues only fixed recovery and latest-stable update commands", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1 });
   database.rows.set("FROM kiosk_commands", { id: "command-1", type: "reload_display", createdAt: "2026-09-01T20:00:00.000Z" });
@@ -325,6 +325,9 @@ test("Admin queues only fixed recovery commands and the paired kiosk completes i
   assert.equal(queued.status, 202);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO kiosk_commands") && call.values.includes("reload_display")));
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("'kiosk.command_queued'")));
+  const update = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(update.status, 202);
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO kiosk_commands") && call.values.includes("install_latest")));
 
   const headers = { authorization: "Bearer paired-secret" };
   const pending = await worker.fetch(new Request("https://api.example.test/kiosk/commands", { headers }), env);

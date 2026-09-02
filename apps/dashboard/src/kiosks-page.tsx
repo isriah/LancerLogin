@@ -6,7 +6,7 @@ import { useModalFocus } from "./modal-focus";
 type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string; pendingEvents?: number; lastSyncAt?: string; errorCategory?: string; pairedAt: string };
 type Simulator = { name: string; active: number; online: number; lastSeenAt?: string; readerOnline: false; releaseVersion: string };
 type Pairing = { code: string; expiresAt: string; workerApiUrl: string; kioskName: string };
-type KioskCommand = "reload_display" | "restart_service" | "reboot" | "reset_network_pin";
+type KioskCommand = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
 
 function PairKioskDialog({ active, onClose, onPaired }: { active?: Kiosk; onClose: () => void; onPaired: () => Promise<void> }) {
   const [name, setName] = useState(active ? `${active.name} replacement` : "Main kiosk");
@@ -80,6 +80,7 @@ export function KiosksPage({ role }: { role: "admin" | "operator" }) {
               <button type="button" onClick={() => void command("restart_service", "Software restart")}>Restart software</button>
               <button type="button" onClick={() => void command("reboot", "Device reboot", `Reboot ${active.name}? Attendance scanning will pause while the Pi restarts.`)}>Reboot Pi</button>
               <button type="button" onClick={() => void command("reset_network_pin", "Network PIN reset", `Reset the local settings PIN on ${active.name}? Anyone at the kiosk can then create a new PIN.`)}>Reset network PIN</button>
+              <button className="primary-button" type="button" disabled={!online} onClick={() => void command("install_latest", "Latest stable kiosk update")}>Update to latest stable</button>
               <button className="danger-button" type="button" onClick={() => void retire()}>Retire kiosk</button>
             </div>
             {maintenanceHelp && <div className="settings-callout" role="status"><strong>Open maintenance on the physical kiosk</strong><p>Press and hold the organization name or logo for three seconds, then enter the local settings PIN. Enrollment, reader tests, slot suggestions, replacement warnings, and mapping removal are available there so fingerprint templates never leave the sensor.</p></div>}

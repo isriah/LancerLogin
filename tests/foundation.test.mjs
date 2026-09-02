@@ -131,8 +131,8 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
   assert.match(workflow, /secrets\.LANCERLOGIN_SETUP_CODE/);
   assert.match(workflow, /cfat_/);
-  assert.match(workflow, /expected=.*INPUT_OPERATION/);
-  assert.match(workflow, /INPUT_CONFIRMATION.*expected.*INSTALLATION_SLUG/);
+  assert.match(workflow, /INPUT_OPERATION.*create\|resume\|upgrade/);
+  assert.doesNotMatch(workflow, /INPUT_CONFIRMATION|inputs\.confirmation/);
   assert.match(workflow, /RESUME|resume/);
   assert.match(workflow, /UPGRADE|upgrade/);
   assert.match(workflow, /accounts\/\$CLOUDFLARE_ACCOUNT_ID\/pages\/projects/);

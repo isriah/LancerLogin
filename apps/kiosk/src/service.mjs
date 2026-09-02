@@ -42,6 +42,7 @@ async function runKioskCommand(command) {
   if (command.type === "reset_network_pin") { await networkPin.reset(); return { message: "Local settings PIN reset" }; }
   if (command.type === "restart_service") return { message: "Service restart requested", afterComplete: () => setTimeout(() => process.exit(1), 250).unref() };
   if (command.type === "reboot") return { message: "Device reboot requested", afterComplete: () => setTimeout(() => { const child = spawn("/usr/bin/systemctl", ["reboot"], { detached: true, stdio: "ignore" }); child.unref(); }, 250).unref() };
+  if (command.type === "install_latest") return { message: "Latest stable kiosk update started", afterComplete: () => setTimeout(() => { const child = spawn("/usr/bin/systemctl", ["start", "--no-block", "lancerlogin-update.service"], { detached: true, stdio: "ignore" }); child.unref(); }, 250).unref() };
   throw new Error("Unsupported kiosk command");
 }
 async function pollCommands() {

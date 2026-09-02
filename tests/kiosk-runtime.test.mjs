@@ -56,6 +56,8 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.match(installer, /systemctl restart lancerlogin-kiosk\.service/);
   assert.match(installer, /49-lancerlogin-network\.rules/);
   assert.match(installer, /49-lancerlogin-recovery\.rules/);
+  assert.match(installer, /lancerlogin-update\.service/);
+  assert.match(installer, /lancerlogin-install-release/);
   assert.match(installer, /same network.*one-time pairing key/);
   assert.match(installer, /lancerlogin-open-kiosk/);
   assert.match(installer, /LancerLogin Kiosk\.desktop/);
@@ -72,6 +74,22 @@ test("systemd configures the R503 serial link on every service start", async () 
   assert.match(unit, /SupplementaryGroups=dialout/);
   assert.match(unit, /ExecStartPre=\/bin\/stty -F \$\{LANCERLOGIN_SENSOR_PATH\} 57600/);
   assert.ok(unit.indexOf("ExecStartPre=") < unit.indexOf("ExecStart=/usr/bin/node"));
+});
+
+test("kiosk update unit permits only a checksum-verified latest stable release", async () => {
+  const [helper, unit, policy] = await Promise.all([
+    readFile("apps/kiosk/scripts/lancerlogin-install-release.sh", "utf8"),
+    readFile("apps/kiosk/systemd/lancerlogin-update.service", "utf8"),
+    readFile("apps/kiosk/polkit/49-lancerlogin-update.rules", "utf8"),
+  ]);
+  assert.match(helper, /repos\/isriah\/LancerLogin\/releases\/latest/);
+  assert.match(helper, /\^v0\\\.\\d\+\\\.\\d\+\$/);
+  assert.match(helper, /install-lancerlogin\.sh\.sha256/);
+  assert.match(helper, /sha256sum --check install-lancerlogin\.sh\.sha256/);
+  assert.doesNotMatch(helper, /\$1|VERSION:-|GITHUB_API=.*\$/);
+  assert.match(unit, /ExecStart=\/usr\/local\/sbin\/lancerlogin-install-release/);
+  assert.match(policy, /subject\.user === "lancerlogin"/);
+  assert.match(policy, /action\.lookup\("unit"\) === "lancerlogin-update\.service"/);
 });
 
 test("one-time pairing key carries self-hosted routing without central discovery", () => {
@@ -105,6 +123,8 @@ test("tagged release archive includes every kiosk runtime module", async () => {
   }
   assert.match(workflow, /LANCERLOGIN_VERSION:-\$\{version\}/);
   assert.match(workflow, /release\/artifacts\/install-lancerlogin\.sh/);
+  assert.match(workflow, /install-lancerlogin\.sh\.sha256/);
+  assert.match(workflow, /lancerlogin-install-release\.sh/);
   assert.match(workflow, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$commit&status=success/);
   assert.match(workflow, /package_version=\$\(jq -r \.version package\.json\)/);
   assert.match(workflow, /GITHUB_REF_NAME.*v\$package_version/);

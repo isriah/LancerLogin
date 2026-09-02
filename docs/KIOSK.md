@@ -62,14 +62,15 @@ The helper writes `lancerlogin-roster-import.csv` for the dashboard roster impor
 
 ## Dashboard management and recovery
 
-Operators can monitor the active kiosk's online state, reader state, pending scan count, last successful sync, installed release, heartbeat, pairing time, and scrubbed issue category. Admins can also add/replace, rename, retire, view history, and queue four fixed recovery actions:
+Operators can monitor the active kiosk's online state, reader state, pending scan count, last successful sync, installed release, heartbeat, pairing time, and scrubbed issue category. Admins can also add/replace, rename, retire, view history, and queue fixed recovery actions:
 
 - **Reload display** asks the local browser page to reload.
 - **Restart software** restarts the sandboxed systemd service.
 - **Reboot Pi** requests a device reboot after explicit confirmation.
 - **Reset network PIN** removes only the local salted PIN record after explicit confirmation; the next local visit creates a new one.
+- **Update to latest stable** starts a fixed, root-owned update unit. It downloads only the official latest `v0.n.n` GitHub release, verifies the installer checksum and kiosk archive checksum, then restarts the kiosk service. It does not accept an administrator-provided URL, tag, shell command, or argument.
 
-The paired kiosk polls for these commands every five seconds. Commands expire from polling after 15 minutes. The API accepts no shell text or arbitrary arguments, and the service account receives only narrow NetworkManager and reboot permissions.
+The paired kiosk polls for these commands every five seconds. Commands expire from polling after 15 minutes. The API accepts no shell text or arbitrary arguments, and the service account receives only narrow NetworkManager, reboot, and one-unit update permissions. The first kiosk update must use a release that includes this updater; install that release once through the existing guided installer, then future Latest stable updates can be queued from **Kiosks** or **Settings → Updates**.
 
 ## Browser simulator boundary
 

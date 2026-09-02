@@ -13,7 +13,7 @@ import { decodePairingKey } from "../apps/kiosk/src/pairing-key.mjs";
 import { createScanner } from "../apps/kiosk/src/scanner.mjs";
 import { createNetworkManager } from "../apps/kiosk/src/network-manager.mjs";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
-import { networkApp } from "../apps/kiosk/src/network-ui.mjs";
+import { networkApp, networkStyles } from "../apps/kiosk/src/network-ui.mjs";
 import { maintenanceApp, maintenanceHtml } from "../apps/kiosk/src/maintenance-ui.mjs";
 import { recoveryApp } from "../apps/kiosk/src/recovery-ui.mjs";
 
@@ -257,6 +257,9 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskHtml, /\/recovery\.js/);
   assert.match(networkApp, /setTimeout\(openNetwork,3000\)/);
   assert.match(networkApp, /touch-keyboard/);
+  assert.match(networkApp, /network-create-keypad/);
+  assert.match(networkApp, /appendPinDigit/);
+  assert.match(networkStyles, /pin-keypad/);
   assert.match(kioskApp, /\/maintenance/);
   assert.match(maintenanceHtml, /Fingerprint maintenance/);
   assert.match(maintenanceApp, /Begin two-scan enrollment|\/enroll/);

@@ -78,19 +78,23 @@ test("live branding stores an image locally and applies colors with a browser th
   assert.match(settings, /individual meetings cannot override it/);
 });
 
-test("Operator workspace exposes kiosk monitoring and the complete Discord attendance workflow", async () => {
+test("Operator workspace exposes kiosk monitoring and the streamlined Discord attendance workflow", async () => {
   const source = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
   assert.match(source, /\/admin\/kiosks/);
   assert.match(source, /Status refreshes every 30 seconds/);
   assert.match(source, /Reader \$\{activeKiosk\.readerOnline/);
   assert.match(source, /Release \$\{activeKiosk\.releaseVersion/);
-  assert.match(source, /\/discord\/link/);
+  assert.doesNotMatch(source, /\/discord\/link|Email missed|Email report/);
   assert.match(source, /\/discord\/contests\?meetingId=/);
   assert.match(source, /\/discord\/contests\/resolve/);
   assert.match(meetings, /\/meetings\/\$\{encodeURIComponent\(editing\.id\)\}/);
   assert.match(meetings, /method: "DELETE"/);
+  assert.match(meetings, /\/restore/);
+  assert.match(meetings, /Delete this and future meetings/);
+  assert.match(meetings, /<th>Date<\/th><th>Start<\/th><th>End<\/th>/);
   assert.match(meetings, /Sync all to Discord/);
+  assert.match(meetings, /calendarOutcomes/);
   assert.match(meetings, /addMinutes\(value\.date, startTime, 150\)/);
   assert.match(source, /Kiosk meeting ID/);
   assert.match(source, /Copy ID/);
@@ -167,10 +171,13 @@ test("attendance actions preserve their layout and mute unavailable choices", as
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(attendance, /disabled=\{row\.disposition === "present"\}/);
-  assert.match(attendance, /disabled=\{row\.disposition !== "absent"\}/);
+  assert.match(attendance, /Send Discord absence notice/);
+  assert.match(attendance, /className="primary-button" type="button" disabled=\{!selected\}/);
+  assert.match(attendance, /toLocaleDateString\(\).*meeting\.title/);
   assert.doesNotMatch(attendance, /row\.disposition === "absent" && <button/);
   assert.match(styles, /grid-template-columns: minmax\(10rem,1fr\) 7rem 30rem/);
   assert.match(styles, /\.correction-actions button:disabled/);
+  assert.match(styles, /min-width: 4\.8rem/);
 });
 
 test("numeric organization settings can be cleared before they are normalized on save", async () => {

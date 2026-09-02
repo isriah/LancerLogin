@@ -22,7 +22,8 @@ export function createNetworkManager({ run = defaultRun, connectSecure = secureC
       const active = devices.find((device) => ["wifi", "ethernet"].includes(device.type) && device.state === "connected"); return { online: Boolean(active), connection: active?.connection || null, type: active?.type || null, devices };
     },
     async wifi() {
-      await run(["radio", "wifi", "on"]); const output = await run(["-t", "--escape", "yes", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes"]); const seen = new Set(); const networks = [];
+      const status = await this.status(); const device = status.devices.find((item) => item.type === "wifi")?.device;
+      await run(["radio", "wifi", "on"]); await run(["device", "wifi", "rescan", ...(device ? ["ifname", device] : [])]); const output = await run(["-t", "--escape", "yes", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "no", ...(device ? ["ifname", device] : [])]); const seen = new Set(); const networks = [];
       for (const line of output.trim().split(/\r?\n/).filter(Boolean)) { const [active, ssid, signal, security] = splitNmcli(line); if (!ssid || seen.has(ssid)) continue; seen.add(ssid); networks.push({ ssid, signal: Number(signal) || 0, secured: Boolean(security && security !== "--"), active: active === "*" }); }
       return networks.sort((left, right) => Number(right.active) - Number(left.active) || right.signal - left.signal);
     },

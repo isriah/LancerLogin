@@ -239,7 +239,7 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .attendance-row.header { min-height: auto; color: var(--muted); background: var(--surface-soft); font-size: .72rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .attendance-row > span:first-child { display: grid; gap: .15rem; }
 .attendance-row small { color: var(--muted); }
-.attendance-state { justify-self: start; padding: .3rem .55rem; border-radius: 2rem; font-size: .72rem; font-weight: 800; text-transform: capitalize; }
+.attendance-state { justify-self: start; align-self: center; min-width: 4.8rem; padding: .3rem .55rem; border-radius: 2rem; font-size: .72rem; font-weight: 800; text-align: center; text-transform: capitalize; }
 .attendance-state.present { color: #075c43; background: #d7f5e9; }
 .attendance-state.absent { color: #843a32; background: #fae4e1; }
 .attendance-state.excused { color: #6f5212; background: #fbefcc; }
@@ -451,6 +451,20 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .responsive-table td small { display: block; margin-top: .25rem; color: var(--muted); }
 .table-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
 .table-actions button { padding: .45rem .55rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface-soft); border-radius: .45rem; cursor: pointer; }
+.table-toolbar .calendar-control { min-width: 13rem; }
+.table-toolbar .primary-button { width: 100%; margin: 0; }
+.inline-action-message { margin: .45rem 0 0; color: var(--muted); font-size: .8rem; }
+.calendar-outcomes { display: grid; gap: .35rem; margin: 0 0 1rem; padding: 0; list-style: none; }
+.calendar-outcomes li { display: grid; grid-template-columns: minmax(10rem,.5fr) minmax(0,1fr); gap: .65rem; padding: .6rem .7rem; border: 1px solid var(--line); border-radius: .5rem; font-size: .85rem; }
+.calendar-outcomes li.failed { border-color: #cf6559; }
+.calendar-outcomes li.skipped { color: var(--muted); }
+.undo-meeting { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 0 0 1rem; padding: .65rem .75rem; color: #075c43; background: #d7f5e9; border-radius: .5rem; }
+.undo-meeting button { padding: .4rem .65rem; border: 1px solid currentColor; border-radius: .45rem; color: inherit; background: transparent; font-weight: 800; cursor: pointer; }
+.meeting-delete-dialog { width: min(38rem,100%); max-height: calc(100vh - 2rem); overflow: auto; padding: 1.25rem; border: 1px solid var(--line); border-radius: .8rem; color: var(--ink); background: var(--surface); box-shadow: 0 2rem 6rem rgba(0,0,0,.35); }
+.meeting-delete-dialog h2,.meeting-delete-dialog p { margin-top: 0; }
+.future-meeting-list { max-height: 12rem; overflow: auto; margin: 1rem 0; padding-left: 1.35rem; }
+.future-meeting-list li { margin: .3rem 0; }
+.danger-button { border: 0; border-radius: .55rem; color: #fff; background: #a9322d; font-weight: 800; cursor: pointer; }
 
 /* Roster actions and dialogs */
 .roster-summary-card { display: flex; justify-content: space-between; gap: 1rem; align-items: center; min-width: 0; padding: 1rem 1.15rem; border: 1px solid var(--line); background: var(--surface); border-radius: .8rem; }
@@ -501,6 +515,8 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
   .update-indicator { white-space: normal; }
   .table-toolbar { display: grid; align-items: start; }
   .table-toolbar label { width: 100%; }
+  .table-toolbar .calendar-control { min-width: 0; }
+  .calendar-outcomes li { grid-template-columns: 1fr; gap: .2rem; }
   .dialog-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .integration-title { grid-template-columns: 1fr; }
   .integration-title > span:last-child { justify-self: start; }

@@ -395,6 +395,21 @@ async function deleteMeetings(request: Request, env: Env, meetingId: string): Pr
   await writeAudit(db, principal, "meeting.deleted", "meeting", meeting.id);
   return response({ deleted: 1, scope: "occurrence" });
 }
+async function restoreMeetings(request: Request, env: Env, meetingId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "occurrence" | "future" }>(request);
+  const meeting = await db.prepare("SELECT id, series_id AS seriesId, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NOT NULL").bind(meetingId).first<{ id: string; seriesId?: string | null; startsAt: string }>();
+  if (!meeting) throw new HttpError(404, "Deleted meeting not found");
+  if (input.scope === "future" && meeting.seriesId) {
+    const updated = await db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NOT NULL").bind(meeting.seriesId, meeting.startsAt).run();
+    const count = updated.meta?.changes ?? 0; if (count < 1) throw new HttpError(404, "No deleted future series occurrences were found");
+    await writeAudit(db, principal, "meeting.series_restored", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, restored: count });
+    return response({ restored: count, scope: "future" });
+  }
+  const updated = await db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NOT NULL").bind(meeting.id).run();
+  if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Deleted meeting not found");
+  await writeAudit(db, principal, "meeting.restored", "meeting", meeting.id);
+  return response({ restored: 1, scope: "occurrence" });
+}
 async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual", actorId?: string): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required");
   const existing = await db.prepare("SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?").bind(input.eventId.trim()).first<{ action: AttendanceAction }>();
@@ -696,7 +711,7 @@ async function discordConfiguration(env: Env, allowUnverified = false): Promise<
 async function discordRequest(config: Record<string, string>, path: string, init: RequestInit): Promise<{ response: globalThis.Response; body: Record<string, unknown> }> {
   const result = await fetch(`https://discord.com/api/v10${path}`, { ...init, headers: { authorization: `Bot ${config.botToken}`, "content-type": "application/json", ...init.headers } });
   const body = await result.json().catch(() => ({})) as Record<string, unknown>;
-  if (!result.ok) throw new HttpError(502, `Discord rejected the request (${result.status})`);
+  if (!result.ok) { const message = typeof body.message === "string" ? body.message.replace(/\s+/g, " ").slice(0, 180) : ""; throw new HttpError(502, `Discord rejected the request (${result.status})${message ? `: ${message}` : ""}`); }
   return { response: result, body };
 }
 async function startDiscordVerification(request: Request, env: Env): Promise<Response> {
@@ -824,19 +839,23 @@ async function syncDiscordCalendarMeeting(db: D1Database, env: Env, principal: P
   await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, updated_at) VALUES ('primary', 'discord', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, updated_at = excluded.updated_at").bind(stateKey, eventId, now).run();
   await writeAudit(db, principal, "discord.calendar_synced", "meeting", meeting.id, { eventId }); return eventId;
 }
-async function syncDiscordCalendarMeetings(db: D1Database, env: Env, principal: Principal, ids: string[]): Promise<{ synced: number; skipped: number }> {
-  let synced = 0; let skipped = 0;
+async function syncDiscordCalendarMeetings(db: D1Database, env: Env, principal: Principal, ids: string[]): Promise<{ synced: number; skipped: number; failed: number; outcomes: Array<{ meetingId: string; title: string; status: "synced" | "skipped" | "failed"; reason?: string }> }> {
+  let synced = 0; let skipped = 0; let failed = 0; const outcomes: Array<{ meetingId: string; title: string; status: "synced" | "skipped" | "failed"; reason?: string }> = [];
   for (const id of ids) {
     const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, notes FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(id).first<{ id: string; title: string; startsAt: string; endsAt?: string; notes?: string }>();
-    if (!meeting) { skipped += 1; continue; }
-    await syncDiscordCalendarMeeting(db, env, principal, meeting); synced += 1;
+    if (!meeting) { skipped += 1; outcomes.push({ meetingId: id, title: "Meeting", status: "skipped", reason: "Meeting is no longer active" }); continue; }
+    if (Date.parse(meeting.endsAt ?? meeting.startsAt) <= Date.now()) { skipped += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "skipped", reason: "Meeting has already ended" }); continue; }
+    if (meeting.title.length > 100) { failed += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason: "Discord event names are limited to 100 characters" }); continue; }
+    if ((meeting.notes?.length ?? 0) > 1_000) { failed += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason: "Discord event descriptions are limited to 1,000 characters" }); continue; }
+    try { await syncDiscordCalendarMeeting(db, env, principal, meeting); synced += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "synced" }); }
+    catch (error) { failed += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason: error instanceof Error ? error.message : "Discord request failed" }); }
   }
-  return { synced, skipped };
+  return { synced, skipped, failed, outcomes };
 }
 async function discordCalendar(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; all?: boolean }>(request);
   if (input.all) {
-    const result = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at DESC LIMIT 1000").all<{ id: string }>();
+    const result = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at ASC LIMIT 1000").all<{ id: string }>();
     const summary = await syncDiscordCalendarMeetings(db, env, principal, (result.results ?? []).map((meeting) => meeting.id));
     return response(summary);
   }
@@ -1065,6 +1084,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeeting(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "DELETE") result = await deleteMeetings(request, env, decodeURIComponent(url.pathname.split("/")[2]));
+    else if (/^\/meetings\/[^/]+\/restore$/.test(url.pathname) && request.method === "POST") result = await restoreMeetings(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (/^\/meeting-series\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeetingSeries(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (url.pathname === "/attendance" && ["GET", "POST"].includes(request.method)) result = await attendance(request, env);
     else if (url.pathname === "/attendance/corrections" && request.method === "POST") result = await correction(request, env);

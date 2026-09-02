@@ -491,6 +491,23 @@ test("Operator can hide one meeting or this and future series occurrences", asyn
   assert.ok(future.calls.some((call) => call.values.includes("meeting.series_deleted")));
 });
 
+test("Operator can immediately restore a soft-deleted meeting or future series occurrences", async () => {
+  const single = new FakeDatabase();
+  single.rows.set("deleted_at IS NOT NULL", { id: "meeting-1", seriesId: null, startsAt: "2026-09-01T20:00:00.000Z" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: single } as unknown as Env;
+  const occurrence = await worker.fetch(request("/meetings/meeting-1/restore", { scope: "occurrence" }, { method: "POST", cookie: await sessionCookie("operator") }), env);
+  assert.equal(occurrence.status, 200);
+  assert.ok(single.calls.some((call) => call.sql.includes("SET deleted_at = NULL") && call.values.includes("meeting-1")));
+  assert.ok(single.calls.some((call) => call.values.includes("meeting.restored")));
+
+  const future = new FakeDatabase();
+  future.rows.set("deleted_at IS NOT NULL", { id: "meeting-3", seriesId: "series-1", startsAt: "2026-09-15T20:00:00.000Z" });
+  const restored = await worker.fetch(request("/meetings/meeting-3/restore", { scope: "future" }, { method: "POST", cookie: await sessionCookie("operator") }), { ...env, DB: future } as unknown as Env);
+  assert.equal(restored.status, 200);
+  assert.ok(future.calls.some((call) => call.sql.includes("SET deleted_at = NULL") && call.values.includes("series-1")));
+  assert.ok(future.calls.some((call) => call.values.includes("meeting.series_restored")));
+});
+
 test("kiosk attendance is installation-scoped and idempotent by event ID", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });

@@ -8,14 +8,14 @@ import { completeKioskCommand, fetchKioskCommand, fetchKioskConfiguration, norma
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
 import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/src/r503.mjs";
-import { kioskApp, kioskHtml, kioskStyles } from "../apps/kiosk/src/ui.mjs";
+import { kioskApp, kioskHtml, kioskStatusStyles, kioskStyles } from "../apps/kiosk/src/ui.mjs";
 import { decodePairingKey } from "../apps/kiosk/src/pairing-key.mjs";
 import { createScanner } from "../apps/kiosk/src/scanner.mjs";
 import { createNetworkManager } from "../apps/kiosk/src/network-manager.mjs";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
 import { prepareLegacyFingerprintImport } from "../apps/kiosk/scripts/prepare-legacy-fingerprint-import.mjs";
 import { networkApp, networkStyles } from "../apps/kiosk/src/network-ui.mjs";
-import { maintenanceApp, maintenanceHtml, maintenanceStyles } from "../apps/kiosk/src/maintenance-ui.mjs";
+import { maintenanceApp, maintenanceHtml, maintenanceLayoutStyles, maintenanceStyles } from "../apps/kiosk/src/maintenance-ui.mjs";
 import { recoveryApp } from "../apps/kiosk/src/recovery-ui.mjs";
 
 test("pairing code is hashed, single-use, and expires", () => {
@@ -143,7 +143,7 @@ test("dashboard recovery can clear the local settings PIN without retaining a cr
 
 test("NetworkManager adapter lists Wi-Fi without retaining passwords", async () => {
   const calls = []; const manager = createNetworkManager({ run: async (args) => { calls.push(args); if (args.includes("status")) return "wlan0:wifi:connected:Studio WiFi\neth0:ethernet:disconnected:\n"; if (args.includes("list")) return "*:Studio WiFi:82:WPA2\n:Guest:55:--\n"; return ""; } });
-  assert.deepEqual((await manager.status()).connection, "Studio WiFi"); const networks = await manager.wifi(); assert.deepEqual(networks.map((item) => ({ ssid: item.ssid, secured: item.secured })), [{ ssid: "Studio WiFi", secured: true }, { ssid: "Guest", secured: false }]); assert.ok(calls.some((args) => args.includes("--rescan")));
+  assert.deepEqual((await manager.status()).connection, "Studio WiFi"); const networks = await manager.wifi(); assert.deepEqual(networks.map((item) => ({ ssid: item.ssid, secured: item.secured })), [{ ssid: "Studio WiFi", secured: true }, { ssid: "Guest", secured: false }]); assert.ok(calls.some((args) => args.includes("rescan") && args.includes("ifname") && args.includes("wlan0"))); assert.ok(calls.some((args) => args.includes("list") && args.includes("--rescan") && args.includes("no")));
 });
 
 test("network policy grants only narrow NetworkManager actions to the kiosk account", async () => {
@@ -315,6 +315,10 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskApp, /adaptLogo/);
   assert.match(kioskApp, /brand-logo-frame/);
   assert.match(kioskHtml, /\/network\.js/);
+  assert.match(kioskHtml, /id="uptime"/);
+  assert.match(kioskApp, /uptimeSeconds/);
+  assert.match(kioskApp, /networkType === "ethernet"/);
+  assert.match(kioskStatusStyles, /network-status\.ethernet/);
   assert.match(kioskHtml, /\/recovery\.js/);
   assert.match(networkApp, /setTimeout\(openNetwork,3000\)/);
   assert.match(networkApp, /touch-keyboard/);
@@ -330,6 +334,7 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(maintenanceStyles, /\[hidden\]\{display:none!important\}/);
   assert.match(maintenanceStyles, /option-list/);
   assert.match(maintenanceStyles, /stage-enroll_wait_first/);
+  assert.match(maintenanceLayoutStyles, /calc\(100vw - 16px\)/);
   assert.match(maintenanceApp, /Begin two-scan enrollment|\/enroll/);
   assert.match(maintenanceApp, /startStagePolling/);
   assert.match(maintenanceApp, /friendlyError/);

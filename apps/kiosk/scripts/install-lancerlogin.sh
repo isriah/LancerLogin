@@ -31,7 +31,7 @@ if [[ "$MODE" == "--dry-run" ]]; then
   echo "3. Install into /opt/lancerlogin with a dedicated system user."
   echo "4. Ask once for the dashboard-generated, time-limited pairing key."
   echo "5. Store the resulting kiosk credential owner-only and start the local service."
-  echo "6. Configure an installed Chromium browser to open the local touch kiosk at desktop login."
+  echo "6. Configure an installed Chromium browser to open the local touch kiosk at desktop login and from a desktop relaunch shortcut."
   echo "Dry-run complete: no files, services, hardware, accounts, or network were changed."
   exit 0
 fi
@@ -94,9 +94,31 @@ echo "On a phone or computer connected to the same network, open http://${host_n
 [[ -z "$local_ip" ]] || echo "If the .local address does not open, use http://${local_ip}:8788/ instead."
 browser_path="$(command -v chromium || command -v chromium-browser || true)"
 if [[ -n "$browser_path" ]]; then
+  install -d -m 0755 /usr/local/bin
+  cat > /usr/local/bin/lancerlogin-open-kiosk <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec "$browser_path" --kiosk --noerrdialogs --disable-infobars --start-fullscreen http://127.0.0.1:8788/
+EOF
+  chmod 0755 /usr/local/bin/lancerlogin-open-kiosk
+
   install -d -m 0755 /etc/xdg/autostart
-  printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=LancerLogin Kiosk' "Exec=${browser_path} --kiosk --noerrdialogs --disable-infobars http://127.0.0.1:8788/" 'X-GNOME-Autostart-enabled=true' > /etc/xdg/autostart/lancerlogin-kiosk.desktop
+  printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=LancerLogin Kiosk' 'Exec=/usr/local/bin/lancerlogin-open-kiosk' 'X-GNOME-Autostart-enabled=true' > /etc/xdg/autostart/lancerlogin-kiosk.desktop
   chmod 0644 /etc/xdg/autostart/lancerlogin-kiosk.desktop
+
+  desktop_user="${SUDO_USER:-}"
+  if [[ -n "$desktop_user" && "$desktop_user" != root ]] && id "$desktop_user" >/dev/null 2>&1; then
+    desktop_home="$(getent passwd "$desktop_user" | cut -d: -f6)"
+    if [[ -n "$desktop_home" && -d "$desktop_home" ]]; then
+      install -d -m 0755 -o "$desktop_user" -g "$desktop_user" "$desktop_home/Desktop"
+      desktop_file="$desktop_home/Desktop/LancerLogin Kiosk.desktop"
+      printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=LancerLogin Kiosk' 'Comment=Open the local LancerLogin attendance screen full-screen' 'Exec=/usr/local/bin/lancerlogin-open-kiosk' 'Terminal=false' 'Categories=Utility;' > "$desktop_file"
+      chown "$desktop_user:$desktop_user" "$desktop_file"
+      chmod 0755 "$desktop_file"
+      runuser -u "$desktop_user" -- gio set "$desktop_file" metadata::trusted true 2>/dev/null || true
+      echo "A LancerLogin Kiosk relaunch shortcut was added to ${desktop_user}'s desktop."
+    fi
+  fi
   echo "Chromium will open LancerLogin in kiosk mode at the next desktop login."
 else
   echo "Chromium was not found. Install it with Raspberry Pi OS software management, then open http://127.0.0.1:8788/ locally."

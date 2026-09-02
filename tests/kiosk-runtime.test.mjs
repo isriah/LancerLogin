@@ -57,6 +57,10 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.match(installer, /49-lancerlogin-network\.rules/);
   assert.match(installer, /49-lancerlogin-recovery\.rules/);
   assert.match(installer, /same network.*one-time pairing key/);
+  assert.match(installer, /lancerlogin-open-kiosk/);
+  assert.match(installer, /LancerLogin Kiosk\.desktop/);
+  assert.match(installer, /metadata::trusted/);
+  assert.match(installer, /SUDO_USER/);
   assert.doesNotMatch(installer, /Worker API URL from the GitHub workflow summary/);
   assert.match(installer, /node_major.*-ge 18/s);
   assert.doesNotMatch(installer, /sudo -u/);

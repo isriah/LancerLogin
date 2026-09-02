@@ -1,5 +1,7 @@
 # Handoff
 
+For a compact, current-session resume point—including process rules, deployment boundaries, Pi state, deferred work, and exact next steps—start with [`SESSION-HANDOFF.md`](../SESSION-HANDOFF.md).
+
 ## Delivered
 
 - Fresh public Apache-2.0 repository: `https://github.com/isriah/LancerLogin`; no source, credentials, configuration, resources, commits, or history from the reference installation were copied.

@@ -1,6 +1,6 @@
 # LancerLogin session handoff
 
-Last updated: 2026-09-02 after publishing LancerLogin v0.10.3 verified kiosk updates.
+Last updated: 2026-09-02 after publishing LancerLogin v0.10.4 durable Discord absence contests.
 
 ## Start the next session here
 
@@ -16,7 +16,7 @@ Public repository: <https://github.com/isriah/LancerLogin>
 
 Public documentation: <https://isriah.github.io/LancerLogin/>
 
-Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.3>
+Latest release: <https://github.com/isriah/LancerLogin/releases/tag/v0.10.4>
 
 ## Non-negotiable boundaries
 
@@ -71,18 +71,24 @@ Authoritative detail:
 ## Current repository and release state
 
 - Branch: `main`
-- v0.10.3 code/tag commit: `423fc713ec3cb3b96f1ddf7e41ea1f1d488448c0` (`Add verified kiosk self-updates`)
-- Immutable v0.10.3 tag commit: `423fc713ec3cb3b96f1ddf7e41ea1f1d488448c0`
-- v0.10.3 is a published, non-draft, non-prerelease GitHub release with the guided installer, installer SHA-256, arm64/armv7 archives, and archive SHA-256 files.
-- GitHub **Verify** completed successfully on `main` for `423fc71` before the v0.10.3 tag, and the v0.10.3 release workflow completed successfully.
-- Local/full gate evidence for the v0.10.3 patch: `npm run verify:release` passed outside the sandbox after an esbuild sandbox filesystem-access failure. The release makes no physical Pi acceptance claim.
+- v0.10.4 code/tag commit: `6964c1571974541065e4411f3abc05050490f6f8` (`Preserve Discord absence notice history`)
+- Immutable v0.10.4 tag commit: `6964c1571974541065e4411f3abc05050490f6f8`
+- v0.10.4 is a published, non-draft, non-prerelease GitHub release with the guided installer, installer SHA-256, arm64/armv7 archives, and archive SHA-256 files.
+- GitHub **Verify** completed successfully on `main` for `6964c15` before the v0.10.4 tag, and the v0.10.4 release workflow completed successfully.
+- Local/full gate evidence for the v0.10.4 patch: `npm run verify:release` passed outside the sandbox after an esbuild sandbox filesystem-access failure. The release makes no physical Pi acceptance claim.
 - GitHub Pages emitted a non-blocking warning that `actions/configure-pages@v5` currently targets deprecated Node.js 20 on the runner. Publication succeeded. Treat checking for an official successor as low-priority cleanup; verify current official action guidance before changing it.
 
-Release notes: [`docs/releases/v0.10.3.md`](docs/releases/v0.10.3.md)
+Release notes: [`docs/releases/v0.10.4.md`](docs/releases/v0.10.4.md)
 
 Durable feature history: [`docs/HANDOFF.md`](docs/HANDOFF.md)
 
 Roadmap/evidence: [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/RELEASE-CHECKLIST.md`](docs/RELEASE-CHECKLIST.md)
+
+## What v0.10.4 delivered
+
+- Re-sending a Discord absence notice no longer invalidates the contest button in the earlier message.
+- Each notice expires after the configurable organization-wide Discord contest window, which defaults to 24 hours and supports 1–168 hours.
+- `0011_discord_notice_history.sql` preserves recipient authorization per message, and `0012_discord_contest_window.sql` stores the expiry setting.
 
 ## What v0.10.3 delivered
 

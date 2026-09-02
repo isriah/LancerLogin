@@ -52,6 +52,10 @@ Status: collecting. Do not implement until the user explicitly reconciles this r
 
 1. Add one search field that matches member name, email, and ID together.
 2. Add an Active-only versus All-members filter.
+3. Correct the desktop roster action-button layout.
+   - Screenshot: <https://i.imgur.com/sr3gjcD.png>
+   - Observation: the roster action buttons are improperly formatted on desktop.
+   - Expected behavior: show the related action buttons side by side on desktop and apply the established styled-button treatment consistently.
 
 ## Additional approved refinements
 

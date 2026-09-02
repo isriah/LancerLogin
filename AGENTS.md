@@ -34,6 +34,7 @@ For each selected work unit:
 - Never place credentials, tokens, personal data, or biometric data in source, fixtures, screenshots, commits, or documentation.
 - Do not change generated artifacts, lockfiles, migrations, environment configuration, or dependencies unless required by the selected work unit; explain why when you do.
 - Preserve unrelated working-tree changes. Do not reset, discard, broadly reformat, or overwrite another change without explicit approval.
+- `.codex-remote-attachments/` is an expected, user-managed untracked folder for Codex remote/mobile attachments. Leave it in place, do not repeatedly report it as an unrelated change, and never stage or modify it unless the user explicitly asks.
 - Treat migrations, authentication/authorization, updater behavior, and Pi-facing changes as high risk: add focused verification and cite the relevant design documentation.
 
 ## Git and review

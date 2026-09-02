@@ -139,11 +139,7 @@ Release: later roster and reports bundle.
 
 ### WU-007 — Settings configuration information architecture
 
-Status: in progress
-
-Owner: LancerLogin coordinator
-Branch: `codex/wu-007-settings-ia`
-Base: `f73d6df132297821acff51631e42d64e15bc40ba`
+Status: merged (`53c2859`)
 
 Goal: organize operational settings where administrators expect to find them.
 Scope: move Discord contest settings and late-scan allowance into Settings > Configuration; reshape the kiosk update area to the installed-versus-latest comparison pattern; move dashboard access/role-grant controls into Settings.

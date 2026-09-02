@@ -302,6 +302,7 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 /* Routed dashboard */
 .dashboard-shell { width: min(76rem,100%); margin: 0 auto; }
 .dashboard-toolbar { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .75rem; align-items: center; margin-bottom: 1rem; }
+.mobile-menu-toggle,.mobile-nav-scrim { display: none; }
 .primary-navigation,.settings-navigation { display: flex; gap: .3rem; min-width: 0; padding: .35rem; overflow-x: auto; border: 1px solid var(--line); background: var(--surface); border-radius: .75rem; }
 .primary-navigation a,.settings-navigation a { flex: 0 0 auto; padding: .55rem .7rem; color: var(--muted); border-radius: .5rem; text-decoration: none; font-size: .8rem; font-weight: 800; white-space: nowrap; }
 .primary-navigation a.active,.settings-navigation a.active { color: var(--ink); background: var(--surface-soft); }
@@ -549,11 +550,17 @@ label { font-size: .9rem; }
 /* Phone layouts use the available screen instead of nesting horizontal scrollers. */
 @media (max-width: 760px) {
   .provisioned-main { padding: 1rem; }
-  .dashboard-toolbar { gap: .65rem; }
-  .primary-navigation,.settings-navigation { width: 100%; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); overflow: visible; }
-  .primary-navigation a,.settings-navigation a { min-width: 0; padding: .6rem .35rem; text-align: center; overflow-wrap: anywhere; white-space: normal; }
-  .toolbar-end { flex-wrap: wrap; }
-  .toolbar-end > * { flex: 1 1 9rem; }
+  .dashboard-toolbar { grid-template-columns: 2.75rem minmax(0,1fr); gap: .65rem; }
+  .mobile-menu-toggle { z-index: 92; width: 2.75rem; height: 2.75rem; display: grid; place-content: center; gap: .28rem; padding: 0; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .6rem; cursor: pointer; }
+  .mobile-menu-toggle span { width: 1.15rem; height: 2px; display: block; background: currentColor; border-radius: 1px; }
+  .mobile-nav-scrim { position: fixed; inset: 0; z-index: 90; display: block; border: 0; background: rgba(5,12,9,.58); cursor: pointer; }
+  .primary-navigation { width: min(19rem,calc(100vw - 3rem)); display: none; grid-template-columns: 1fr; align-content: start; gap: .45rem; position: fixed; inset: 0 auto 0 0; z-index: 91; padding: 5.25rem 1rem 1rem; overflow-y: auto; border: 0; border-radius: 0; background: var(--surface); box-shadow: 1rem 0 3rem rgba(0,0,0,.28); }
+  .primary-navigation.mobile-open { display: grid; }
+  .primary-navigation a { min-width: 0; min-height: 2.75rem; padding: .75rem .9rem; text-align: left; overflow-wrap: anywhere; white-space: normal; }
+  .settings-navigation { width: 100%; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); overflow: visible; }
+  .settings-navigation a { min-width: 0; padding: .6rem .35rem; text-align: center; overflow-wrap: anywhere; white-space: normal; }
+  .toolbar-end { grid-column: 2; flex-wrap: wrap; justify-content: end; }
+  .toolbar-end > * { flex: 0 1 auto; }
   .sign-out-button { justify-self: stretch; }
   .kiosk-page-heading,.roster-summary-card,.settings-callout,.live-meeting > header,.contest-list article,.member-history > div { align-items: stretch; flex-direction: column; }
   .kiosk-page-heading .primary-button { width: 100%; }

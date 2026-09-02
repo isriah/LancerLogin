@@ -65,6 +65,19 @@ test("mobile controls retain a 44px touch target", async ({ page }) => {
   for (const control of controls) expect(control.height, control.label).toBeGreaterThanOrEqual(44);
 });
 
+test("mobile navigation opens as a dismissible side drawer", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/dashboard");
+  const menu = page.getByRole("button", { name: "Open navigation" });
+  await menu.click();
+  const navigation = page.getByRole("navigation", { name: "Primary dashboard navigation" });
+  await expect(navigation).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close navigation" }).first()).toBeVisible();
+  await navigation.getByRole("link", { name: "Reports" }).click();
+  await expect(page.getByRole("heading", { name: "Reports" })).toBeVisible();
+  await expect(navigation).not.toBeVisible();
+});
+
 test("expanded mobile content only scrolls where data requires it", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const allowedScrollerSelectors = [".responsive-table", ".table-scroll"];

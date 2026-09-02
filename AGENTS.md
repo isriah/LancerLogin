@@ -29,6 +29,16 @@ For each selected work unit:
 - For serial work, update the related work unit with merge and release-bundle status. For parallel work, report the outcome to the integration task; only that task updates the shared work-unit ledger after merge.
 - Report changed files, verification run, and any remaining risk or manual validation.
 
+## Structured decisions
+
+When a task needs a specific decision from the user before it can safely continue—such as approval, a product or design choice, a version number, scope selection, or a migration-integration decision—present it in Plan mode as a structured choice prompt when that mode is available.
+
+- Ask one decision at a time and state the consequence of the choice briefly.
+- Offer two or three mutually exclusive options, put the recommended option first, and allow the user to supply an alternative.
+- Do not use a structured prompt for routine, already-authorized implementation or integration work.
+- Once the user selects an option, continue within that authorization without asking again for the same decision.
+- If the active task cannot use Plan mode, stop and ask the same concise question in chat; do not imitate clickable controls with Markdown.
+
 ## Repository safety
 
 - Never place credentials, tokens, personal data, or biometric data in source, fixtures, screenshots, commits, or documentation.

@@ -99,6 +99,7 @@ test("guided setup keeps branding local and makes its compact progress accessibl
 test("Operator workspace exposes kiosk monitoring without an Attendance contest-audit panel", async () => {
   const source = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(source, /\/admin\/kiosks/);
   assert.match(source, /Status refreshes every 30 seconds/);
   assert.match(source, /Reader \$\{activeKiosk\.readerOnline/);
@@ -118,6 +119,10 @@ test("Operator workspace exposes kiosk monitoring without an Attendance contest-
   assert.doesNotMatch(source, /Copy ID/);
   assert.match(meetings, /Notes <span>\(optional\)<\/span>/);
   assert.match(meetings, /Attendance required/);
+  assert.doesNotMatch(meetings, /Optional meeting/);
+  assert.match(meetings, /Search Meetings/);
+  assert.match(styles, /\.meeting-create-form input\[type="checkbox"\]/);
+  assert.match(styles, /\.meeting-directory input\[type="checkbox"\]:checked/);
   assert.match(meetings, /Create recurring series/);
   assert.match(meetings, /Start from a template/);
   assert.match(meetings, /Duplicate an existing meeting/);

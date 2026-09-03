@@ -467,6 +467,11 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .inline-options { display: flex; flex-wrap: wrap; gap: .7rem 1.2rem; margin: .8rem 0; }
 .inline-options label { display: flex; gap: .45rem; align-items: center; margin: 0; }
 .inline-options input { width: auto; min-height: auto; margin: 0; }
+.meeting-create-form input[type="checkbox"],.meeting-edit-form input[type="checkbox"],.meeting-directory input[type="checkbox"] { appearance: none; width: 1.15rem; height: 1.15rem; min-height: 1.15rem; padding: 0; margin: 0; border: 1px solid var(--line); background: var(--surface); border-radius: .3rem; cursor: pointer; }
+.meeting-create-form input[type="checkbox"]::after,.meeting-edit-form input[type="checkbox"]::after,.meeting-directory input[type="checkbox"]::after { content: ""; display: block; width: .3rem; height: .6rem; margin: .08rem auto 0; border: solid var(--on-primary); border-width: 0 .14rem .14rem 0; transform: rotate(45deg) scale(0); }
+.meeting-create-form input[type="checkbox"]:checked,.meeting-edit-form input[type="checkbox"]:checked,.meeting-directory input[type="checkbox"]:checked { border-color: var(--primary); background: var(--primary); }
+.meeting-create-form input[type="checkbox"]:checked::after,.meeting-edit-form input[type="checkbox"]:checked::after,.meeting-directory input[type="checkbox"]:checked::after { transform: rotate(45deg) scale(1); }
+.meeting-create-form input[type="checkbox"]:focus-visible,.meeting-edit-form input[type="checkbox"]:focus-visible,.meeting-directory input[type="checkbox"]:focus-visible { outline: 3px solid color-mix(in srgb,var(--primary) 30%,transparent); outline-offset: 2px; }
 .meeting-directory { width: 100%; }
 .table-toolbar { display: flex; justify-content: space-between; gap: 1rem; align-items: end; margin-bottom: 1rem; }
 .table-toolbar h2 { margin: 0; }

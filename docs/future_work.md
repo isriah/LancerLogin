@@ -331,12 +331,12 @@ Release: next integration reliability bundle.
 
 ### WU-023 — Dashboard update-flow polish
 
-Status: in progress
+Status: merged (`c6b57d6`)
 
 Owner: Codex coordinator
 Branch: codex/wu-023-dashboard-update-flow
 Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
-Task: provisioning client `client-new-thread:2fd59928-a555-41bf-8f30-bf647521693b`
+Task: provisioning client `client-new-thread:2fd59928-a555-41bf-8f30-bf647521693b` (the task platform did not expose an addressable task ID for archival)
 
 Goal: make dashboard update actions easier to follow without weakening deployment safeguards.
 Scope: align the dashboard update card with kiosk-update presentation; move its action into the first card; download backups without opening a blank tab; open GitHub in a new tab. Preserve backup-before-update and manual private-workflow authorization.

@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import { api, apiBaseUrl } from "./dashboard-api";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 
 type Provider = "google" | "resend" | "discord";
 type Status = { provider: Provider; saved: boolean; configured: boolean; state: "not_configured" | "verification_required" | "configured"; verificationPending?: boolean; updatedAt?: string; verifiedAt?: string };
@@ -56,6 +57,7 @@ function stateLabel(status?: Status) { return status?.configured ? "Configured" 
 
 export function IntegrationSettings() {
   const [statuses, setStatuses] = useState<Status[]>([]); const [values, setValues] = useState<Record<string, string>>({}); const [notice, setNotice] = useState("Loading integration status…"); const [messages, setMessages] = useState<Partial<Record<Provider, Message>>>({}); const [busy, setBusy] = useState<Provider>(); const [open, setOpen] = useState<Set<Provider>>(new Set(providers)); const initialized = useRef(false);
+  useDashboardLoadingOverlay(notice === "Loading integration status…", "Loading integration status…");
   async function load(collapseVerified = false) { const result = await api<{ integrations: Status[] }>("/admin/integrations"); setStatuses(result.integrations); setNotice("Saved secret values are encrypted and never displayed."); if (!initialized.current) { setOpen(new Set(result.integrations.filter((item) => !item.configured).map((item) => item.provider))); initialized.current = true; } else if (collapseVerified) setOpen((current) => new Set([...current].filter((provider) => !result.integrations.find((item) => item.provider === provider)?.configured))); return result.integrations; }
   useEffect(() => { void load().then(() => { const url = new URL(window.location.href); if (url.searchParams.get("verified") === "google") { setMessages((current) => ({ ...current, google: { kind: "success", text: "Google OAuth was verified successfully." } })); url.searchParams.delete("verified"); window.history.replaceState({}, "", url); } }).catch((error: Error) => setNotice(error.message)); }, []);
   function show(provider: Provider, kind: Message["kind"], text: string) { setMessages((current) => ({ ...current, [provider]: { kind, text } })); if (kind === "error") window.requestAnimationFrame(() => document.getElementById(`${provider}-integration-message`)?.focus()); }

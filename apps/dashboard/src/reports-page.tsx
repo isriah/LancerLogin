@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, apiBaseUrl } from "./dashboard-api";
 import { RouteLink, usePath } from "./router";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 
 type Meeting = { id: string; title: string; startsAt: string; endsAt: string; required: boolean | number; isTest?: boolean | number };
 type MeetingResponse = { meetings: Meeting[]; attendanceReportingStartsOn?: string | null };
@@ -16,6 +17,7 @@ const meetingIsOptional = (meeting: Meeting) => !Boolean(meeting.required);
 
 export function ReportsPage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]); const [rows, setRows] = useState<Record<string, Row[]>>({}); const [roster, setRoster] = useState<Record<string, boolean>>({}); const [contests, setContests] = useState<Contest[]>([]); const [notice, setNotice] = useState("Loading reports…");
+  useDashboardLoadingOverlay(notice === "Loading reports…", "Loading reports…");
   const { path, navigate } = usePath(); const [sort, setSort] = useState<"rate" | "first" | "last">("rate"); const [range, setRange] = useState("10"); const [from, setFrom] = useState(""); const [to, setTo] = useState(""); const [meetingType, setMeetingType] = useState<"all" | "regular" | "optional">("all"); const [rosterFilter, setRosterFilter] = useState<"active" | "all">("active"); const [baseline, setBaseline] = useState(""); const [useBaseline, setUseBaseline] = useState(false); const [reviewing, setReviewing] = useState<Contest>(); const [reviewNote, setReviewNote] = useState(""); const [reviewBusy, setReviewBusy] = useState(false);
 
   async function load() {

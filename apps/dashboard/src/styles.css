@@ -4,7 +4,7 @@ html { font-size: 17px; scroll-behavior: smooth; }
 body { margin: 0; min-width: 320px; overflow-x: hidden; }
 button, input, select, textarea { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
-.app { --bg: #f3f5f2; --surface: #fff; --surface-soft: #eef1ef; --ink: #16211d; --muted: #69756f; --line: #dce4df; --primary: #146c5b; --secondary: #dba72d; --on-primary: #fff; --on-secondary: #111714; --primary-soft: color-mix(in srgb,var(--primary) 12%,var(--surface)); --secondary-soft: color-mix(in srgb,var(--secondary) 14%,var(--surface)); --gold: var(--secondary); --layout-gap: 1rem; --card-padding: 1.35rem; min-height: 100vh; color: var(--ink); background: var(--bg); }
+.app { --bg: #f3f5f2; --surface: #fff; --surface-soft: #eef1ef; --ink: #16211d; --muted: #69756f; --line: #dce4df; --primary: #146c5b; --secondary: #dba72d; --on-primary: #fff; --on-secondary: #111714; --primary-soft: color-mix(in srgb,var(--primary) 12%,var(--surface)); --secondary-soft: color-mix(in srgb,var(--secondary) 14%,var(--surface)); --gold: var(--secondary); --layout-gap: 1rem; --card-padding: 1.35rem; min-height: 100vh; color: var(--ink); background: radial-gradient(circle at 15% 5%, color-mix(in srgb,var(--primary) 11%,transparent), transparent 32%), var(--bg); background-attachment: fixed; }
 .app[data-theme="dark"] { --bg: #111315; --surface: #191c1f; --surface-soft: #24282d; --ink: #f1f3f4; --muted: #a9b0b7; --line: #343a40; --gold: var(--secondary); }
 .skip-link { position: fixed; left: 1rem; top: -5rem; z-index: 20; padding: .75rem 1rem; color: #fff; background: #111; border-radius: .5rem; }
 .skip-link:focus { top: 1rem; }
@@ -72,7 +72,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--gold); outline-
 @media (max-width: 960px) { .sidebar { position: static; width: 100%; grid-template-columns: 3.1rem 1fr auto; grid-template-rows: auto; }.sidebar nav,.sidebar-footer { display: none; }.main { margin-left: 0; }.content-grid { grid-template-columns: 1fr; }.preview-panel { position: static; }.after-setup { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .main { padding: 1.5rem 1rem 3rem; }.topbar { align-items: flex-start; }.theme-button { white-space: nowrap; }.notice { grid-template-columns: 1fr; }.after-setup ol { grid-template-columns: 1fr; }.resource-list div { display: grid; gap: .2rem; } }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
-.provisioned-main { min-height: 100vh; padding: 2rem; background: radial-gradient(circle at 15% 5%, color-mix(in srgb, var(--primary) 11%, transparent), transparent 32%), var(--bg); }
+.provisioned-main { min-height: 100vh; padding: 2rem; }
 .setup-header { width: min(76rem, 100%); display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: .8rem; margin: 0 auto 2.5rem; }
 .brand-home-link { width: fit-content; max-width: 100%; display: flex; align-items: center; gap: .8rem; color: var(--ink); text-decoration: none; border-radius: .8rem; }
 .brand-heading { min-width: 0; display: flex; flex-direction: column; }
@@ -113,6 +113,11 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .centered-state .brand-mark { margin-bottom: 1.5rem; }
 @media (max-width: 720px) { .provisioned-main { padding: 1rem; }.setup-header { margin-bottom: 1.5rem; }.form-grid,.choice-grid { grid-template-columns: 1fr; }.choice { min-height: auto; }.first-admin-card { padding: 1.25rem; } }
 .auth-check { width: min(72rem,100%); margin: 8rem auto; text-align: center; }
+.dashboard-loading-overlay { position: fixed; inset: 0; z-index: 70; display: grid; place-content: center; justify-items: center; gap: .75rem; color: var(--ink); background: color-mix(in srgb,var(--bg) 78%,transparent); font-size: .85rem; font-weight: 800; pointer-events: auto; }
+.dashboard-loading-indicator { width: 2.5rem; aspect-ratio: 1; border: .24rem solid color-mix(in srgb,var(--primary) 22%,transparent); border-top-color: var(--primary); border-radius: 50%; animation: dashboard-loading-spin .8s linear infinite; }
+main[aria-busy="true"] .setup-status { display: none; }
+@keyframes dashboard-loading-spin { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) { .dashboard-loading-indicator { animation-duration: 2.4s; } }
 .workspace-shell { width: min(76rem,100%); margin: 0 auto; }
 .workspace-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin: 1rem 0 1.5rem; }
 .workspace-header h1 { font-size: clamp(2rem,4vw,3rem); }

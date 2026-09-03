@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AttendanceCalendar } from "./attendance-calendar";
 import { usePath } from "./router";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 type Meeting = { id: string; title: string; startsAt: string; endsAt?: string | null; required: boolean | number; notes?: string | null };
@@ -12,6 +13,7 @@ export function AttendanceWorkspace({ embedded = false, onSignedOut, selectedMee
   const { navigate } = usePath();
   const [meetings, setMeetings] = useState<Meeting[]>([]); const [selected, setSelected] = useState(""); const [rows, setRows] = useState<AttendanceRow[]>([]); const [kiosks, setKiosks] = useState<Kiosk[]>([]);
   const [notice, setNotice] = useState("Loading meetings…"); const [memberNotices, setMemberNotices] = useState<Record<string, string>>({});
+  useDashboardLoadingOverlay(notice === "Loading meetings…", "Loading attendance…");
   async function refreshMeetings() { const result = await api<{ meetings: Meeting[] }>("/meetings"); const ordered = [...result.meetings].sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt)); setMeetings(ordered); const linkedMeeting = selectedMeetingId && ordered.find((meeting) => meeting.id === selectedMeetingId); if (linkedMeeting) setSelected(linkedMeeting.id); else if (!selected) { const latestCompleted = ordered.filter((meeting) => Date.parse(meeting.endsAt ?? meeting.startsAt) <= Date.now()).at(-1); setSelected(latestCompleted?.id ?? ordered[0]?.id ?? ""); } setNotice(ordered.length ? "" : "No meetings have been created yet."); }
   async function refreshKiosks() { const result = await api<{ kiosks: Kiosk[] }>("/admin/kiosks"); setKiosks(result.kiosks); }
   async function refreshAttendance(meetingId = selected) { if (!meetingId) { setRows([]); return; } const attendance = await api<{ attendance: AttendanceRow[] }>(`/attendance?meetingId=${encodeURIComponent(meetingId)}`); setRows(attendance.attendance); }

@@ -1,11 +1,13 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "./dashboard-api";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 
 export type RosterMember = { id: string; memberId: string; firstName: string; lastName: string; email?: string; discordUserId?: string; active: boolean | number; attendanceRequiredFrom?: string | null; hasDashboardAccess?: boolean | number };
 type User = { id: string; email?: string; localUsername?: string; memberId?: string | null; memberExternalId?: string; memberFirstName?: string; memberLastName?: string; role: "admin" | "operator"; active: boolean | number; createdAt: string };
 
 export function UserSettings({ members }: { members: RosterMember[] }) {
   const [users, setUsers] = useState<User[]>([]); const [method, setMethod] = useState<"local" | "google">("local"); const [identifier, setIdentifier] = useState(""); const [password, setPassword] = useState(""); const [confirmation, setConfirmation] = useState(""); const [role, setRole] = useState<"admin" | "operator">("operator"); const [memberId, setMemberId] = useState(""); const [notice, setNotice] = useState("Loading dashboard access…"); const [error, setError] = useState("");
+  useDashboardLoadingOverlay(notice === "Loading dashboard access…", "Loading dashboard access…");
   async function load() { const result = await api<{ users: User[] }>("/admin/users"); setUsers(result.users); setNotice("Only Admins can grant dashboard access or change roles."); }
   useEffect(() => { void load().catch((caught: Error) => setNotice(caught.message)); }, []);
   function showError(message: string) { setError(message); window.requestAnimationFrame(() => document.getElementById("dashboard-access-error")?.focus()); }

@@ -4,6 +4,7 @@ import { ColorEditor } from "./color-editor";
 import { RosterImportPanel } from "./roster-import-panel";
 import type { RosterMember } from "./user-settings";
 import { hardwarePairingKey, kioskInstallerUrl } from "./hardware-pairing-key";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 const steps = [
@@ -65,6 +66,7 @@ export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut
   const [attendanceRows, setAttendanceRows] = useState<AttendanceRow[]>([]);
   const [messages, setMessages] = useState<Partial<Record<StepId, { errors?: string[]; warnings?: string[] }>>>({});
   const [notice, setNotice] = useState("Loading shared setup…");
+  useDashboardLoadingOverlay(notice === "Loading shared setup…", "Loading guided setup…");
   const [showCelebration, setShowCelebration] = useState(false);
   const complete = completed.size === steps.length;
   const currentIndex = steps.findIndex(([id]) => id === currentStep);

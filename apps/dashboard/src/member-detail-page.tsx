@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./dashboard-api";
 import { EditMemberDialog } from "./roster-page";
 import { RouteLink, usePath } from "./router";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 import type { RosterMember } from "./user-settings";
 
 type HistoryRow = { meetingId: string; title: string; startsAt: string; endsAt: string; checkedInAt?: string; checkedOutAt?: string; reason?: string; disposition: "present" | "absent" | "excused" | "not_required" };
@@ -11,6 +12,7 @@ const formatTime = (value?: string) => value ? new Date(value).toLocaleString() 
 
 export function MemberDetailPage({ role, memberId }: { role: "admin" | "operator"; memberId: string }) {
   const { path, navigate } = usePath(); const [detail, setDetail] = useState<Detail>(); const [notice, setNotice] = useState("Loading member history…"); const [editing, setEditing] = useState(false);
+  useDashboardLoadingOverlay(notice === "Loading member history…", "Loading member history…");
   async function load(message = "") { const result = await api<Detail>(`/admin/members/${encodeURIComponent(memberId)}/history`); setDetail(result); setNotice(message); }
   useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, [memberId]);
   async function toggleActive() { if (!detail) return; try { await api(`/admin/members/${encodeURIComponent(detail.member.id)}`, { method: "PATCH", body: JSON.stringify({ active: !detail.member.active }) }); await load(`${detail.member.firstName} is now ${detail.member.active ? "inactive" : "active"}.`); } catch (error) { setNotice((error as Error).message); } }

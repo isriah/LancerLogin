@@ -346,6 +346,19 @@ test("dashboard styling uses self-hosted typography and themed organization cont
   assert.match(organization, /logo-backdrop-options/);
 });
 
+test("dashboard loading stays in an accessible overlay and the brand gradient is viewport-stable", async () => {
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  const overlay = await readFile("apps/dashboard/src/loading-overlay.tsx", "utf8");
+  const pages = await Promise.all(["home-page.tsx", "meetings-page.tsx", "attendance-workspace.tsx", "reports-page.tsx", "roster-page.tsx", "kiosks-page.tsx", "updates-page.tsx"].map((file) => readFile(`apps/dashboard/src/${file}`, "utf8")));
+  assert.match(styles, /background-attachment: fixed/);
+  assert.match(styles, /\.dashboard-loading-overlay \{ position: fixed/);
+  assert.match(styles, /@keyframes dashboard-loading-spin/);
+  assert.match(styles, /main\[aria-busy="true"\] \.setup-status \{ display: none/);
+  assert.match(overlay, /role", "status"/);
+  assert.match(overlay, /aria-live", "polite"/);
+  for (const page of pages) assert.match(page, /useDashboardLoadingOverlay/);
+});
+
 test("roster dialogs trap keyboard focus and restore it when closed", async () => {
   const helper = await readFile("apps/dashboard/src/modal-focus.ts", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");

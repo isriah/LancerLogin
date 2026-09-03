@@ -4,6 +4,7 @@ import { useModalFocus } from "./modal-focus";
 import { type RosterMember } from "./user-settings";
 import { RosterImportPanel } from "./roster-import-panel";
 import { RouteLink, usePath } from "./router";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 
 type NewMember = { memberId: string; firstName: string; lastName: string; email: string; discordUserId: string; attendanceRequiredFrom: string };
 const participationStartToday = () => new Date().toISOString().slice(0, 10);
@@ -37,6 +38,7 @@ export function EditMemberDialog({ member, onClose, onSaved }: { member?: Roster
 export function RosterPage({ role }: { role: "admin" | "operator" }) {
   const { path, navigate } = usePath();
   const [members, setMembers] = useState<RosterMember[]>([]); const [imports, setImports] = useState<Array<{ createdAt: string; count: number; mode: string; deactivated: number }>>([]); const [notice, setNotice] = useState("Loading roster…"); const [addOpen, setAddOpen] = useState(false); const [editing, setEditing] = useState<RosterMember>(); const [query, setQuery] = useState(""); const [scope, setScope] = useState<"active" | "all">("active");
+  useDashboardLoadingOverlay(notice === "Loading roster…", "Loading roster…");
   async function load(message = "") { const result = await api<{ members: RosterMember[] }>("/admin/members"); setMembers(result.members); setNotice(message); }
   useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); if (role === "admin") void api<{ imports: Array<{ createdAt: string; count: number; mode: string; deactivated: number }> }>("/admin/roster/history").then((result) => setImports(result.imports)).catch(() => undefined); }, [role]);
   async function toggleActive(member: RosterMember) { try { await api(`/admin/members/${encodeURIComponent(member.id)}`, { method: "PATCH", body: JSON.stringify({ active: !member.active }) }); await load(`${member.firstName} is now ${member.active ? "inactive" : "active"}.`); } catch (error) { setNotice((error as Error).message); } }

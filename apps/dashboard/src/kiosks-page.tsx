@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { api } from "./dashboard-api";
 import { hardwarePairingKey, kioskInstallerUrl } from "./hardware-pairing-key";
 import { useModalFocus } from "./modal-focus";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 
 type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string; pendingEvents?: number; lastSyncAt?: string; errorCategory?: string; pairedAt: string };
 type Simulator = { name: string; active: number; online: number; lastSeenAt?: string; readerOnline: false; releaseVersion: string };
@@ -57,6 +58,7 @@ export function KiosksPage({ role }: { role: "admin" | "operator" }) {
   const [kiosks, setKiosks] = useState<Kiosk[]>([]);
   const [simulator, setSimulator] = useState<Simulator | null>(null);
   const [notice, setNotice] = useState("Loading kiosk status…");
+  useDashboardLoadingOverlay(notice === "Loading kiosk status…", "Loading kiosk status…");
   const [pairing, setPairing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [maintenanceHelp, setMaintenanceHelp] = useState(false);

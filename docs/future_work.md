@@ -395,12 +395,12 @@ Release: next dashboard reliability bundle.
 
 ### WU-027 — Attendance calendar spacing
 
-Status: in progress
+Status: merged (`ac5c478`)
 
 Owner: Codex coordinator
 Branch: codex/wu-027-attendance-calendar-spacing
 Base: 57018bddf9f9a7ded65746c5a886abe841172435
-Task: provisioning client `client-new-thread:2a03eff5-784f-41d9-afce-f52d3f3cee3c`
+Task: provisioning client `client-new-thread:2a03eff5-784f-41d9-afce-f52d3f3cee3c` (recovered from a branch-owned Worktree; the task platform did not expose an addressable task ID for archival)
 
 Goal: restore comfortable separation between the Attendance calendar and its cards.
 Scope: add the missing vertical spacing only. Exclude calendar routing, meeting selection, and attendance behavior changes.

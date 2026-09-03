@@ -20,6 +20,7 @@ Read only the documentation relevant to the selected work. Use Plan mode before 
 - One implementation task normally owns one work unit and one branch. Use a Worktree only when work runs in parallel or must be isolated from the local checkout.
 - Before parallel work, compare code areas, shared contracts, migrations, authorization, deployment configuration, and shared documentation. Run overlapping units serially.
 - Implementation tasks do not edit the shared ledger, merge to `main`, release, deploy, mutate cloud resources, or update the Pi. The task that performs integration records the merge in the ledger.
+- Parallel implementation commits must start with their WU ID, for example `WU-019: clarify contest resolution failures`. If task provisioning creates a detached Worktree or lacks an addressable task ID, record it as a candidate for review; do not create a duplicate implementation task.
 
 ## Definition of done
 

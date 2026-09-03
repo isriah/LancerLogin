@@ -33,6 +33,10 @@ For a parallel unit, also add:
 Owner: <coordination task or assignee>
 Branch: <branch name>
 Base: <starting main commit>
+
+For a detached recovery candidate, also add:
+
+Candidate: <commit SHA>, <Worktree path>, and evidence tying it to this WU>
 ```
 
 ## Selecting and completing work
@@ -47,6 +51,8 @@ Base: <starting main commit>
 Parallel development is permitted only for work units with no material overlap. Compare scope and sources before starting: units that touch the same feature surface, shared component, API/data contract, migration/schema, authorization policy, deployment configuration, or shared documentation run serially.
 
 For approved independent units, create one Codex Worktree and one `codex/wu-<id>-<short-name>` branch per implementation task from a committed base. Implementation tasks change only their selected unit's code, tests, and directly relevant documentation; they do not edit this ledger, merge, release, deploy, or update the Pi. Integrate completed branches one at a time and then update this ledger with merge and release-bundle evidence.
+
+Implementation commits use the `WU-###:` prefix. If Codex produces a detached Worktree, retain it and record an explicit candidate commit/path; `$ll-integrate all` can propose it for review. Do not start a duplicate task for a WU with recorded branch, task, or candidate evidence.
 
 Use `docs/WORKFLOW.md` for the operating procedure and recovery guidance. Do not use a persistent coordinator or scheduled heartbeat to provision, poll, or recover a backlog. Planning, diagnosis, and review may run in parallel when they do not write shared state.
 
@@ -270,6 +276,7 @@ Owner: Codex coordinator
 Branch: codex/wu-019-contest-resolution-feedback
 Base: 5b0ee40a334cd2b03faf0f4c445248dfab14298a
 Task: provisioning client `client-new-thread:48491ddf-d24d-4ae0-a561-8f0e5519bcb3`
+Candidate: `14eb778817badd14236d971a8ddcfd1dff62b7ed` in detached Worktree `C:\\Users\\Izz\\.codex\\worktrees\\30d7\\LancerLogin Workspace`; commit subject and changed Reports/API/test files match this WU.
 
 Goal: make contest review failures visible and actionable to an operator.
 Scope: validate a required review reason before a contest resolution is submitted and present clear feedback if it is missing or a resolution fails. Preserve contest policy, audit history, and existing approval outcomes.
@@ -302,6 +309,7 @@ Owner: Codex coordinator
 Branch: codex/wu-021-disable-meeting-templates
 Base: 93c7d5d204f6e7dafd5522bad59798c3683b2535
 Task: provisioning client `client-new-thread:93e2161c-1ed9-4c0c-b7a0-17610f572ca3`
+Candidate: `7ab804fc0304113695fc87eeeff0bf3468f6cefd` in detached Worktree `C:\\Users\\Izz\\.codex\\worktrees\\5331\\LancerLogin Workspace`; commit subject and changed meeting-template files match this WU.
 
 Goal: remove meeting templates from the normal scheduling workflow.
 Scope: disable template selection, creation, and use in product workflows while preserving existing stored template records. Exclude deletion or migration of stored templates and changes to meeting/recurrence behavior.
@@ -425,6 +433,7 @@ Owner: Codex coordinator
 Branch: codex/wu-029-compact-dashboard-access
 Base: 93c7d5d204f6e7dafd5522bad59798c3683b2535
 Task: provisioning client `client-new-thread:2c6de0aa-110e-49df-a0c1-c55a6d9d4740`
+Candidate: `d46815146c46cd2ae6f0e9abbcf2a22139084857` in detached Worktree `C:\\Users\\Izz\\.codex\\worktrees\\00b3\\LancerLogin Workspace`; commit subject and changed dashboard-access files match this WU.
 
 Goal: make Dashboard Access selection compact without losing its accessible role semantics.
 Scope: replace oversized visual radio selectors with compact toggle-style controls while retaining keyboard operation, labels, selected-state communication, and authorization behavior.

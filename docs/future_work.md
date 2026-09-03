@@ -269,7 +269,7 @@ Status: in progress
 Owner: Codex coordinator
 Branch: codex/wu-019-contest-resolution-feedback
 Base: 5b0ee40a334cd2b03faf0f4c445248dfab14298a
-Task: provisioning pending
+Task: provisioning client `client-new-thread:48491ddf-d24d-4ae0-a561-8f0e5519bcb3`
 
 Goal: make contest review failures visible and actionable to an operator.
 Scope: validate a required review reason before a contest resolution is submitted and present clear feedback if it is missing or a resolution fails. Preserve contest policy, audit history, and existing approval outcomes.

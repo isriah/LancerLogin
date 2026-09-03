@@ -389,7 +389,7 @@ Status: in progress
 Owner: Codex coordinator
 Branch: codex/wu-026-reports-filter-reliability
 Base: db36a66d3ff14499cbb12c2bcd29350a227f56cb
-Task: provisioning pending
+Task: provisioning client `client-new-thread:fb1663f3-3f3f-4062-bb2e-b456bdcd8fa9` (the task platform did not expose an addressable task ID)
 
 Goal: restore correct All-meetings reporting and keep leaderboard controls usable.
 Scope: diagnose and repair the All-meetings regression; add regression coverage explaining the earlier verification gap; fix Attendance-leaderboard sort-selector overflow. Preserve reporting baseline and optional/regular semantics.

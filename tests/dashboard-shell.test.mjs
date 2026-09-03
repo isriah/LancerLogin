@@ -308,6 +308,16 @@ test("contest review requires a reason and keeps failures beside the unresolved 
   assert.match(reports, /id="contest-review-reason-error"[^>]+role="alert"/);
 });
 
+test("pending contests are signaled in the shell instead of occupying Reports", async () => {
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const indicator = await readFile("apps/dashboard/src/contest-indicator.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  assert.match(shell, /ContestIndicator/);
+  assert.match(indicator, /\/discord\/contests/);
+  assert.match(indicator, /Open Home/);
+  assert.match(styles, /\.reports-page \.contest-report \{ display: none; \}/);
+});
+
 test("dashboard cards keep their spacing and operational actions aligned", async () => {
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");

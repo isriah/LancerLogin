@@ -453,6 +453,9 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .section-heading h2 { display: flex; gap: .55rem; align-items: center; margin: 0; font-size: 1.2rem; }
 .toolbar-end { display: flex; gap: .55rem; align-items: center; justify-content: end; }
 .update-indicator { display: inline-flex; gap: .38rem; align-items: center; min-height: 2.75rem; padding: .55rem .7rem; border: 1px solid var(--secondary); color: var(--ink); background: var(--secondary-soft); border-radius: .6rem; cursor: pointer; white-space: nowrap; }
+.contest-indicator { display: inline-flex; gap: .38rem; align-items: center; min-height: 2.75rem; padding: .55rem .7rem; border: 1px solid var(--primary); color: var(--ink); background: var(--surface-soft); border-radius: .6rem; cursor: pointer; white-space: nowrap; }
+.contest-indicator > span { width: 1.35rem; height: 1.35rem; display: grid; place-items: center; color: var(--on-primary); background: var(--primary); border-radius: 50%; font-weight: 800; }
+.reports-page .contest-report { display: none; }
 .update-indicator > span { width: 1.35rem; height: 1.35rem; display: grid; place-items: center; color: var(--on-secondary); background: var(--secondary); border-radius: 50%; }
 .live-pill { display: inline-block; padding: .25rem .48rem; color: #fff; background: #b42318; border-radius: 2rem; font-family: "Roboto",ui-sans-serif,system-ui,sans-serif; font-size: .62rem; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
 .wizard-steps .setup-finish-button { width: 100%; display: block; min-height: 2.8rem; margin-top: .9rem; padding: .7rem .9rem; border-color: var(--primary); color: var(--on-primary); text-align: center; background: var(--primary); font-weight: 800; white-space: normal; }

@@ -384,7 +384,7 @@ Release: next onboarding polish bundle.
 
 ### WU-026 — Reports filter and selector reliability
 
-Status: ready
+Status: merged (`aa985b5`)
 
 Goal: restore correct All-meetings reporting and keep leaderboard controls usable.
 Scope: diagnose and repair the All-meetings regression; add regression coverage explaining the earlier verification gap; fix Attendance-leaderboard sort-selector overflow. Preserve reporting baseline and optional/regular semantics.

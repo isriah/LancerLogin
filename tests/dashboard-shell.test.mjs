@@ -282,6 +282,10 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   assert.match(styles, /\.report-grid \{ display: grid; grid-template-columns: minmax\(0,1\.5fr\) minmax\(18rem,1fr\)/);
   assert.match(styles, /\.leaderboard-card \{ grid-row: span 2; \}/);
   assert.match(styles, /\.roster-row-actions \{ display: flex/);
+  assert.match(styles, /\.roster-row \{[^}]*minmax\(15rem,max-content\)/);
+  assert.match(styles, /\.roster-actions \{[^}]*align-items: center/);
+  assert.match(styles, /\.roster-directory \.panel-heading \{ align-items: start; flex-direction: column/);
+  assert.match(styles, /\.roster-directory \.roster-actions \{ width: 100%; justify-content: space-between/);
   assert.match(styles, /\.roster-row-actions button \{ min-height: 2\.25rem/);
   assert.match(roster, /className="roster-row-actions"/);
   assert.match(styles, /\.panel-heading \{[^}]*align-items: center/);

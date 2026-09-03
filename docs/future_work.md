@@ -265,18 +265,14 @@ Release: likely next dashboard patch bundle (candidate 0.13.1).
 
 ### WU-018 — Kiosk Wi-Fi scan authorization repair
 
-Status: in progress
-
-Owner: Codex coordinator
-Branch: codex/wu-018-wifi-scan-authorization
-Base: 7d8f07685cc4242e40cd27a9a76e0446539664a8
+Status: merged (`d3ed914`)
 
 Goal: allow an authorized local operator to rescan Wi-Fi networks after entering the kiosk settings PIN.
 Scope: diagnose and repair the NetworkManager authorization path behind the local network-settings page; preserve PIN, rate-limit, credential, and least-privilege boundaries. Do not expose saved Wi-Fi credentials or broaden arbitrary system-command access.
 Sources: Codex task **WU Idea Inbox** (NetworkManager rescan authorization failure); `docs/KIOSK.md`; `docs/SECURITY.md`.
 Acceptance: after successful local PIN entry, a supported Pi can rescan Wi-Fi without the reported NetworkManager authorization error; unauthorized and locked-out requests remain denied; network secrets are never surfaced or logged.
 Verification: `npm run verify:kiosk`, focused local-service authorization tests, and manual validation on the supported Pi.
-Release: likely next kiosk patch or feature bundle; determine after diagnosis (candidate 0.13.1 or 0.14.0).
+Release: pending user-selected kiosk patch or feature bundle (candidate 0.13.1 or 0.14.0); supported-Pi validation remains required.
 
 ## Release bundling
 

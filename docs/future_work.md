@@ -293,12 +293,12 @@ Release: next dashboard reliability bundle.
 
 ### WU-020 — Meetings form presentation polish
 
-Status: in progress
+Status: merged (`66937b1`)
 
 Owner: Codex coordinator
 Branch: codex/wu-020-meetings-form-polish
 Base: 57018bddf9f9a7ded65746c5a886abe841172435
-Task: provisioning client `client-new-thread:dbeac071-af1f-43a8-ab15-ce70b1a43861`
+Task: provisioning client `client-new-thread:dbeac071-af1f-43a8-ab15-ce70b1a43861` (recovered from a branch-owned Worktree; the task platform did not expose an addressable task ID for archival)
 
 Goal: make meeting creation and discovery controls clearer and visually consistent with the active theme.
 Scope: remove the requested Optional-meeting tooltip; theme Meetings-page checkboxes; rename the search heading to “Search Meetings.” Exclude scheduling, recurrence, and attendance-policy changes.

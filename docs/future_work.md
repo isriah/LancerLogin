@@ -416,7 +416,7 @@ Status: in progress
 Owner: Codex coordinator
 Branch: codex/wu-028-roster-control-layout
 Base: fa72a71c7ca2850f4b89311d8626b917e5a95ba1
-Task: provisioning pending
+Task: provisioning client `client-new-thread:fd6ba36b-044c-4ebc-aee9-eb7fb259bce6`
 
 Goal: keep roster rows compact and align the roster header controls.
 Scope: arrange member action buttons horizontally where space allows with responsive fallback; vertically align the shown count and Add member action. Exclude roster permissions and member-action behavior changes.

@@ -10,8 +10,8 @@ Coordinator task: `01a065cb-bd5b-7992-b770-56d5191f4e59`
 Mode: complete-all
 Execution set: WU-019, WU-020, WU-021, WU-022, WU-023, WU-024, WU-025, WU-026, WU-027, WU-028, WU-029, WU-030, WU-031
 Heartbeat: `lancerlogin-coordinator-checkpoints` (active, every five minutes)
-Last checkpoint: WU-028 was reserved for fresh provisioning. Its named branch `codex/wu-028-roster-control-layout` was recreated from and verified at reservation base `fa72a71c7ca2850f4b89311d8626b917e5a95ba1`.
-Next checkpoint: reconcile WU-028 task provisioning evidence.
+Last checkpoint: WU-028 fresh task creation returned provisioning client `client-new-thread:fd6ba36b-044c-4ebc-aee9-eb7fb259bce6` for `codex/wu-028-roster-control-layout`; Worktree setup is pending.
+Next checkpoint: make one bounded event-driven check for the WU-028 resolved task ID and branch-owned Worktree.
 User decision: none
 
 ## Checkpoint format

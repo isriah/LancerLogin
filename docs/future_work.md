@@ -480,6 +480,17 @@ Acceptance: after verified Discord setup, an unlinked active member can pair the
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused signed Discord-command, pairing-collision, authorization, audit, and conditional-Roster-column coverage.
 Release: next Discord workflow and dashboard operations bundle.
 
+### WU-033 — v0.14.0 release-gate repair
+
+Status: merged
+
+Goal: restore deterministic release verification for v0.14.0 without reducing browser or dependency-security coverage.
+Scope: update browser smoke assertions to cover the intended contest-notification and Data-management confirmation flows; bound the registry-dependent high-severity dependency audit and make its failure output actionable. Preserve the high-severity audit as a required release gate. Exclude release tagging, publication, deployment, and Pi updates.
+Sources: v0.14.0 release-blocker request; `tests-browser/dashboard-smoke.spec.ts`; `tests-browser/dashboard-mobile.spec.ts`; `.github/workflows/ci.yml`; `package.json`; `docs/DEVELOPMENT.md`.
+Acceptance: browser smoke exercises the current contest and destructive-action workflows without stale expectations; a registry outage or stalled audit terminates predictably with diagnostic output; high-severity findings still fail Verify.
+Verification: `npm run test:browser`; `npm run verify:release`; exact main-branch GitHub Verify workflow.
+Release: v0.14.0 release blocker.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

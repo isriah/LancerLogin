@@ -114,9 +114,14 @@ test("meeting actions move below meeting data on a narrow screen", async ({ page
 test("data deletion requires an exact typed confirmation", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/settings/data");
-  const deletion = page.getByRole("button", { name: "Delete roster" });
+  const roster = page.locator(".data-category").filter({ has: page.getByRole("heading", { name: "Roster", exact: true }) });
+  await roster.getByRole("button", { name: "Delete" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete Roster" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("alert")).toContainText("permanently deletes");
+  const deletion = dialog.getByRole("button", { name: "Delete roster" });
   await expect(deletion).toBeDisabled();
-  await page.getByLabel("Type DELETE ROSTER to confirm").fill("DELETE ROSTER");
+  await dialog.getByLabel("Type DELETE ROSTER to confirm").fill("DELETE ROSTER");
   await expect(deletion).toBeEnabled();
 });
 

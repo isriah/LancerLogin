@@ -34,15 +34,16 @@ test("half-width dashboard does not overflow", async ({ page }) => {
   expect(widths.scroll).toBeLessThanOrEqual(widths.client);
 });
 
-test("Reports exposes operational filters and direct contest review", async ({ page }) => {
+test("Reports keeps operational filters while pending contests route through the shell", async ({ page }) => {
   await page.goto("/reports");
   await expect(page.getByRole("heading", { name: "Reports", exact: true })).toBeVisible();
   await expect(page.getByLabel("Meeting type")).toBeVisible();
   await expect(page.getByLabel("Roster")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Contests awaiting review" })).toBeVisible();
-  await page.getByRole("button", { name: "Review contest" }).click();
-  await expect(page.getByRole("heading", { name: "Review contest" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve and mark present" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Contests awaiting review" })).toBeHidden();
+  await page.getByRole("button", { name: "1 attendance contest awaiting review. Open Home." }).click();
+  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Attendance contests" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
 });
 
 test("Reports filters completed Regular and Optional meetings without hiding All meetings", async ({ page }) => {

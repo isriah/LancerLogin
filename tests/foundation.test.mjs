@@ -183,7 +183,12 @@ test("CI runs the complete release gate and tags require that exact verified com
   const packageDocument = JSON.parse(await readFile("package.json", "utf8"));
   assert.equal(packageDocument.scripts["verify:migrations"], "node scripts/verify-d1-migrations.mjs");
   assert.match(packageDocument.scripts["verify:all"], /verify:migrations.*typecheck.*test.*build/);
-  assert.match(packageDocument.scripts["verify:release"], /verify:all.*npm audit --audit-level=high/);
+  assert.match(packageDocument.scripts["verify:release"], /verify:all.*audit:release/);
+  assert.equal(packageDocument.scripts["audit:release"], "node scripts/audit-dependencies.mjs");
+  const audit = await readFile("scripts/audit-dependencies.mjs", "utf8");
+  assert.match(audit, /audit", "--audit-level=high/);
+  assert.match(audit, /timeoutMs = 120_000/);
+  assert.match(audit, /registry may be unavailable or unresponsive/);
   const verifier = await readFile("scripts/verify-d1-migrations.mjs", "utf8");
   assert.match(verifier, /d1", "migrations", "apply"/);
   assert.match(verifier, /"--local"/);
@@ -192,6 +197,7 @@ test("CI runs the complete release gate and tags require that exact verified com
   assert.doesNotMatch(verifier, /--remote|CLOUDFLARE_API_TOKEN/);
   const ciWorkflow = await readFile(".github/workflows/ci.yml", "utf8");
   assert.match(ciWorkflow, /npm run verify:release/);
+  assert.match(ciWorkflow, /timeout-minutes: 20/);
   assert.match(ciWorkflow, /rhysd\/actionlint:1\.7\.12/);
   assert.match(ciWorkflow, /npm run test:browser/);
   const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");

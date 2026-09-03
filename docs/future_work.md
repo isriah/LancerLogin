@@ -255,18 +255,19 @@ Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-017 — Kiosk status-card presentation
 
-Status: in progress
+Status: merged (`653c78c`)
 
 Owner: Codex coordinator
 Branch: codex/wu-017-kiosk-status-card
 Base: ef5376be0adaaac7e1e0e6af48c1362e35122efd
+Task: provisioning client `client-new-thread:72feb7ed-b4b1-480a-90cc-f4cee9b7ebd0` (the task platform did not expose an addressable task ID for archival)
 
 Goal: make kiosk health state compact, readable, and centered in the Kiosks dashboard card.
 Scope: replace the healthy status line with a vertically centered status pill/bubble and remove the Kiosks-page recovery-guidance text entirely. Preserve underlying kiosk diagnostics, status data, and authorized recovery actions.
 Sources: Codex task **WU Idea Inbox** (Kiosks status and recovery text); WU-009; `docs/KIOSK.md`.
 Acceptance: healthy state appears as a vertically centered bubble, recovery-guidance copy is absent from Kiosks, and kiosk state/actions remain available and accurate.
 Verification: `npm run verify:dashboard` and focused browser visual coverage.
-Release: likely next dashboard patch bundle (candidate 0.13.1).
+Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-018 — Kiosk Wi-Fi scan authorization repair
 

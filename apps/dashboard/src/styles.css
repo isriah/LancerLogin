@@ -395,9 +395,11 @@ main[aria-busy="true"] .setup-status { display: none; }
 .kiosk-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
 .kiosk-grid .task-card { min-width: 0; }
 .kiosk-state { display: flex; align-items: center; flex-wrap: wrap; gap: .45rem .7rem; }
+.kiosk-state-healthy { justify-content: center; min-height: 3.1rem; }
 .status-pill { display: inline-block; width: fit-content; padding: .35rem .75rem; border-radius: 2rem; font-size: .72rem; font-weight: 800; white-space: nowrap; }
 .status-pill.online { color: #075c43; background: #d7f5e9; }
 .status-pill.offline { color: #843a32; background: #fae4e1; }
+.kiosk-health-pill { display: inline-flex; align-items: center; min-height: 2.15rem; padding: .35rem .9rem; }
 .kiosk-grid dl { display: grid; gap: .4rem; }
 .kiosk-grid dl div { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem 0; border-bottom: 1px solid var(--line); }
 .kiosk-grid dt { color: var(--muted); }

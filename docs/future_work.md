@@ -270,7 +270,7 @@ Release: v0.13.1 dashboard and kiosk reliability refinement; supported-Pi valida
 
 ### WU-019 — Contest-resolution feedback
 
-Status: in progress
+Status: merged (`116b692`)
 
 Owner: Codex coordinator
 Branch: codex/wu-019-contest-resolution-feedback

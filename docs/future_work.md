@@ -191,7 +191,7 @@ Scope: fix the empty result for “All meetings”; treat an unchecked existing 
 Sources: Codex task **WU Idea Inbox** (Reports and meeting-type items); `docs/DASHBOARD.md`; `docs/DECISIONS.md`.
 Acceptance: operators can create or edit an Optional meeting using the existing setting, filter Reports by All, Regular, or Optional meetings, never see test meetings in Reports, and use the affected controls without overflow or cramped identity text.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and focused browser coverage for reports filters and responsive controls.
-Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
+Release: v0.13.1 dashboard and kiosk reliability refinement.
 
 ### WU-012 — Member participation start dates
 
@@ -202,7 +202,7 @@ Scope: add an editable member start date, defaulted to the roster-added date; ex
 Sources: Codex task **WU Idea Inbox** (member start date); `docs/DASHBOARD.md`; WU-006.
 Acceptance: an authorized operator can view and change a member’s start date, and every relevant member/detail/report surface omits pre-start meetings from that member’s attendance obligations without deleting data.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, `npm run verify:migrations`, and focused tests for defaulting and reporting boundaries.
-Release: pending user-selected feature bundle (candidate 0.14.0).
+Release: v0.13.1 dashboard and kiosk reliability refinement.
 
 ### WU-013 — Future-meeting attendance semantics
 
@@ -213,7 +213,7 @@ Scope: replace pre-start “Absent” states with a neutral muted state; suppres
 Sources: Codex task **WU Idea Inbox** (future absence state and Discord notice); `docs/DECISIONS.md`; `docs/DASHBOARD.md`.
 Acceptance: members are not labeled absent before a meeting starts, no Discord absence notice is sent for an unstarted meeting, and current/past meeting attendance behavior remains unchanged.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and focused notification/status tests.
-Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
+Release: v0.13.1 dashboard and kiosk reliability refinement.
 
 ### WU-014 — Calendar-led attendance navigation
 
@@ -224,7 +224,7 @@ Scope: show a Home-style calendar view above the Attendance meeting selector; ro
 Sources: Codex task **WU Idea Inbox** (calendar selection and Attendance calendar); `docs/DASHBOARD.md`.
 Acceptance: the Attendance page exposes a usable calendar above its selector, and selecting a meeting follows the approved future versus in-progress/past destination rule at desktop and mobile widths.
 Verification: `npm run verify:dashboard` and focused browser route/responsive coverage.
-Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
+Release: v0.13.1 dashboard and kiosk reliability refinement.
 
 ### WU-015 — Dashboard visual stability
 
@@ -235,7 +235,7 @@ Scope: replace layout-shifting loading cards with animated overlays that do not 
 Sources: Codex task **WU Idea Inbox** (loading and gradient items); `docs/DASHBOARD.md`.
 Acceptance: loading an affected page does not move its rendered layout, the overlay is visibly animated and accessible, and primary-theme gradients do not shift between dashboard routes.
 Verification: `npm run verify:dashboard` and desktop/mobile browser visual smoke checks.
-Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
+Release: v0.13.1 dashboard and kiosk reliability refinement.
 
 ### WU-016 — Dashboard card alignment refinement
 
@@ -251,7 +251,7 @@ Scope: perform a focused Data-page alignment/sizing pass; align shared card head
 Sources: Codex task **WU Idea Inbox** (Data, card alignment, setup button, and roster Active items); `docs/DASHBOARD.md`.
 Acceptance: affected cards use consistent vertical alignment at desktop and responsive widths, the Setup action is styled as a themed button, and roster entries no longer display the requested Active status.
 Verification: `npm run verify:dashboard` and focused desktop/mobile visual checks.
-Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
+Release: v0.13.1 dashboard and kiosk reliability refinement.
 
 ### WU-017 — Kiosk status-card presentation
 
@@ -267,7 +267,7 @@ Scope: replace the healthy status line with a vertically centered status pill/bu
 Sources: Codex task **WU Idea Inbox** (Kiosks status and recovery text); WU-009; `docs/KIOSK.md`.
 Acceptance: healthy state appears as a vertically centered bubble, recovery-guidance copy is absent from Kiosks, and kiosk state/actions remain available and accurate.
 Verification: `npm run verify:dashboard` and focused browser visual coverage.
-Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
+Release: v0.13.1 dashboard and kiosk reliability refinement.
 
 ### WU-018 — Kiosk Wi-Fi scan authorization repair
 
@@ -278,7 +278,7 @@ Scope: diagnose and repair the NetworkManager authorization path behind the loca
 Sources: Codex task **WU Idea Inbox** (NetworkManager rescan authorization failure); `docs/KIOSK.md`; `docs/SECURITY.md`.
 Acceptance: after successful local PIN entry, a supported Pi can rescan Wi-Fi without the reported NetworkManager authorization error; unauthorized and locked-out requests remain denied; network secrets are never surfaced or logged.
 Verification: `npm run verify:kiosk`, focused local-service authorization tests, and manual validation on the supported Pi.
-Release: pending user-selected kiosk patch or feature bundle (candidate 0.13.1 or 0.14.0); supported-Pi validation remains required.
+Release: v0.13.1 dashboard and kiosk reliability refinement; supported-Pi validation remains required.
 
 ## Release bundling
 

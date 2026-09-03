@@ -206,7 +206,11 @@ Release: pending user-selected feature bundle (candidate 0.14.0).
 
 ### WU-013 — Future-meeting attendance semantics
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-013-future-attendance
+Base: d8a10b8d3175de6fb5780e0434358ac9b7538a76
 
 Goal: prevent future meetings from presenting members as absent or generating premature absence notifications.
 Scope: replace pre-start “Absent” states with a neutral muted state; suppress Discord absence notices until a meeting has started. Align dashboard status and notification eligibility without changing outcomes for current or past meetings.

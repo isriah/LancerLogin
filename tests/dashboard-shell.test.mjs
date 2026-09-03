@@ -71,14 +71,21 @@ test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", 
   assert.match(source, /Allow anonymous usage reporting/);
 });
 
-test("live branding stores an image locally and applies colors with a browser theme preference", async () => {
+test("guided setup keeps branding local and makes its compact progress accessible", async () => {
   const workspace = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   const entry = await readFile("apps/dashboard/src/main.tsx", "utf8");
   const settings = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
   const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   assert.match(workspace, /accept="image\/png,image\/jpeg,image\/webp"/);
   assert.match(workspace, /file\.size > 131_072/);
-  assert.match(workspace, /stored in D1/);
+  assert.doesNotMatch(workspace, /stored in D1/);
+  assert.doesNotMatch(workspace, /Light or dark mode is a personal browser preference/);
+  assert.match(workspace, /className="setup-progress" role="progressbar"/);
+  assert.match(workspace, /aria-label="Guided setup progress"/);
+  assert.match(styles, /\.setup-logo-file input\[type="file"\]::file-selector-button/);
+  assert.match(styles, /\.wizard-panel \.logo-backdrop-options \+ \.color-grid/);
+  assert.match(styles, /\.wizard-panel \.setup-branding-save \{ margin-top: \.45rem/);
   assert.match(entry, /brandTheme\(branding\.primaryColor, branding\.secondaryColor\)/);
   assert.match(entry, /data-theme=\{theme\}/);
   assert.match(entry, /lancerlogin-theme/);

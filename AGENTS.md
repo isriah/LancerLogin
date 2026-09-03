@@ -6,6 +6,17 @@ This file supplements the repository documentation and is permanent guidance for
 
 Read and follow [docs/future_work.md](docs/future_work.md) before recording future work, planning product work, or beginning a selected work unit.
 
+## Coordinator execution
+
+For an explicitly authorized multi-work-unit coordinator run, treat the selected ready units at the start of the run as its execution set. Use the maximum safe parallelism: separate only the units with material overlap or a real dependency into later cohorts. Integration remains serial even when implementation is parallel. Do not describe a run as “serial” merely because integration happens one branch at a time.
+
+- Before reserving work, state the selected units, the first cohort, and why any units must wait. If the selection is `all`, it means every unit that is `ready` when the run begins; report any units excluded for another status.
+- Reserve a unit only when its implementation task is about to be created. Each reserved unit must receive a fresh, separately named Worktree implementation task and its own recorded task ID, branch, and base commit. Never reuse another unit’s implementation task, agent, or worktree.
+- If Worktree/task creation fails, immediately record the failure and restore the unit to `ready` unless a genuine blocker requires `blocked`; do not leave a unit stranded as `in progress`.
+- For each cohort, wait for every implementation task's final handoff, then integrate completed branches one at a time, update the ledger, and archive the finalized implementation task before starting dependent work from the updated `main` base.
+- Do not end an authorized run, or describe it as complete, while a selected unit is still `ready` or `in progress`. Continue with the next safe cohort until every selected unit is `merged`, `blocked`, or `failed`. If the task platform interrupts execution, say so explicitly, preserve accurate ledger state, and on continuation reconcile the recorded task IDs and branches before creating anything new.
+- A blocked or failed unit does not prevent unrelated selected units from continuing. Report its evidence and continue with the next safe cohort; ask the user only when the remaining work needs a material decision.
+
 ## Project orientation
 
 Before a change, identify the affected surface and read the relevant documentation:

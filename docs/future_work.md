@@ -444,11 +444,7 @@ Release: next dashboard workflow bundle.
 
 ### WU-031 — Settings hierarchy and copy cleanup
 
-Status: in progress
-
-Owner: Codex coordinator
-Branch: codex/wu-031-settings-hierarchy-cleanup
-Base: 57018bddf9f9a7ded65746c5a886abe841172435
+Status: ready
 
 Goal: make Settings navigation clearer while removing the requested redundant helper copy.
 Scope: remove the listed Configuration, Integrations, and Organization cards; show the parent Settings item with an active bubble while a subpage is selected. Exclude setting behavior, authorization, and secret-storage changes.

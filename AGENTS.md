@@ -6,6 +6,15 @@ This file supplements the repository documentation and is permanent guidance for
 
 Read and follow [docs/future_work.md](docs/future_work.md) before recording future work, planning product work, or beginning a selected work unit.
 
+### Idea intake
+
+`docs/idea_inbox.md` is the durable, canonical intake for untriaged observations, defects, feature requests, and documentation ideas. The Codex task titled **WU Idea Inbox** is the conversational front door for that file, not the source of record.
+
+- In the **WU Idea Inbox** task, when the user supplies an idea, append a new raw entry to `docs/idea_inbox.md` and commit that intake-only change. Preserve the user's request; do not investigate, group, create a work unit, modify product code, or change deployment state there.
+- Assign each entry the next `IN-###` ID and leave it `untriaged`. A single message may be one raw entry even when it contains several related thoughts; inbox processing decides whether to split it.
+- Only `$lancerlogin-inbox-process`, running in the coordinator task, may change an intake entry from `untriaged` to `covered`, `promoted`, or `discarded`. It records the corresponding WU IDs or rationale and commits those status changes with the ledger update.
+- Do not use task-message history, a task preview, or an assistant acknowledgement as evidence that an idea was captured. If an inbox message cannot be recorded in `docs/idea_inbox.md`, say so and ask the user to retry; never silently accept it.
+
 ## Coordinator execution
 
 For an explicitly authorized multi-work-unit coordinator run, treat the selected ready units at the start of the run as its execution set. Use the maximum safe parallelism: separate only the units with material overlap or a real dependency into later cohorts. Integration remains serial even when implementation is parallel. Do not describe a run as “serial” merely because integration happens one branch at a time.

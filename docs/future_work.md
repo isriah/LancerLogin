@@ -10,7 +10,7 @@ This file is LancerLogin's authoritative, organized list of planned work. It rep
 - Complete a selected unit through the relevant focused checks, documentation updates, commit, and merge to `main`. A merged unit does not imply a release, private deployment, or Pi update.
 - Keep finished units as a short record with their merged commit or release reference. Remove obsolete detail only after it is preserved in issue history, release notes, or another durable record.
 
-`docs/feedback/` remains a historical intake record for screenshots and raw observations. Move or synthesize actionable items into a work unit here; do not treat dated feedback files as the execution backlog.
+`docs/idea_inbox.md` is the live, durable raw-intake record. Process its `untriaged` entries into work units here through `$lancerlogin-inbox-process`; do not treat it as an execution backlog. `docs/feedback/` remains a historical record for screenshots and prior observations.
 
 ## Work-unit format
 

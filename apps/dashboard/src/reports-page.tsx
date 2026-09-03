@@ -2,25 +2,25 @@ import { useEffect, useMemo, useState } from "react";
 import { api, apiBaseUrl } from "./dashboard-api";
 import { RouteLink, usePath } from "./router";
 
-type Meeting = { id: string; title: string; startsAt: string; endsAt: string; isTest?: boolean | number };
+type Meeting = { id: string; title: string; startsAt: string; endsAt: string; required: boolean | number; isTest?: boolean | number };
 type MeetingResponse = { meetings: Meeting[]; attendanceReportingStartsOn?: string | null };
 type Row = { memberId: string; externalId: string; firstName: string; lastName: string; disposition: "present" | "active" | "absent" | "excused" | "not_required" };
 type Contest = { meetingId: string; memberId: string; firstName: string; lastName: string; meetingTitle: string; status: "open" | "approved" | "rejected" | "reviewed"; createdAt: string };
 type RosterMember = { id: string; active: boolean | number };
 type MemberStat = { memberId: string; externalId: string; firstName: string; lastName: string; present: number; primaryTotal: number; adjustedTotal: number; history: { meeting: Meeting; disposition: Row["disposition"] }[] };
-type SavedView = { range: string; from: string; to: string; meetingType: "all" | "regular" | "test"; roster: "active" | "all" };
+type SavedView = { range: string; from: string; to: string; meetingType: "all" | "regular" | "optional"; roster: "active" | "all" };
 
 const savedViewKey = "lancerlogin-reports-view";
 const percent = (top: number, bottom: number) => bottom ? Math.round(top / bottom * 100) : 0;
-const meetingIsTest = (meeting: Meeting) => Boolean(meeting.isTest);
+const meetingIsOptional = (meeting: Meeting) => !Boolean(meeting.required);
 
 export function ReportsPage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]); const [rows, setRows] = useState<Record<string, Row[]>>({}); const [roster, setRoster] = useState<Record<string, boolean>>({}); const [contests, setContests] = useState<Contest[]>([]); const [notice, setNotice] = useState("Loading reports…");
-  const { path, navigate } = usePath(); const [sort, setSort] = useState<"rate" | "first" | "last">("rate"); const [range, setRange] = useState("10"); const [from, setFrom] = useState(""); const [to, setTo] = useState(""); const [meetingType, setMeetingType] = useState<"all" | "regular" | "test">("all"); const [rosterFilter, setRosterFilter] = useState<"active" | "all">("active"); const [baseline, setBaseline] = useState(""); const [useBaseline, setUseBaseline] = useState(false); const [reviewing, setReviewing] = useState<Contest>(); const [reviewNote, setReviewNote] = useState(""); const [reviewBusy, setReviewBusy] = useState(false);
+  const { path, navigate } = usePath(); const [sort, setSort] = useState<"rate" | "first" | "last">("rate"); const [range, setRange] = useState("10"); const [from, setFrom] = useState(""); const [to, setTo] = useState(""); const [meetingType, setMeetingType] = useState<"all" | "regular" | "optional">("all"); const [rosterFilter, setRosterFilter] = useState<"active" | "all">("active"); const [baseline, setBaseline] = useState(""); const [useBaseline, setUseBaseline] = useState(false); const [reviewing, setReviewing] = useState<Contest>(); const [reviewNote, setReviewNote] = useState(""); const [reviewBusy, setReviewBusy] = useState(false);
 
   async function load() {
     const [meetingResult, rosterResult, contestResult] = await Promise.all([api<MeetingResponse>("/meetings"), api<{ members: RosterMember[] }>("/admin/members"), api<{ contests: Contest[] }>("/discord/contests")]);
-    const completed = meetingResult.meetings.filter((meeting) => Date.parse(meeting.endsAt) <= Date.now()).sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt));
+    const completed = meetingResult.meetings.filter((meeting) => !meeting.isTest && Date.parse(meeting.endsAt) <= Date.now()).sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt));
     const results = await Promise.all(completed.map(async (meeting) => [meeting.id, (await api<{ attendance: Row[] }>(`/attendance?meetingId=${encodeURIComponent(meeting.id)}&includeInactive=1`)).attendance] as const));
     const reportingBaseline = meetingResult.attendanceReportingStartsOn ?? "";
     setMeetings(completed); setRows(Object.fromEntries(results)); setRoster(Object.fromEntries(rosterResult.members.map((member) => [member.id, Boolean(member.active)]))); setContests(contestResult.contests.filter((contest) => contest.status === "open")); setBaseline(reportingBaseline); setUseBaseline(Boolean(reportingBaseline)); setNotice("");
@@ -28,7 +28,7 @@ export function ReportsPage() {
   useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, []);
 
   const effectiveFrom = useBaseline ? baseline : from;
-  const filteredMeetings = useMemo(() => meetings.filter((meeting) => (!effectiveFrom || meeting.startsAt.slice(0, 10) >= effectiveFrom) && (!to || meeting.startsAt.slice(0, 10) <= to) && (meetingType === "all" || meetingType === "test" ? meetingIsTest(meeting) : !meetingIsTest(meeting))), [meetings, effectiveFrom, to, meetingType]);
+  const filteredMeetings = useMemo(() => meetings.filter((meeting) => (!effectiveFrom || meeting.startsAt.slice(0, 10) >= effectiveFrom) && (!to || meeting.startsAt.slice(0, 10) <= to) && (meetingType === "all" || meetingType === "optional" ? meetingIsOptional(meeting) : !meetingIsOptional(meeting))), [meetings, effectiveFrom, to, meetingType]);
   const members = useMemo(() => {
     const values = new Map<string, MemberStat>();
     for (const meeting of filteredMeetings) for (const row of rows[meeting.id] ?? []) {

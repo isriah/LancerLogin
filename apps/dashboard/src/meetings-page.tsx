@@ -28,7 +28,7 @@ function MeetingFields({ value, onChange }: { value: MeetingForm; onChange: (val
     <label>Title<input required maxLength={120} value={value.title} onChange={(event) => onChange({ ...value, title: event.target.value })} /></label>
     <div className="form-grid"><label>Date<input required type="date" value={value.date} onChange={(event) => changeDate(event.target.value)} /></label><label>Start time<input required type="time" value={value.startTime} onChange={(event) => changeStart(event.target.value)} /></label><label>End time<input required type="time" value={value.endTime} onChange={(event) => onChange({ ...value, endTime: event.target.value })} /></label></div>
     <label>Notes <span>(optional)</span><textarea rows={4} maxLength={2000} value={value.notes} onChange={(event) => onChange({ ...value, notes: event.target.value })} /></label>
-    <div className="inline-options"><label><input type="checkbox" checked={value.required} onChange={(event) => onChange({ ...value, required: event.target.checked })} /> Attendance required</label></div>
+    <div className="inline-options"><label><input type="checkbox" checked={value.required} onChange={(event) => onChange({ ...value, required: event.target.checked })} /> Attendance required <span className="field-help">Uncheck for an Optional meeting.</span></label></div>
   </>;
 }
 

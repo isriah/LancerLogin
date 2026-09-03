@@ -255,7 +255,11 @@ Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-017 — Kiosk status-card presentation
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-017-kiosk-status-card
+Base: ef5376be0adaaac7e1e0e6af48c1362e35122efd
 
 Goal: make kiosk health state compact, readable, and centered in the Kiosks dashboard card.
 Scope: replace the healthy status line with a vertically centered status pill/bubble and remove the Kiosks-page recovery-guidance text entirely. Preserve underlying kiosk diagnostics, status data, and authorized recovery actions.

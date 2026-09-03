@@ -315,7 +315,11 @@ Release: next scheduling simplification bundle.
 
 ### WU-022 — Discord calendar-sync resilience
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-022-discord-calendar-sync
+Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
 
 Goal: make Discord bulk-event synchronization recover predictably from missing permissions and rate limits.
 Scope: diagnose the reported 403 and 429 paths; provide actionable missing-permission feedback and compliant rate-limit/backoff handling. Exclude permission escalation, policy bypass, and unrelated Discord feature changes.
@@ -326,7 +330,11 @@ Release: next integration reliability bundle.
 
 ### WU-023 — Dashboard update-flow polish
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-023-dashboard-update-flow
+Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
 
 Goal: make dashboard update actions easier to follow without weakening deployment safeguards.
 Scope: align the dashboard update card with kiosk-update presentation; move its action into the first card; download backups without opening a blank tab; open GitHub in a new tab. Preserve backup-before-update and manual private-workflow authorization.
@@ -337,7 +345,11 @@ Release: next operations polish bundle.
 
 ### WU-024 — Data-management action UX
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-024-data-management-ux
+Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
 
 Goal: make Data management compact and make restore/delete actions deliberate and understandable.
 Scope: reduce the requested card height; style file selection; replace exposed file selectors and destructive controls with Restore/Delete buttons and validated confirmation modals; remove the requested guidance and reset-onboarding cards. Preserve category scope, warnings, and typed confirmations.
@@ -348,7 +360,11 @@ Release: next data-management UX bundle.
 
 ### WU-025 — Guided-setup refinement
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-025-guided-setup-refinement
+Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
 
 Goal: make guided setup more compact and clearer about progress.
 Scope: refine the listed logo/file, color, copy, spacing, and progress presentation; add a top percentage progress bar. Preserve persisted cross-admin setup state, accessibility, and setup-step behavior.

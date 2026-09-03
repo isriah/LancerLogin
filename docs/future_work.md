@@ -283,7 +283,7 @@ Scope: validate a required review reason before a contest resolution is submitte
 Sources: `docs/idea_inbox.md` (IN-019); `apps/dashboard/src/reports-page.tsx`; `apps/api/src/worker.mjs`.
 Acceptance: an operator cannot accidentally leave a contest open without seeing why; valid resolutions retain their current behavior.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused contest-resolution coverage.
-Release: next dashboard reliability bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-020 — Meetings form presentation polish
 
@@ -299,7 +299,7 @@ Scope: remove the requested Optional-meeting tooltip; theme Meetings-page checkb
 Sources: `docs/idea_inbox.md` (IN-020, IN-026); `apps/dashboard/src/meetings-page.tsx`; `docs/DASHBOARD.md`.
 Acceptance: the listed controls use the active theme and requested labels/copy, without changing meeting behavior.
 Verification: `npm run verify:dashboard`; focused Meetings form and theme coverage.
-Release: next dashboard polish bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-021 — Disable meeting templates
 
@@ -316,7 +316,7 @@ Scope: disable template selection, creation, and use in product workflows while 
 Sources: `docs/idea_inbox.md` (IN-021); WU-008; `apps/dashboard/src/meetings-page.tsx`; `apps/api/migrations/0017_meeting_templates.sql`.
 Acceptance: operators cannot create or apply templates through the dashboard, and existing meetings remain unchanged.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and focused template-flow coverage.
-Release: next scheduling simplification bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-022 — Discord calendar-sync resilience
 
@@ -332,7 +332,7 @@ Scope: diagnose the reported 403 and 429 paths; provide actionable missing-permi
 Sources: `docs/idea_inbox.md` (IN-022); `apps/api/src/integration-workflows.mjs`; `apps/api/src/worker.mjs`; `docs/DECISIONS.md`.
 Acceptance: supported sync attempts distinguish configuration/permission failures from retryable rate limits, respect provider retry guidance, and expose no secrets.
 Verification: `npm run verify:api`; mocked Discord 403/429 coverage; supported-server manual validation.
-Release: next integration reliability bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-023 — Dashboard update-flow polish
 
@@ -348,7 +348,7 @@ Scope: align the dashboard update card with kiosk-update presentation; move its 
 Sources: `docs/idea_inbox.md` (IN-023); `apps/dashboard/src/updates-page.tsx`; `docs/DASHBOARD.md`; `docs/BOOTSTRAPPING.md`.
 Acceptance: the updated layout follows the requested navigation behavior and cannot dispatch deployment or bypass the backup requirement.
 Verification: `npm run verify:dashboard`; focused browser checks for backup/download and external-link behavior.
-Release: next operations polish bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-024 — Data-management action UX
 
@@ -364,7 +364,7 @@ Scope: reduce the requested card height; style file selection; replace exposed f
 Sources: `docs/idea_inbox.md` (IN-024, IN-033); `apps/dashboard/src/data-settings.tsx`; `docs/BACKUP-RESTORE.md`; `docs/DECISIONS.md`.
 Acceptance: restore and destructive actions remain explicitly confirmed and correctly scoped, while the listed UI clutter is absent.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused restore/delete confirmation coverage.
-Release: next data-management UX bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-025 — Guided-setup refinement
 
@@ -380,7 +380,7 @@ Scope: refine the listed logo/file, color, copy, spacing, and progress presentat
 Sources: `docs/idea_inbox.md` (IN-025); `apps/dashboard/src/setup-workspace.tsx`; `docs/DASHBOARD.md`; `docs/DECISIONS.md`.
 Acceptance: the requested redundant copy/status elements are absent, controls are styled consistently, and progress is clearly visible without changing setup completion semantics.
 Verification: `npm run verify:dashboard`; focused guided-setup and responsive browser coverage.
-Release: next onboarding polish bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-026 — Reports filter and selector reliability
 
@@ -391,7 +391,7 @@ Scope: diagnose and repair the All-meetings regression; add regression coverage 
 Sources: `docs/idea_inbox.md` (IN-027, IN-028); WU-011; `apps/dashboard/src/reports-page.tsx`; `docs/DASHBOARD.md`.
 Acceptance: All, Regular, and Optional filters return their intended completed meetings, selector controls do not overflow at supported widths, and automated coverage catches the reported regression.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused report filter and responsive browser coverage.
-Release: next dashboard reliability bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-027 — Attendance calendar spacing
 
@@ -407,7 +407,7 @@ Scope: add the missing vertical spacing only. Exclude calendar routing, meeting 
 Sources: `docs/idea_inbox.md` (IN-029); `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/styles.css`.
 Acceptance: calendar and card surfaces have a consistent visible gap at desktop and mobile widths.
 Verification: `npm run verify:dashboard`; focused responsive visual checks.
-Release: next dashboard polish bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-028 — Roster control layout
 
@@ -423,7 +423,7 @@ Scope: arrange member action buttons horizontally where space allows with respon
 Sources: `docs/idea_inbox.md` (IN-030, IN-031); `apps/dashboard/src/roster-page.tsx`; `apps/dashboard/src/styles.css`.
 Acceptance: supported desktop rows are not unnecessarily tall, header controls align, and narrow layouts remain usable.
 Verification: `npm run verify:dashboard`; focused desktop/mobile roster visual checks.
-Release: next dashboard polish bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-029 — Compact dashboard-access controls
 
@@ -440,7 +440,7 @@ Scope: replace oversized visual radio selectors with compact toggle-style contro
 Sources: `docs/idea_inbox.md` (IN-032); `apps/dashboard/src/roster-page.tsx`; `docs/DASHBOARD.md`; `docs/DECISIONS.md`.
 Acceptance: access role selection is compact, keyboard-accessible, and produces the same saved role/access outcomes.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused access-control accessibility coverage.
-Release: next settings polish bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-030 — Contest-review navigation and notification
 
@@ -451,7 +451,7 @@ Scope: remove the Reports pending-contests card; retain contest review on the re
 Sources: `docs/idea_inbox.md` (IN-034); WU-003; WU-019; `apps/dashboard/src/reports-page.tsx`; `apps/dashboard/src/update-indicator.tsx`.
 Acceptance: pending contests are discoverable from the shell and reviewable from their meeting, while Reports no longer contains the card.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused contest navigation/notification coverage.
-Release: next dashboard workflow bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-031 — Settings hierarchy and copy cleanup
 
@@ -467,7 +467,7 @@ Scope: remove the listed Configuration, Integrations, and Organization cards; sh
 Sources: `docs/idea_inbox.md` (IN-035, IN-036, IN-037, IN-038); `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/configuration-settings.tsx`; `apps/dashboard/src/integration-settings.tsx`; `apps/dashboard/src/organization-settings.tsx`.
 Acceptance: the specified cards are absent and Settings/subpage navigation communicates hierarchy at desktop and responsive widths.
 Verification: `npm run verify:dashboard`; focused settings-navigation accessibility and visual coverage.
-Release: next settings polish bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-032 — Discord self-pairing and roster visibility
 
@@ -478,7 +478,7 @@ Scope: add a signed Discord `/pair <member-id>` command that links the invoking 
 Sources: `docs/idea_inbox.md` (IN-039, IN-040); `docs/INTEGRATIONS.md`; `docs/DASHBOARD.md`; `docs/SECURITY.md`; `apps/api/src/index.ts`; `apps/dashboard/src/roster-page.tsx`.
 Acceptance: after verified Discord setup, an unlinked active member can pair their own Discord account using their member ID; invalid, unknown, inactive, and already-linked IDs receive clear non-disclosing feedback; no `/pair` request can reassign an existing member or Discord account; Roster shows the paired Discord-ID column only while Discord is configured.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused signed Discord-command, pairing-collision, authorization, audit, and conditional-Roster-column coverage.
-Release: next Discord workflow and dashboard operations bundle.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-033 — v0.14.0 release-gate repair
 
@@ -489,7 +489,7 @@ Scope: update browser smoke assertions to cover the intended contest-notificatio
 Sources: v0.14.0 release-blocker request; `tests-browser/dashboard-smoke.spec.ts`; `tests-browser/dashboard-mobile.spec.ts`; `.github/workflows/ci.yml`; `package.json`; `docs/DEVELOPMENT.md`.
 Acceptance: browser smoke exercises the current contest and destructive-action workflows without stale expectations; a registry outage or stalled audit terminates predictably with diagnostic output; high-severity findings still fail Verify.
 Verification: `npm run test:browser`; `npm run verify:release`; exact main-branch GitHub Verify workflow.
-Release: v0.14.0 release blocker.
+Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ## Release bundling
 

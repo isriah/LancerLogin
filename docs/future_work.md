@@ -184,18 +184,14 @@ Release: v0.13.0 roster, scheduling, and kiosk operations; requires follow-on wo
 
 ### WU-011 — Reports meeting-type correctness
 
-Status: in progress
-
-Owner: Codex coordinator
-Branch: codex/wu-011-reports-meeting-types
-Base: c75c70467f7f1cbdf797273517bf59a6163174df
+Status: merged (`b7d8bb0`)
 
 Goal: make Reports meeting filters accurately represent every supported meeting type and consistently return matching data.
 Scope: fix the empty result for “All meetings”; treat an unchecked existing “attendance required” setting as the first-class Optional meeting type in meeting creation/editing and Reports; exclude test meetings from Reports; correct the crowded member-name/ID presentation and sort-control overflow. No new meeting-type storage field or checkbox is introduced.
 Sources: Codex task **WU Idea Inbox** (Reports and meeting-type items); `docs/DASHBOARD.md`; `docs/DECISIONS.md`.
 Acceptance: operators can create or edit an Optional meeting using the existing setting, filter Reports by All, Regular, or Optional meetings, never see test meetings in Reports, and use the affected controls without overflow or cramped identity text.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and focused browser coverage for reports filters and responsive controls.
-Release: likely next dashboard patch bundle (candidate 0.13.1).
+Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-012 — Member participation start dates
 

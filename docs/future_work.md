@@ -264,7 +264,12 @@ Release: v0.13.1 dashboard and kiosk reliability refinement; supported-Pi valida
 
 ### WU-019 — Contest-resolution feedback
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-019-contest-resolution-feedback
+Base: 5b0ee40a334cd2b03faf0f4c445248dfab14298a
+Task: provisioning pending
 
 Goal: make contest review failures visible and actionable to an operator.
 Scope: validate a required review reason before a contest resolution is submitted and present clear feedback if it is missing or a resolution fails. Preserve contest policy, audit history, and existing approval outcomes.

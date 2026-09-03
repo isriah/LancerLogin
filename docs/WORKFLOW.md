@@ -71,6 +71,7 @@ Scheduled tasks are for stable, periodic work such as a daily CI review, a relea
 
 ## Skills
 
+- `$ll-start`: orient or resume a task, triage untriaged ideas into a proposal, and present the best current integration, development, or release decision without executing it.
 - `$ll-wu-create`: turn a request into a proposed WU; no product implementation.
 - `$ll-inbox-process`: triage and promote approved inbox entries.
 - `$ll-wu-develop`: implement one selected WU.

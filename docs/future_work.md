@@ -228,14 +228,14 @@ Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-015 — Dashboard visual stability
 
-Status: ready
+Status: merged (`53255da`)
 
 Goal: eliminate visual jumps during navigation and keep the themed background visually calm across pages.
 Scope: replace layout-shifting loading cards with animated overlays that do not displace page content; keep the primary-theme gradient stable while switching pages. Apply the loading treatment consistently to comparable dashboard loading states.
 Sources: Codex task **WU Idea Inbox** (loading and gradient items); `docs/DASHBOARD.md`.
 Acceptance: loading an affected page does not move its rendered layout, the overlay is visibly animated and accessible, and primary-theme gradients do not shift between dashboard routes.
 Verification: `npm run verify:dashboard` and desktop/mobile browser visual smoke checks.
-Release: likely next dashboard patch bundle (candidate 0.13.1).
+Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-016 — Dashboard card alignment refinement
 

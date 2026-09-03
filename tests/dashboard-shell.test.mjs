@@ -287,6 +287,16 @@ test("reports are an operational workspace with filters, trend, saved views, and
   assert.match(styles, /\.report-filters/);
 });
 
+test("contest review requires a reason and keeps failures beside the unresolved contest", async () => {
+  const reports = await readFile("apps/dashboard/src/reports-page.tsx", "utf8");
+  assert.match(reports, /const \[reviewError, setReviewError\] = useState\(""\)/);
+  assert.match(reports, /A review reason is required before resolving this contest\./);
+  assert.match(reports, /reviewNote: trimmedReviewNote/);
+  assert.match(reports, /Contest resolution failed: \$\{message\}/);
+  assert.match(reports, /Review reason<textarea[^>]+required aria-invalid=\{Boolean\(reviewError\)\}/);
+  assert.match(reports, /id="contest-review-reason-error"[^>]+role="alert"/);
+});
+
 test("dashboard cards keep their spacing and operational actions aligned", async () => {
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");

@@ -881,6 +881,10 @@ test("Operators can list and resolve Discord attendance contests", async () => {
   const listed = await worker.fetch(request("/discord/contests?meetingId=meeting-1", undefined, { cookie }), env);
   assert.equal(listed.status, 200);
   assert.equal((await listed.json() as { contests: unknown[] }).contests.length, 1);
+  const missingReason = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved", reviewNote: "   " }, { cookie }), env);
+  assert.equal(missingReason.status, 400);
+  assert.deepEqual(await missingReason.json(), { error: "A review reason is required before resolving this contest" });
+  assert.equal(database.batches.length, 0);
   const resolved = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved", reviewNote: "Member showed the Operator a kiosk error." }, { cookie }), env);
   assert.equal(resolved.status, 200);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("UPDATE discord_attendance_contests")));

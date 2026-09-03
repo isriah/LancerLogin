@@ -121,6 +121,7 @@ test("Operator workspace exposes kiosk monitoring without an Attendance contest-
 
 test("data controls expose separate backup, restore, and deletion per category", async () => {
   const source = await readFile("apps/dashboard/src/data-settings.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   for (const scope of ["meetings", "roster", "installation"]) {
     assert.match(source, new RegExp(`${scope}: \\{ title:`));
   }
@@ -130,6 +131,8 @@ test("data controls expose separate backup, restore, and deletion per category",
   assert.match(source, /RESTORE \$\{scope\.toUpperCase\(\)\}/);
   assert.match(source, /Sensitive backup/);
   assert.match(source, /id=\{`data-error-\$\{scope\}`\} className="inline-messages error" role="alert"/);
+  assert.match(styles, /\.data-category \{[^}]*align-items: center/);
+  assert.match(styles, /\.data-control \{[^}]*align-content: center/);
 });
 
 test("dashboard uses distinct routes and keeps roster accounts together", async () => {
@@ -252,6 +255,7 @@ test("reports are an operational workspace with filters, trend, saved views, and
 test("dashboard cards keep their spacing and operational actions aligned", async () => {
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
+  const setup = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
   assert.match(styles, /--card-padding: 1\.35rem/);
   assert.match(styles, /\.kiosk-monitor[^\n]*padding: var\(--card-padding\)/);
   assert.match(styles, /\.attendance-card \.panel-heading \{ padding: var\(--card-padding\)/);
@@ -260,6 +264,12 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   assert.match(styles, /\.roster-row-actions \{ display: flex/);
   assert.match(styles, /\.roster-row-actions button \{ min-height: 2\.25rem/);
   assert.match(roster, /className="roster-row-actions"/);
+  assert.match(styles, /\.panel-heading \{[^}]*align-items: center/);
+  assert.match(styles, /\.roster-directory h2 \{ margin-bottom: 0/);
+  assert.match(styles, /\.wizard-steps \.setup-finish-button \{[^}]*background: var\(--primary\)/);
+  assert.match(setup, /className="primary-button setup-finish-button"/);
+  assert.match(roster, /<span>Actions<\/span>/);
+  assert.doesNotMatch(roster, /current\.active \? "Active" : "Inactive"/);
 });
 
 test("roster discovery searches every requested member field and scopes active members", async () => {

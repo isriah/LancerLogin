@@ -206,18 +206,14 @@ Release: pending user-selected feature bundle (candidate 0.14.0).
 
 ### WU-013 — Future-meeting attendance semantics
 
-Status: in progress
-
-Owner: Codex coordinator
-Branch: codex/wu-013-future-attendance
-Base: d8a10b8d3175de6fb5780e0434358ac9b7538a76
+Status: merged (`20ac58d`)
 
 Goal: prevent future meetings from presenting members as absent or generating premature absence notifications.
 Scope: replace pre-start “Absent” states with a neutral muted state; suppress Discord absence notices until a meeting has started. Align dashboard status and notification eligibility without changing outcomes for current or past meetings.
 Sources: Codex task **WU Idea Inbox** (future absence state and Discord notice); `docs/DECISIONS.md`; `docs/DASHBOARD.md`.
 Acceptance: members are not labeled absent before a meeting starts, no Discord absence notice is sent for an unstarted meeting, and current/past meeting attendance behavior remains unchanged.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and focused notification/status tests.
-Release: likely next dashboard patch bundle (candidate 0.13.1).
+Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-014 — Calendar-led attendance navigation
 

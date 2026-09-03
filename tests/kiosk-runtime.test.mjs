@@ -160,6 +160,37 @@ test("network policy grants only narrow NetworkManager actions to the kiosk acco
   assert.doesNotMatch(policy, /polkit\.Result\.YES[\s\S]*return polkit\.Result\.YES/);
 });
 
+test("local Wi-Fi scans require an active, unlocked network PIN session", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-network-service-"));
+  const previousPinPath = process.env.LANCERLOGIN_NETWORK_PIN;
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.LANCERLOGIN_NETWORK_PIN = join(directory, "network-pin.json");
+  process.env.NODE_ENV = "test";
+  let service;
+  try {
+    service = await import("../apps/kiosk/src/service.mjs");
+    service.network.wifi = async () => [{ ssid: "Workshop WiFi", signal: 91, secured: true, active: false }];
+    await new Promise((resolve) => service.server.listen(0, "127.0.0.1", resolve));
+    const { port } = service.server.address();
+    const request = (path, options) => fetch(`http://127.0.0.1:${port}${path}`, options);
+
+    assert.equal((await request("/network/wifi")).status, 403);
+    assert.equal((await request("/network/pin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: "123456" }) })).status, 201);
+    const scan = await request("/network/wifi");
+    assert.equal(scan.status, 200);
+    assert.deepEqual((await scan.json()).networks, [{ ssid: "Workshop WiFi", signal: 91, secured: true, active: false }]);
+
+    await request("/network/session", { method: "DELETE" });
+    for (let attempt = 0; attempt < 5; attempt += 1) await request("/network/unlock", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: "654321" }) });
+    assert.equal((await request("/network/wifi")).status, 403);
+  } finally {
+    if (service?.server.listening) await new Promise((resolve, reject) => service.server.close((error) => error ? reject(error) : resolve()));
+    if (previousPinPath === undefined) delete process.env.LANCERLOGIN_NETWORK_PIN; else process.env.LANCERLOGIN_NETWORK_PIN = previousPinPath;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousNodeEnv;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("network diagnostics exposes only connection type and active Wi-Fi signal", async () => {
   const manager = createNetworkManager({ run: async (args) => {
     if (args.includes("status")) return "wlan0:wifi:connected:Private WiFi\n";

@@ -106,4 +106,4 @@ if (process.env.NODE_ENV !== "test") {
   void Promise.all([loadPairing(), loadBranding()]).then(() => scanner.start()); heartbeat(); pollCommands(); setInterval(heartbeat, 60_000).unref(); setInterval(pollCommands, 5_000).unref();
 }
 
-export { server };
+export { server, network };

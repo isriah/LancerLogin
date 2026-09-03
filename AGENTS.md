@@ -1,129 +1,55 @@
 # LancerLogin Agent Guidance
 
-This file supplements the repository documentation and is permanent guidance for every session in this workspace. Read it before changing product code, deployment state, or planned future work.
+This file contains durable rules for every task in this repository. Read the task-specific documentation named below before changing that surface. For the day-to-day process and copyable prompts, read [docs/WORKFLOW.md](docs/WORKFLOW.md).
 
-## Future work and planning
+## Orient before changing code
 
-Read and follow [docs/future_work.md](docs/future_work.md) before recording future work, planning product work, or beginning a selected work unit.
+- Planned work: [docs/future_work.md](docs/future_work.md)
+- Raw ideas: [docs/idea_inbox.md](docs/idea_inbox.md)
+- Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- Development and focused verification: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+- Product and operational decisions: [docs/DECISIONS.md](docs/DECISIONS.md)
+- Kiosk behavior and hardware constraints: [docs/KIOSK.md](docs/KIOSK.md)
+- Releases: [docs/RELEASE-CHECKLIST.md](docs/RELEASE-CHECKLIST.md)
 
-### Idea intake
+Read only the documentation relevant to the selected work. Use Plan mode before code changes when a request is ambiguous, materially multi-step, or has a product, security, migration, or architecture decision.
 
-`docs/idea_inbox.md` is the durable, canonical intake for untriaged observations, defects, feature requests, and documentation ideas. The Codex task titled **WU Idea Inbox** is the conversational front door for that file, not the source of record.
+## Work-unit rules
 
-- In the **WU Idea Inbox** task, when the user supplies an idea, append a new raw entry to `docs/idea_inbox.md`. Preserve the user's request; do not investigate, group, create a work unit, modify product code, or change deployment state there. Intake entries are intentionally uncommitted until a promotion checkpoint or an explicitly requested inbox sync.
-- Assign each entry the next `IN-###` ID and leave it `untriaged`. A single message may be one raw entry even when it contains several related thoughts; inbox processing decides whether to split it.
-- Only `$lancerlogin-inbox-process`, running in the coordinator task, may change an intake entry from `untriaged` to `covered`, `promoted`, or `discarded`. It records the corresponding WU IDs or rationale and commits those status changes with the ledger update.
-- The coordinator must treat uncommitted changes limited to `docs/idea_inbox.md` as expected local intake, preserve them while performing unrelated work, and include them in its triage snapshot. Do not create a commit or remote push merely to capture an idea.
-- Do not use task-message history, a task preview, or an assistant acknowledgement as evidence that an idea was captured. If an inbox message cannot be recorded in `docs/idea_inbox.md`, say so and ask the user to retry; never silently accept it.
-
-## Coordinator execution
-
-For an explicitly authorized multi-work-unit coordinator run, treat the selected ready units at the start of the run as its execution set. Use the maximum safe parallelism: separate only the units with material overlap or a real dependency into later cohorts. Integration remains serial even when implementation is parallel. Do not describe a run as “serial” merely because integration happens one branch at a time.
-
-`docs/coordinator_state.md` is the durable source of truth for an active coordinator run: its fixed execution set, active cohort, task/provisioning evidence, next checkpoint, and any user decision. Create or update it whenever an orchestration run changes state. A coordinator chat turn is deliberately bounded; ending a checkpoint after recording its durable next action is normal, not an interruption.
-
-- Before reserving work, state the selected units, the first cohort, and why any units must wait. If the selection is `all`, it means every unit that is `ready` when the run begins; report any units excluded for another status.
-- Reserve a unit only when its implementation task is about to be created. Each reserved unit must receive a fresh, separately named Worktree implementation task and its own recorded task ID, branch, and base commit. Never reuse another unit’s implementation task, agent, or worktree.
-- Before provisioning a cohort, create every recorded `codex/wu-…` branch from the committed reservation base and verify that its branch ref points to that exact commit. Provision a task from its named branch, never from a bare commit SHA or detached ref.
-- Treat task creation as successful only after the coordinator has recorded a unique task ID, the intended branch, and a non-detached Worktree checked out on that branch. Before retrying an uncertain task-creation response, inspect the task inventory and Worktrees. Never create a second implementation task for the same WU while another task or candidate Worktree for it exists.
-- Provision tasks serially even when their implementations will run in parallel. A returned `clientThreadId` means Worktree setup is pending, not automatically failed: record it and make at most three bounded, event-driven checks over three minutes for a resolved task ID and branch-owned Worktree. Start parallel implementation only after every task in the cohort is confirmed.
-- A detached candidate Worktree or a candidate without a resolved task ID is failed or pending provisioning evidence, never an implementation environment. Do not reuse or delete it without first confirming that no task owns it and obtaining current user approval.
-- At the provisioning deadline, inspect the named branch. If it has a clean, reviewable implementation commit beyond its recorded base, use that commit as completion evidence: run its focused verification, integrate it normally, and record that the task platform did not expose an archivable task ID. If it has no such commit, record a `failed` provisioning outcome with its client ID, branch, and candidate Worktree evidence, then continue unrelated selected units. Do not leave it `in progress` or end the authorized run merely to wait longer.
-- If Worktree/task creation fails, immediately record the failure and restore the unit to `ready` unless a genuine blocker requires `blocked`; do not leave a unit stranded as `in progress`.
-- After a Worktree/task creation failure, do not blindly retry it. Inspect the task-creation result, task inventory, and any newly created failed-attempt worktree; retry only after identifying a concrete recoverable cause. Otherwise report the platform failure and stop that cohort. Do not delete or reuse a failed-attempt worktree without first confirming that no task owns it and obtaining current user approval.
-- Treat the ledger's recorded implementation task ID, branch, base commit, and status as the durable run state; a coordinator's current chat turn, sidebar availability, or ability to accept a new prompt is not evidence that a child task has finished.
-- A coordinator checkpoint performs only one material transition: reconcile one active unit, integrate one completed branch, or provision one next unit. It records the resulting evidence and next checkpoint in `docs/coordinator_state.md`, commits the affected ledger/state update, and then ends normally. It never waits inside one turn for an entire cohort or backlog.
-- At the start of every checkpoint, including a heartbeat-triggered turn, read `docs/coordinator_state.md`, `docs/future_work.md`, and the named evidence before acting. Reconcile the recorded next action before creating or reserving anything new. If a user decision is required, record `needs-user-decision` and ask once; later heartbeats stay quiet until the decision changes state.
-- An explicitly authorized automatic run uses a heartbeat attached to the coordinator task to invoke the next checkpoint. The heartbeat may continue routine in-scope work but never releases, deploys, changes the Pi, bypasses a required user decision, or adds units that were not in the recorded execution set. When every selected unit is `merged`, `blocked`, or `failed`, record the terminal run outcome and keep the heartbeat quiet.
-- A blocked or failed unit does not prevent unrelated selected units from continuing. Report its evidence and continue with the next safe cohort; ask the user only when the remaining work needs a material decision.
-
-## Project orientation
-
-Before a change, identify the affected surface and read the relevant documentation:
-
-- Architecture and system boundaries: `docs/ARCHITECTURE.md`
-- Local setup and focused verification: `docs/DEVELOPMENT.md`
-- Product and operational decisions: `docs/DECISIONS.md`
-- Kiosk behavior and hardware constraints: `docs/KIOSK.md`
-- Release process: `docs/RELEASE-CHECKLIST.md`
-
-Do not read every document by default; read the documents relevant to the selected work unit.
+- A work unit is one independently reviewable outcome. Do not begin one just because it is listed; the user must select or authorize it.
+- One implementation task normally owns one work unit and one branch. Use a Worktree only when work runs in parallel or must be isolated from the local checkout.
+- Before parallel work, compare code areas, shared contracts, migrations, authorization, deployment configuration, and shared documentation. Run overlapping units serially.
+- Implementation tasks do not edit the shared ledger, merge to `main`, release, deploy, mutate cloud resources, or update the Pi. The task that performs integration records the merge in the ledger.
 
 ## Definition of done
 
-For each selected work unit:
-
-- Make only in-scope changes.
-- Add or update tests when behavior changes or a regression can be captured.
+- Keep changes within the selected scope and acceptance criteria.
+- Add or update focused tests when behavior changes or a regression can be captured.
 - Run the focused verification documented in `docs/DEVELOPMENT.md`.
-- Review the final diff for regressions, unintended scope, security issues, and missing documentation.
-- For serial work, update the related work unit with merge and release-bundle status. For parallel work, report the outcome to the integration task; only that task updates the shared work-unit ledger after merge.
-- Report changed files, verification run, and any remaining risk or manual validation.
-
-## Structured decisions
-
-When a task needs a specific decision from the user before it can safely continue—such as approval, a product or design choice, a version number, scope selection, or a migration-integration decision—present it in Plan mode as a structured choice prompt when that mode is available.
-
-- Ask one decision at a time and state the consequence of the choice briefly.
-- Offer two or three mutually exclusive options, put the recommended option first, and allow the user to supply an alternative.
-- Do not use a structured prompt for routine, already-authorized implementation or integration work.
-- Once the user selects an option, continue within that authorization without asking again for the same decision.
-- If the active task cannot use Plan mode, stop and ask the same concise question in chat; do not imitate clickable controls with Markdown.
+- Inspect the final diff for scope, regressions, security, and documentation gaps.
+- Commit a small, single-purpose change and report the commit, changed files, verification, and remaining risks.
 
 ## Repository safety
 
-- Never place credentials, tokens, personal data, or biometric data in source, fixtures, screenshots, commits, or documentation.
-- Do not change generated artifacts, lockfiles, migrations, environment configuration, or dependencies unless required by the selected work unit; explain why when you do.
+- Never put credentials, tokens, personal data, or biometric data in code, fixtures, screenshots, commits, or documentation.
 - Preserve unrelated working-tree changes. Do not reset, discard, broadly reformat, or overwrite another change without explicit approval.
-- `.codex-remote-attachments/` is an expected, user-managed untracked folder for Codex remote/mobile attachments. Leave it in place, do not repeatedly report it as an unrelated change, and never stage or modify it unless the user explicitly asks.
-- Treat migrations, authentication/authorization, updater behavior, and Pi-facing changes as high risk: add focused verification and cite the relevant design documentation.
+- `.codex-remote-attachments/` is expected user-managed content. Do not stage, modify, or repeatedly report it.
+- Treat migrations, authentication/authorization, updater behavior, and Pi-facing changes as high risk: read the relevant design documentation and add focused verification.
+- Do not change generated artifacts, lockfiles, migrations, environment configuration, or dependencies unless the selected work requires it; explain why when you do.
 
-## Git and review
+## Git, releases, and deployment
 
-- Prefer small, single-purpose commits that correspond to one work unit.
-- Before committing, inspect `git diff` and `git status`; include only intended files.
-- For dependent shell steps, run each mutation and its verification as separate commands and check the result before continuing. Do not use PowerShell semicolon chaining for dependent Git operations or for a mutation followed by verification.
-- Complete a selected work unit with the commit and merge process defined in `docs/future_work.md`. Do not include unrelated working-tree changes.
-- For parallel work units, use separate worktrees and branches. Implementation tasks do not modify the shared work-unit ledger or merge directly to `main`; the integration task merges one completed branch at a time.
-- For a behavior-changing change, review it against its acceptance criteria, not only whether tests pass.
-- When Codex makes the same kind of mistake twice, add a short, concrete rule to the closest applicable `AGENTS.md` or linked guide.
+- Prefer small, single-purpose commits. Inspect `git status` and `git diff` before committing; include only intended files.
+- Run dependent shell mutations and verification as separate commands. Do not use PowerShell semicolon chaining for dependent Git operations.
+- Releases require explicit user authorization and follow `docs/RELEASE-CHECKLIST.md`. A merged work unit is not a release.
+- A private adopter deployment, Pi update, service restart, or cloud-resource mutation requires an explicit current user request.
+- Use `ssh lancerlogin-pi` for Pi access; never include passwords in commands, files, logs, or chat.
 
-## Skill validation
+## Skills and decisions
 
-The bundled skill validator uses PyYAML from the ignored local `.agents/skill-validator-python/` directory and requires UTF-8 mode on this Windows host. Validate a changed skill with:
-
-```powershell
-$env:PYTHONPATH = "$PWD\.agents\skill-validator-python"
-$env:PYTHONUTF8 = "1"
-& "C:\Python314\python.exe" "C:\Users\Izz\.codex\skills\.system\skill-creator\scripts\quick_validate.py" ".agents\skills\<skill-name>"
-```
+- Use the repository skills for repeatable inbox, work-unit, integration, and release procedures. Validate any changed skill using the command in `docs/WORKFLOW.md`.
+- When a material user decision is required, use a structured Plan-mode question when available. Ask one decision at a time, give a recommended option and its consequence, and do not imitate clickable controls in Markdown.
 
 ## GitHub CLI
 
-- GitHub CLI is installed and authenticated on this Windows host. Use its absolute path so a stale Codex terminal `PATH` can never block normal work:
-
-  ```powershell
-  & "C:\Program Files\GitHub CLI\gh.exe"
-  ```
-
-- Before diagnosing a GitHub CLI availability issue, run the command above with `--version` or `auth status`. Do not claim `gh` is missing because bare `gh` is unavailable in an inherited shell.
-- Use the direct executable for release checks, workflow status, and reruns. Public release verification must still succeed for the exact commit before tagging; never workaround a failed release gate by changing the tag or version without diagnosing it.
-
-## Raspberry Pi SSH
-
-- The verified key-based SSH configuration is `ssh lancerlogin-pi`.
-- Its non-secret resolved settings are user `attkiosk`, host `attkiosk.local`, and identity file `~/.ssh/lancerlogin_pi`. Confirm the configuration, when needed, with:
-
-  ```powershell
-  ssh -G lancerlogin-pi
-  ```
-
-- Do not use the Windows login name or the retired `izz` account for Pi SSH. Never put a password into a command, shell history, source file, log, or chat response; SSH should prompt interactively only when key authentication is unavailable.
-- Pi changes, service restarts, and remote deployments require an explicit current user request. First inspect status, keep changes narrow, and do not erase local R503 mappings or templates.
-
-## Releases and private deployment
-
-- Keep releases in the `0.n.n` namespace. Use `0.n.X` for narrowly scoped fixes; reserve `1.0.0` for a user-approved major release.
-- For a release: run focused verification, run the complete release gate, commit/push, wait for the exact-commit public GitHub Verify workflow, then create/push the matching `v0.n.n` tag and wait for the immutable public release build.
-- Only run the private adopter deployment workflow when the user explicitly requests deployment or has authorized the current change round to update the installation. When dispatching it in a browser, prepare the form first and ask for confirmation immediately before the final **Run workflow** click only because browser safety requires that action-time confirmation.
-- Do not update the Pi unless the user specifically includes it in the requested deployment.
+Use `& "C:\\Program Files\\GitHub CLI\\gh.exe"` for GitHub CLI commands. Verify the exact commit's public workflow before creating a release tag; never change a version or tag to bypass a failed release gate.

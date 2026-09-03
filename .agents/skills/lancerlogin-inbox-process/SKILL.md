@@ -5,7 +5,7 @@ description: "Triage the durable LancerLogin idea inbox into proposed work units
 
 # LancerLogin Inbox Process
 
-Read `AGENTS.md`, `docs/idea_inbox.md`, and `docs/future_work.md`. `docs/idea_inbox.md` is the authoritative raw-intake source, including expected uncommitted local entries; do not use Codex task history as a substitute for it. The task titled **WU Idea Inbox** is only the normal place where new entries are captured.
+Read `AGENTS.md`, `docs/WORKFLOW.md`, `docs/idea_inbox.md`, and `docs/future_work.md`. `docs/idea_inbox.md` is the authoritative raw-intake source, including expected uncommitted local entries; do not use task history as a substitute for it.
 
 ## Triage
 
@@ -23,9 +23,9 @@ Finish with a promotion-ready proposal that identifies the included `IN-###` ent
 
 ## Record approved units
 
-When the user explicitly approves selected candidates in the same task, incorporate their feedback and automatically record those approved candidates as work units. Do this only in the coordinator task at a safe checkpoint, where it owns the shared ledger; otherwise direct the user to continue this task there.
+When the user explicitly approves selected candidates in the same task, incorporate their feedback and automatically record those approved candidates as work units.
 
-- Re-read `docs/idea_inbox.md` and `docs/future_work.md` immediately before editing. Assign the next available WU IDs, use the documented work-unit format, and promote only the proposal's named `IN-###` entries.
+- Re-read `docs/idea_inbox.md` and `docs/future_work.md` immediately before editing. Do not promote while another task is changing the ledger; report that conflict and ask the user to retry after it is resolved. Assign the next available WU IDs, use the documented work-unit format, and promote only the proposal's named `IN-###` entries.
 - Set `Status: ready` only when the candidate is safe to implement; otherwise use `Status: blocked` and state the exact missing decision.
 - Add only the approved units. Change each source inbox entry to `promoted` and record its WU ID(s); use `covered` or `discarded` only when the user approves that disposition and state why. Do not reserve, create implementation tasks, merge, release, deploy, mutate cloud resources, or update the Pi.
 - Review the diff, preserve unrelated changes, and commit only `docs/idea_inbox.md` and `docs/future_work.md` with a concise inbox-promotion message.

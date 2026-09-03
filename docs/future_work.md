@@ -44,29 +44,11 @@ Base: <starting main commit>
 
 ## Parallel work
 
-Parallel development is permitted only for work units with no material overlap. Before reserving a unit, compare its scope and sources against every active unit. Do not run units in parallel when they touch the same feature surface, shared contract, migration/schema, authorization policy, deployment configuration, or shared documentation file.
+Parallel development is permitted only for work units with no material overlap. Compare scope and sources before starting: units that touch the same feature surface, shared component, API/data contract, migration/schema, authorization policy, deployment configuration, or shared documentation run serially.
 
-1. A single coordination task owns `docs/future_work.md` and integration to `main`.
-2. The coordination task records the selected unit as `in progress` with its owner, branch, and base commit, then commits that reservation to `main` before implementation tasks begin.
-3. Start each implementation task in its own Codex **Worktree**, from that committed `main` state, on a branch named `codex/wu-<id>-<short-name>`.
-4. An implementation task may edit only its selected unit's code, tests, and directly relevant documentation. It must not edit `docs/future_work.md`, merge, push directly to `main`, release, deploy, or update the Pi.
-5. The implementation task commits its branch, runs focused verification, and reports its commit SHA, changed files, verification, and integration risks.
-6. The coordination task integrates completed branches one at a time: update/rebase against current `main`, resolve any conflict, rerun affected verification, merge, and then update the work unit to `merged` with its merge and release-bundle reference.
-7. After the coordinator has recorded a final outcome and captured the implementation task's handoff evidence, archive that implementation task. Archive merged tasks after integration; archive blocked or failed tasks only after their blocker or failure evidence is recorded and no follow-up is requested. Keep the coordinator, inbox, and any task that still needs a decision or integration work active. Archived tasks remain available for restoration and audit.
+For approved independent units, create one Codex Worktree and one `codex/wu-<id>-<short-name>` branch per implementation task from a committed base. Implementation tasks change only their selected unit's code, tests, and directly relevant documentation; they do not edit this ledger, merge, release, deploy, or update the Pi. Integrate completed branches one at a time and then update this ledger with merge and release-bundle evidence.
 
-If work units cannot be cleanly isolated, run them serially instead. Planning, diagnosis, and review tasks may run in parallel without reserving a worktree as long as they do not write shared state.
-
-### Authorized coordinator orchestration
-
-When the user explicitly authorizes a named set of work units for an orchestration run, the coordination task may:
-
-1. assess whether the units are safe to run in parallel, reserve the safe units, and commit the reservations to `main`;
-2. create one Worktree implementation task per reserved unit, with its branch, scope, sources, verification, and safety boundaries in the task prompt;
-3. wait for task completion, inspect each result, and collect commit SHA, changed-file, verification, and integration-risk evidence;
-4. integrate safe completed branches serially, updating and re-verifying against current `main` before every merge; and
-5. mark merged, blocked, or failed units in this file, report the outcome, and archive the corresponding implementation task once its final evidence is recorded and it has no remaining follow-up.
-
-The coordinator must leave a blocked, failed, or materially conflicting branch unmerged and preserve its evidence for follow-up. This authority never includes a release, push to a private adopter deployment, cloud-resource mutation, or Pi change; those remain subject to the explicit boundaries in `AGENTS.md`.
+Use `docs/WORKFLOW.md` for the operating procedure and recovery guidance. Do not use a persistent coordinator or scheduled heartbeat to provision, poll, or recover a backlog. Planning, diagnosis, and review may run in parallel when they do not write shared state.
 
 ## Seeded work units
 

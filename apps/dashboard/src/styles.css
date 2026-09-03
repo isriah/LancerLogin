@@ -343,23 +343,14 @@ main[aria-busy="true"] .setup-status { display: none; }
 .settings-form input::placeholder { color: var(--muted); opacity: .72; }
 .settings-form .logo-preview,.settings-form .color-grid,.settings-form > button { grid-column: 1 / -1; }
 .data-category-list { display: grid; gap: 1rem; }
-.data-category { display: grid; grid-template-columns: minmax(13rem,1fr) minmax(9rem,.45fr) minmax(14rem,.8fr) minmax(13rem,.7fr); gap: 1rem; align-items: center; min-width: 0; padding: 1.15rem; border: 1px solid var(--line); background: var(--surface); border-radius: .8rem; }
+.data-category { display: grid; grid-template-columns: minmax(13rem,1fr) minmax(18rem,.8fr); gap: 1rem; align-items: center; min-width: 0; padding: 1rem 1.15rem; border: 1px solid var(--line); background: var(--surface); border-radius: .8rem; }
 .data-category.sensitive { border-color: #d7a64a; }
 .data-category > div:first-child { display: grid; align-content: center; gap: .35rem; }
 .data-category h3,.data-category p { margin: 0; }
 .data-category p { overflow-wrap: anywhere; font-size: .76rem; }
-.data-category > .inline-messages { grid-column: 1 / -1; margin: 0; }
-.data-control { min-width: 0; display: grid; align-content: center; gap: .55rem; }
-.data-control label { margin-top: 0; }
-.data-control input { min-width: 0; padding: .45rem; font-size: .72rem; }
-.restore-control label { display: grid; justify-items: center; gap: .4rem; text-align: center; }
-.restore-control input[type="file"] { width: 100%; text-align: center; }
-.restore-control input[type="file"]::file-selector-button { margin-right: .55rem; }
-.data-control button,.reset-card button { width: 100%; min-height: 2.7rem; padding: .6rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface-soft); border-radius: .5rem; font-weight: 750; cursor: pointer; }
-.data-control.danger { padding: .7rem; border: 1px solid #d9aaa5; border-radius: .55rem; }
-.data-control.danger label { display: grid; gap: .35rem; margin: .7rem 0; font-size: .76rem; }
-.data-control.danger input { width: 100%; }
-.data-control.danger button { border-color: #b34a40; color: #8f3028; background: transparent; }
+.data-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: .55rem; }
+.data-actions button { min-height: 2.55rem; padding: .55rem .7rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface-soft); border-radius: .5rem; font-weight: 750; cursor: pointer; }
+.data-actions .danger-button { border-color: #a9322d; color: #fff; background: #a9322d; }
 .sensitive-note { display: block; color: #8a5a00; font-size: .72rem; }
 .reset-card,.update-card { display: grid; grid-template-columns: minmax(0,1fr) minmax(10rem,.3fr); gap: 1rem; align-items: center; padding: 1rem; margin: 0; border: 1px solid var(--line); background: var(--surface); border-radius: .8rem; }
 .update-card { display: block; width: 100%; }
@@ -491,6 +482,13 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .undo-meeting button { padding: .4rem .65rem; border: 1px solid currentColor; border-radius: .45rem; color: inherit; background: transparent; font-weight: 800; cursor: pointer; }
 .meeting-delete-dialog { width: min(38rem,100%); max-height: calc(100vh - 2rem); overflow: auto; padding: 1.25rem; border: 1px solid var(--line); border-radius: .8rem; color: var(--ink); background: var(--surface); box-shadow: 0 2rem 6rem rgba(0,0,0,.35); }
 .meeting-delete-dialog h2,.meeting-delete-dialog p { margin-top: 0; }
+.data-action-dialog { display: grid; gap: 1rem; width: min(36rem,100%); padding: 1.25rem; }
+.data-action-dialog > label { display: grid; gap: .4rem; font-weight: 750; }
+.data-action-dialog > label input { width: 100%; min-height: 2.6rem; padding: .55rem .65rem; border: 1px solid var(--line); border-radius: .5rem; color: var(--ink); background: var(--surface-soft); }
+.file-picker { padding: .8rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface-soft); }
+.file-picker input[type="file"] { padding: .35rem; background: var(--surface); font-weight: 400; }
+.file-picker input[type="file"]::file-selector-button { margin-right: .65rem; padding: .4rem .55rem; border: 1px solid var(--line); border-radius: .4rem; color: var(--ink); background: var(--surface-soft); font-weight: 750; cursor: pointer; }
+.file-picker span { color: var(--muted); font-size: .8rem; font-weight: 400; }
 .future-meeting-list { max-height: 12rem; overflow: auto; margin: 1rem 0; padding-left: 1.35rem; }
 .future-meeting-list li { margin: .3rem 0; }
 .danger-button { border: 0; border-radius: .55rem; color: #fff; background: #a9322d; font-weight: 800; cursor: pointer; }

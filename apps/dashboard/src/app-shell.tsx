@@ -45,7 +45,7 @@ export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { r
   else if (role === "admin" && path === "/settings/access") page = <AccessSettings />;
   else if (role === "admin" && path === "/settings/integrations") page = <IntegrationSettings />;
   else if (role === "admin" && path === "/settings/privacy") page = <PrivacySettings />;
-  else if (role === "admin" && path === "/settings/data") page = <DataSettings onReset={() => { setSetupKey((value) => value + 1); openSetup(); }} />;
+  else if (role === "admin" && path === "/settings/data") page = <DataSettings />;
   else if (role === "admin" && path === "/settings/guided-setup") page = <GuidedSetupSettings onOpenSetup={openSetup} />;
   else if (role === "admin" && path === "/settings/updates") page = <UpdatesPage />;
   else page = <section className="empty-page"><h2>Page unavailable</h2><p>This page does not exist or your role cannot open it.</p><button type="button" onClick={() => navigate("/dashboard")}>Return home</button></section>;

@@ -127,12 +127,15 @@ test("data controls expose separate backup, restore, and deletion per category",
   }
   assert.match(source, /\/admin\/data\/backup\?scope=\$\{scope\}/);
   assert.match(source, /\/admin\/data\/restore/);
-  assert.match(source, /\/admin\/setup\/reset/);
   assert.match(source, /RESTORE \$\{scope\.toUpperCase\(\)\}/);
   assert.match(source, /Sensitive backup/);
-  assert.match(source, /id=\{`data-error-\$\{scope\}`\} className="inline-messages error" role="alert"/);
+  assert.match(source, /Restore file/);
+  assert.match(source, /data-action-dialog/);
+  assert.match(source, /useModalFocus/);
+  assert.doesNotMatch(source, /\/admin\/setup\/reset|Restart onboarding|window\.confirm|window\.prompt/);
   assert.match(styles, /\.data-category \{[^}]*align-items: center/);
-  assert.match(styles, /\.data-control \{[^}]*align-content: center/);
+  assert.match(styles, /\.data-actions \{ display: flex/);
+  assert.match(styles, /\.file-picker input\[type="file"\]::file-selector-button/);
 });
 
 test("dashboard uses distinct routes and keeps roster accounts together", async () => {

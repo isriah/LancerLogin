@@ -172,6 +172,19 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
   assert.match(shell, /setupStepIds\.every/);
 });
 
+test("dashboard access sign-in method is a compact, accessible radio toggle group", async () => {
+  const users = await readFile("apps/dashboard/src/user-settings.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  assert.match(users, /<fieldset className="method-switch"><legend>Sign-in method<\/legend>/);
+  assert.match(users, /type="radio" name="user-method" checked=\{method === "local"\}/);
+  assert.match(users, /type="radio" name="user-method" checked=\{method === "google"\}/);
+  assert.match(users, /className=\{method === "local" \? "selected" : ""\}/);
+  assert.match(users, /className=\{method === "google" \? "selected" : ""\}/);
+  assert.match(styles, /\.method-switch-options \{ display: inline-grid/);
+  assert.match(styles, /\.method-switch-options label\.selected/);
+  assert.match(styles, /\.method-switch-options label:has\(input:focus-visible\)/);
+});
+
 test("Settings separates operational configuration, access, and kiosk update comparisons", async () => {
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const organization = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");

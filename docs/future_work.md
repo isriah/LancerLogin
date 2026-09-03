@@ -384,7 +384,12 @@ Release: next onboarding polish bundle.
 
 ### WU-026 — Reports filter and selector reliability
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-026-reports-filter-reliability
+Base: db36a66d3ff14499cbb12c2bcd29350a227f56cb
+Task: provisioning pending
 
 Goal: restore correct All-meetings reporting and keep leaderboard controls usable.
 Scope: diagnose and repair the All-meetings regression; add regression coverage explaining the earlier verification gap; fix Attendance-leaderboard sort-selector overflow. Preserve reporting baseline and optional/regular semantics.

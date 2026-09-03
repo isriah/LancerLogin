@@ -5,6 +5,9 @@ const now = Date.now();
 const iso = (offsetMinutes) => new Date(now + offsetMinutes * 60_000).toISOString();
 const logo = `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="120"><text x="80" y="82" fill="white" font-size="72" font-family="sans-serif" font-weight="700">NOVA</text></svg>').toString("base64")}`;
 const meetings = [
+  { id: "past-regular", title: "Completed build session", startsAt: iso(-4 * 24 * 60), endsAt: iso(-4 * 24 * 60 + 120), attendanceClosesAt: iso(-4 * 24 * 60 + 150), required: 1, isTest: 0 },
+  { id: "past-optional", title: "Completed open workshop", startsAt: iso(-3 * 24 * 60), endsAt: iso(-3 * 24 * 60 + 120), attendanceClosesAt: iso(-3 * 24 * 60 + 150), required: 0, isTest: 0 },
+  { id: "past-test", title: "Completed test session", startsAt: iso(-2 * 24 * 60), endsAt: iso(-2 * 24 * 60 + 120), attendanceClosesAt: iso(-2 * 24 * 60 + 150), required: 1, isTest: 1 },
   { id: "active-meeting", title: "Build session", startsAt: iso(-30), endsAt: iso(60), attendanceClosesAt: iso(90), required: 1, isTest: 0 },
   { id: "next-week", title: "Studio night", startsAt: iso(7 * 24 * 60), endsAt: iso(7 * 24 * 60 + 120), attendanceClosesAt: iso(7 * 24 * 60 + 150), required: 1, isTest: 0 },
 ];

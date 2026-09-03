@@ -44,3 +44,31 @@ test("Reports exposes operational filters and direct contest review", async ({ p
   await expect(page.getByRole("heading", { name: "Review contest" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve and mark present" })).toBeVisible();
 });
+
+test("Reports filters completed Regular and Optional meetings without hiding All meetings", async ({ page }) => {
+  // The preview includes completed meetings of each type. This specifically avoids the
+  // prior gap, where the smoke test had only active or future meetings to filter.
+  await page.goto("/reports");
+  const scope = page.locator(".report-scope");
+  const meetingType = page.getByLabel("Meeting type");
+
+  await expect(scope).toHaveText("Showing 2 completed meetings across all preserved history.");
+  await meetingType.selectOption("regular");
+  await expect(scope).toHaveText("Showing 1 completed meeting across all preserved history.");
+  await meetingType.selectOption("optional");
+  await expect(scope).toHaveText("Showing 1 completed meeting across all preserved history.");
+  await meetingType.selectOption("all");
+  await expect(scope).toHaveText("Showing 2 completed meetings across all preserved history.");
+});
+
+test("Attendance leaderboard sort selector stays within its card", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await page.goto("/reports");
+  const card = page.locator(".leaderboard-card");
+  const selector = card.getByLabel("Sort");
+  const [cardBounds, selectorBounds] = await Promise.all([card.boundingBox(), selector.boundingBox()]);
+  expect(cardBounds).not.toBeNull();
+  expect(selectorBounds).not.toBeNull();
+  expect(selectorBounds!.x).toBeGreaterThanOrEqual(cardBounds!.x);
+  expect(selectorBounds!.x + selectorBounds!.width).toBeLessThanOrEqual(cardBounds!.x + cardBounds!.width);
+});

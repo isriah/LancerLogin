@@ -321,3 +321,19 @@ Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Remove the Settings > Organization card that reads Changes apply after you save them.
 Disposition: WU-031
+
+## IN-039
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Add a Roster column that appears when Discord integration is configured and shows a member's paired Discord ID.
+Disposition: WU-032
+
+## IN-040
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Add Discord pairing like the old system: a Discord command that accepts a member ID and pairs the Discord account with that member.
+Disposition: WU-032

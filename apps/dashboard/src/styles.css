@@ -242,6 +242,7 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .attendance-state { justify-self: start; align-self: center; min-width: 4.8rem; padding: .3rem .55rem; border-radius: 2rem; font-size: .72rem; font-weight: 800; text-align: center; text-transform: capitalize; }
 .attendance-state.present { color: #075c43; background: #d7f5e9; }
 .attendance-state.absent { color: #843a32; background: #fae4e1; }
+.attendance-state.upcoming { color: var(--muted); background: var(--surface-soft); font-size: 0; font-style: italic; }.attendance-state.upcoming::after { content: "Not started"; font-size: .72rem; }
 .attendance-state.excused { color: #6f5212; background: #fbefcc; }
 .correction-actions { display: flex; gap: .3rem; }
 .correction-actions button { padding: .35rem .45rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .45rem; font-size: .7rem; cursor: pointer; }

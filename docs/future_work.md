@@ -228,11 +228,7 @@ Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-015 — Dashboard visual stability
 
-Status: in progress
-
-Owner: Codex coordinator
-Branch: codex/wu-015-dashboard-visual-stability
-Base: aa1c080e1f43192e7dde315f186bde3f1acc30f5
+Status: ready
 
 Goal: eliminate visual jumps during navigation and keep the themed background visually calm across pages.
 Scope: replace layout-shifting loading cards with animated overlays that do not displace page content; keep the primary-theme gradient stable while switching pages. Apply the loading treatment consistently to comparable dashboard loading states.

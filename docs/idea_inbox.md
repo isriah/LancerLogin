@@ -313,3 +313,11 @@ Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Remove the Settings > Integrations card that says Saved secret values are encrypted and never displayed.
 Disposition:
+
+## IN-038
+
+Status: untriaged
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Remove the Settings > Organization card that reads Changes apply after you save them.
+Disposition:

@@ -427,7 +427,7 @@ Release: next dashboard polish bundle.
 
 ### WU-029 — Compact dashboard-access controls
 
-Status: in progress
+Status: merged (`4be60c0`)
 
 Owner: Codex coordinator
 Branch: codex/wu-029-compact-dashboard-access

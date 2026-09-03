@@ -471,7 +471,7 @@ Release: next settings polish bundle.
 
 ### WU-032 — Discord self-pairing and roster visibility
 
-Status: ready
+Status: merged (`d4a4143`)
 
 Goal: let members safely pair their Discord account to the correct roster entry and let operators see that pairing in Roster.
 Scope: add a signed Discord `/pair <member-id>` command that links the invoking Discord account to an active roster member; show paired Discord IDs as a conditional Roster column when Discord is configured. Reject requests that would replace an existing member or Discord-account pairing and direct the requester to an operator. Preserve existing operator/admin linking, attendance notices, contests, audit history, and all Discord verification boundaries. Exclude automatic roster matching, bulk relinking, and exposure of Discord credentials.

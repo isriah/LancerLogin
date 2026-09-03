@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, apiBaseUrl } from "./dashboard-api";
 import { clearUpdateCheckCache, formatVersion, isNewerRelease } from "./update-indicator";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 
 type Release = { tag_name?: string; html_url?: string };
 type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; releaseVersion?: string };
@@ -16,6 +17,7 @@ const commandLabel = (command?: Command, kiosk?: Kiosk, latest?: Release) => {
 
 export function UpdatesPage() {
   const [current, setCurrent] = useState("Loading…"); const [workflowUrl, setWorkflowUrl] = useState(""); const [latest, setLatest] = useState<Release>(); const [kiosk, setKiosk] = useState<Kiosk>(); const [commands, setCommands] = useState<Command[]>([]); const [notice, setNotice] = useState("Checking the community release feed…"); const [busy, setBusy] = useState(false); const [kioskBusy, setKioskBusy] = useState(false);
+  useDashboardLoadingOverlay(current === "Loading…", "Checking for updates…");
   async function load() {
     const [installation, kiosks, release] = await Promise.all([api<{ releaseVersion: string; workflowUrl: string }>("/admin/update-info"), api<{ kiosks: Kiosk[] }>("/admin/kiosks"), fetch("https://api.github.com/repos/isriah/LancerLogin/releases/latest", { headers: { accept: "application/vnd.github+json" } }).then((result) => result.ok ? result.json() as Promise<Release> : Promise.reject(new Error("Latest release is temporarily unavailable")))]);
     const active = kiosks.kiosks.find((item) => item.active === 1); setCurrent(formatVersion(installation.releaseVersion)); setWorkflowUrl(installation.workflowUrl); setKiosk(active); setLatest(release);

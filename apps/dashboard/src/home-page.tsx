@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./dashboard-api";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 
 type Meeting = { id: string; title: string; startsAt: string; endsAt: string; attendanceClosesAt: string; required: boolean | number };
 type Attendance = { memberId: string; externalId: string; firstName: string; lastName: string; disposition: "present" | "active" | "absent" | "excused"; checkedInAt?: string; checkedOutAt?: string };
@@ -9,6 +10,7 @@ const dayKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() +
 
 export function HomePage({ navigate }: { role: "admin" | "operator"; navigate: (path: string) => void }) {
   const [meetings, setMeetings] = useState<Meeting[]>([]); const [active, setActive] = useState<ActiveMeeting[]>([]); const [contests, setContests] = useState<Contest[]>([]); const [notice, setNotice] = useState("Loading dashboard…");
+  useDashboardLoadingOverlay(notice === "Loading dashboard…", "Loading dashboard…");
   async function load() { const [meetingResult, contestResult] = await Promise.all([api<{ meetings: Meeting[] }>("/meetings"), api<{ contests: Contest[] }>("/discord/contests")]); const now = Date.now(); const current = meetingResult.meetings.filter((meeting) => Date.parse(meeting.startsAt) <= now && Date.parse(meeting.endsAt) >= now); const activeResults = await Promise.all(current.map(async (meeting) => ({ ...meeting, ...await api<{ attendance: Attendance[]; finalized: boolean }>(`/attendance?meetingId=${encodeURIComponent(meeting.id)}`) }))); setMeetings(meetingResult.meetings); setActive(activeResults); setContests(contestResult.contests); setNotice("Dashboard data is current."); }
   useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); const timer = window.setInterval(() => void load().catch(() => undefined), 60_000); return () => window.clearInterval(timer); }, []);
   const days = useMemo(() => { const currentWeek = new Date(); currentWeek.setHours(0, 0, 0, 0); currentWeek.setDate(currentWeek.getDate() - currentWeek.getDay()); const start = new Date(currentWeek); start.setDate(start.getDate() - 7); return Array.from({ length: 35 }, (_, index) => { const date = new Date(start); date.setDate(start.getDate() + index); return date; }); }, []);

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "./dashboard-api";
+import { useDashboardLoadingOverlay } from "./loading-overlay";
 
 type Frequency = "daily" | "weekly" | "biweekly" | "monthly";
 type Meeting = { id: string; title: string; startsAt: string; endsAt: string; required: boolean | number; notes?: string | null; isTest?: boolean | number; seriesId?: string | null; recurrenceFrequency?: Frequency | null; recurrenceUntil?: string | null; recurrenceSequence?: number | null };
@@ -34,6 +35,7 @@ function MeetingFields({ value, onChange }: { value: MeetingForm; onChange: (val
 
 export function MeetingsPage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]); const [templates, setTemplates] = useState<MeetingTemplate[]>([]); const [templateId, setTemplateId] = useState(""); const [createForm, setCreateForm] = useState<MeetingForm>(initialForm); const [frequency, setFrequency] = useState<"once" | Frequency>("once"); const [seriesUntil, setSeriesUntil] = useState(""); const [search, setSearch] = useState(""); const [editing, setEditing] = useState<Meeting>(); const [editForm, setEditForm] = useState<MeetingForm>(initialForm); const [editScope, setEditScope] = useState<"occurrence" | "future">("occurrence"); const [notice, setNotice] = useState("Loading meetings…"); const [createError, setCreateError] = useState(""); const [editError, setEditError] = useState(""); const [deleteTarget, setDeleteTarget] = useState<Meeting>(); const [undo, setUndo] = useState<Deletion>(); const [calendarAllNotice, setCalendarAllNotice] = useState(""); const [calendarOutcomes, setCalendarOutcomes] = useState<SyncOutcome[]>([]); const [calendarByMeeting, setCalendarByMeeting] = useState<Record<string, string>>({}); const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  useDashboardLoadingOverlay(notice === "Loading meetings…", "Loading meetings…");
   async function load() { const [meetingResult, templateResult] = await Promise.all([api<{ meetings: Meeting[] }>("/meetings"), api<{ templates: MeetingTemplate[] }>("/meeting-templates")]); setMeetings(meetingResult.meetings); setTemplates(templateResult.templates); setNotice(""); }
   useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, []);
   const filtered = useMemo(() => { const query = search.trim().toLocaleLowerCase(); if (!query) return meetings; return meetings.filter((meeting) => [meeting.title, meeting.startsAt, meeting.endsAt, meeting.required ? "required" : "optional", meeting.notes ?? "", frequencyLabel(meeting.recurrenceFrequency), meeting.recurrenceUntil ?? ""].join(" ").toLocaleLowerCase().includes(query)); }, [meetings, search]);

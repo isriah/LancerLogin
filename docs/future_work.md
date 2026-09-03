@@ -195,18 +195,14 @@ Release: likely next dashboard patch bundle (candidate 0.13.1).
 
 ### WU-012 — Member participation start dates
 
-Status: in progress
-
-Owner: Codex coordinator
-Branch: codex/wu-012-member-start-dates
-Base: 7d8f07685cc4242e40cd27a9a76e0446539664a8
+Status: merged (`eb0a6a1`)
 
 Goal: ensure attendance reporting begins when each member joins the team rather than retroactively counting earlier meetings.
 Scope: add an editable member start date, defaulted to the roster-added date; exclude meetings before that date from the member’s absence state, attendance calculations, and reports. Extend the merged member detail workspace; preserve historical meeting and attendance records.
 Sources: Codex task **WU Idea Inbox** (member start date); `docs/DASHBOARD.md`; WU-006.
 Acceptance: an authorized operator can view and change a member’s start date, and every relevant member/detail/report surface omits pre-start meetings from that member’s attendance obligations without deleting data.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, `npm run verify:migrations`, and focused tests for defaulting and reporting boundaries.
-Release: likely next feature bundle (candidate 0.14.0).
+Release: pending user-selected feature bundle (candidate 0.14.0).
 
 ### WU-013 — Future-meeting attendance semantics
 

@@ -411,7 +411,12 @@ Release: next dashboard polish bundle.
 
 ### WU-028 — Roster control layout
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-028-roster-control-layout
+Base: fa72a71c7ca2850f4b89311d8626b917e5a95ba1
+Task: provisioning pending
 
 Goal: keep roster rows compact and align the roster header controls.
 Scope: arrange member action buttons horizontally where space allows with responsive fallback; vertically align the shown count and Add member action. Exclude roster permissions and member-action behavior changes.

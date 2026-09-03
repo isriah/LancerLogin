@@ -363,12 +363,12 @@ Release: next data-management UX bundle.
 
 ### WU-025 — Guided-setup refinement
 
-Status: in progress
+Status: merged (`8a94893`)
 
 Owner: Codex coordinator
 Branch: codex/wu-025-guided-setup-refinement
 Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
-Task: provisioning client `client-new-thread:d44ecd97-dc5c-4862-9a5d-17a6fb5d378a`
+Task: provisioning client `client-new-thread:d44ecd97-dc5c-4862-9a5d-17a6fb5d378a` (the task platform did not expose an addressable task ID for archival)
 
 Goal: make guided setup more compact and clearer about progress.
 Scope: refine the listed logo/file, color, copy, spacing, and progress presentation; add a top percentage progress bar. Preserve persisted cross-admin setup state, accessibility, and setup-step behavior.

@@ -52,6 +52,7 @@ Parallel development is permitted only for work units with no material overlap. 
 4. An implementation task may edit only its selected unit's code, tests, and directly relevant documentation. It must not edit `docs/future_work.md`, merge, push directly to `main`, release, deploy, or update the Pi.
 5. The implementation task commits its branch, runs focused verification, and reports its commit SHA, changed files, verification, and integration risks.
 6. The coordination task integrates completed branches one at a time: update/rebase against current `main`, resolve any conflict, rerun affected verification, merge, and then update the work unit to `merged` with its merge and release-bundle reference.
+7. After the coordinator has recorded a final outcome and captured the implementation task's handoff evidence, archive that implementation task. Archive merged tasks after integration; archive blocked or failed tasks only after their blocker or failure evidence is recorded and no follow-up is requested. Keep the coordinator, inbox, and any task that still needs a decision or integration work active. Archived tasks remain available for restoration and audit.
 
 If work units cannot be cleanly isolated, run them serially instead. Planning, diagnosis, and review tasks may run in parallel without reserving a worktree as long as they do not write shared state.
 
@@ -63,7 +64,7 @@ When the user explicitly authorizes a named set of work units for an orchestrati
 2. create one Worktree implementation task per reserved unit, with its branch, scope, sources, verification, and safety boundaries in the task prompt;
 3. wait for task completion, inspect each result, and collect commit SHA, changed-file, verification, and integration-risk evidence;
 4. integrate safe completed branches serially, updating and re-verifying against current `main` before every merge; and
-5. mark merged, blocked, or failed units in this file and report the outcome.
+5. mark merged, blocked, or failed units in this file, report the outcome, and archive the corresponding implementation task once its final evidence is recorded and it has no remaining follow-up.
 
 The coordinator must leave a blocked, failed, or materially conflicting branch unmerged and preserve its evidence for follow-up. This authority never includes a release, push to a private adopter deployment, cloud-resource mutation, or Pi change; those remain subject to the explicit boundaries in `AGENTS.md`.
 

@@ -27,3 +27,5 @@ Execute dependent Git and verification steps as separate commands and check each
 Never create implementation tasks, reserve work, merge, or push merely because units exist. Those mutations require the user to name and authorize the applicable unit(s). Never release, deploy, invoke the private Upgrade workflow, mutate cloud resources, or update the Pi unless the user separately authorizes that action.
 
 When implementation tasks finish, report their commit SHA, changed files, verification, integration result, and remaining risks. Do not claim mocked or local verification as external acceptance.
+
+After the coordinator records the final merged, blocked, or failed outcome and has captured the task's commit/verification/risk evidence, archive the corresponding implementation task. Do not archive it while integration, a user decision, or another requested follow-up remains. Keep the coordinator and inbox tasks active; archived implementation tasks remain available for audit or restoration.

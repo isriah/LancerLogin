@@ -71,6 +71,16 @@ When a task needs a specific decision from the user before it can safely continu
 - For a behavior-changing change, review it against its acceptance criteria, not only whether tests pass.
 - When Codex makes the same kind of mistake twice, add a short, concrete rule to the closest applicable `AGENTS.md` or linked guide.
 
+## Skill validation
+
+The bundled skill validator uses PyYAML from the ignored local `.agents/skill-validator-python/` directory and requires UTF-8 mode on this Windows host. Validate a changed skill with:
+
+```powershell
+$env:PYTHONPATH = "$PWD\.agents\skill-validator-python"
+$env:PYTHONUTF8 = "1"
+& "C:\Python314\python.exe" "C:\Users\Izz\.codex\skills\.system\skill-creator\scripts\quick_validate.py" ".agents\skills\<skill-name>"
+```
+
 ## GitHub CLI
 
 - GitHub CLI is installed and authenticated on this Windows host. Use its absolute path so a stale Codex terminal `PATH` can never block normal work:

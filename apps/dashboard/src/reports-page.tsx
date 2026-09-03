@@ -30,7 +30,7 @@ export function ReportsPage() {
   useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, []);
 
   const effectiveFrom = useBaseline ? baseline : from;
-  const filteredMeetings = useMemo(() => meetings.filter((meeting) => (!effectiveFrom || meeting.startsAt.slice(0, 10) >= effectiveFrom) && (!to || meeting.startsAt.slice(0, 10) <= to) && (meetingType === "all" || meetingType === "optional" ? meetingIsOptional(meeting) : !meetingIsOptional(meeting))), [meetings, effectiveFrom, to, meetingType]);
+  const filteredMeetings = useMemo(() => meetings.filter((meeting) => (!effectiveFrom || meeting.startsAt.slice(0, 10) >= effectiveFrom) && (!to || meeting.startsAt.slice(0, 10) <= to) && (meetingType === "all" || (meetingType === "optional" ? meetingIsOptional(meeting) : !meetingIsOptional(meeting)))), [meetings, effectiveFrom, to, meetingType]);
   const members = useMemo(() => {
     const values = new Map<string, MemberStat>();
     for (const meeting of filteredMeetings) for (const row of rows[meeting.id] ?? []) {

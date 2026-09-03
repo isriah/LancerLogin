@@ -320,6 +320,7 @@ Status: in progress
 Owner: Codex coordinator
 Branch: codex/wu-022-discord-calendar-sync
 Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
+Task: provisioning client `client-new-thread:0c7d865d-89d7-422e-b14a-c8286bad7a44`
 
 Goal: make Discord bulk-event synchronization recover predictably from missing permissions and rate limits.
 Scope: diagnose the reported 403 and 429 paths; provide actionable missing-permission feedback and compliant rate-limit/backoff handling. Exclude permission escalation, policy bypass, and unrelated Discord feature changes.
@@ -335,6 +336,7 @@ Status: in progress
 Owner: Codex coordinator
 Branch: codex/wu-023-dashboard-update-flow
 Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
+Task: provisioning client `client-new-thread:2fd59928-a555-41bf-8f30-bf647521693b`
 
 Goal: make dashboard update actions easier to follow without weakening deployment safeguards.
 Scope: align the dashboard update card with kiosk-update presentation; move its action into the first card; download backups without opening a blank tab; open GitHub in a new tab. Preserve backup-before-update and manual private-workflow authorization.
@@ -350,6 +352,7 @@ Status: in progress
 Owner: Codex coordinator
 Branch: codex/wu-024-data-management-ux
 Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
+Task: provisioning client `client-new-thread:8892b26c-bc72-48f9-a14a-e044a6d7993f`
 
 Goal: make Data management compact and make restore/delete actions deliberate and understandable.
 Scope: reduce the requested card height; style file selection; replace exposed file selectors and destructive controls with Restore/Delete buttons and validated confirmation modals; remove the requested guidance and reset-onboarding cards. Preserve category scope, warnings, and typed confirmations.
@@ -365,6 +368,7 @@ Status: in progress
 Owner: Codex coordinator
 Branch: codex/wu-025-guided-setup-refinement
 Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
+Task: provisioning client `client-new-thread:d44ecd97-dc5c-4862-9a5d-17a6fb5d378a`
 
 Goal: make guided setup more compact and clearer about progress.
 Scope: refine the listed logo/file, color, copy, spacing, and progress presentation; add a top percentage progress bar. Preserve persisted cross-admin setup state, accessibility, and setup-step behavior.

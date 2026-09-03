@@ -195,7 +195,11 @@ Release: likely next dashboard patch bundle (candidate 0.13.1).
 
 ### WU-012 — Member participation start dates
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-012-member-start-dates
+Base: 7d8f07685cc4242e40cd27a9a76e0446539664a8
 
 Goal: ensure attendance reporting begins when each member joins the team rather than retroactively counting earlier meetings.
 Scope: add an editable member start date, defaulted to the roster-added date; exclude meetings before that date from the member’s absence state, attendance calculations, and reports. Extend the merged member detail workspace; preserve historical meeting and attendance records.
@@ -261,7 +265,11 @@ Release: likely next dashboard patch bundle (candidate 0.13.1).
 
 ### WU-018 — Kiosk Wi-Fi scan authorization repair
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-018-wifi-scan-authorization
+Base: 7d8f07685cc4242e40cd27a9a76e0446539664a8
 
 Goal: allow an authorized local operator to rescan Wi-Fi networks after entering the kiosk settings PIN.
 Scope: diagnose and repair the NetworkManager authorization path behind the local network-settings page; preserve PIN, rate-limit, credential, and least-privilege boundaries. Do not expose saved Wi-Fi credentials or broaden arbitrary system-command access.

@@ -316,6 +316,7 @@ test("numeric organization settings can be cleared before they are normalized on
 
 test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding", async () => {
   const source = await readFile("apps/dashboard/src/kiosks-page.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(source, /\/admin\/pairing-codes/);
   assert.match(source, /Replace kiosk/);
   assert.match(source, /Retire kiosk/);
@@ -327,7 +328,13 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(source, /Reset network PIN/);
   assert.match(source, /\/admin\/kiosks\/\$\{encodeURIComponent\(active\.id\)\}\/commands/);
   assert.match(source, /Last Wi-Fi scan/);
-  assert.match(source, /Recovery guidance/);
+  assert.match(source, /const healthy = Boolean\(active && online && active\.readerOnline/);
+  assert.match(source, /healthy \? "Healthy" : online \? "Online"/);
+  assert.match(source, /kiosk-state\$\{healthy \? " kiosk-state-healthy"/);
+  assert.match(source, /kiosk-health-pill/);
+  assert.doesNotMatch(source, /Recovery guidance|recoveryGuidance/);
+  assert.match(styles, /\.kiosk-state-healthy \{[^}]*justify-content: center[^}]*min-height: 3\.1rem/);
+  assert.match(styles, /\.kiosk-health-pill \{[^}]*display: inline-flex[^}]*align-items: center/);
   assert.doesNotMatch(source, /openSetup/);
 });
 

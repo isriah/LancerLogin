@@ -239,18 +239,19 @@ Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-016 — Dashboard card alignment refinement
 
-Status: in progress
+Status: merged (`361c8c9`)
 
 Owner: Codex coordinator
 Branch: codex/wu-016-dashboard-card-alignment
 Base: 2cf4e8443747ffd3fa01b88e2aa5df92b110f480
+Task: provisioning client `client-new-thread:272fcb24-a2c4-42e5-8982-5ea7250fe253` (the task platform did not expose an addressable task ID for archival)
 
 Goal: make dashboard cards and controls consistently aligned and legible without changing product behavior.
 Scope: perform a focused Data-page alignment/sizing pass; align shared card headers and status text vertically, including the Roster Members header/count; make Setup’s “Finish and return” a themed button; remove the displayed Active status from roster entries. Exclude functional workflow changes.
 Sources: Codex task **WU Idea Inbox** (Data, card alignment, setup button, and roster Active items); `docs/DASHBOARD.md`.
 Acceptance: affected cards use consistent vertical alignment at desktop and responsive widths, the Setup action is styled as a themed button, and roster entries no longer display the requested Active status.
 Verification: `npm run verify:dashboard` and focused desktop/mobile visual checks.
-Release: likely next dashboard patch bundle (candidate 0.13.1).
+Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-017 — Kiosk status-card presentation
 

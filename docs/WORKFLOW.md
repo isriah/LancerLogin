@@ -48,6 +48,8 @@ Parallelism is useful only for independently mergeable work. Before creating Wor
 
 Create a separate Worktree and `codex/wu-<id>-<short-name>` branch for each approved independent WU. Start them manually from their committed base. Do not use a persistent coordinator to repeatedly poll or provision an entire backlog.
 
+To assess the whole ready ledger, use `$ll-coordinator assess all`. To approve its immediately preceding recommended first batch without retyping IDs, reply `$ll-coordinator launch suggested`. The coordinator rechecks that suggestion against the current ledger before creating any tasks; if it has become stale, it shows a fresh assessment instead of launching.
+
 When a branch is ready, invoke `$ll-integrate WU-###`. Integration is serial: inspect the handoff, update the branch against current `main`, run affected verification, merge, and record the result. Archive the implementation task only after its final evidence is recorded.
 
 ### 6. Release deliberately

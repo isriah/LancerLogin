@@ -12,6 +12,7 @@ Interpret the requested mode from the remaining prompt text. Accept individual W
 - **list [selector]**: Read-only. Show the selected units' goal, scope, sources, verification, release impact, and likely overlap.
 - **assess <selector>**: Determine which selected ready units are safe to run in parallel. Inspect the named sources where a shared surface is plausible. State a first parallel batch and the units that must wait, with reasons.
 - **launch <selector>**: Use only after explicit user authorization. First perform `assess`, then create a separate named Worktree task for each approved independent unit. Record its branch and task evidence in the ledger before starting it. Do not wait, poll, retry task provisioning automatically, or launch a later cohort.
+- **launch suggested**: Treat this as approval of the first parallel batch proposed by the immediately preceding `assess` response in this same task. Re-read the ledger and verify that every proposed WU is still `ready`, no new active WU overlaps it, and the selection has not changed. If it is still valid, launch exactly that batch. Otherwise, do not launch anything; provide a fresh assessment and wait for approval.
 - **integrate <WU-ID>**: Invoke `$ll-integrate <WU-ID>` and follow that skill.
 
 Treat a possible overlap in a migration/schema, shared contract, authorization policy, deployment configuration, or shared documentation as serial until inspection proves otherwise. Each implementation task has exactly one WU, one branch, and one Worktree. Never create a duplicate task for an active WU.

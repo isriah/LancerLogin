@@ -295,7 +295,7 @@ Status: in progress
 
 Owner: Codex coordinator
 Branch: codex/wu-021-disable-meeting-templates
-Base: a71d5da345d272c25127f3665191b2b36a1578c9
+Base: 93c7d5d204f6e7dafd5522bad59798c3683b2535
 Task: provisioning pending
 
 Goal: remove meeting templates from the normal scheduling workflow.
@@ -418,7 +418,7 @@ Status: in progress
 
 Owner: Codex coordinator
 Branch: codex/wu-029-compact-dashboard-access
-Base: a71d5da345d272c25127f3665191b2b36a1578c9
+Base: 93c7d5d204f6e7dafd5522bad59798c3683b2535
 Task: provisioning pending
 
 Goal: make Dashboard Access selection compact without losing its accessible role semantics.

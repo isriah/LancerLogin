@@ -217,7 +217,11 @@ Release: pending user-selected dashboard patch bundle (candidate 0.13.1).
 
 ### WU-014 — Calendar-led attendance navigation
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-014-attendance-calendar
+Base: f9021408d8080b5e7751f121e02f422fd3a1f712
 
 Goal: let operators reach the appropriate meeting workspace directly from calendar context.
 Scope: show a Home-style calendar view above the Attendance meeting selector; route future calendar selections to the selected meeting’s Meetings view and in-progress or past selections to its Attendance view. Reuse existing meeting routing and calendar data where possible.

@@ -1,5 +1,5 @@
 ---
-name: lancerlogin-integrate
+name: ll-integrate
 description: "Review and serially merge one completed LancerLogin work-unit branch, then update the shared ledger. Use after an implementation task provides a commit handoff."
 ---
 

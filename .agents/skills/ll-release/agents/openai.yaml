@@ -1,7 +1,7 @@
 interface:
   display_name: "LancerLogin Release"
   short_description: "Package merged work into a release"
-  default_prompt: "Use $lancerlogin-release preview-unreleased to review the next LancerLogin release bundle."
+  default_prompt: "Use $ll-release preview-unreleased to review the next LancerLogin release bundle."
 
 policy:
   allow_implicit_invocation: false

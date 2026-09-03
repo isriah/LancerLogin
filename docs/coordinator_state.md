@@ -12,6 +12,6 @@ This file preserves evidence from the retired heartbeat-coordinator workflow. It
 - Provisioning client: `client-new-thread:0f533e7b-cb6e-42ec-8a1f-539cdfed645e`
 - Last observed Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\e0b3\\LancerLogin Workspace`
 
-WU-031 remains `in progress` in `docs/future_work.md`. Resume it manually from its named branch: inspect the commit and verification, then integrate it through `$lancerlogin-integrate WU-031` if it is ready. If it is not, record the evidence and return the unit to `ready` or `blocked` before starting replacement work.
+WU-031 remains `in progress` in `docs/future_work.md`. Resume it manually from its named branch: inspect the commit and verification, then integrate it through `$ll-integrate WU-031` if it is ready. If it is not, record the evidence and return the unit to `ready` or `blocked` before starting replacement work.
 
 Remove this file only after WU-031 has a recorded terminal outcome and the user no longer needs the historical coordinator evidence.

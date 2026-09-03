@@ -1,5 +1,5 @@
 ---
-name: lancerlogin-release
+name: ll-release
 description: "Package merged, unreleased LancerLogin work units into one verified public release. Use only when the user explicitly invokes a release command; never deploy an installation."
 ---
 

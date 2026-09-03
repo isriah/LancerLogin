@@ -1,7 +1,7 @@
 interface:
   display_name: "LancerLogin Coordinator"
   short_description: "Coordinate LancerLogin work units"
-  default_prompt: "Use $lancerlogin-coordinator to list ready LancerLogin work units."
+  default_prompt: "Use $ll-coordinator to list ready LancerLogin work units."
 
 policy:
   allow_implicit_invocation: false

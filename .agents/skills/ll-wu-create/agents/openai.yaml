@@ -1,7 +1,7 @@
 interface:
   display_name: "LancerLogin Create Work Unit"
   short_description: "Create a LancerLogin work unit"
-  default_prompt: "Use $lancerlogin-wu-create to add a work unit for: "
+  default_prompt: "Use $ll-wu-create to add a work unit for: "
 
 policy:
   allow_implicit_invocation: false

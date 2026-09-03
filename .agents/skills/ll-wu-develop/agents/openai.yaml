@@ -1,7 +1,7 @@
 interface:
   display_name: "LancerLogin Develop Work Unit"
   short_description: "Develop one reserved work unit"
-  default_prompt: "Use $lancerlogin-wu-develop to develop the selected reserved work unit."
+  default_prompt: "Use $ll-wu-develop to develop the selected work unit."
 
 policy:
   allow_implicit_invocation: false

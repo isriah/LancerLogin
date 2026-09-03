@@ -1,7 +1,7 @@
 interface:
   display_name: "LancerLogin Inbox Triage"
   short_description: "Turn inbox ideas into proposed work units"
-  default_prompt: "Use $lancerlogin-inbox-process to triage the LancerLogin Inbox."
+  default_prompt: "Use $ll-inbox-process to triage the LancerLogin Inbox."
 
 policy:
   allow_implicit_invocation: false

@@ -10,11 +10,11 @@ idea -> inbox -> triage -> ready work unit -> implement -> verify -> integrate -
 
 ### 1. Capture an idea
 
-Use the **WU Idea Inbox** task, or invoke `$lancerlogin-wu-create <idea>` in a planning task. Inbox intake preserves the request without investigating or starting code. Raw entries live in `docs/idea_inbox.md` and are intentionally not committed until triage.
+Use the **WU Idea Inbox** task, or invoke `$ll-wu-create <idea>` in a planning task. Inbox intake preserves the request without investigating or starting code. Raw entries live in `docs/idea_inbox.md` and are intentionally not committed until triage.
 
 ### 2. Triage and select work
 
-Invoke `$lancerlogin-inbox-process` to group inbox entries, identify duplicates, and propose small work units. After approval, it records the work units in `docs/future_work.md`.
+Invoke `$ll-inbox-process` to group inbox entries, identify duplicates, and propose small work units. After approval, it records the work units in `docs/future_work.md`.
 
 To choose work, open a task and say either:
 
@@ -38,7 +38,7 @@ For a substantial initiative, save a durable plan in `docs/PLANS/<initiative>.md
 
 ### 4. Implement one work unit
 
-Use `$lancerlogin-wu-develop WU-###`. The implementation task reads the named sources, makes only in-scope changes, runs focused verification, reviews its diff, and commits the result. It reports a commit SHA, changed files, verification, and risks.
+Use `$ll-wu-develop WU-###`. The implementation task reads the named sources, makes only in-scope changes, runs focused verification, reviews its diff, and commits the result. It reports a commit SHA, changed files, verification, and risks.
 
 For ordinary serial work, the same task can update the WU status after its commit is safely on `main`. For parallel work, the implementation task leaves `docs/future_work.md` unchanged; the integration task updates it after the branch is merged.
 
@@ -48,11 +48,11 @@ Parallelism is useful only for independently mergeable work. Before creating Wor
 
 Create a separate Worktree and `codex/wu-<id>-<short-name>` branch for each approved independent WU. Start them manually from their committed base. Do not use a persistent coordinator to repeatedly poll or provision an entire backlog.
 
-When a branch is ready, invoke `$lancerlogin-integrate WU-###`. Integration is serial: inspect the handoff, update the branch against current `main`, run affected verification, merge, and record the result. Archive the implementation task only after its final evidence is recorded.
+When a branch is ready, invoke `$ll-integrate WU-###`. Integration is serial: inspect the handoff, update the branch against current `main`, run affected verification, merge, and record the result. Archive the implementation task only after its final evidence is recorded.
 
 ### 6. Release deliberately
 
-Merged WUs accumulate until the user asks for a release. Invoke `$lancerlogin-release preview-unreleased` to review the eligible bundle, then `$lancerlogin-release package-unreleased` after explicitly authorizing publication. A release does not authorize private deployment or a Pi update.
+Merged WUs accumulate until the user asks for a release. Invoke `$ll-release preview-unreleased` to review the eligible bundle, then `$ll-release package-unreleased` after explicitly authorizing publication. A release does not authorize private deployment or a Pi update.
 
 ## Scheduled tasks
 
@@ -67,11 +67,11 @@ Scheduled tasks are for stable, periodic work such as a daily CI review, a relea
 
 ## Skills
 
-- `$lancerlogin-wu-create`: turn a request into a proposed WU; no product implementation.
-- `$lancerlogin-inbox-process`: triage and promote approved inbox entries.
-- `$lancerlogin-wu-develop`: implement one selected WU.
-- `$lancerlogin-integrate`: review and merge one completed WU branch.
-- `$lancerlogin-release`: preview or package merged unreleased WUs.
+- `$ll-wu-create`: turn a request into a proposed WU; no product implementation.
+- `$ll-inbox-process`: triage and promote approved inbox entries.
+- `$ll-wu-develop`: implement one selected WU.
+- `$ll-integrate`: review and merge one completed WU branch.
+- `$ll-release`: preview or package merged unreleased WUs.
 
 Validate a changed skill on this host:
 

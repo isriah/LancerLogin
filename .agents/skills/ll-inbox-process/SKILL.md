@@ -1,6 +1,6 @@
 ---
-name: lancerlogin-inbox-process
-description: "Triage the durable LancerLogin idea inbox into proposed work units, then record user-approved units in the ledger. Use when the user explicitly invokes $lancerlogin-inbox-process; do not implement work units."
+name: ll-inbox-process
+description: "Triage the durable LancerLogin idea inbox into proposed work units, then record user-approved units in the ledger. Use when the user explicitly invokes $ll-inbox-process; do not implement work units."
 ---
 
 # LancerLogin Inbox Process
@@ -19,7 +19,7 @@ Do not modify product code, branches, task reservations, releases, deployment st
 - For each candidate, provide a short outcome, scope and non-goals, relevant sources, observable acceptance criteria, focused verification, dependencies or overlap, and likely release bundle. Use candidate labels, not official WU IDs.
 - For material grouping, product, scope, or release-bundle choices, use the structured Plan-mode decision framework in `AGENTS.md` when available.
 
-Finish with a promotion-ready proposal that identifies the included `IN-###` entries and wait for the user's feedback or explicit approval. Do not invoke `$lancerlogin-wu-create`.
+Finish with a promotion-ready proposal that identifies the included `IN-###` entries and wait for the user's feedback or explicit approval. Do not invoke `$ll-wu-create`.
 
 ## Record approved units
 

@@ -1,6 +1,6 @@
 # Idea Inbox
 
-This is LancerLogin's durable raw-intake record. Capture ideas in the Codex task titled **WU Idea Inbox**; that task appends them here and commits the intake-only change. `$lancerlogin-inbox-process` triages `untriaged` entries and, after user approval, records their final disposition.
+This is LancerLogin's durable raw-intake record. Capture ideas in the Codex task titled **WU Idea Inbox**; that task appends them here without a commit. `$lancerlogin-inbox-process` triages `untriaged` entries and, after user approval, records their final disposition in the planning commit. An explicit inbox-sync request may commit the file earlier when remote backup or cross-device access is needed.
 
 Do not implement work directly from this file.
 

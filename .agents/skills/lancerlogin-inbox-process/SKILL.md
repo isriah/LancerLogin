@@ -5,7 +5,7 @@ description: "Triage the durable LancerLogin idea inbox into proposed work units
 
 # LancerLogin Inbox Process
 
-Read `AGENTS.md`, `docs/idea_inbox.md`, and `docs/future_work.md`. `docs/idea_inbox.md` is the authoritative raw-intake source; do not use Codex task history as a substitute for it. The task titled **WU Idea Inbox** is only the normal place where new entries are captured.
+Read `AGENTS.md`, `docs/idea_inbox.md`, and `docs/future_work.md`. `docs/idea_inbox.md` is the authoritative raw-intake source, including expected uncommitted local entries; do not use Codex task history as a substitute for it. The task titled **WU Idea Inbox** is only the normal place where new entries are captured.
 
 ## Triage
 

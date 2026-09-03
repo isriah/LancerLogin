@@ -207,10 +207,14 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
   assert.match(indicator, /formatVersion/);
   assert.match(source, /private GitHub deployment repository/);
   assert.match(source, /authorize Upgrade manually/);
+  assert.match(source, /window\.open\(workflowUrl, "_blank", "noopener,noreferrer"\)/);
+  assert.match(source, /<div className="panel-heading"><h2>Dashboard<\/h2><button className="primary-button"/);
+  assert.match(source, /Opens the guarded workflow in your private deployment repository in a new tab/);
   assert.match(source, /Update to latest stable/);
   assert.match(source, /command: "install_latest"/);
   assert.match(source, /Waiting for the kiosk to receive the request/);
   assert.match(source, /\/commands`\); setCommands/);
+  assert.doesNotMatch(source, /about:blank|window\.location\.href/);
   assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);
 });
 

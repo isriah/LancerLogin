@@ -580,6 +580,7 @@ label { font-size: .9rem; }
 .release-comparisons > article { padding: 1rem 1.15rem; border: 1px solid var(--line); border-radius: .7rem; background: var(--surface); }
 .release-comparisons h2 { margin: 0 0 .8rem; font-size: 1.05rem; }
 .release-comparisons .panel-heading { margin-bottom: .8rem; }.release-comparisons .panel-heading h2,.release-comparisons .panel-heading p { margin: 0; }
+.update-steps { display: grid; gap: .45rem; margin: 0; padding-left: 1.25rem; color: var(--muted); font-size: .86rem; }
 .version-grid { align-items: stretch; }.version-grid > div,.version-grid > article { display: grid; align-content: start; gap: .3rem; }
 .report-grid { display: grid; grid-template-columns: minmax(0,1.5fr) minmax(18rem,1fr); gap: 1rem; align-items: start; }
 .report-filters { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: .8rem; align-items: end; }.report-filters label { margin: 0; }.report-scope { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .85rem; }

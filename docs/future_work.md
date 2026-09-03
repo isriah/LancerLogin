@@ -303,7 +303,7 @@ Release: next dashboard polish bundle.
 
 ### WU-021 — Disable meeting templates
 
-Status: in progress
+Status: merged (`e394ad7`)
 
 Owner: Codex coordinator
 Branch: codex/wu-021-disable-meeting-templates

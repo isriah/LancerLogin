@@ -809,6 +809,70 @@ test("Discord missing-member workflow mentions only linked absent members and re
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("Discord calendar sync explains missing scheduled-event permission without exposing credentials", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z" });
+  database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ message: "Missing Permissions" }), { status: 403, headers: { "content-type": "application/json" } });
+  try {
+    const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(result.status, 502);
+    const body = await result.json() as { error: string };
+    assert.match(body.error, /Manage Events permission/);
+    assert.doesNotMatch(JSON.stringify(body), /discord-secret/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("bulk Discord calendar sync stops after a permission failure instead of repeating denied requests", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z" });
+  database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
+  database.lists.set("SELECT id FROM meetings", [{ id: "meeting-1" }, { id: "meeting-2" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async () => { calls += 1; return new Response(JSON.stringify({ message: "Missing Permissions" }), { status: 403, headers: { "content-type": "application/json" } }); };
+  try {
+    const result = await worker.fetch(request("/discord/calendar", { all: true }, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(calls, 1);
+    assert.deepEqual(await result.json(), {
+      synced: 0,
+      skipped: 1,
+      failed: 1,
+      outcomes: [
+        { meetingId: "meeting-1", title: "Studio", status: "failed", reason: "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." },
+        { meetingId: "meeting-2", title: "Meeting", status: "skipped", reason: "Calendar sync stopped until the Discord permission is corrected" },
+      ],
+    });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Discord calendar sync retries a rate limit only after Discord's retry delay", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z" });
+  database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const originalSetTimeout = globalThis.setTimeout; let calls = 0; let waited: number | undefined;
+  globalThis.setTimeout = ((callback: () => void, milliseconds?: number) => { waited = milliseconds; callback(); return 0; }) as typeof setTimeout;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return calls === 1
+      ? new Response(JSON.stringify({ retry_after: 1.25 }), { status: 429, headers: { "content-type": "application/json", "retry-after": "10" } })
+      : new Response(JSON.stringify({ id: "event-1" }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(result.status, 200);
+    assert.equal(calls, 2);
+    assert.equal(waited, 1_250);
+    assert.deepEqual(await result.json(), { synced: true, eventId: "event-1" });
+  } finally { globalThis.fetch = originalFetch; globalThis.setTimeout = originalSetTimeout; }
+});
+
 test("Operators can list and resolve Discord attendance contests", async () => {
   const database = new FakeDatabase();
   database.lists.set("FROM discord_attendance_contests c", [{ meetingId: "meeting-1", memberId: "member-1", externalId: "A-1", firstName: "Avery", lastName: "Stone", status: "open", createdAt: "2026-08-30T00:00:00Z" }]);

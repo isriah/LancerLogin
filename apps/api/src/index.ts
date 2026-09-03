@@ -46,6 +46,13 @@ class HttpError extends Error {
   readonly details?: string[];
   constructor(status: number, message: string, details?: string[]) { super(message); this.status = status; this.details = details; }
 }
+class DiscordPermissionError extends HttpError {
+  constructor(calendar = false) { super(502, calendar ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
+}
+class DiscordRateLimitError extends HttpError {
+  readonly retryAfterMs: number;
+  constructor(retryAfterMs: number) { super(503, `Discord is rate limiting calendar sync. Wait ${Math.ceil(retryAfterMs / 1000)} seconds before trying again.`); this.retryAfterMs = retryAfterMs; }
+}
 async function parseJson<T>(request: Request, maxBytes = 262_144): Promise<T> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new HttpError(415, "Content-Type must be application/json");
   if (Number(request.headers.get("content-length") ?? 0) > maxBytes) throw new HttpError(413, "Request body is too large");
@@ -803,11 +810,28 @@ async function discordConfiguration(env: Env, allowUnverified = false): Promise<
   if (!allowUnverified && !record.verifiedAt) throw new HttpError(503, "Discord verification is required before using attendance workflows");
   return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
 }
+const discordRetryDelay = (response: Response, body: Record<string, unknown>) => {
+  const bodyValue = body.retry_after;
+  const retryAfter = typeof bodyValue === "number" ? bodyValue : Number(response.headers.get("retry-after"));
+  return Number.isFinite(retryAfter) && retryAfter >= 0 ? Math.ceil(retryAfter * 1_000) : 1_000;
+};
+const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 async function discordRequest(config: Record<string, string>, path: string, init: RequestInit): Promise<{ response: globalThis.Response; body: Record<string, unknown> }> {
-  const result = await fetch(`https://discord.com/api/v10${path}`, { ...init, headers: { authorization: `Bot ${config.botToken}`, "content-type": "application/json", ...init.headers } });
-  const body = await result.json().catch(() => ({})) as Record<string, unknown>;
-  if (!result.ok) { const message = typeof body.message === "string" ? body.message.replace(/\s+/g, " ").slice(0, 180) : ""; throw new HttpError(502, `Discord rejected the request (${result.status})${message ? `: ${message}` : ""}`); }
-  return { response: result, body };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await fetch(`https://discord.com/api/v10${path}`, { ...init, headers: { authorization: `Bot ${config.botToken}`, "content-type": "application/json", ...init.headers } });
+    const body = await result.json().catch(() => ({})) as Record<string, unknown>;
+    if (result.ok) return { response: result, body };
+    if (result.status === 403) throw new DiscordPermissionError(path.includes("/scheduled-events"));
+    if (result.status === 429) {
+      const retryAfterMs = discordRetryDelay(result, body);
+      if (attempt === 2) throw new DiscordRateLimitError(retryAfterMs);
+      await wait(retryAfterMs);
+      continue;
+    }
+    const message = typeof body.message === "string" ? body.message.replace(/\s+/g, " ").slice(0, 180) : "";
+    throw new HttpError(502, `Discord rejected the request (${result.status})${message ? `: ${message}` : ""}`);
+  }
+  throw new HttpError(502, "Discord request did not complete");
 }
 async function startDiscordVerification(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env, true);
@@ -943,7 +967,17 @@ async function syncDiscordCalendarMeetings(db: D1Database, env: Env, principal: 
     if (meeting.title.length > 100) { failed += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason: "Discord event names are limited to 100 characters" }); continue; }
     if ((meeting.notes?.length ?? 0) > 1_000) { failed += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason: "Discord event descriptions are limited to 1,000 characters" }); continue; }
     try { await syncDiscordCalendarMeeting(db, env, principal, meeting); synced += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "synced" }); }
-    catch (error) { failed += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason: error instanceof Error ? error.message : "Discord request failed" }); }
+    catch (error) {
+      failed += 1;
+      const reason = error instanceof Error ? error.message : "Discord request failed";
+      outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason });
+      if (error instanceof DiscordPermissionError || error instanceof DiscordRateLimitError) {
+        const remaining = ids.slice(ids.indexOf(id) + 1);
+        skipped += remaining.length;
+        outcomes.push(...remaining.map((meetingId) => ({ meetingId, title: "Meeting", status: "skipped" as const, reason: error instanceof DiscordPermissionError ? "Calendar sync stopped until the Discord permission is corrected" : "Calendar sync paused after Discord rate limiting; retry later" })));
+        break;
+      }
+    }
   }
   return { synced, skipped, failed, outcomes };
 }

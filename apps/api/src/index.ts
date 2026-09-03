@@ -198,7 +198,7 @@ async function setupProgress(request: Request, env: Env): Promise<Response> {
 }
 async function members(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, request.method === "GET" ? ["admin", "operator"] : ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const result = await db.prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.email, m.discord_user_id AS discordUserId, m.active, m.created_at AS rosterAddedAt, m.attendance_required_from AS attendanceRequiredFrom, EXISTS(SELECT 1 FROM users u WHERE u.installation_id = m.installation_id AND u.member_id = m.id AND u.active = 1) AS hasDashboardAccess FROM members m WHERE m.installation_id = 'primary' ORDER BY m.last_name, m.first_name").all(); return response({ members: result.results ?? [] }); }
+  if (request.method === "GET") { const result = await db.prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.email, m.discord_user_id AS discordUserId, m.active, m.created_at AS rosterAddedAt, m.attendance_required_from AS attendanceRequiredFrom, EXISTS(SELECT 1 FROM users u WHERE u.installation_id = m.installation_id AND u.member_id = m.id AND u.active = 1) AS hasDashboardAccess FROM members m WHERE m.installation_id = 'primary' ORDER BY m.last_name, m.first_name").all(); const discordConfigured = Boolean((await integrationRecord(env, "discord"))?.verifiedAt); return response({ members: result.results ?? [], discordConfigured }); }
   const input = await parseJson<{ members?: MemberInput[]; mode?: "merge" | "replace" }>(request); const mode = input.mode ?? "merge";
   if (!["merge", "replace"].includes(mode)) throw new HttpError(400, "Roster import mode must be merge or replace");
   if (!Array.isArray(input.members) || !input.members.length || input.members.length > 500) throw new HttpError(400, "Provide between 1 and 500 roster members");
@@ -910,7 +910,7 @@ const discordEphemeral = (content: string) => response({ type: 4, data: { conten
 async function discordInteraction(request: Request, env: Env): Promise<Response> {
   const config = await discordConfiguration(env, true); const raw = await request.text();
   if (!await verifyDiscordInteraction(request, config, raw)) throw new HttpError(401, "Discord interaction signature is invalid");
-  let interaction: { type?: number; guild_id?: string; data?: { custom_id?: string }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
+  let interaction: { type?: number; guild_id?: string; data?: { custom_id?: string; name?: string; options?: { name?: string; value?: string }[] }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
   try { interaction = JSON.parse(raw); } catch { throw new HttpError(400, "Discord interaction body is invalid"); }
   if (interaction.type === 1) return response({ type: 1 });
   const customId = interaction.data?.custom_id ?? ""; const discordUserId = interaction.member?.user?.id ?? interaction.user?.id; const messageId = interaction.message?.id; const db = requireDatabase(env);
@@ -923,6 +923,19 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
   }
   const record = await integrationRecord(env, "discord");
   if (!record?.verifiedAt) return discordEphemeral("This LancerLogin Discord integration has not been verified by an Admin.");
+  if (interaction.type === 2 && interaction.data?.name === "pair" && discordUserId && interaction.guild_id === config.guildId) {
+    const memberId = interaction.data.options?.find((option) => option.name === "member-id")?.value?.trim();
+    if (!memberId || memberId.length > 80) return discordEphemeral("Provide your LancerLogin member ID with /pair. Ask an Operator for help if you need it.");
+    const member = await db.prepare("SELECT id, discord_user_id AS discordUserId, active FROM members WHERE installation_id = 'primary' AND external_id = ?").bind(memberId).first<{ id: string; discordUserId?: string; active: number }>();
+    if (!member || !member.active || member.discordUserId) return discordEphemeral("That member ID cannot be paired. Ask an Operator for help.");
+    const existing = await db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND discord_user_id = ?").bind(discordUserId).first<{ id: string }>();
+    if (existing) return discordEphemeral("This Discord account is already paired. Ask an Operator for help.");
+    await db.batch([
+      db.prepare("UPDATE members SET discord_user_id = ? WHERE installation_id = 'primary' AND id = ? AND active = 1 AND discord_user_id IS NULL").bind(discordUserId, member.id),
+      db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', NULL, 'discord.member_self_paired', 'member', ?, ?, ?)").bind(crypto.randomUUID(), member.id, JSON.stringify({ discordUserId }), new Date().toISOString()),
+    ]);
+    return discordEphemeral("Your Discord account is now paired with your LancerLogin roster entry.");
+  }
   const meetingId = customId.startsWith("lancerlogin-attendance:") ? customId.slice("lancerlogin-attendance:".length) : "";
   if (interaction.type !== 3 || !meetingId || !discordUserId || !messageId) return discordEphemeral("This attendance contest button is invalid or expired. Ask an Operator for help.");
   const recipient = await db.prepare("SELECT r.member_id AS memberId, r.delivered_at AS deliveredAt FROM discord_attendance_recipients r JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE r.installation_id = 'primary' AND r.meeting_id = ? AND r.message_id = ? AND r.discord_user_id = ? AND m.discord_user_id = ? AND m.active = 1").bind(meetingId, messageId, discordUserId, discordUserId).first<{ memberId: string; deliveredAt: string }>();

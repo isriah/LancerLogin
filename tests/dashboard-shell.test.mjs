@@ -93,7 +93,7 @@ test("guided setup keeps branding local and makes its compact progress accessibl
   assert.match(settings, /id="organization-title">Organization/);
   assert.match(settings, /Save organization settings/);
   assert.match(configuration, /Late scan allowance/);
-  assert.match(configuration, /Changes apply to every meeting/);
+  assert.doesNotMatch(configuration, /Changes apply to every meeting/);
 });
 
 test("Operator workspace exposes kiosk monitoring without an Attendance contest-audit panel", async () => {
@@ -190,6 +190,22 @@ test("Settings separates operational configuration, access, and kiosk update com
   assert.match(updates, /<span>Installed<\/span>/);
   assert.match(updates, /<span>Latest compatible<\/span>/);
   assert.match(updates, /className="version-grid"/);
+});
+
+test("settings subpages preserve the parent navigation bubble without duplicating the current-page label", async () => {
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const router = await readFile("apps/dashboard/src/router.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  const organization = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
+  const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
+  const integrations = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
+  assert.ok(shell.includes('const viewingSettings = path.startsWith("/settings/")'));
+  assert.ok(shell.includes('label === "Settings" && viewingSettings && path !== href ? "active" : ""'));
+  assert.ok(shell.includes('path === "/settings/configuration"'));
+  assert.match(router, /aria-current=\{active \? "page" : undefined\}/);
+  assert.match(styles, /\.primary-navigation a\.active,\.settings-navigation a\.active/);
+  assert.match(styles, /\.settings-navigation \{ width: 100%; display: grid/);
+  for (const source of [organization, configuration, integrations]) assert.doesNotMatch(source, /Changes apply after you save them|Changes apply to every meeting after you save them|Saved secret values are encrypted and never displayed/);
 });
 
 test("home shows a five-week rolling calendar, live attendance, and contest review", async () => {

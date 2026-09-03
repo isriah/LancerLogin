@@ -83,6 +83,21 @@ test("mobile navigation opens as a dismissible side drawer", async ({ page }) =>
   await expect(navigation).not.toBeVisible();
 });
 
+test("Settings keeps its parent bubble and the current subpage at desktop and mobile widths", async ({ page }) => {
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/settings/configuration");
+    if (viewport.width < 700) await page.getByRole("button", { name: "Open navigation" }).click();
+    const settings = page.getByRole("link", { name: "Settings", exact: true });
+    await expect(settings).toBeVisible();
+    await expect(settings).toHaveClass(/active/);
+    await expect(settings).not.toHaveAttribute("aria-current");
+    const currentCategory = page.getByRole("navigation", { name: "Settings categories" }).getByRole("link", { name: "Configuration" });
+    await expect(currentCategory).toHaveAttribute("aria-current", "page");
+    await expect(page.getByText("Changes apply to every meeting after you save them")).toHaveCount(0);
+  }
+});
+
 test("meeting actions move below meeting data on a narrow screen", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/meetings");

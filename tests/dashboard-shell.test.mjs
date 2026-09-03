@@ -277,6 +277,7 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   const setup = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
   assert.match(styles, /--card-padding: 1\.35rem/);
   assert.match(styles, /\.kiosk-monitor[^\n]*padding: var\(--card-padding\)/);
+  assert.match(styles, /\.attendance-layout \{[^}]*margin-top: 1rem/);
   assert.match(styles, /\.attendance-card \.panel-heading \{ padding: var\(--card-padding\)/);
   assert.match(styles, /\.report-grid \{ display: grid; grid-template-columns: minmax\(0,1\.5fr\) minmax\(18rem,1fr\)/);
   assert.match(styles, /\.leaderboard-card \{ grid-row: span 2; \}/);

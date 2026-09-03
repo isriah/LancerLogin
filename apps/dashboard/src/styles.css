@@ -244,7 +244,7 @@ main[aria-busy="true"] .setup-progress { display: none; }
 .meeting-id button { grid-column: 2; grid-row: 1 / 3; padding: .45rem .65rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .45rem; cursor: pointer; }
 .meeting-actions button { flex: 1; padding: .55rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .5rem; cursor: pointer; }
 .meeting-actions button:disabled { opacity: .5; cursor: not-allowed; }
-.attendance-layout { display: grid; grid-template-columns: minmax(17rem,.6fr) minmax(0,1.4fr); gap: 1rem; align-items: start; }
+.attendance-layout { display: grid; grid-template-columns: minmax(17rem,.6fr) minmax(0,1.4fr); gap: 1rem; align-items: start; margin-top: 1rem; }
 .attendance-card { overflow: hidden; border: 1px solid var(--line); background: var(--surface); border-radius: 1rem; }
 .attendance-card .panel-heading { padding: var(--card-padding); }
 .attendance-table { display: grid; }

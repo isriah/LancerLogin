@@ -189,6 +189,19 @@ test("protected routes immediately honor account deactivation and role changes",
   assert.equal((await worker.fetch(request("/meetings", undefined, { cookie: staleAdmin }), { ...env, DB: changed } as unknown as Env)).status, 200);
 });
 
+test("stored meeting templates remain readable but template mutations are unavailable", async () => {
+  const database = new FakeDatabase();
+  database.lists.set("FROM meeting_templates", [{ id: "template-1", name: "Practice", title: "Practice meeting" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("operator");
+  const stored = await worker.fetch(request("/meeting-templates", undefined, { cookie }), env);
+  assert.equal(stored.status, 200);
+  assert.deepEqual(await stored.json(), { templates: [{ id: "template-1", name: "Practice", title: "Practice meeting" }] });
+  assert.equal((await worker.fetch(request("/meeting-templates", { name: "New template" }, { cookie }), env)).status, 404);
+  assert.equal((await worker.fetch(request("/meeting-templates/template-1", undefined, { method: "DELETE", cookie }), env)).status, 404);
+  assert.equal(database.calls.some((call) => /(?:INSERT INTO|UPDATE|DELETE FROM) meeting_templates/.test(call.sql)), false);
+});
+
 test("branding stores a bounded image asset in D1 and rejects remote logo URLs", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
@@ -440,13 +453,6 @@ test("Operator can create meetings and reasoned attendance corrections", async (
   const corrected = await worker.fetch(request("/attendance/corrections", { memberId: "member-1", meetingId: "meeting-1", disposition: "excused", reason: "School event" }, { cookie: operator }), env);
   assert.equal(corrected.status, 201);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("attendance.corrected")));
-});
-
-test("Operator can save reusable meeting timing defaults", async () => {
-  const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/meeting-templates", { name: "Weekly build", title: "Build", startTime: "18:30", durationMinutes: 150, required: true, recurrenceFrequency: "weekly", recurrenceDurationDays: 84 }, { cookie: await sessionCookie("operator") }), env);
-  assert.equal(result.status, 201); assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO meeting_templates") && call.values.includes("18:30") && call.values.includes(150))); assert.ok(database.calls.some((call) => call.values.includes("meeting_template.created")));
-  const invalid = await worker.fetch(request("/meeting-templates", { name: "Broken", title: "Build", startTime: "25:00", durationMinutes: 150 }, { cookie: await sessionCookie("operator") }), env); assert.equal(invalid.status, 400);
 });
 
 test("Reports may request inactive roster history without changing the default attendance roster", async () => {

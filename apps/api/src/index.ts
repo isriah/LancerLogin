@@ -18,7 +18,6 @@ type BrandingInput = { organizationName?: string; subtitle?: string | null; logo
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null; attendanceRequiredFrom?: string | null };
 type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
-type MeetingTemplateInput = { name?: string; title?: string; startTime?: string; durationMinutes?: number; required?: boolean; notes?: string | null; recurrenceFrequency?: RecurrenceFrequency | null; recurrenceDurationDays?: number | null };
 type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
 
 const baseHeaders = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
@@ -362,10 +361,6 @@ async function completeKioskCommand(request: Request, env: Env, commandId: strin
   return response({ completed: true, commandId });
 }
 function validTimestamp(value: string | undefined): value is string { return Boolean(value && Number.isFinite(Date.parse(value))); }
-function validateMeetingTemplateInput(input: MeetingTemplateInput): asserts input is MeetingTemplateInput & { name: string; title: string; startTime: string; durationMinutes: number } {
-  if (!input.name?.trim() || input.name.length > 120 || !input.title?.trim() || input.title.length > 120 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(input.startTime ?? "") || !Number.isInteger(input.durationMinutes) || input.durationMinutes! < 1 || input.durationMinutes! > 1440 || (input.notes?.length ?? 0) > 2_000 || (input.recurrenceFrequency !== null && input.recurrenceFrequency !== undefined && !["daily", "weekly", "biweekly", "monthly"].includes(input.recurrenceFrequency)) || (input.recurrenceDurationDays !== null && input.recurrenceDurationDays !== undefined && (!Number.isInteger(input.recurrenceDurationDays) || input.recurrenceDurationDays < 1 || input.recurrenceDurationDays > 3650))) throw new HttpError(400, "Template needs a name, meeting title, valid start time and duration, and valid optional recurrence settings");
-  if (!input.recurrenceFrequency && input.recurrenceDurationDays !== null && input.recurrenceDurationDays !== undefined) throw new HttpError(400, "A recurrence duration requires a recurrence frequency");
-}
 function validateMeetingInput(input: MeetingInput): asserts input is MeetingInput & { title: string; startsAt: string; endsAt: string } {
   if (!input.title?.trim() || input.title.length > 120 || (input.notes?.length ?? 0) > 2_000 || !validTimestamp(input.startsAt) || !validTimestamp(input.endsAt ?? undefined) || Date.parse(input.endsAt!) <= Date.parse(input.startsAt!)) throw new HttpError(400, "Meeting needs a title, valid start and end times, an end after its start, and optional notes under 2,000 characters");
 }
@@ -413,23 +408,10 @@ async function meetings(request: Request, env: Env): Promise<Response> {
   const created = occurrences.map((occurrence, index) => ({ id: ids[index], title: input.title!.trim(), ...occurrence, required: input.required !== false, notes: input.notes?.trim() || null, seriesId, recurrenceFrequency: input.recurrence?.frequency ?? null, recurrenceUntil: input.recurrence?.until ?? null, recurrenceSequence: occurrence.sequence }));
   return response({ meeting: created[0], meetings: created, seriesId }, 201);
 }
-async function meetingTemplates(request: Request, env: Env, templateId?: string): Promise<Response> {
+async function meetingTemplates(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
-  if (request.method === "GET") {
-    const result = await db.prepare("SELECT id, name, title, start_time AS startTime, duration_minutes AS durationMinutes, required, notes, recurrence_frequency AS recurrenceFrequency, recurrence_duration_days AS recurrenceDurationDays, created_at AS createdAt, updated_at AS updatedAt FROM meeting_templates WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE LIMIT 200").all();
-    return response({ templates: result.results ?? [] });
-  }
-  if (!templateId) {
-    const input = await parseJson<MeetingTemplateInput>(request); validateMeetingTemplateInput(input); const id = crypto.randomUUID(); const now = new Date().toISOString();
-    try { await db.prepare("INSERT INTO meeting_templates (id, installation_id, name, title, start_time, duration_minutes, required, notes, recurrence_frequency, recurrence_duration_days, created_by, created_at, updated_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, input.name.trim(), input.title.trim(), input.startTime, input.durationMinutes, input.required === false ? 0 : 1, input.notes?.trim() || null, input.recurrenceFrequency ?? null, input.recurrenceDurationDays ?? null, principal.userId, now, now).run(); } catch (error) { if ((error as Error).message.includes("UNIQUE")) throw new HttpError(409, "A meeting template already uses that name"); throw error; }
-    await writeAudit(db, principal, "meeting_template.created", "meeting_template", id, { name: input.name.trim() }); return response({ id }, 201);
-  }
-  if (request.method === "DELETE") {
-    const result = await db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary' AND id = ?").bind(templateId).run(); if ((result.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting template not found"); await writeAudit(db, principal, "meeting_template.deleted", "meeting_template", templateId); return response({ deleted: true });
-  }
-  const input = await parseJson<MeetingTemplateInput>(request); validateMeetingTemplateInput(input);
-  try { const result = await db.prepare("UPDATE meeting_templates SET name = ?, title = ?, start_time = ?, duration_minutes = ?, required = ?, notes = ?, recurrence_frequency = ?, recurrence_duration_days = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ?").bind(input.name.trim(), input.title.trim(), input.startTime, input.durationMinutes, input.required === false ? 0 : 1, input.notes?.trim() || null, input.recurrenceFrequency ?? null, input.recurrenceDurationDays ?? null, new Date().toISOString(), templateId).run(); if ((result.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting template not found"); } catch (error) { if ((error as Error).message.includes("UNIQUE")) throw new HttpError(409, "A meeting template already uses that name"); throw error; }
-  await writeAudit(db, principal, "meeting_template.updated", "meeting_template", templateId, { name: input.name.trim() }); return response({ updated: true });
+  const result = await db.prepare("SELECT id, name, title, start_time AS startTime, duration_minutes AS durationMinutes, required, notes, recurrence_frequency AS recurrenceFrequency, recurrence_duration_days AS recurrenceDurationDays, created_at AS createdAt, updated_at AS updatedAt FROM meeting_templates WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE LIMIT 200").all();
+  return response({ templates: result.results ?? [] });
 }
 async function updateMeeting(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
@@ -1217,8 +1199,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "GET") result = await kioskCommandStatus(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/admin/simulator" && ["GET", "POST"].includes(request.method)) result = await simulatedKiosk(request, env);
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
-    else if (url.pathname === "/meeting-templates" && ["GET", "POST"].includes(request.method)) result = await meetingTemplates(request, env);
-    else if (/^\/meeting-templates\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await meetingTemplates(request, env, decodeURIComponent(url.pathname.split("/")[2]));
+    else if (url.pathname === "/meeting-templates" && request.method === "GET") result = await meetingTemplates(request, env);
     else if (url.pathname === "/meetings/bulk-delete" && request.method === "POST") result = await bulkDeleteMeetings(request, env);
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeeting(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "DELETE") result = await deleteMeetings(request, env, decodeURIComponent(url.pathname.split("/")[2]));

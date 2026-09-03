@@ -124,10 +124,8 @@ test("Operator workspace exposes kiosk monitoring without an Attendance contest-
   assert.match(styles, /\.meeting-create-form input\[type="checkbox"\]/);
   assert.match(styles, /\.meeting-directory input\[type="checkbox"\]:checked/);
   assert.match(meetings, /Create recurring series/);
-  assert.match(meetings, /Start from a template/);
   assert.match(meetings, /Duplicate an existing meeting/);
-  assert.match(meetings, /Save as template/);
-  assert.match(meetings, /\/meeting-templates/);
+  assert.doesNotMatch(meetings, /template/i);
   assert.doesNotMatch(meetings, /Test meeting/);
 });
 

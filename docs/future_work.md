@@ -444,7 +444,7 @@ Release: next settings polish bundle.
 
 ### WU-030 — Contest-review navigation and notification
 
-Status: ready
+Status: merged (`1925346`)
 
 Goal: surface pending contests without making Reports their primary workspace.
 Scope: remove the Reports pending-contests card; retain contest review on the relevant meeting page; add a dashboard-shell notifier modeled on update notifications. Preserve existing contest data and review outcomes.

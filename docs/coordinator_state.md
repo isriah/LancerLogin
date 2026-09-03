@@ -10,8 +10,8 @@ Coordinator task: `01a065cb-bd5b-7992-b770-56d5191f4e59`
 Mode: complete-all
 Execution set: WU-019, WU-020, WU-021, WU-022, WU-023, WU-024, WU-025, WU-026, WU-027, WU-028, WU-029, WU-030, WU-031
 Heartbeat: `lancerlogin-coordinator-checkpoints` (active, every five minutes)
-Last checkpoint: WU-031 provisioning check 1/3 found branch-owned Worktree `C:\\Users\\Izz\\.codex\\worktrees\\e0b3\\LancerLogin Workspace` at base `fb46dae27718659a49eac8d390de5c91a1ae5ac8`, but task inventory exposed no addressable task ID for client `client-new-thread:0f533e7b-cb6e-42ec-8a1f-539cdfed645e`.
-Next checkpoint: make bounded WU-031 provisioning check 2/3.
+Last checkpoint: WU-031 provisioning check 2/3 found branch-owned Worktree `C:\\Users\\Izz\\.codex\\worktrees\\e0b3\\LancerLogin Workspace` at implementation commit `cc1f5c1`, but task inventory still exposed no addressable task ID for client `client-new-thread:0f533e7b-cb6e-42ec-8a1f-539cdfed645e`.
+Next checkpoint: make bounded WU-031 provisioning check 3/3, then apply the recorded-branch recovery rule if the task ID remains unresolved.
 User decision: none
 
 ## Checkpoint format

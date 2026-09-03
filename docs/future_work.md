@@ -184,7 +184,11 @@ Release: v0.13.0 roster, scheduling, and kiosk operations; requires follow-on wo
 
 ### WU-011 — Reports meeting-type correctness
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-011-reports-meeting-types
+Base: c75c70467f7f1cbdf797273517bf59a6163174df
 
 Goal: make Reports meeting filters accurately represent every supported meeting type and consistently return matching data.
 Scope: fix the empty result for “All meetings”; treat an unchecked existing “attendance required” setting as the first-class Optional meeting type in meeting creation/editing and Reports; exclude test meetings from Reports; correct the crowded member-name/ID presentation and sort-control overflow. No new meeting-type storage field or checkbox is introduced.

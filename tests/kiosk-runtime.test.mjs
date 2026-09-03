@@ -149,7 +149,15 @@ test("NetworkManager adapter lists Wi-Fi without retaining passwords", async () 
 
 test("network policy grants only narrow NetworkManager actions to the kiosk account", async () => {
   const policy = await readFile("apps/kiosk/polkit/49-lancerlogin-network.rules", "utf8");
-  assert.match(policy, /subject\.user === "lancerlogin"/); assert.match(policy, /NetworkManager\.network-control/); assert.doesNotMatch(policy, /polkit\.Result\.YES[\s\S]*return polkit\.Result\.YES/);
+  const allowed = [...policy.matchAll(/"(org\.freedesktop\.NetworkManager\.[^"]+)"/g)].map(([, action]) => action);
+  assert.deepEqual(allowed, [
+    "org.freedesktop.NetworkManager.enable-disable-wifi",
+    "org.freedesktop.NetworkManager.network-control",
+    "org.freedesktop.NetworkManager.settings.modify.system",
+    "org.freedesktop.NetworkManager.wifi.scan",
+  ]);
+  assert.match(policy, /subject\.user === "lancerlogin"/);
+  assert.doesNotMatch(policy, /polkit\.Result\.YES[\s\S]*return polkit\.Result\.YES/);
 });
 
 test("network diagnostics exposes only connection type and active Wi-Fi signal", async () => {

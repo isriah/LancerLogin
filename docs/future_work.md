@@ -296,7 +296,7 @@ Status: in progress
 Owner: Codex coordinator
 Branch: codex/wu-021-disable-meeting-templates
 Base: 93c7d5d204f6e7dafd5522bad59798c3683b2535
-Task: provisioning pending
+Task: provisioning client `client-new-thread:93e2161c-1ed9-4c0c-b7a0-17610f572ca3`
 
 Goal: remove meeting templates from the normal scheduling workflow.
 Scope: disable template selection, creation, and use in product workflows while preserving existing stored template records. Exclude deletion or migration of stored templates and changes to meeting/recurrence behavior.
@@ -419,7 +419,7 @@ Status: in progress
 Owner: Codex coordinator
 Branch: codex/wu-029-compact-dashboard-access
 Base: 93c7d5d204f6e7dafd5522bad59798c3683b2535
-Task: provisioning pending
+Task: provisioning client `client-new-thread:2c6de0aa-110e-49df-a0c1-c55a6d9d4740`
 
 Goal: make Dashboard Access selection compact without losing its accessible role semantics.
 Scope: replace oversized visual radio selectors with compact toggle-style controls while retaining keyboard operation, labels, selected-state communication, and authorization behavior.

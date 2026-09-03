@@ -315,12 +315,12 @@ Release: next scheduling simplification bundle.
 
 ### WU-022 — Discord calendar-sync resilience
 
-Status: in progress
+Status: merged (`527ad6a`)
 
 Owner: Codex coordinator
 Branch: codex/wu-022-discord-calendar-sync
 Base: 7f7ad9c521dac435a10b3b47a669dbdbcdf13e05
-Task: provisioning client `client-new-thread:0c7d865d-89d7-422e-b14a-c8286bad7a44`
+Task: provisioning client `client-new-thread:0c7d865d-89d7-422e-b14a-c8286bad7a44` (the task platform did not expose an addressable task ID for archival)
 
 Goal: make Discord bulk-event synchronization recover predictably from missing permissions and rate limits.
 Scope: diagnose the reported 403 and 429 paths; provide actionable missing-permission feedback and compliant rate-limit/backoff handling. Exclude permission escalation, policy bypass, and unrelated Discord feature changes.

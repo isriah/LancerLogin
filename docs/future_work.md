@@ -280,6 +280,149 @@ Acceptance: after successful local PIN entry, a supported Pi can rescan Wi-Fi wi
 Verification: `npm run verify:kiosk`, focused local-service authorization tests, and manual validation on the supported Pi.
 Release: v0.13.1 dashboard and kiosk reliability refinement; supported-Pi validation remains required.
 
+### WU-019 — Contest-resolution feedback
+
+Status: ready
+
+Goal: make contest review failures visible and actionable to an operator.
+Scope: validate a required review reason before a contest resolution is submitted and present clear feedback if it is missing or a resolution fails. Preserve contest policy, audit history, and existing approval outcomes.
+Sources: `docs/idea_inbox.md` (IN-019); `apps/dashboard/src/reports-page.tsx`; `apps/api/src/worker.mjs`.
+Acceptance: an operator cannot accidentally leave a contest open without seeing why; valid resolutions retain their current behavior.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused contest-resolution coverage.
+Release: next dashboard reliability bundle.
+
+### WU-020 — Meetings form presentation polish
+
+Status: ready
+
+Goal: make meeting creation and discovery controls clearer and visually consistent with the active theme.
+Scope: remove the requested Optional-meeting tooltip; theme Meetings-page checkboxes; rename the search heading to “Search Meetings.” Exclude scheduling, recurrence, and attendance-policy changes.
+Sources: `docs/idea_inbox.md` (IN-020, IN-026); `apps/dashboard/src/meetings-page.tsx`; `docs/DASHBOARD.md`.
+Acceptance: the listed controls use the active theme and requested labels/copy, without changing meeting behavior.
+Verification: `npm run verify:dashboard`; focused Meetings form and theme coverage.
+Release: next dashboard polish bundle.
+
+### WU-021 — Disable meeting templates
+
+Status: ready
+
+Goal: remove meeting templates from the normal scheduling workflow.
+Scope: disable template selection, creation, and use in product workflows while preserving existing stored template records. Exclude deletion or migration of stored templates and changes to meeting/recurrence behavior.
+Sources: `docs/idea_inbox.md` (IN-021); WU-008; `apps/dashboard/src/meetings-page.tsx`; `apps/api/migrations/0017_meeting_templates.sql`.
+Acceptance: operators cannot create or apply templates through the dashboard, and existing meetings remain unchanged.
+Verification: `npm run verify:api`, `npm run verify:dashboard`, and focused template-flow coverage.
+Release: next scheduling simplification bundle.
+
+### WU-022 — Discord calendar-sync resilience
+
+Status: ready
+
+Goal: make Discord bulk-event synchronization recover predictably from missing permissions and rate limits.
+Scope: diagnose the reported 403 and 429 paths; provide actionable missing-permission feedback and compliant rate-limit/backoff handling. Exclude permission escalation, policy bypass, and unrelated Discord feature changes.
+Sources: `docs/idea_inbox.md` (IN-022); `apps/api/src/integration-workflows.mjs`; `apps/api/src/worker.mjs`; `docs/DECISIONS.md`.
+Acceptance: supported sync attempts distinguish configuration/permission failures from retryable rate limits, respect provider retry guidance, and expose no secrets.
+Verification: `npm run verify:api`; mocked Discord 403/429 coverage; supported-server manual validation.
+Release: next integration reliability bundle.
+
+### WU-023 — Dashboard update-flow polish
+
+Status: ready
+
+Goal: make dashboard update actions easier to follow without weakening deployment safeguards.
+Scope: align the dashboard update card with kiosk-update presentation; move its action into the first card; download backups without opening a blank tab; open GitHub in a new tab. Preserve backup-before-update and manual private-workflow authorization.
+Sources: `docs/idea_inbox.md` (IN-023); `apps/dashboard/src/updates-page.tsx`; `docs/DASHBOARD.md`; `docs/BOOTSTRAPPING.md`.
+Acceptance: the updated layout follows the requested navigation behavior and cannot dispatch deployment or bypass the backup requirement.
+Verification: `npm run verify:dashboard`; focused browser checks for backup/download and external-link behavior.
+Release: next operations polish bundle.
+
+### WU-024 — Data-management action UX
+
+Status: ready
+
+Goal: make Data management compact and make restore/delete actions deliberate and understandable.
+Scope: reduce the requested card height; style file selection; replace exposed file selectors and destructive controls with Restore/Delete buttons and validated confirmation modals; remove the requested guidance and reset-onboarding cards. Preserve category scope, warnings, and typed confirmations.
+Sources: `docs/idea_inbox.md` (IN-024, IN-033); `apps/dashboard/src/data-settings.tsx`; `docs/BACKUP-RESTORE.md`; `docs/DECISIONS.md`.
+Acceptance: restore and destructive actions remain explicitly confirmed and correctly scoped, while the listed UI clutter is absent.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused restore/delete confirmation coverage.
+Release: next data-management UX bundle.
+
+### WU-025 — Guided-setup refinement
+
+Status: ready
+
+Goal: make guided setup more compact and clearer about progress.
+Scope: refine the listed logo/file, color, copy, spacing, and progress presentation; add a top percentage progress bar. Preserve persisted cross-admin setup state, accessibility, and setup-step behavior.
+Sources: `docs/idea_inbox.md` (IN-025); `apps/dashboard/src/setup-workspace.tsx`; `docs/DASHBOARD.md`; `docs/DECISIONS.md`.
+Acceptance: the requested redundant copy/status elements are absent, controls are styled consistently, and progress is clearly visible without changing setup completion semantics.
+Verification: `npm run verify:dashboard`; focused guided-setup and responsive browser coverage.
+Release: next onboarding polish bundle.
+
+### WU-026 — Reports filter and selector reliability
+
+Status: ready
+
+Goal: restore correct All-meetings reporting and keep leaderboard controls usable.
+Scope: diagnose and repair the All-meetings regression; add regression coverage explaining the earlier verification gap; fix Attendance-leaderboard sort-selector overflow. Preserve reporting baseline and optional/regular semantics.
+Sources: `docs/idea_inbox.md` (IN-027, IN-028); WU-011; `apps/dashboard/src/reports-page.tsx`; `docs/DASHBOARD.md`.
+Acceptance: All, Regular, and Optional filters return their intended completed meetings, selector controls do not overflow at supported widths, and automated coverage catches the reported regression.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused report filter and responsive browser coverage.
+Release: next dashboard reliability bundle.
+
+### WU-027 — Attendance calendar spacing
+
+Status: ready
+
+Goal: restore comfortable separation between the Attendance calendar and its cards.
+Scope: add the missing vertical spacing only. Exclude calendar routing, meeting selection, and attendance behavior changes.
+Sources: `docs/idea_inbox.md` (IN-029); `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/styles.css`.
+Acceptance: calendar and card surfaces have a consistent visible gap at desktop and mobile widths.
+Verification: `npm run verify:dashboard`; focused responsive visual checks.
+Release: next dashboard polish bundle.
+
+### WU-028 — Roster control layout
+
+Status: ready
+
+Goal: keep roster rows compact and align the roster header controls.
+Scope: arrange member action buttons horizontally where space allows with responsive fallback; vertically align the shown count and Add member action. Exclude roster permissions and member-action behavior changes.
+Sources: `docs/idea_inbox.md` (IN-030, IN-031); `apps/dashboard/src/roster-page.tsx`; `apps/dashboard/src/styles.css`.
+Acceptance: supported desktop rows are not unnecessarily tall, header controls align, and narrow layouts remain usable.
+Verification: `npm run verify:dashboard`; focused desktop/mobile roster visual checks.
+Release: next dashboard polish bundle.
+
+### WU-029 — Compact dashboard-access controls
+
+Status: ready
+
+Goal: make Dashboard Access selection compact without losing its accessible role semantics.
+Scope: replace oversized visual radio selectors with compact toggle-style controls while retaining keyboard operation, labels, selected-state communication, and authorization behavior.
+Sources: `docs/idea_inbox.md` (IN-032); `apps/dashboard/src/roster-page.tsx`; `docs/DASHBOARD.md`; `docs/DECISIONS.md`.
+Acceptance: access role selection is compact, keyboard-accessible, and produces the same saved role/access outcomes.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused access-control accessibility coverage.
+Release: next settings polish bundle.
+
+### WU-030 — Contest-review navigation and notification
+
+Status: ready
+
+Goal: surface pending contests without making Reports their primary workspace.
+Scope: remove the Reports pending-contests card; retain contest review on the relevant meeting page; add a dashboard-shell notifier modeled on update notifications. Preserve existing contest data and review outcomes.
+Sources: `docs/idea_inbox.md` (IN-034); WU-003; WU-019; `apps/dashboard/src/reports-page.tsx`; `apps/dashboard/src/update-indicator.tsx`.
+Acceptance: pending contests are discoverable from the shell and reviewable from their meeting, while Reports no longer contains the card.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused contest navigation/notification coverage.
+Release: next dashboard workflow bundle.
+
+### WU-031 — Settings hierarchy and copy cleanup
+
+Status: ready
+
+Goal: make Settings navigation clearer while removing the requested redundant helper copy.
+Scope: remove the listed Configuration, Integrations, and Organization cards; show the parent Settings item with an active bubble while a subpage is selected. Exclude setting behavior, authorization, and secret-storage changes.
+Sources: `docs/idea_inbox.md` (IN-035, IN-036, IN-037, IN-038); `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/configuration-settings.tsx`; `apps/dashboard/src/integration-settings.tsx`; `apps/dashboard/src/organization-settings.tsx`.
+Acceptance: the specified cards are absent and Settings/subpage navigation communicates hierarchy at desktop and responsive widths.
+Verification: `npm run verify:dashboard`; focused settings-navigation accessibility and visual coverage.
+Release: next settings polish bundle.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

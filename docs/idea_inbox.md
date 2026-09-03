@@ -164,160 +164,160 @@ Disposition: WU-015
 
 ## IN-019
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: When approving an attendance contest without a reason, do not silently fail and leave the contest open; validate clearly or handle the missing reason.
-Disposition:
+Disposition: WU-019
 
 ## IN-020
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Remove the Meetings-page Attendance required tooltip that reads Uncheck for an optional meeting.
-Disposition:
+Disposition: WU-020
 
 ## IN-021
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Disable meeting-template functionality.
-Disposition:
+Disposition: WU-021
 
 ## IN-022
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Diagnose Discord bulk-event sync: initial events fail with 403 Missing Permissions and later events fail with 429 rate limiting.
-Disposition:
+Disposition: WU-022
 
 ## IN-023
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Make the dashboard update card mimic the kiosk update card; move the update button into its first card; download backups without opening a blank tab; and open GitHub in a new tab rather than navigating away.
-Disposition:
+Disposition: WU-023
 
 ## IN-024
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Reduce excessive Data-management-card height (https://i.imgur.com/ToR1rmA.png); style and align Choose file; move delete-meeting confirmation to a post-click popup; remove the category guidance card; and remove the restart-onboarding card from Settings > Data.
-Disposition:
+Disposition: WU-024
 
 ## IN-025
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Refine guided setup: style Choose file; remove stored in d1 from logo selection; add spacing between theme selection and color buttons (https://i.imgur.com/CM9uDEb.png); remove light/dark preference text and synchronized-progress card; reduce padding above Save and continue; and add a top progress bar containing the percentage.
-Disposition:
+Disposition: WU-025
 
 ## IN-026
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Make Meetings-page checkboxes follow the active theme and rename the search header to Search Meetings.
-Disposition:
+Disposition: WU-020
 
 ## IN-027
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Fix the sort-field overflow within the Attendance leaderboard selector.
-Disposition:
+Disposition: WU-026
 
 ## IN-028
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Investigate the Reports All meetings regression: default All meetings still shows no results while Required/Regular meetings does, despite the last release explicitly claiming this was fixed; determine why verification missed it.
-Disposition:
+Disposition: WU-026
 
 ## IN-029
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Add missing vertical padding between the calendar and cards on the Attendance page.
-Disposition:
+Disposition: WU-027
 
 ## IN-030
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Lay roster action buttons out horizontally, not vertically, to prevent overly tall member rows (https://i.imgur.com/9H1rBUS.png).
-Disposition:
+Disposition: WU-028
 
 ## IN-031
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Vertically align the Roster-page shown count and Add member button (https://i.imgur.com/ytdn1ql.png).
-Disposition:
+Disposition: WU-028
 
 ## IN-032
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Replace oversized Dashboard Access radio selectors with compact slide toggles (https://i.imgur.com/UK2mU0G.png).
-Disposition:
+Disposition: WU-029
 
 ## IN-033
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: In Data management, hide the visible file selector behind a Restore file button and a validation/restore modal; make delete meetings and delete attendance each a single button with confirmation and warnings in a modal.
-Disposition:
+Disposition: WU-024
 
 ## IN-034
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Remove Contests awaiting review from Reports; show a pending-contests notifier in the upper right like update notifications; retain contests on the relevant meeting page.
-Disposition:
+Disposition: WU-030
 
 ## IN-035
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Remove the Settings > Configuration card that says Changes apply to every meeting after you save them.
-Disposition:
+Disposition: WU-031
 
 ## IN-036
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: When viewing a Settings sub-page, give the parent Settings item a bubble matching the active sub-page treatment.
-Disposition:
+Disposition: WU-031
 
 ## IN-037
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Remove the Settings > Integrations card that says Saved secret values are encrypted and never displayed.
-Disposition:
+Disposition: WU-031
 
 ## IN-038
 
-Status: untriaged
+Status: promoted
 Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Remove the Settings > Organization card that reads Changes apply after you save them.
-Disposition:
+Disposition: WU-031

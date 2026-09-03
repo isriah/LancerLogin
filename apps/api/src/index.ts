@@ -573,7 +573,7 @@ async function attendance(request: Request, env: Env): Promise<Response> {
     if (!meeting) throw new HttpError(404, "Meeting not found");
     const closesAt = attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30); const finalized = Date.now() > Date.parse(closesAt);
     const meetingDate = meeting.startsAt.slice(0, 10);
-    return response({ attendance: (rows.results ?? []).map((row) => { const events = [{ action: "check_in" as const, occurredAt: row.checkedInAt }, ...(row.checkedOutAt ? [{ action: "check_out" as const, occurredAt: row.checkedOutAt }] : [])].filter((event) => event.occurredAt); const derived = attendanceDisposition(events, row.correction); return { ...row, disposition: row.attendanceRequiredFrom && meetingDate < row.attendanceRequiredFrom ? "not_required" : finalized && derived === "active" ? "absent" : derived }; }), attendanceClosesAt: closesAt, finalized });
+    return response({ attendance: (rows.results ?? []).map((row) => { const events = [{ action: "check_in" as const, occurredAt: row.checkedInAt }, ...(row.checkedOutAt ? [{ action: "check_out" as const, occurredAt: row.checkedOutAt }] : [])].filter((event) => event.occurredAt); const derived = attendanceDisposition(events, row.correction); return { ...row, disposition: row.attendanceRequiredFrom && meetingDate < row.attendanceRequiredFrom ? "not_required" : Date.now() < Date.parse(meeting.startsAt) && derived === "absent" ? "upcoming" : finalized && derived === "active" ? "absent" : derived }; }), attendanceClosesAt: closesAt, finalized });
   }
   return recordAttendance(db, await parseJson(request), "manual", principal.userId);
 }

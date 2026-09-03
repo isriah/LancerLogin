@@ -293,7 +293,11 @@ Release: next dashboard reliability bundle.
 
 ### WU-020 — Meetings form presentation polish
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-020-meetings-form-polish
+Base: 57018bddf9f9a7ded65746c5a886abe841172435
 
 Goal: make meeting creation and discovery controls clearer and visually consistent with the active theme.
 Scope: remove the requested Optional-meeting tooltip; theme Meetings-page checkboxes; rename the search heading to “Search Meetings.” Exclude scheduling, recurrence, and attendance-policy changes.
@@ -390,7 +394,11 @@ Release: next dashboard reliability bundle.
 
 ### WU-027 — Attendance calendar spacing
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-027-attendance-calendar-spacing
+Base: 57018bddf9f9a7ded65746c5a886abe841172435
 
 Goal: restore comfortable separation between the Attendance calendar and its cards.
 Scope: add the missing vertical spacing only. Exclude calendar routing, meeting selection, and attendance behavior changes.
@@ -401,7 +409,11 @@ Release: next dashboard polish bundle.
 
 ### WU-028 — Roster control layout
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-028-roster-control-layout
+Base: 57018bddf9f9a7ded65746c5a886abe841172435
 
 Goal: keep roster rows compact and align the roster header controls.
 Scope: arrange member action buttons horizontally where space allows with responsive fallback; vertically align the shown count and Add member action. Exclude roster permissions and member-action behavior changes.
@@ -434,7 +446,11 @@ Release: next dashboard workflow bundle.
 
 ### WU-031 — Settings hierarchy and copy cleanup
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-031-settings-hierarchy-cleanup
+Base: 57018bddf9f9a7ded65746c5a886abe841172435
 
 Goal: make Settings navigation clearer while removing the requested redundant helper copy.
 Scope: remove the listed Configuration, Integrations, and Organization cards; show the parent Settings item with an active bubble while a subpage is selected. Exclude setting behavior, authorization, and secret-storage changes.

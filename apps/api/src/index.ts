@@ -870,7 +870,7 @@ async function processDiscordAttendanceNotifications(env: Env, now = Date.now())
 async function discordMissing(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string }>(request);
   if (!input.meetingId) throw new HttpError(400, "Meeting is required");
-  const meeting = await db.prepare("SELECT id, title FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
+  const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string; startsAt: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found"); if (Date.now() < Date.parse(meeting.startsAt)) throw new HttpError(409, "Attendance has not started for this meeting");
   return response(await sendDiscordAttendanceNotification(env, meeting, { force: true, actor: principal }), 202);
 }
 async function discordContests(request: Request, env: Env): Promise<Response> {

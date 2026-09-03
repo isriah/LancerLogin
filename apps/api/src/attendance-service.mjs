@@ -49,13 +49,14 @@ export function createAttendanceService({ now = () => new Date().toISOString() }
       return [...members.values()].filter((member) => member.active).map((member) => {
         const correction = corrections.get(`${member.id}:${meetingId}`);
         const memberEvents = events.filter((event) => event.memberId === member.id && event.meetingId === meetingId);
-        return { member, disposition: attendanceDisposition(memberEvents, correction?.disposition), correction };
+        const required = !member.attendanceRequiredFrom || meetings.get(meetingId)?.startsAt.slice(0, 10) >= member.attendanceRequiredFrom;
+        return { member, disposition: required ? attendanceDisposition(memberEvents, correction?.disposition) : "not_required", correction };
       });
     },
     exportCsv(principal) {
       requireCapability(principal, "view-reports");
       const rows = [["member_id", "member_name", "meeting_id", "meeting_title", "disposition"]];
-      for (const meeting of meetings.values()) for (const row of this.attendanceFor(meeting.id)) rows.push([row.member.externalId, `${row.member.firstName} ${row.member.lastName}`, meeting.id, meeting.title, row.disposition]);
+      for (const meeting of meetings.values()) for (const row of this.attendanceFor(meeting.id)) if (row.disposition !== "not_required") rows.push([row.member.externalId, `${row.member.firstName} ${row.member.lastName}`, meeting.id, meeting.title, row.disposition]);
       writeAudit(principal, "attendance.exported", "attendance", "csv");
       return rows.map((row) => row.map(csv).join(",")).join("\n");
     },

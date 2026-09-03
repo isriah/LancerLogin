@@ -6,7 +6,8 @@ import { RosterImportPanel } from "./roster-import-panel";
 import { RouteLink, usePath } from "./router";
 
 type NewMember = { memberId: string; firstName: string; lastName: string; email: string; discordUserId: string; attendanceRequiredFrom: string };
-const emptyMember = (): NewMember => ({ memberId: "", firstName: "", lastName: "", email: "", discordUserId: "", attendanceRequiredFrom: "" });
+const participationStartToday = () => new Date().toISOString().slice(0, 10);
+const emptyMember = (): NewMember => ({ memberId: "", firstName: "", lastName: "", email: "", discordUserId: "", attendanceRequiredFrom: participationStartToday() });
 
 function AddMemberDialog({ open, members, onClose, onAdded }: { open: boolean; members: RosterMember[]; onClose: () => void; onAdded: () => Promise<void> }) {
   const [member, setMember] = useState<NewMember>(emptyMember); const [error, setError] = useState(""); const [busy, setBusy] = useState(false); const [entryMode, setEntryMode] = useState<"member" | "import">("member"); const dialog = useRef<HTMLDivElement>(null);

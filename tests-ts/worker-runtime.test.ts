@@ -234,6 +234,8 @@ test("Admin roster import is bounded, installation-scoped, and audited", async (
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/admin/members", { members: [{ memberId: "A-1", firstName: "Avery", lastName: "Stone", email: "avery@example.test" }] }, { cookie: await sessionCookie("admin") }), env);
   assert.equal(result.status, 201);
+  const memberInsert = database.batches.flat().find((call) => call.sql.includes("INSERT INTO members"));
+  assert.ok(memberInsert?.values.some((value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)), "new members receive a participation start date");
   assert.equal(database.batches.at(-1)?.length, 2);
   assert.ok(database.batches.at(-1)?.[0].sql.includes("installation_id"));
   assert.ok(database.batches.at(-1)?.[1].sql.includes("roster.imported"));
@@ -462,19 +464,17 @@ test("Reports may request inactive roster history without changing the default a
 
 test("member history is stable by roster ID and available to Operators", async () => {
   const database = new FakeDatabase();
-  database.rows.set("external_id = ?", { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: 0 });
+  database.rows.set("external_id = ?", { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: 0, attendanceRequiredFrom: "2026-09-02" });
   database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
-  database.lists.set("FROM meetings meeting", [{ meetingId: "meeting-1", title: "Build session", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", checkedInAt: "2026-09-01T20:05:00.000Z", checkedOutAt: "2026-09-01T21:10:00.000Z" }, { meetingId: "meeting-2", title: "Practice", startsAt: "2026-09-02T20:00:00.000Z", endsAt: "2026-09-02T22:00:00.000Z", correction: "excused", reason: "Medical appointment" }]);
+  database.lists.set("FROM meetings meeting", [{ meetingId: "meeting-1", title: "Pre-start meeting", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", checkedInAt: "2026-09-01T20:05:00.000Z", checkedOutAt: "2026-09-01T21:10:00.000Z" }, { meetingId: "meeting-2", title: "Practice", startsAt: "2026-09-02T20:00:00.000Z", endsAt: "2026-09-02T22:00:00.000Z", correction: "excused", reason: "Medical appointment" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/admin/members/A-101/history", undefined, { cookie: await sessionCookie("operator") }), env);
   assert.equal(result.status, 200);
-  const body = await result.json() as { member: { active: boolean; memberId: string }; history: Array<{ disposition: string; checkedInAt?: string; checkedOutAt?: string; reason?: string }> };
-  assert.deepEqual(body.member, { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: false });
-  assert.equal(body.history[0].disposition, "present");
-  assert.equal(body.history[0].checkedInAt, "2026-09-01T20:05:00.000Z");
-  assert.equal(body.history[0].checkedOutAt, "2026-09-01T21:10:00.000Z");
-  assert.equal(body.history[1].disposition, "excused");
-  assert.equal(body.history[1].reason, "Medical appointment");
+  const body = await result.json() as { member: { active: boolean; memberId: string; attendanceRequiredFrom?: string }; history: Array<{ disposition: string; checkedInAt?: string; checkedOutAt?: string; reason?: string }> };
+  assert.deepEqual(body.member, { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: false, attendanceRequiredFrom: "2026-09-02" });
+  assert.equal(body.history.length, 1);
+  assert.equal(body.history[0].disposition, "excused");
+  assert.equal(body.history[0].reason, "Medical appointment");
 });
 
 test("authenticated kiosk configuration returns current display branding", async () => {

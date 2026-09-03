@@ -54,7 +54,7 @@ try {
   }, null, 2)}\n`, { mode: 0o600 });
 
   await runWrangler(["d1", "migrations", "apply", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory]);
-  const output = await runWrangler(["d1", "execute", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory, "--json", "--command", "SELECT name FROM d1_migrations ORDER BY id; SELECT name, sql FROM sqlite_master WHERE name IN ('organization_settings', 'kiosks', 'kiosk_commands', 'idx_kiosk_commands_pending', 'meetings', 'meeting_templates', 'idx_meeting_templates_installation_name', 'pairing_codes', 'simulated_kiosk_sessions', 'users', 'idx_one_user_per_member', 'idx_meetings_series', 'attendance_events', 'encrypted_integrations', 'integration_verification_challenges', 'idx_integration_verification_expiry', 'discord_attendance_notifications', 'discord_attendance_recipients') ORDER BY name;"], { json: true });
+  const output = await runWrangler(["d1", "execute", databaseName, "--local", "--config", configPath, "--persist-to", stateDirectory, "--json", "--command", "SELECT name FROM d1_migrations ORDER BY id; SELECT name, sql FROM sqlite_master WHERE name IN ('members', 'organization_settings', 'kiosks', 'kiosk_commands', 'idx_kiosk_commands_pending', 'meetings', 'meeting_templates', 'idx_meeting_templates_installation_name', 'pairing_codes', 'simulated_kiosk_sessions', 'users', 'idx_one_user_per_member', 'idx_meetings_series', 'attendance_events', 'encrypted_integrations', 'integration_verification_challenges', 'idx_integration_verification_expiry', 'discord_attendance_notifications', 'discord_attendance_recipients') ORDER BY name;"], { json: true });
   const result = JSON.parse(output);
   const applied = result[0]?.results?.map((row) => row.name) ?? [];
   const expected = (await readdir(migrationsDirectory)).filter((name) => /^\d+_.+\.sql$/.test(name)).sort();
@@ -71,6 +71,8 @@ try {
   const templateSql = schema.get("meeting_templates") ?? ""; const templateIndexSql = schema.get("idx_meeting_templates_installation_name") ?? "";
   if (!templateSql.includes("duration_minutes") || !templateSql.includes("recurrence_duration_days") || !templateIndexSql.includes("installation_id")) throw new Error("Final D1 schema is missing meeting-template timing or tenant scope");
   if (!usersSql.includes("member_id") || !memberUserIndexSql.includes("member_id")) throw new Error("Final D1 schema is missing the optional one-to-one roster account link");
+  const membersSql = schema.get("members") ?? "";
+  if (!membersSql.includes("attendance_required_from")) throw new Error("Final D1 schema is missing member participation start dates");
   const attendanceSql = schema.get("attendance_events") ?? ""; const notificationSql = schema.get("discord_attendance_notifications") ?? ""; const recipientSql = schema.get("discord_attendance_recipients") ?? "";
   if (!brandingSql.includes("late_scan_minutes") || !brandingSql.includes("logo_backdrop") || !attendanceSql.includes("check_out") || !notificationSql.includes("message_id") || !recipientSql.includes("discord_user_id") || !recipientSql.includes("message_id)")) throw new Error("Final D1 schema is missing attendance lifecycle or durable Discord notification fields");
   const integrationSql = schema.get("encrypted_integrations") ?? ""; const challengeSql = schema.get("integration_verification_challenges") ?? ""; const challengeIndexSql = schema.get("idx_integration_verification_expiry") ?? "";

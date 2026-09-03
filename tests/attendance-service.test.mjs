@@ -33,3 +33,11 @@ test("corrections and excuses are reasoned and reflected in export", () => {
   assert.match(csv, /"excused"/);
   assert.equal(service.audit().at(-1).action, "attendance.exported");
 });
+
+test("participation start dates omit earlier meetings without deleting their history", () => {
+  const service = createAttendanceService({ now: fixedNow });
+  service.addMember(admin, { id: "m-1", externalId: "42", firstName: "Ada", lastName: "Lovelace", attendanceRequiredFrom: "2026-09-01" });
+  service.createMeeting(operator, { id: "meeting-1", title: "Archived practice", startsAt: "2026-08-30T10:00:00.000Z", endsAt: "2026-08-30T13:00:00.000Z" });
+  assert.equal(service.attendanceFor("meeting-1")[0].disposition, "not_required");
+  assert.doesNotMatch(service.exportCsv(operator), /Archived practice/);
+});

@@ -287,6 +287,8 @@ test("member detail routes preserve deep links, history, and role-limited action
   assert.match(detail, /Complete attendance history/);
   assert.match(detail, /Check-in/);
   assert.match(detail, /Check-out/);
+  assert.match(roster, /attendanceRequiredFrom/);
+  assert.match(detail, /Attendance required from/);
   assert.match(detail, /role === "admin"/);
 });
 

@@ -22,7 +22,7 @@ Summarize only actionable items. For each proposed inbox candidate or ready WU, 
 
 ## Present one next decision and execute it
 
-Choose the highest-value safe next action and ask the user one structured Plan-mode decision when available. Give a recommended option and its consequence; do not imitate clickable controls in Markdown. Do not require the user to remember or retype WU IDs unless they choose a custom option.
+Choose the highest-value safe next action and present a short numbered menu. Put the recommended option first, state its consequence, and number only the options that are viable in the current state. Explicitly say that the user may reply with the matching digit alone. A message containing exactly one displayed digit is the user's authorization to execute that option. Do not require WU IDs or command names.
 
 Use this priority order:
 
@@ -37,6 +37,8 @@ Offer the decision that fits the current state. The action names must make clear
 - **Promote the proposed inbox work and start the first safe batch:** treat the choice as approval of the named inbox candidates. Record them using `$ll-inbox-process`, assess all ready units, then launch only the first safe compatible batch using `$ll-coordinator`. If a material product or grouping decision remains unresolved, ask that decision instead of guessing.
 - **Start the recommended ready batch:** re-assess the ready units and launch the first safe compatible batch immediately. Do not make the user repeat `assess all` or `launch suggested`.
 - **Preview release:** run `$ll-release preview-unreleased`. If packaging needs a version or other material decision, ask it before creating a release.
+
+For example, show `1. Start the recommended ready batch (recommended)` rather than asking the user to type a skill invocation. Use up to three choices when possible. A custom alternative can be included as the final numbered choice only when it is genuinely useful; if chosen, ask the minimum follow-up needed before acting.
 
 After the user chooses, perform the selected procedure in this same task rather than only explaining the next command. The selected choice is the explicit authorization for its stated promotion, task-launch, or integration action. Re-read the ledger immediately before mutation and stop if its state has changed, a conflict is found, or required evidence is absent.
 

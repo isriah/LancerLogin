@@ -291,7 +291,12 @@ Release: next dashboard polish bundle.
 
 ### WU-021 — Disable meeting templates
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-021-disable-meeting-templates
+Base: a71d5da345d272c25127f3665191b2b36a1578c9
+Task: provisioning pending
 
 Goal: remove meeting templates from the normal scheduling workflow.
 Scope: disable template selection, creation, and use in product workflows while preserving existing stored template records. Exclude deletion or migration of stored templates and changes to meeting/recurrence behavior.
@@ -409,7 +414,12 @@ Release: next dashboard polish bundle.
 
 ### WU-029 — Compact dashboard-access controls
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: codex/wu-029-compact-dashboard-access
+Base: a71d5da345d272c25127f3665191b2b36a1578c9
+Task: provisioning pending
 
 Goal: make Dashboard Access selection compact without losing its accessible role semantics.
 Scope: replace oversized visual radio selectors with compact toggle-style controls while retaining keyboard operation, labels, selected-state communication, and authorization behavior.

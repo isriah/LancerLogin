@@ -753,10 +753,11 @@ Release: planned v0.18.0 meeting operations and kiosk feedback release.
 Status: in progress
 
 Owner: Codex task
-Branch: `codex/wu-048-meeting-management-scope` (requested; provisioning Worktree)
+Branch: `codex/wu-048-split-meeting-management`
 Base: `48e07f97df38fa3c00f2caa4ed61be3d05eeb84e`
-Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\1f49\\LancerLogin Workspace` (detached)
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\1f49\\LancerLogin Workspace`
 Task: `01a06ba8-6e00-7490-8405-2297d6640890`
+Candidate: `e71e936ac88660279fe5ea524206697850fdd698`; commit subject and API/dashboard/documentation/test files match this WU.
 
 Goal: put single-meeting management on meeting detail while retaining bulk operations in Dashboard Table view.
 Dependencies: WU-044 and WU-045

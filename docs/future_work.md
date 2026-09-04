@@ -945,7 +945,13 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-058 — Kiosks dashboard conformance
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-058-kiosks-dashboard-conformance` (requested; provisioning Worktree)
+Base: `3611e2b`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\ee83\\LancerLogin Workspace` (detached)
+Task: provisioning client `client-new-thread:18f96031-053a-499d-a5da-3d713d7f909c`
 
 Goal: make the dashboard-owned kiosk health and management workspace conform while preserving the physical kiosk boundary.
 Dependencies: WU-057

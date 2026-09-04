@@ -1,10 +1,11 @@
-import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import { AdaptiveBrandLogo, type LogoBackdrop } from "./adaptive-brand-logo";
 import { ColorEditor } from "./color-editor";
 import { RosterImportPanel } from "./roster-import-panel";
 import type { RosterMember } from "./user-settings";
 import { hardwarePairingKey, kioskInstallerUrl } from "./hardware-pairing-key";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
+import { useModalFocus } from "./modal-focus";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 const steps = [
@@ -38,9 +39,9 @@ function InlineMessages({ id, errors = [], warnings = [] }: { id: string; errors
   </div>;
 }
 
-function StepFrame({ step, children, onBack, onSkip }: { step: typeof steps[number]; children: ReactNode; onBack?: () => void; onSkip: () => void }) {
+function StepFrame({ step, children, onBack, onSkip, complete }: { step: typeof steps[number]; children: ReactNode; onBack?: () => void; onSkip: () => void; complete: boolean }) {
   return <section className="wizard-panel" aria-labelledby={`step-${step[0]}-title`}>
-    <p className="kicker">Core setup · Step {steps.findIndex(([id]) => id === step[0]) + 1} of {steps.length}</p>
+    <div className="wizard-step-heading"><p className="kicker">Core setup · Step {steps.findIndex(([id]) => id === step[0]) + 1} of {steps.length}</p><span className="ui-status" data-tone={complete ? "success" : "neutral"}>{complete ? "Complete" : "Not complete"}</span></div>
     <h2 id={`step-${step[0]}-title`}>{step[1]}</h2><p>{step[2]}</p>
     {children}
     <div className="wizard-secondary-actions">{onBack && <button type="button" onClick={onBack}>Back</button>}<button type="button" onClick={onSkip}>Skip for now</button></div>
@@ -68,6 +69,8 @@ export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut
   const [notice, setNotice] = useState("Loading shared setup…");
   useDashboardLoadingOverlay(notice === "Loading shared setup…", "Loading guided setup…");
   const [showCelebration, setShowCelebration] = useState(false);
+  const completionDialog = useRef<HTMLElement>(null);
+  useModalFocus(completionDialog, showCelebration, true, () => undefined);
   const complete = completed.size === steps.length;
   const currentIndex = steps.findIndex(([id]) => id === currentStep);
   const progress = Math.round((completed.size / steps.length) * 100);
@@ -95,7 +98,8 @@ export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut
     if (!completed.has(step)) await api("/admin/setup/progress", { method: "PATCH", body: JSON.stringify({ step, completed: true }) });
     setCompleted((current) => new Set([...current, step]));
   }
-  function goToIndex(index: number) { setCurrentStep(steps[Math.max(0, Math.min(index, steps.length - 1))][0]); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  function goToIndex(index: number) { setCurrentStep(steps[Math.max(0, Math.min(index, steps.length - 1))][0]); window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); }
+  function skipStep() { setNotice(`${activeStep[1]} skipped for now. It remains incomplete and can be reopened from the step list.`); goToIndex(currentIndex + 1); }
   async function finishStep(step: StepId, success: string) { await markComplete(step); showMessages(step, {}); setNotice(success); if (step === "confirm-attendance") setShowCelebration(true); else if (currentIndex < steps.length - 1) goToIndex(currentIndex + 1); }
   async function saveBranding(event: FormEvent) {
     event.preventDefault(); showMessages("branding", {});
@@ -149,13 +153,14 @@ export function SetupWorkspace({ initialBranding, onBrandingChanged, onSignedOut
   };
 
   return <div className="workspace-shell">
+    {embedded && <div className="page-intro setup-page-intro"><p className="kicker">Resumable onboarding</p><h1>Guided setup</h1><p>Complete the five core steps in order, or skip an item and reopen it later.</p></div>}
     {!embedded && <header className="workspace-header"><div><p className="kicker">{branding.organizationName}</p><h1>{complete ? "Setup complete" : activeStep[1]}</h1></div><button className="theme-button" type="button" onClick={signOut}>Sign out</button></header>}
     <div className="setup-progress" role="progressbar" aria-label="Guided setup progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><div className="setup-progress-fill" style={{ width: `${progress}%` }} /><span>{progress}%</span></div>
     <p className="visually-hidden" role="status">{notice}</p>
     <div className="wizard-layout">
-      <nav className="wizard-steps" aria-label="Core setup steps"><p className="kicker">Resumable onboarding</p><ol>{steps.map(([id, title], index) => <li key={id}><button type="button" className={id === currentStep ? "active" : ""} aria-current={id === currentStep ? "step" : undefined} onClick={() => { setCurrentStep(id); window.scrollTo({ top: 0, behavior: "auto" }); }}><span>{completed.has(id) ? "✓" : index + 1}</span>{title}</button></li>)}</ol>{complete && <button className="primary-button setup-finish-button" type="button" onClick={onComplete}>Finish and return to dashboard</button>}</nav>
-      <StepFrame step={activeStep} onBack={currentIndex > 0 ? () => goToIndex(currentIndex - 1) : undefined} onSkip={() => goToIndex(currentIndex + 1)}>{stepBody[currentStep]}</StepFrame>
+      <nav className="wizard-steps" aria-label="Core setup steps"><p className="kicker">Setup progress</p><ol>{steps.map(([id, title], index) => <li key={id}><button type="button" className={id === currentStep ? "active" : ""} aria-current={id === currentStep ? "step" : undefined} aria-label={`${title}: ${completed.has(id) ? "complete" : "not complete"}`} onClick={() => { setCurrentStep(id); window.scrollTo({ top: 0, behavior: "auto" }); }}><span>{completed.has(id) ? "✓" : index + 1}</span><span className="wizard-step-label">{title}<small>{completed.has(id) ? "Complete" : "Not complete"}</small></span></button></li>)}</ol>{complete && <button className="primary-button setup-finish-button" type="button" onClick={onComplete}>Finish and return to dashboard</button>}</nav>
+      <StepFrame step={activeStep} complete={completed.has(currentStep)} onBack={currentIndex > 0 ? () => goToIndex(currentIndex - 1) : undefined} onSkip={skipStep}>{stepBody[currentStep]}</StepFrame>
     </div>
-    {showCelebration && <div className="completion-overlay"><div className="confetti" aria-hidden="true">{Array.from({ length: 24 }, (_, index) => <i key={index} style={{ "--piece": index, "--left": `${(index * 37) % 100}%`, "--drift": `${(index % 5 - 2) * 2}rem` } as React.CSSProperties} />)}</div><section className="completion-dialog" role="dialog" aria-modal="true" aria-labelledby="setup-complete-title"><span className="completion-icon" aria-hidden="true">✓</span><h2 id="setup-complete-title">Setup complete</h2><p>Your roster, kiosk path, and attendance confirmation are ready. You can revisit Setup at any time.</p><button className="primary-button" type="button" autoFocus onClick={() => { setShowCelebration(false); onComplete?.(); }}>Go to Dashboard</button></section></div>}
+    {showCelebration && <div className="completion-overlay dialog-backdrop"><div className="confetti" aria-hidden="true">{Array.from({ length: 24 }, (_, index) => <i key={index} style={{ "--piece": index, "--left": `${(index * 37) % 100}%`, "--drift": `${(index % 5 - 2) * 2}rem` } as React.CSSProperties} />)}</div><section ref={completionDialog} className="completion-dialog ui-dialog" role="dialog" aria-modal="true" aria-labelledby="setup-complete-title" aria-describedby="setup-complete-detail" tabIndex={-1}><span className="completion-icon" aria-hidden="true">✓</span><h2 id="setup-complete-title">Setup complete</h2><p id="setup-complete-detail">Your roster, kiosk path, and attendance confirmation are ready. You can revisit Setup at any time.</p><button className="primary-button" type="button" data-modal-initial-focus onClick={() => { setShowCelebration(false); onComplete?.(); }}>Go to Dashboard</button></section></div>}
   </div>;
 }

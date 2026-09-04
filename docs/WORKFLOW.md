@@ -62,6 +62,8 @@ When a branch is ready, invoke `$ll-integrate WU-###`. Integration is serial: in
 
 To inspect several completed branches without making changes, use `$ll-integrate preview all`; it reports the safe serial merge order and includes explicitly recorded detached candidates. Use `$ll-integrate all` to authorize immediate integration of every eligible candidate. It reports the order and exclusions, revalidates each candidate before merging it, and stops at the first stale record, missing evidence, conflict, or failed verification.
 
+When `$ll-start` completes a selected phase, its final report includes a short **Valid next commands** section based on the resulting state. It distinguishes commands that can be issued immediately from conditional follow-ups. For example, while a newly created implementation task is provisioning or running, checking that task or invoking `$ll-start` to refresh the overall state is valid immediately; `$ll-integrate preview all` is listed only as a later command after the implementation produces an eligible candidate. Context-dependent shortcuts such as `$ll-coordinator launch suggested` must not be presented unless their required preceding assessment occurred in the same task.
+
 ### 6. Release deliberately
 
 Merged WUs accumulate until the user asks for a release. Invoke `$ll-release preview-unreleased` to review the eligible bundle, then `$ll-release package-unreleased` after explicitly authorizing publication. A release does not authorize private deployment or a Pi update.

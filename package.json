@@ -2,7 +2,7 @@
   "name": "lancerlogin",
   "private": true,
   "type": "module",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Self-hosted single-kiosk attendance",
   "license": "Apache-2.0",
   "workspaces": [
@@ -30,7 +30,8 @@
     "verify:telemetry": "npm run test:telemetry && npm run typecheck --workspace @lancerlogin/telemetry-collector",
     "verify:all": "npm run verify:migrations && npm run typecheck && npm test && npm run build",
     "audit:release": "node scripts/audit-dependencies.mjs",
-    "verify:release": "npm run verify:all && npm run audit:release",
+    "audit:release:local": "node scripts/audit-dependencies.mjs --defer-transient-to-ci",
+    "verify:release": "npm run verify:all && npm run audit:release:local",
     "dev:api": "npm --workspace @lancerlogin/api run dev",
     "dev:dashboard": "npm --workspace @lancerlogin/dashboard run dev",
     "dev:kiosk": "npm --workspace @lancerlogin/kiosk run dev",

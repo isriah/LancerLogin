@@ -21,7 +21,7 @@ For `package-unreleased`, first present the exact eligible bundle and proposed v
 Then:
 
 1. Update all included work units with the chosen release version, update every applicable package version, and create `docs/releases/vX.Y.Z.md` using the documented release-note format. The notes must state included work units, user-visible behavior, migrations, configuration/deployment implications, known limits, and manual validation.
-2. Run the focused verification required by the included work, then `npm run verify:release`.
+2. Run the focused verification required by the included work, then `npm run verify:release`. A local advisory-endpoint transport failure may be explicitly deferred by that command, but a vulnerability result may not. Treat any deferral as pending—not passed—and require the strict exact-commit GitHub dependency-audit job before tagging.
 3. Inspect the final diff, commit only the intended release-preparation files with subject `Release vX.Y.Z`, and push `main` only to the authorized remote. The subject forces the selective dependency-audit job for that exact release candidate even if no dependency manifest changed.
 4. Wait for the exact pushed commit's GitHub **Verify** workflow in the authorized repository to pass. Do not tag a different commit or change the version to bypass a failed gate.
 5. Create and push the matching `vX.Y.Z` tag, then wait for the immutable public release build and report its URL and verification result.

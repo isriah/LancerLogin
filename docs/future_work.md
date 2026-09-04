@@ -511,7 +511,7 @@ Scope: make the contest notifier open an accessible popup containing the actiona
 Sources: `docs/idea_inbox.md` (IN-041, IN-048); WU-019; WU-030; `apps/dashboard/src/contest-indicator.tsx`; `apps/dashboard/src/home-page.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`.
 Acceptance: the notifier opens a keyboard-accessible contest popup; each item shows member name and ID together plus meeting name and occurrence date; valid contest actions complete from the popup and Home with clear success or failure feedback; the notifier count refreshes after every successful resolution and disappears when no open contests remain.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused browser coverage for popup accessibility, contest context, and resolution actions.
-Release: v0.14.1 dashboard navigation and integration refinement.
+Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-035 — Shared dashboard route-state repair
 
@@ -530,7 +530,7 @@ Scope: repair the shared dashboard routing state used by Roster and Reports memb
 Sources: `docs/idea_inbox.md` (IN-042); WU-006; `apps/dashboard/src/router.tsx`; `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/roster-page.tsx`; `apps/dashboard/src/reports-page.tsx`; `docs/DASHBOARD.md`.
 Acceptance: clicking a member in Roster or Reports updates the URL and visible page in one action; Back/Forward and direct `/roster/[ID]` loads remain correct.
 Verification: `npm run verify:dashboard`; focused browser coverage for Roster/Reports navigation, direct loads, and browser history.
-Release: v0.14.1 dashboard navigation and integration refinement.
+Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-036 — Member-detail Discord identity
 
@@ -548,7 +548,7 @@ Scope: add the member's paired Discord ID to `/roster/[ID]` when Discord is enab
 Sources: `docs/idea_inbox.md` (IN-043, IN-044); WU-032; WU-039; `apps/dashboard/src/member-detail-page.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`; `docs/INTEGRATIONS.md`.
 Acceptance: enabled Discord shows either the paired ID or an accessible muted unlinked state on member detail; disabled Discord shows neither; no secret integration values are returned.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused conditional member-detail and authorization coverage.
-Release: v0.14.1 dashboard navigation and integration refinement.
+Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-037 — Attendance calendar selection repair
 
@@ -578,7 +578,7 @@ Scope: stop rendering the success message produced by a normal Kiosks status ref
 Sources: `docs/idea_inbox.md` (IN-046); WU-017; `apps/dashboard/src/kiosks-page.tsx`; `docs/KIOSK.md`.
 Acceptance: a successful normal refresh does not render the named card; actionable kiosk status and operation feedback remain visible and accessible.
 Verification: `npm run verify:dashboard`; focused Kiosks-page coverage for successful loading, failures, and action results.
-Release: v0.14.1 dashboard navigation and integration refinement.
+Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-039 — Explicit integration enablement
 
@@ -597,7 +597,7 @@ Scope: add a persisted enable toggle for Google, Resend, and Discord; default ne
 Sources: `docs/idea_inbox.md` (IN-047); `apps/dashboard/src/integration-settings.tsx`; `apps/api/src/index.ts`; `apps/api/migrations/`; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `docs/DECISIONS.md`.
 Acceptance: each provider has an accessible persisted enable toggle; disabled providers expose no configuration form or operational delivery; enabled entries sort first; existing configured providers remain enabled after migration; Google cannot be disabled when that would remove the installation's only usable sign-in method.
 Verification: `npm run verify:migrations`, `npm run verify:api`, and `npm run verify:dashboard`; focused enable/disable, migration, provider-gating, Google lockout-prevention, sorting, and responsive accessibility coverage.
-Release: v0.14.1 dashboard navigation and integration refinement.
+Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-040 — Theme toggle control
 
@@ -615,7 +615,7 @@ Scope: replace the existing Light mode/Dark mode text button with an accessible 
 Sources: `docs/idea_inbox.md` (IN-049); `apps/dashboard/src/main.tsx`; `apps/dashboard/src/styles.css`; `docs/DASHBOARD.md`.
 Acceptance: the theme control presents and announces its current state as a toggle, works by keyboard and pointer, and preserves the existing saved light/dark outcome across reloads.
 Verification: `npm run verify:dashboard`; focused keyboard and browser coverage for both theme states and persistence.
-Release: v0.14.1 dashboard navigation and integration refinement.
+Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-041 — Reports selector clarity and spacing
 
@@ -633,7 +633,7 @@ Scope: fix the clipped Attendance-leaderboard sort value; add sufficient right-s
 Sources: `docs/idea_inbox.md` (IN-050, IN-051, IN-057); WU-002; WU-026; `apps/dashboard/src/reports-page.tsx`; `apps/dashboard/src/styles.css`; `tests-browser/dashboard-smoke.spec.ts`; `docs/DASHBOARD.md`.
 Acceptance: every affected selector shows its selected value and arrow without clipping at supported widths; Reports explains that the operational-baseline option is available only when configured and otherwise clearly identifies preserved history as the active scope; existing report results remain unchanged.
 Verification: `npm run verify:dashboard`; focused responsive browser geometry and reporting-period state coverage.
-Release: v0.14.1 dashboard navigation and integration refinement.
+Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-042 — Roster table alignment and action placement
 
@@ -652,7 +652,7 @@ Scope: vertically center roster table headers and row values; place member actio
 Sources: `docs/idea_inbox.md` (IN-052, IN-053, IN-054); WU-028; `apps/dashboard/src/roster-page.tsx`; `apps/dashboard/src/styles.css`; `docs/DASHBOARD.md`.
 Acceptance: roster headings and values align vertically, desktop actions appear on the right rather than beneath the identity block, and narrow layouts remain readable and operable.
 Verification: `npm run verify:dashboard`; focused desktop and mobile roster browser coverage.
-Release: v0.14.1 dashboard navigation and integration refinement.
+Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-043 — Kiosk information-card action consolidation
 
@@ -670,7 +670,7 @@ Scope: move the Admin-only Add kiosk/Replace kiosk action from the page heading 
 Sources: `docs/idea_inbox.md` (IN-056); WU-009; WU-038; `apps/dashboard/src/kiosks-page.tsx`; `apps/dashboard/src/styles.css`; `docs/KIOSK.md`.
 Acceptance: authorized Admins find Add or Replace beside the physical kiosk information, Operators cannot access it, and the existing pairing/replacement workflow and warnings remain intact.
 Verification: `npm run verify:dashboard`; focused Kiosks-page role, pairing-dialog, and responsive browser coverage.
-Release: v0.14.1 dashboard navigation and integration refinement.
+Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-044 — Canonical meeting-detail workspace
 
@@ -688,7 +688,7 @@ Scope: add `/meetings/[ID]` with Back to Dashboard and meeting-switcher controls
 Sources: `docs/idea_inbox.md` (IN-059, IN-062); WU-014; WU-035; WU-037; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/router.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`; `docs/ARCHITECTURE.md`.
 Acceptance: direct and in-app `/meetings/[ID]` navigation renders the requested meeting summary and complete attendance workflow; legacy Attendance bookmarks land at the correct replacement; manual refresh works; automatic refresh runs only while attendance is open; Back/Forward, permissions, and member-local outcomes remain correct.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused browser coverage for direct routes, redirects, meeting switching, lifecycle states, attendance actions, refresh timing, and responsive accessibility.
-Release: v0.15.0 Dashboard and meeting-workspace redesign.
+Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-045 — Dashboard meeting browser and navigation
 

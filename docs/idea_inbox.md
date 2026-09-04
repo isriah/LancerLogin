@@ -697,3 +697,19 @@ Recorded: 2026-09-04
 Source: WU Idea Inbox
 Request: Let members request an attendance report in Discord through a command that returns an ephemeral message listing meetings they were absent for and their current attendance percentage.
 Disposition: WU-072
+
+## IN-086
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: In addition to the Discord slash command for attendance reports, add a button on the persistent attendance-channel message that triggers the same request.
+Disposition: WU-073
+
+## IN-087
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Add an optional one-way Google Calendar integration for a configured calendar. Create an event when a meeting is created in the dashboard and immediately push dashboard edits; do not back-port Google Calendar changes to LancerLogin. Sync only meeting date and time.
+Disposition: WU-074

@@ -1033,6 +1033,42 @@ Acceptance: every public page uses the fixed red/gold identity consistently; lig
 Verification: `npm run verify:docs`; add focused structural assertions for brand tokens, light/dark support, focus, and shared page wiring; browser-check all seven pages at 1280x900 and 390x844 in light and dark modes with keyboard navigation, reduced motion, screenshot/table overflow, and contrast review.
 Release: next public-documentation visual refresh.
 
+### WU-063 — Dashboard meeting-selector visual conformance
+
+Status: ready
+
+Goal: make the Dashboard meeting-selector dropdown match the established dashboard form-control language without changing meeting navigation.
+Dependencies: none
+Scope: conform the Dashboard meeting selector's label, native select, inset arrow, spacing, typography, border, radius, height, hover, focus, disabled, light/dark, adopter-brand, and responsive treatment using shared tokens and established patterns. Preserve the native-select interaction, meeting ordering, selection routing, Calendar/Table behavior, and Add meeting hierarchy. Exclude meeting-detail and guided-setup selectors, meeting data or routing changes, and unrelated dashboard controls.
+Sources: `docs/idea_inbox.md` (IN-074); `docs/UI-STANDARDS.md`; `docs/DASHBOARD.md`; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/styles.css`; `tests/dashboard-shell.test.mjs`; `tests-browser/dashboard-meeting-browser.spec.ts`; `tests-browser/convergence-audit.spec.ts`.
+Acceptance: the Dashboard selector uses the shared native-control and inset-arrow treatment, remains visibly labeled with a 44px target and clear focus/disabled states, preserves navigation behavior, and fits without clipping or page-level overflow at 1280x900 and 390x844 in light/dark with representative adopter colors. No standards exception is expected.
+Verification: `npm run verify:dashboard`; focused Dashboard meeting-browser coverage for selection and keyboard operation; desktop/mobile light/dark and adopter-brand visual checks.
+Release: next dashboard polish bundle.
+
+### WU-064 — Discord kiosk-status message self-healing
+
+Status: ready
+
+Goal: make manual and scheduled Discord kiosk-status synchronization recover automatically when its previously tracked Discord message has been deleted.
+Dependencies: none
+Scope: when updating the stored persistent kiosk-status message receives Discord's missing-message response, create a replacement in the configured attendance channel and replace the stored message mapping and content hash before reporting success. Preserve Admin/Operator authorization, verified-integration gating, controlled mentions, unchanged-content idempotence when the tracked message exists, audit records, channel selection, and existing handling for permissions, rate limits, authentication, and other Discord failures. Exclude calendar sync, absence-notice behavior, Discord configuration UI, channel-manager mode, and unrelated kiosk presentation.
+Sources: `docs/idea_inbox.md` (IN-075 and IN-076); `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `apps/api/src/index.ts`; `apps/dashboard/src/kiosks-page.tsx`; `tests/integration-workflows.test.mjs`; relevant API integration tests; `tests-browser/displaced-meeting-utilities.spec.ts`.
+Acceptance: a missing tracked status message causes exactly one replacement to be posted to the configured attendance channel, the new Discord message ID and content hash become authoritative, the dashboard reports success, and a later unchanged sync is idempotent; non-missing Discord errors remain actionable failures and no unrelated message is modified or deleted.
+Verification: `npm run verify:api`; `npm run verify:dashboard` if response or dashboard handling changes; focused mocked Discord coverage for existing-message update, missing-message recreation, persisted replacement mapping, unchanged follow-up, and non-404 failures; focused Kiosks browser coverage for recovered success and actionable error feedback.
+Release: next Discord reliability bundle; suitable for a narrow patch if the failure affects production adopters.
+
+### WU-065 — Discord designated-channel manager mode
+
+Status: blocked
+
+Goal: offer an opt-in Discord mode that maintains a dedicated attendance channel's LancerLogin-owned status, guidance, and expiring absence messages as one coherent operational surface.
+Dependencies: WU-061 and WU-064; product decision required on whether “status message at the top” means a Discord-pinned message or the oldest maintained LancerLogin message in the dedicated channel
+Scope: add an Admin-only Discord configuration toggle; when enabled, maintain a persistent kiosk/status message followed by a pairing-and-contest how-to message, send controlled absence pings after each meeting's late-scan window closes, and delete each tracked absence message after the configured Discord contest window; move the contest-window setting from Settings > Configuration to the Discord card in Settings > Integrations. Restrict management to the configured attendance channel and to LancerLogin-owned, explicitly tracked messages; never delete or rewrite unrelated or user-authored content. Preserve provider verification, encrypted credentials, signed contests, recipient history, retry/idempotence, authorization, controlled mentions, and behavior when the mode is disabled. Exclude general Discord moderation, managing other channels, changing attendance or contest policy, and unrelated Settings presentation.
+Sources: `docs/idea_inbox.md` (IN-077); `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `apps/dashboard/src/integration-settings.tsx`; `apps/dashboard/src/configuration-settings.tsx`; `apps/api/src/index.ts`; `apps/api/migrations/`; Discord integration and scheduler tests; `tests-browser/settings-conformance.spec.ts`.
+Acceptance: the toggle and contest-window setting are available only to Admins in the Discord integration surface; enabled mode maintains exactly one current status message and one current how-to message according to the approved ordering mechanism, sends each eligible absence ping only after the late-scan cutoff, deletes only its tracked absence message after contest expiry, survives deleted managed messages, and leaves unrelated channel content untouched; disabled mode preserves current Discord behavior.
+Verification: `npm run verify:migrations`, `npm run verify:api`, and `npm run verify:dashboard`; focused provider-fake coverage for enable/disable, message ordering and self-healing, cutoff scheduling, retries, expiry deletion, contest validity, controlled mentions, and unrelated-message safety; focused Admin/Operator and responsive Settings browser coverage; supported-server manual validation before release.
+Release: later Discord channel-management feature bundle after its dependencies and product decision are resolved.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

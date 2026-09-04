@@ -601,3 +601,35 @@ Recorded: 2026-09-04
 Source: WU Idea Inbox
 Request: Perform a full documentation styling pass to match the web-dashboard branding and style guides. Use fixed primary and secondary colors `#B80100` and `#EEB822` rather than customizable colors, and support light and dark mode.
 Disposition: WU-062
+
+## IN-074
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Theme the Dashboard meeting-selector dropdown to match the established design guidelines.
+Disposition: WU-063
+
+## IN-075
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Fix the Sync Discord status button, which fails with `Discord rejected the request (404): Unknown Message`.
+Disposition: WU-064
+
+## IN-076
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: If the Discord message used for sync status has been removed, recreate and send it to the channel designated in step 7 of Discord integration configuration.
+Disposition: WU-064
+
+## IN-077
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Add a Discord configuration toggle for a designated-channel-only Channel manager mode. When enabled, maintain the channel with a regularly updated persistent status message at the top; a following how-to message covering the Discord pairing command and attendance contests; and automatic absence-ping messages sent after each meeting's late-scan window closes, retained for the Discord contest window, then self-deleted. Move the Discord contest-window setting from Settings > Configuration to the Discord section of Settings > Integrations.
+Disposition: WU-065

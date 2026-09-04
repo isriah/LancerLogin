@@ -196,16 +196,71 @@ test("Reports filters completed Regular and Optional meetings without hiding All
   await expect(scope).toHaveText("Showing 2 completed meetings across all preserved history.");
 });
 
-test("Attendance leaderboard sort selector stays within its card", async ({ page }) => {
-  await page.setViewportSize({ width: 800, height: 900 });
+test("Reports identifies preserved history when no operational baseline is configured", async ({ page }) => {
   await page.goto("/reports");
-  const card = page.locator(".leaderboard-card");
-  const selector = card.getByLabel("Sort");
-  const [cardBounds, selectorBounds] = await Promise.all([card.boundingBox(), selector.boundingBox()]);
-  expect(cardBounds).not.toBeNull();
-  expect(selectorBounds).not.toBeNull();
-  expect(selectorBounds!.x).toBeGreaterThanOrEqual(cardBounds!.x);
-  expect(selectorBounds!.x + selectorBounds!.width).toBeLessThanOrEqual(cardBounds!.x + cardBounds!.width);
+  const reportingPeriod = page.getByLabel("Reporting period");
+  await expect(reportingPeriod).toHaveValue("all");
+  await expect(reportingPeriod).toBeEnabled();
+  await expect(reportingPeriod.locator('option[value="baseline"]')).toHaveAttribute("disabled", "");
+  await expect(page.locator("#reporting-period-help")).toHaveText("No operational baseline is configured, so All preserved history is active. An Admin can configure a baseline in Configuration settings to make the operational period available.");
+});
+
+test("Reports defaults to a configured operational baseline while preserving historical access", async ({ page }) => {
+  const baseline = new Date(Date.now() - 3.5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  await page.route("**/meetings", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    await route.fulfill({ response, json: { ...payload, attendanceReportingStartsOn: baseline } });
+  });
+  await page.goto("/reports");
+
+  const reportingPeriod = page.getByLabel("Reporting period");
+  await expect(reportingPeriod).toHaveValue("baseline");
+  await expect(reportingPeriod.locator('option[value="baseline"]')).not.toHaveAttribute("disabled", "");
+  await expect(page.getByLabel("From")).toBeDisabled();
+  await expect(page.locator("#reporting-period-help")).toHaveText(`The operational baseline starts ${baseline} and is selected by default. Choose All preserved history to include completed meetings from before that date.`);
+  await expect(page.locator(".report-scope")).toContainText(`in the operational reporting baseline (from ${baseline})`);
+
+  await reportingPeriod.selectOption("all");
+  await expect(page.getByLabel("From")).toBeEnabled();
+  await expect(page.locator(".report-scope")).toHaveText("Showing 2 completed meetings across all preserved history.");
+});
+
+test("Reports selectors keep selected values and inset arrows visible at supported widths", async ({ page }) => {
+  for (const width of [390, 800, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/reports");
+    await page.evaluate(() => document.fonts.ready);
+
+    const geometries = await page.locator(".reports-page select").evaluateAll((selectors) => selectors.map((selector) => {
+      const element = selector as HTMLSelectElement;
+      const bounds = element.getBoundingClientRect();
+      const styles = getComputedStyle(element);
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d")!;
+      context.font = styles.font;
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        clientWidth: document.documentElement.clientWidth,
+        paddingRight: Number.parseFloat(styles.paddingRight),
+        availableTextWidth: bounds.width - Number.parseFloat(styles.paddingLeft) - Number.parseFloat(styles.paddingRight),
+        selectedTextWidth: context.measureText(element.selectedOptions[0].text).width,
+        backgroundImage: styles.backgroundImage,
+        backgroundPositionX: styles.backgroundPositionX,
+      };
+    }));
+
+    expect(geometries).toHaveLength(5);
+    for (const geometry of geometries) {
+      expect(geometry.left).toBeGreaterThanOrEqual(0);
+      expect(geometry.right).toBeLessThanOrEqual(geometry.clientWidth);
+      expect(geometry.paddingRight).toBeGreaterThanOrEqual(48);
+      expect(geometry.backgroundImage).not.toBe("none");
+      expect(geometry.backgroundPositionX).toContain("calc(100% -");
+      expect(geometry.availableTextWidth).toBeGreaterThanOrEqual(geometry.selectedTextWidth);
+    }
+  }
 });
 
 test("Kiosks hides routine refresh success and preserves action feedback", async ({ page }) => {

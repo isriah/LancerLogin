@@ -730,7 +730,7 @@ Release: v0.17.0 Dashboard meeting creation and kiosk version visibility.
 
 ### WU-047 — Meeting-detail Discord and contest operations
 
-Status: in progress
+Status: merged (`6644a8a`)
 
 Owner: Codex task
 Branch: `codex/wu-047-meeting-detail-discord-contests` (requested; provisioning Worktree)
@@ -738,6 +738,7 @@ Base: `bb9ecca51a4531ec4ed33efd345e46ca7f293877`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\9227\\LancerLogin Workspace` (detached)
 Task: `01a06b96-69d0-7be1-877b-c2efc817c9f0`
 Candidate: `45bae194be479cd29ccf4b37b08b783aba3eadbf`; commit subject and API/dashboard/documentation/test files match this WU.
+Integration: candidate `45bae194be479cd29ccf4b37b08b783aba3eadbf` was merged as `6644a8a`; on the merged tree, `npm run verify:api`, `npm run verify:dashboard`, `npm run verify:docs`, the focused Data-dialog rerun, and the 47-test full browser suite passed.
 
 Goal: keep meeting-specific Discord and contest actions on the meeting they affect.
 Dependencies: WU-034, WU-039, and WU-044
@@ -745,7 +746,7 @@ Scope: place eligible Discord calendar sync, absence notification, and contest r
 Sources: `docs/idea_inbox.md` (IN-063); WU-022; WU-030; WU-034; WU-039; WU-044; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/contest-indicator.tsx`; `apps/api/src/index.ts`; `docs/INTEGRATIONS.md`; `docs/DASHBOARD.md`; `docs/SECURITY.md`.
 Acceptance: verified enabled Discord exposes only time-eligible meeting actions; disabled or unverified Discord exposes none; meeting contests are reviewable with existing validation and audit behavior; the global notifier still reaches all pending contests and refreshes after resolution.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused authorization, provider-state, timing-boundary, contest-resolution, notifier, and browser coverage.
-Release: v0.15.0 Dashboard and meeting-workspace redesign.
+Release: planned v0.18.0 meeting operations and kiosk feedback release.
 
 ### WU-048 — Split meeting management by scope
 

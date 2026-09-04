@@ -1109,13 +1109,14 @@ Release: next dashboard layout and polish bundle.
 
 ### WU-067 — Contest-review member and scan context
 
-Status: in progress
+Status: merged (`65c0516`, corrected by `950bcc5`)
 
 Owner: Codex task
 Branch: `codex/wu-067-contest-review-context`
 Base: `8122e57`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\d558\\LancerLogin Workspace`
 Task: `01a06ecc-c13b-7711-a74e-16c62b27b01e` (provisioned from client `client-new-thread:088b5b89-9cd0-43fb-9211-fc6ea30788fb`)
+Integration: candidate `4484a5a229593231999e50053f650e5661614b58` was merged as `65c0516`. `npm run verify:api` and `npm run verify:dashboard` passed on the integrated tree. The first unfiltered browser run exposed a test-only modal sequencing error: it attempted to click the background theme switch while the contest dialog correctly contained pointer interaction. Correction `950bcc5` closes the dialog, verifies focus return, changes theme, reopens the dialog, and rechecks the context. The focused regression and the complete 110-test browser suite then passed. Provider-fake and UI coverage prove lifetime counts across preserved statuses, partial/no/complete raw scan distinctions independent of corrections, Operator/Admin access, and unavailable unauthorized/unverified paths.
 
 Goal: give reviewers enough member history and raw scan context to judge each attendance contest from either review surface.
 Dependencies: WU-064 (both units change the Discord Worker surface and related integration coverage; integrate the reliability repair first)

@@ -595,7 +595,7 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-040 — Theme toggle control
 
-Status: in progress
+Status: merged (`c45e35a`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-040-theme-toggle`

@@ -885,13 +885,15 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-055 — Authentication and guided-setup conformance
 
-Status: in progress
+Status: merged (`2cd4c2b`)
 
 Owner: Codex task
 Branch: `codex/wu-055-authentication-guided-setup` (requested; provisioning Worktree)
 Base: `a7a98cc`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\9257\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:10d233b8-8832-4a75-875a-8c8def93dab3`
+Candidate: `d5e74961abb84d6e0f17fbfbf0245ec296904e31`; commit subject and authentication/setup UI and browser-test files match this WU.
+Integration: candidate `d5e74961abb84d6e0f17fbfbf0245ec296904e31` was merged as `2cd4c2bbb0dd5919e5cbbcd1bea2c5dcf441fba2`; after correcting candidate-only test selectors and setup fixtures, `npm run verify:dashboard`, the 7-test focused authentication/setup browser matrix, and the 68-test full browser suite passed on the integrated code.
 
 Goal: make every dashboard-rendered authentication and guided-setup state follow the shared visual and interaction contract.
 Dependencies: WU-054

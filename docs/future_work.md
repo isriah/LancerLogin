@@ -497,7 +497,13 @@ Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-034 — Contest-review popup and context
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-034-contest-review-popup`
+Base: `d8fb5c809c22236724c52a9a6f7fac0cf40b0571`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\4ebd\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:b9e9c26b-183d-4c85-a3c1-2aad2443261a`
 
 Goal: let operators review pending attendance contests from the top-right notifier with enough meeting and member context to act confidently.
 Dependencies: none
@@ -589,7 +595,13 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-040 — Theme toggle control
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-040-theme-toggle`
+Base: `d8fb5c809c22236724c52a9a6f7fac0cf40b0571`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\768e\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:7d88a656-3bad-407d-b2e3-88843156ae76`
 
 Goal: make light and dark appearance selection compact and immediately understandable.
 Dependencies: none
@@ -613,7 +625,13 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-042 — Roster table alignment and action placement
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-042-roster-table-alignment`
+Base: `d8fb5c809c22236724c52a9a6f7fac0cf40b0571`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\6ab2\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:1b6c1737-c4c5-4a2a-b908-be245086164f`
 
 Goal: make roster rows scan cleanly and keep member actions in their intended column.
 Dependencies: none
@@ -625,7 +643,13 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-043 — Kiosk information-card action consolidation
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-043-kiosk-card-action`
+Base: `d8fb5c809c22236724c52a9a6f7fac0cf40b0571`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\558b\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:ead5d842-47a0-4839-8eea-4a1013a40aa0`
 
 Goal: place kiosk replacement where operators inspect the device being replaced.
 Dependencies: none

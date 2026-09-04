@@ -397,7 +397,7 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   assert.match(styles, /\.roster-directory h2 \{ margin-bottom: 0/);
   assert.match(styles, /\.wizard-steps \.setup-finish-button \{[^}]*background: var\(--primary\)/);
   assert.match(setup, /className="primary-button setup-finish-button"/);
-  assert.match(roster, /<span className="roster-action-cell">Actions<\/span>/);
+  assert.match(roster, /<span className="roster-action-cell" role="columnheader">Actions<\/span>/);
   assert.doesNotMatch(roster, /current\.active \? "Active" : "Inactive"/);
 });
 
@@ -463,7 +463,7 @@ test("member detail routes preserve deep links, history, and role-limited action
   assert.match(detail, /Attendance required from/);
   assert.match(detail, /role === "admin"/);
   assert.match(shell, /discordEnabled=\{integrations\.discord\.enabled\}/);
-  assert.match(detail, /discordEnabled && <dl className="member-discord-identity"/);
+  assert.match(detail, /discordEnabled && <div><dt>Discord identity<\/dt>/);
   assert.match(detail, /detail\.member\.discordUserId/);
   assert.match(detail, /member-discord-unlinked">Not linked/);
 });

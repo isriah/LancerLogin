@@ -201,16 +201,18 @@ test("contest notifier opens an accessible review popup with context and refresh
   contests = [{ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: "2026-09-03T20:05:00Z" }];
   failNextResolution = true;
   await page.goto("/dashboard");
-  const homeContests = page.getByRole("region", { name: "Attendance contests" });
-  await expect(homeContests).toContainText("Jordan Lee");
-  await expect(homeContests).toContainText("A-103");
-  await expect(homeContests).toContainText("Build session · Sep 3, 2026");
-  await homeContests.getByLabel("Review reason").fill("Operator reviewed the original attendance.");
-  await homeContests.getByRole("button", { name: "Keep attendance" }).click();
-  await expect(homeContests.getByRole("alert")).toHaveText("Contest resolution failed: Review service unavailable");
-  await homeContests.getByRole("button", { name: "Keep attendance" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Attendance contest reviewed and audited." })).toBeVisible();
-  await expect(homeContests).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Attendance contests" })).toHaveCount(0);
+  const refreshedIndicator = page.getByRole("button", { name: "1 attendance contest awaiting review. Open contest review." });
+  await refreshedIndicator.click();
+  const refreshedDialog = page.getByRole("dialog", { name: "Contests awaiting review" });
+  await expect(refreshedDialog).toContainText("Jordan Lee");
+  await expect(refreshedDialog).toContainText("A-103");
+  await expect(refreshedDialog).toContainText("Build session · Sep 3, 2026");
+  await refreshedDialog.getByLabel("Review reason").fill("Operator reviewed the original attendance.");
+  await refreshedDialog.getByRole("button", { name: "Keep attendance" }).click();
+  await expect(refreshedDialog.getByRole("alert")).toHaveText("Contest resolution failed: Review service unavailable");
+  await refreshedDialog.getByRole("button", { name: "Keep attendance" }).click();
+  await expect(refreshedDialog.getByRole("status")).toHaveText("Contest reviewed.");
   await expect(page.getByRole("button", { name: /attendance contest.*awaiting review/i })).toHaveCount(0);
 });
 

@@ -770,14 +770,15 @@ Release: planned v0.18.0 meeting operations and kiosk feedback release.
 
 ### WU-049 — Consolidate displaced meeting utilities
 
-Status: in progress
+Status: merged (`b6c560d`)
 
 Owner: Codex task
 Branch: `codex/wu-049-displaced-meeting-utilities` (requested; provisioning Worktree)
 Base: `48e07f97df38fa3c00f2caa4ed61be3d05eeb84e`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\edd5\\LancerLogin Workspace` (detached)
 Task: `01a06ba8-7f31-7780-bbed-1ea8fb19b335`
-Candidate: `081c6d25d44039af07167d00f329b33bdd56ca3a`; commit subject and Dashboard/Kiosks/Reports/documentation/test files match this WU.
+Candidate: `fe2c1ba95b1a7715be1aec29a899403723dc882e`; reconciled directly onto the integrated WU-048 tree and supersedes `081c6d25d44039af07167d00f329b33bdd56ca3a`.
+Integration: reviewed and merged as `b6c560d`; combined `verify:api`, `verify:dashboard`, and `verify:docs` passed, then the obsolete Dashboard contest-section assertion was updated to the retained global-notifier contract; its focused rerun and the clean full browser suite passed (54/54).
 
 Goal: give utilities displaced by the Dashboard redesign one clear, non-duplicated home.
 Dependencies: WU-044, WU-045, and WU-047
@@ -785,7 +786,7 @@ Scope: retain attendance CSV export in Reports; move persistent Discord kiosk-st
 Sources: `docs/idea_inbox.md` (IN-065); WU-030; WU-039; WU-044; WU-045; WU-047; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/reports-page.tsx`; `apps/dashboard/src/kiosks-page.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`; `docs/KIOSK.md`; `docs/INTEGRATIONS.md`.
 Acceptance: CSV export remains in Reports; authorized kiosk-status sync appears on Kiosks only when Discord is enabled and verified; Dashboard no longer duplicates live-roster or contest content; meeting detail and the global notifier remain complete replacement paths.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused Reports export, Kiosks integration gating, contest-access, navigation, and combined browser coverage.
-Release: v0.15.0 Dashboard and meeting-workspace redesign.
+Release: planned v0.18.0 meeting operations and kiosk feedback release.
 
 ### WU-050 — Updates-page latency and degraded loading
 

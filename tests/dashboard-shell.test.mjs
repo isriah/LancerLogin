@@ -577,6 +577,19 @@ test("dashboard styling uses self-hosted typography and themed organization cont
   assert.match(organization, /logo-backdrop-options/);
 });
 
+test("wide operational routes use the workspace width while text-heavy routes stay readable", async () => {
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  for (const route of ["/dashboard", "/reports", "/roster", "/kiosks"]) assert.match(shell, new RegExp(`"${route}"`));
+  assert.match(shell, /path\.startsWith\("\/meetings\/"\)/);
+  assert.match(shell, /path\.startsWith\("\/roster\/"\)/);
+  assert.match(shell, /data-layout=\{wideDashboardLayout \? "wide" : "readable"\}/);
+  assert.match(styles, /--dashboard-readable-max: 76rem/);
+  assert.match(styles, /--dashboard-workspace-max: 120rem/);
+  assert.match(styles, /\.dashboard-shell \{ width: min\(var\(--dashboard-readable-max\),100%\)/);
+  assert.match(styles, /\.dashboard-shell\[data-layout="wide"\] \{ width: min\(var\(--dashboard-workspace-max\),100%\)/);
+});
+
 test("Settings routes share semantic page, form, status, and destructive-action contracts", async () => {
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");

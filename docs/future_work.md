@@ -711,17 +711,17 @@ Release: v0.16.0 Dashboard meeting-browser and update reliability release.
 
 ### WU-046 — Dashboard meeting-creation dialog
 
-Status: blocked
+Status: merged (`747b956`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-046-dashboard-meeting-creation-dialog`
 Base: `d1577c807e711dc3091a168359f1a117a9260c42`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\9dd5\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:4b9c0c9a-3725-4a8f-8e4d-2454849d37b0`
-Integration: candidate `17b314e` was merged as `6e13780`, but merged-tree browser verification failed because the create-dialog API-error alert intermittently did not receive focus; the focused repetition reproduced 1 failure in 10 runs. Do not mark merged until a corrective commit makes the full browser suite reliable.
+Integration: feature candidate `17b314e` was merged as `6e13780`; corrective candidate `ddeb281` was merged as `747b956`. On the corrected merged tree, `npm run verify:api`, `npm run verify:dashboard`, `npm run verify:kiosk`, and the 44-test full browser suite passed.
 
 Goal: create meetings without leaving the active Dashboard meeting browser.
-Dependencies: correct the intermittent create-dialog API-error focus race on current `main`, then rerun `npm run verify:api`, `npm run verify:dashboard`, and the full `npm run test:browser` gate
+Dependencies: WU-045
 Scope: move the existing creation fields into an accessible dialog opened from the Dashboard meeting-browser header; preserve one-time and recurring creation, validation, duplication support, and best-effort Discord calendar sync; after success close the dialog, refresh both active browser view and meeting selector, and announce the created count without navigation. Exclude edit/delete management and changes to recurrence or Discord policy.
 Sources: `docs/idea_inbox.md` (IN-061); WU-008; WU-020; WU-045; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/modal-focus.ts`; `apps/dashboard/src/styles.css`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`.
 Acceptance: keyboard and pointer users can open, complete, cancel, and recover validation errors in the dialog; successful one-time or recurring creation closes it, announces the correct count, and updates the currently selected Dashboard view and selector without changing routes.
@@ -785,17 +785,17 @@ Release: v0.16.0 Dashboard meeting-browser and update reliability release.
 
 ### WU-051 — Kiosk release-version footer
 
-Status: blocked
+Status: merged (`4911370`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-051-kiosk-release-version-footer`
 Base: `d1577c807e711dc3091a168359f1a117a9260c42`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\5c7c\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:0a148572-a8a9-4e21-b6a1-a54e6bff4b98`
-Integration: candidate `232547d` was merged as `4911370`; merged-tree `npm run verify:kiosk` passed, but the full browser suite failed 43/44 when the recorded WU-046 create-dialog API-error alert focus race reproduced. Do not mark merged until the WU-046 corrective commit is integrated and the full browser suite passes.
+Integration: candidate `232547d` was merged as `4911370`; shared WU-046 corrective candidate `ddeb281` was merged as `747b956`. On the corrected merged tree, `npm run verify:kiosk` and the 44-test full browser suite passed.
 
 Goal: show the running kiosk software version on the physical attendance interface while keeping reader failures visible.
-Dependencies: integrate WU-046 corrective commit `ddeb281`, then rerun the full `npm run test:browser` gate
+Dependencies: none
 Scope: expose the local `LANCERLOGIN_VERSION` through the loopback-only display-state response and replace the successful `Fingerprint reader online` footer copy with that version. Retain an explicit reader-offline warning, queue count, uptime, pairing behavior, and the dashboard heartbeat version. Exclude version selection, update behavior, dashboard Kiosks-page changes, and new diagnostic details.
 Sources: `docs/idea_inbox.md` (IN-068); `apps/kiosk/src/service.mjs`; `apps/kiosk/src/ui.mjs`; `tests/kiosk-runtime.test.mjs`; `docs/KIOSK.md`.
 Acceptance: a paired physical kiosk displays its running release version in the footer when the reader is online; development and missing-version states use a clear safe fallback; a reader failure still replaces the version text with the existing offline warning; no credential, biometric, or additional host detail is exposed.

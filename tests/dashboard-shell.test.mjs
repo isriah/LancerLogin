@@ -233,7 +233,7 @@ test("home shows a five-week rolling calendar, live attendance, and contest revi
   assert.match(home, /Date\.parse\(meeting\.endsAt\) >= now/);
   assert.match(home, /Active · not checked out/);
   assert.match(home, /Attendance contests/);
-  assert.match(home, /reviewNote/);
+  assert.match(home, /ContestReviewList/);
   assert.match(home, /navigate\(`\/attendance\?meetingId=\$\{encodeURIComponent\(meeting\.id\)\}`\)/);
   assert.match(attendance, /selectedMeetingId/);
   assert.match(attendance, /const ordered = \[\.\.\.result\.meetings\]\.sort\(\(left, right\) => Date\.parse\(left\.startsAt\) - Date\.parse\(right\.startsAt\)\)/);
@@ -311,10 +311,20 @@ test("contest review requires a reason and keeps failures beside the unresolved 
 test("pending contests are signaled in the shell instead of occupying Reports", async () => {
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const indicator = await readFile("apps/dashboard/src/contest-indicator.tsx", "utf8");
+  const reviewList = await readFile("apps/dashboard/src/contest-review-list.tsx", "utf8");
+  const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(shell, /ContestIndicator/);
   assert.match(indicator, /\/discord\/contests/);
-  assert.match(indicator, /Open Home/);
+  assert.match(indicator, /aria-haspopup="dialog"/);
+  assert.match(indicator, /useModalFocus/);
+  assert.match(indicator, /contestsChangedEvent/);
+  assert.match(reviewList, /meetingStartsAt/);
+  assert.match(reviewList, /<strong>\{contest\.firstName\} \{contest\.lastName\}<small>\{contest\.externalId\}/);
+  assert.match(reviewList, /contest\.meetingTitle.*occurrenceDate\(contest\)/s);
+  assert.match(reviewList, /A review reason is required before resolving this contest\./);
+  assert.match(reviewList, /window\.dispatchEvent\(new Event\(contestsChangedEvent\)\)/);
+  assert.match(home, /ContestReviewList contests=\{open\}/);
   assert.match(styles, /\.reports-page \.contest-report \{ display: none; \}/);
 });
 

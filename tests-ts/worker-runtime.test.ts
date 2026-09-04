@@ -936,12 +936,15 @@ test("Discord calendar sync retries a rate limit only after Discord's retry dela
 test("Operators can list and resolve Discord attendance contests", async () => {
   const database = new FakeDatabase();
   database.rows.set("google_enabled AS googleEnabled", { googleEnabled: 0, resendEnabled: 0, discordEnabled: 1 });
-  database.lists.set("FROM discord_attendance_contests c", [{ meetingId: "meeting-1", memberId: "member-1", externalId: "A-1", firstName: "Avery", lastName: "Stone", status: "open", createdAt: "2026-08-30T00:00:00Z" }]);
+  database.lists.set("FROM discord_attendance_contests c", [{ meetingId: "meeting-1", meetingTitle: "Studio", meetingStartsAt: "2026-08-30T20:00:00Z", memberId: "member-1", externalId: "A-1", firstName: "Avery", lastName: "Stone", status: "open", createdAt: "2026-08-30T00:00:00Z" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const cookie = await sessionCookie("operator");
   const listed = await worker.fetch(request("/discord/contests?meetingId=meeting-1", undefined, { cookie }), env);
   assert.equal(listed.status, 200);
-  assert.equal((await listed.json() as { contests: unknown[] }).contests.length, 1);
+  const contests = (await listed.json() as { contests: { meetingTitle: string; meetingStartsAt: string }[] }).contests;
+  assert.equal(contests.length, 1);
+  assert.deepEqual({ meetingTitle: contests[0].meetingTitle, meetingStartsAt: contests[0].meetingStartsAt }, { meetingTitle: "Studio", meetingStartsAt: "2026-08-30T20:00:00Z" });
+  assert.ok(database.calls.some((call) => call.sql.includes("mt.starts_at AS meetingStartsAt")));
   const missingReason = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved", reviewNote: "   " }, { cookie }), env);
   assert.equal(missingReason.status, 400);
   assert.deepEqual(await missingReason.json(), { error: "A review reason is required before resolving this contest" });

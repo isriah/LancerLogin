@@ -8,7 +8,7 @@ const port = Number(process.env.LANCERLOGIN_KIOSK_PREVIEW_PORT ?? 8792);
 const displayState = {
   display: { id: "ready", tone: "ready", message: "Place finger on reader", detail: "Attendance kiosk ready" },
   branding: { organizationName: "Example Arts Club", subtitle: "Create together", logoData: "", primaryColor: "#8b2f72", secondaryColor: "#2f8b72", logoBackdrop: "auto" },
-  kioskName: "Main kiosk", readerOnline: true, cloudOnline: true, pendingEvents: 0, displayReloadToken: 0,
+  kioskName: "Main kiosk", readerOnline: true, cloudOnline: true, pendingEvents: 0, releaseVersion: "0.17.0", displayReloadToken: 0,
 };
 
 createServer((request, response) => {

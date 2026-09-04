@@ -14,7 +14,13 @@ export const kioskStyles = `:root{--page-bg:#f4f6f8;--surface-bg:#424a53;--text-
 
 export const kioskStatusStyles = `.network-status .network-icon{position:relative;display:flex;width:42px;height:42px;align-items:end;justify-content:center;gap:4px;border:0;border-radius:0;font-size:inherit}.network-status .network-icon::after{display:none}.network-status .network-icon i{display:block;width:9px;border-radius:2px 2px 0 0;background:currentColor}.network-status .network-icon i:nth-child(1){height:14px}.network-status .network-icon i:nth-child(2){height:25px}.network-status .network-icon i:nth-child(3){height:36px}.network-status.ethernet .network-icon{display:block;width:43px;height:35px;border:4px solid currentColor;border-radius:4px}.network-status.ethernet .network-icon i{position:absolute;bottom:-10px;width:4px;height:12px;border-radius:0;background:currentColor}.network-status.ethernet .network-icon i:nth-child(1){left:8px}.network-status.ethernet .network-icon i:nth-child(2){left:16px}.network-status.ethernet .network-icon i:nth-child(3){left:24px}`;
 
+export function kioskReaderStatus({ readerOnline = false, releaseVersion = "development" } = {}) {
+  const version = typeof releaseVersion === "string" && releaseVersion.trim() ? releaseVersion.trim() : "development";
+  return readerOnline ? `LancerLogin ${version}` : "Fingerprint reader offline";
+}
+
 export const kioskApp = `
+${kioskReaderStatus.toString()}
 const byId = (id) => document.getElementById(id);
 let lastLogoSource = "";
 
@@ -116,7 +122,7 @@ function render(value) {
   const meeting = byId("display-meeting");
   meeting.textContent = display.meetingTitle || "";
   meeting.hidden = !display.meetingTitle;
-  byId("reader-status").textContent = value.readerOnline ? "Fingerprint reader online" : "Fingerprint reader offline";
+  byId("reader-status").textContent = kioskReaderStatus(value);
   byId("queue-status").textContent = value.pendingEvents ? value.pendingEvents + " scan" + (value.pendingEvents === 1 ? "" : "s") + " waiting" : "No scans waiting";
   uptime(value.uptimeSeconds);
   const network = byId("network-status");

@@ -32,7 +32,7 @@ The local service continuously polls the R503. A member places an enrolled finge
 
 The first accepted scan welcomes the member and records arrival. The second says goodbye and records departure. The screen and R503 aura light provide ready, processing, welcome, goodbye, unknown-finger, rejected, reader-offline, and cloud-offline feedback. An eight-second device debounce prevents one held finger from producing both scans.
 
-Organization name, subtitle, logo, logo contrast treatment, and colors are cached locally. A transparent logo uses the configured adaptive backdrop. If cloud delivery fails, the atomic local queue retains events in order and retries; expected attendance rejections are shown and removed so they do not block later scans. The footer shows reader state, queue count, and time.
+Organization name, subtitle, logo, logo contrast treatment, and colors are cached locally. A transparent logo uses the configured adaptive backdrop. If cloud delivery fails, the atomic local queue retains events in order and retries; expected attendance rejections are shown and removed so they do not block later scans. When the reader is online, the footer shows the running LancerLogin release (or a development fallback); a reader failure replaces it with the offline warning. Queue count and uptime remain beside it.
 
 ## Touch Wi-Fi settings
 

@@ -7,7 +7,7 @@ test("physical kiosk screen fits the supported 800 by 480 display", async ({ pag
   await page.goto(`${kioskBaseUrl}/`);
   await expect(page.getByRole("heading", { name: "Place finger on reader" })).toBeVisible();
   await expect(page.getByText("Example Arts Club")).toBeVisible();
-  await expect(page.getByText("Fingerprint reader online")).toBeVisible();
+  await expect(page.getByText("LancerLogin 0.17.0")).toBeVisible();
   await expect(page.getByText("No scans waiting")).toBeVisible();
   const dimensions = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
   expect(dimensions).toEqual({ width: 800, height: 480 });

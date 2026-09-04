@@ -509,13 +509,14 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-035 — Shared dashboard route-state repair
 
-Status: in progress
+Status: merged (`9bcf335`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-035-shared-route-state` (requested; provisioning Worktree is currently detached)
 Base: `4428c8c8fd73d68d43cb23764b7aa248ef830e6f`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\454a\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:cac6f042-9d0c-4707-8b0e-ec662ffc8b2a`
+Candidate: `4ae815f614ad7333b90ec7f7632812390543ce96` in detached Worktree `C:\\Users\\Izz\\.codex\\worktrees\\454a\\LancerLogin Workspace`; commit subject and routing/test files match this WU.
 
 Goal: make in-app member links render the member-detail page immediately instead of changing only the browser URL.
 Dependencies: none

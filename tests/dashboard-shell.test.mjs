@@ -497,18 +497,19 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(source, /\/admin\/kiosks\/\$\{encodeURIComponent\(active\.id\)\}\/commands/);
   assert.match(source, /Last Wi-Fi scan/);
   assert.match(source, /const healthy = Boolean\(active && online && active\.readerOnline/);
-  assert.match(source, /healthy \? "Healthy" : online \? "Online"/);
-  assert.match(source, /kiosk-state\$\{healthy \? " kiosk-state-healthy"/);
+  assert.match(source, /healthy \? "healthy" : "degraded"/);
+  assert.match(source, /health === "unpaired" \? "Not paired"/);
+  assert.match(source, /kiosk-state-\$\{health\}/);
   assert.match(source, /kiosk-health-pill/);
   assert.doesNotMatch(source, /Recovery guidance|recoveryGuidance/);
-  assert.match(styles, /\.kiosk-state-healthy \{[^}]*justify-content: center[^}]*min-height: 3\.1rem/);
-  assert.match(styles, /\.kiosk-health-pill \{[^}]*display: inline-flex[^}]*align-items: center/);
+  assert.match(styles, /\.kiosk-state \{[^}]*align-items: center[^}]*min-height: var\(--control-min-block-size\)/);
+  assert.match(styles, /\.kiosk-health-pill \{[^}]*min-height: var\(--control-min-block-size\)/);
   assert.match(styles, /\.kiosk-card-heading \{[^}]*display: flex[^}]*justify-content: space-between/);
   assert.match(styles, /\.kiosk-card-heading \.primary-button \{[^}]*width: auto[^}]*margin: 0/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*\.kiosk-card-heading \.primary-button \{ width: 100%; \}/);
   assert.doesNotMatch(styles, /\.kiosk-page-heading/);
   assert.doesNotMatch(source, /openSetup/);
-  assert.match(source, /discordConfigured && <section className="kiosk-discord-status"/);
+  assert.match(source, /kiosk-discord-status\$\{discordConfigured \? "" : " unavailable"\}/);
   assert.match(source, /\/discord\/kiosk-status/);
   assert.match(source, /Sync Discord status/);
   assert.match(source, /Persistent Discord kiosk status (?:updated|is already current)/);
@@ -519,10 +520,10 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
 test("Kiosks refresh hides redundant success while preserving actionable feedback", async () => {
   const source = await readFile("apps/dashboard/src/kiosks-page.tsx", "utf8");
   assert.doesNotMatch(source, /Kiosk status is current\./);
-  assert.match(source, /if \(!preserveNotice\) setNotice\(""\)/);
+  assert.match(source, /if \(!preserveNotice\) setNotice\(\{ message: "", tone: "neutral" \}\)/);
   assert.match(source, /load\(\{ preserveNotice: true \}\)/);
-  assert.match(source, /setInterval\(\(\) => void load\(\)\.catch\(\(error: Error\) => setNotice\(error\.message\)\), 30_000\)/);
-  assert.match(source, /\{notice && <p className="setup-status" role="status">\{notice\}<\/p>\}/);
+  assert.match(source, /setInterval\(\(\) => void load\(\)\.catch\(\(error: Error\) => setNotice\(\{ message: error\.message, tone: "error" \}\)\), 30_000\)/);
+  assert.match(source, /notice\.message && <p className="setup-status ui-status kiosk-notice"/);
   for (const result of ["Kiosk renamed.", "Kiosk retired.", "queued. The kiosk normally receives it within five seconds.", "Browser simulator stopped."]) {
     assert.match(source, new RegExp(result.replaceAll(".", "\\.")));
   }

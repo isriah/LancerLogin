@@ -735,7 +735,8 @@ Status: in progress
 Owner: Codex task
 Branch: `codex/wu-047-meeting-detail-discord-contests` (requested; provisioning Worktree)
 Base: `bb9ecca51a4531ec4ed33efd345e46ca7f293877`
-Task: provisioning client `client-new-thread:e90ea049-444a-4f9a-add6-b0908971cd8b`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\9227\\LancerLogin Workspace` (detached)
+Task: `01a06b96-69d0-7be1-877b-c2efc817c9f0`
 
 Goal: keep meeting-specific Discord and contest actions on the meeting they affect.
 Dependencies: WU-034, WU-039, and WU-044
@@ -814,7 +815,8 @@ Status: in progress
 Owner: Codex task
 Branch: `codex/wu-052-kiosk-scan-feedback` (requested; provisioning Worktree)
 Base: `bb9ecca51a4531ec4ed33efd345e46ca7f293877`
-Task: provisioning client `client-new-thread:6d56490c-f3be-4b65-94c2-f3327bde5fe4`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\3dd2\\LancerLogin Workspace` (detached)
+Task: `01a06b96-7800-7b51-af9b-502dd452c8bb`
 
 Goal: make scan processing, duplicate attendance, and offline outcomes immediately recognizable from the physical kiosk screen.
 Dependencies: none

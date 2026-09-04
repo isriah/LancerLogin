@@ -63,6 +63,58 @@ test("meeting detail presents lifecycle and operational context", async ({ page 
   await expect(summary).toContainText("Attendance closes");
 });
 
+test("detail dialogs manage occurrence and future-series scope, return focus, and carry deletion Undo to Dashboard", async ({ page }) => {
+  const submitted: { url: string; method: string; body: Record<string, unknown> }[] = [];
+  await page.route(/\/(meeting-series\/weekly-build|meetings\/active-meeting(?:\/restore)?|meetings)$/, async (route) => {
+    const request = route.request();
+    if (request.method() === "GET") return route.continue();
+    submitted.push({ url: new URL(request.url()).pathname, method: request.method(), body: request.postDataJSON() });
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/meetings") return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ meetings: [{ id: "duplicate-1" }] }) });
+    return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/meetings/active-meeting");
+  const editButton = page.getByRole("button", { name: "Edit" });
+  await editButton.click();
+  let dialog = page.getByRole("dialog", { name: "Edit meeting" });
+  await expect(dialog.getByLabel("Title", { exact: true })).toBeFocused();
+  await dialog.getByRole("radio", { name: "This and future occurrences" }).check();
+  await dialog.getByLabel("Title", { exact: true }).fill("Build session shifted");
+  await dialog.getByRole("button", { name: "Save meeting" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(editButton).toBeFocused();
+
+  const duplicateButton = page.getByRole("button", { name: "Duplicate" });
+  await duplicateButton.click();
+  dialog = page.getByRole("dialog", { name: "Duplicate meeting" });
+  await expect(dialog.getByLabel("Title", { exact: true })).toBeFocused();
+  await expect(dialog.getByLabel("Frequency")).toHaveValue("weekly");
+  await dialog.getByLabel("Title", { exact: true }).fill("Build session copy");
+  await dialog.getByRole("button", { name: "Duplicate recurring series" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(duplicateButton).toBeFocused();
+
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "Delete meeting" });
+  await expect(dialog.getByRole("button", { name: "Delete this and future meetings" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Delete", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("dialog", { name: "Delete meeting" }).getByRole("button", { name: "Delete this and future meetings" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole("status").filter({ hasText: "This and future series occurrences were deleted." })).toBeVisible();
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "This and future series occurrences were restored." })).toBeVisible();
+
+  expect(submitted).toEqual([
+    expect.objectContaining({ url: "/meeting-series/weekly-build", method: "PATCH", body: expect.objectContaining({ meetingId: "active-meeting", title: "Build session shifted" }) }),
+    expect.objectContaining({ url: "/meetings", method: "POST", body: expect.objectContaining({ title: "Build session copy", recurrence: expect.objectContaining({ frequency: "weekly" }) }) }),
+    { url: "/meetings/active-meeting", method: "DELETE", body: { scope: "future" } },
+    { url: "/meetings/active-meeting/restore", method: "POST", body: { scope: "future" } },
+  ]);
+});
+
 test("meeting-local Discord actions and contest review retain their scoped outcomes", async ({ page }) => {
   const calendarBodies: unknown[] = [];
   const absenceBodies: unknown[] = [];
@@ -180,10 +232,17 @@ test("meeting detail remains operable and contained at a compact mobile width", 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/meetings/active-meeting");
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
+  await page.getByRole("switch", { name: "Dark mode" }).click();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Duplicate" }).click();
+  const dialog = page.getByRole("dialog", { name: "Duplicate meeting" });
+  await expect(dialog).toBeVisible();
   const dimensions = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
-  for (const control of await page.locator(".meeting-detail-workspace button, .meeting-detail-workspace select").all()) {
+  for (const control of await dialog.locator('button, input:not([type="checkbox"]):not([type="radio"]), select, textarea, .inline-options label').all()) {
     const bounds = await control.boundingBox();
     if (bounds) expect(bounds.height).toBeGreaterThanOrEqual(44);
   }
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Duplicate" })).toBeFocused();
 });

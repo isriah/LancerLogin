@@ -53,6 +53,34 @@ test("legacy Meetings opens the searchable Dashboard table and rows navigate ind
   await expect(page).toHaveURL(/\/meetings\/next-week$/);
 });
 
+test("Table search, checkbox selection, bulk delete, and Sync all stay independent from row navigation", async ({ page }) => {
+  const requests: { path: string; body: Record<string, unknown> }[] = [];
+  await page.route(/\/(meetings\/bulk-delete|discord\/calendar)$/, async (route) => {
+    requests.push({ path: new URL(route.request().url()).pathname, body: route.request().postDataJSON() });
+    const body = new URL(route.request().url()).pathname === "/meetings/bulk-delete" ? { deleted: 1 } : { synced: 1, skipped: 0, failed: 0, outcomes: [] };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  });
+  await page.goto("/dashboard");
+  await page.getByRole("radio", { name: "Table" }).check();
+  const search = page.getByLabel("Search Meetings");
+  await search.fill("Build session");
+  const row = page.locator(".meeting-browser-row").filter({ hasText: "Build session" });
+  const checkbox = row.getByRole("checkbox", { name: "Select Build session" });
+  await checkbox.check();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(checkbox).toBeChecked();
+  await expect(page.getByRole("button", { name: "Delete selected (1)" })).toBeEnabled();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Delete selected (1)" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "1 selected meetings deleted." })).toBeVisible();
+  await page.getByRole("button", { name: "Sync all to Discord" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Discord calendar: 1 updated" })).toBeVisible();
+  expect(requests).toEqual([
+    { path: "/meetings/bulk-delete", body: { meetingIds: ["active-meeting"], confirmation: "DELETE SELECTED MEETINGS" } },
+    { path: "/discord/calendar", body: { all: true } },
+  ]);
+});
+
 test("Add meeting opens a keyboard-contained dialog and restores focus when dismissed", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/dashboard");

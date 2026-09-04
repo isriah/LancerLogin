@@ -619,7 +619,7 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-041 — Reports selector clarity and spacing
 
-Status: in progress
+Status: merged (`5165b3d1bad36dbb6d29b598c6ab7ccbac24690e`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-041-reports-selector-clarity`

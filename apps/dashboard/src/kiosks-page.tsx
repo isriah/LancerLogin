@@ -56,24 +56,24 @@ export function KiosksPage({ role }: { role: "admin" | "operator" }) {
   const [maintenanceHelp, setMaintenanceHelp] = useState(false);
   const [name, setName] = useState("");
 
-  async function load() {
+  async function load({ preserveNotice = false }: { preserveNotice?: boolean } = {}) {
     const [hardware, simulated] = await Promise.all([api<{ kiosks: Kiosk[] }>("/admin/kiosks"), role === "admin" ? api<{ simulator: Simulator | null }>("/admin/simulator") : Promise.resolve({ simulator: null })]);
-    setKiosks(hardware.kiosks); setSimulator(simulated.simulator); setNotice("Kiosk status is current.");
+    setKiosks(hardware.kiosks); setSimulator(simulated.simulator); if (!preserveNotice) setNotice("");
   }
-  useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); const timer = window.setInterval(() => void load().catch(() => undefined), 30_000); return () => window.clearInterval(timer); }, [role]);
+  useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); const timer = window.setInterval(() => void load().catch((error: Error) => setNotice(error.message)), 30_000); return () => window.clearInterval(timer); }, [role]);
   const active = kiosks.find((kiosk) => kiosk.active === 1);
   const retired = kiosks.filter((kiosk) => kiosk.active !== 1);
   const online = Boolean(active?.lastSeenAt && Date.now() - Date.parse(active.lastSeenAt) < 90_000);
   const healthy = Boolean(active && online && active.readerOnline && active.networkType !== "offline" && (active.pendingEvents ?? 0) === 0 && !active.errorCategory);
 
-  async function rename() { if (!active) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "PATCH", body: JSON.stringify({ name }) }); setEditing(false); setNotice("Kiosk renamed."); await load(); } catch (error) { setNotice((error as Error).message); } }
-  async function retire() { if (!active || !window.confirm(`Retire ${active.name}? Its credential will stop working, but its history will remain.`)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "DELETE", body: JSON.stringify({ confirmation: "RETIRE KIOSK" }) }); setNotice("Kiosk retired. You can pair another device now."); await load(); } catch (error) { setNotice((error as Error).message); } }
+  async function rename() { if (!active) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "PATCH", body: JSON.stringify({ name }) }); setEditing(false); setNotice("Kiosk renamed."); await load({ preserveNotice: true }); } catch (error) { setNotice((error as Error).message); } }
+  async function retire() { if (!active || !window.confirm(`Retire ${active.name}? Its credential will stop working, but its history will remain.`)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "DELETE", body: JSON.stringify({ confirmation: "RETIRE KIOSK" }) }); setNotice("Kiosk retired. You can pair another device now."); await load({ preserveNotice: true }); } catch (error) { setNotice((error as Error).message); } }
   async function command(type: KioskCommand, label: string, confirmation?: string) { if (!active || confirmation && !window.confirm(confirmation)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}/commands`, { method: "POST", body: JSON.stringify({ command: type }) }); setNotice(`${label} queued. The kiosk normally receives it within five seconds.`); } catch (error) { setNotice((error as Error).message); } }
-  async function stopSimulator() { try { await api("/admin/simulator", { method: "POST", body: JSON.stringify({ action: "stop" }) }); setNotice("Browser simulator stopped."); await load(); } catch (error) { setNotice((error as Error).message); } }
+  async function stopSimulator() { try { await api("/admin/simulator", { method: "POST", body: JSON.stringify({ action: "stop" }) }); setNotice("Browser simulator stopped."); await load({ preserveNotice: true }); } catch (error) { setNotice((error as Error).message); } }
 
   return <section className="page-stack" aria-labelledby="kiosks-title">
     <div className="page-intro kiosk-page-heading"><h1 id="kiosks-title">Kiosks</h1>{role === "admin" && <button className="primary-button" type="button" onClick={() => setPairing(true)}>{active ? "Replace kiosk" : "Add kiosk"}</button>}</div>
-    <p className="setup-status" role="status">{notice}</p>
+    {notice && <p className="setup-status" role="status">{notice}</p>}
     <div className="kiosk-grid">
       <article className="task-card">
         <h2>Physical kiosk</h2>

@@ -94,3 +94,22 @@ test("Attendance leaderboard sort selector stays within its card", async ({ page
   expect(selectorBounds!.x).toBeGreaterThanOrEqual(cardBounds!.x);
   expect(selectorBounds!.x + selectorBounds!.width).toBeLessThanOrEqual(cardBounds!.x + cardBounds!.width);
 });
+
+test("Kiosks hides routine refresh success and preserves action feedback", async ({ page }) => {
+  await page.route("**/admin/kiosks/kiosk-1", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+  await page.goto("/kiosks");
+  await expect(page.getByRole("heading", { name: "Kiosks", exact: true })).toBeVisible();
+  await expect(page.getByText("Kiosk status is current.")).toHaveCount(0);
+  await expect(page.locator(".setup-status")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Rename" }).click();
+  await page.getByLabel("Device name").fill("Lobby kiosk");
+  await page.getByRole("button", { name: "Save name" }).click();
+  await expect(page.getByRole("status")).toHaveText("Kiosk renamed.");
+});
+
+test("Kiosks keeps refresh failures visible", async ({ page }) => {
+  await page.route("**/admin/kiosks", (route) => route.abort());
+  await page.goto("/kiosks");
+  await expect(page.getByRole("status")).toHaveText("Failed to fetch");
+});

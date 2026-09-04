@@ -409,6 +409,18 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.doesNotMatch(source, /openSetup/);
 });
 
+test("Kiosks refresh hides redundant success while preserving actionable feedback", async () => {
+  const source = await readFile("apps/dashboard/src/kiosks-page.tsx", "utf8");
+  assert.doesNotMatch(source, /Kiosk status is current\./);
+  assert.match(source, /if \(!preserveNotice\) setNotice\(""\)/);
+  assert.match(source, /load\(\{ preserveNotice: true \}\)/);
+  assert.match(source, /setInterval\(\(\) => void load\(\)\.catch\(\(error: Error\) => setNotice\(error\.message\)\), 30_000\)/);
+  assert.match(source, /\{notice && <p className="setup-status" role="status">\{notice\}<\/p>\}/);
+  for (const result of ["Kiosk renamed.", "Kiosk retired.", "queued. The kiosk normally receives it within five seconds.", "Browser simulator stopped."]) {
+    assert.match(source, new RegExp(result.replaceAll(".", "\\.")));
+  }
+});
+
 test("integration setup distinguishes saved credentials from verified connections", async () => {
   const source = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
   assert.match(source, /Verification required/);

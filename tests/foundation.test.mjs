@@ -86,11 +86,12 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /recurrence_frequency: null/);
   assert.match(source, /deleted_at: null/);
+  assert.match(source, /google_enabled: providers\.has\("google"\) \? 1 : 0/);
 });
 
 test("Discord absence recipient history preserves every sent notice", async () => {
@@ -128,6 +129,15 @@ test("integration verification migration stores only proof state and hashed chal
   assert.match(migration, /challenge_hash TEXT NOT NULL/);
   assert.match(migration, /idx_integration_verification_expiry/);
   assert.doesNotMatch(migration, /raw_ip|fingerprint|template|biometric/i);
+});
+
+test("integration enablement migration preserves configured providers and defaults new providers off", async () => {
+  const migration = await readFile("apps/api/migrations/0021_integration_enablement.sql", "utf8");
+  assert.match(migration, /google_enabled INTEGER NOT NULL DEFAULT 0 CHECK/);
+  assert.match(migration, /resend_enabled INTEGER NOT NULL DEFAULT 0 CHECK/);
+  assert.match(migration, /discord_enabled INTEGER NOT NULL DEFAULT 0 CHECK/);
+  for (const provider of ["google", "resend", "discord"]) assert.match(migration, new RegExp(`${provider}_enabled = EXISTS \\([\\s\\S]*provider = '${provider}'`));
+  assert.doesNotMatch(migration, /ciphertext|iv|credential|secret/i);
 });
 
 test("entire-installation restore inserts roster members before linked dashboard users", async () => {

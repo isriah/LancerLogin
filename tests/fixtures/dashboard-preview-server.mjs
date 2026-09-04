@@ -25,6 +25,7 @@ const server = createServer((request, response) => {
   const payload = path === "/setup/status" ? { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Nova Arts Collective", subtitle: "Make things together", logoData: logo, primaryColor: "#8b2f72", secondaryColor: "#e9b949", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } }
     : path === "/auth/session" ? { user: { role: "admin" } }
     : path === "/admin/setup/progress" ? { completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }
+    : path === "/integrations/capabilities" ? { integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: true } } }
     : path === "/meetings" ? { meetings, lateScanMinutes: 30 }
     : path === "/meeting-templates" ? { templates: [] }
     : path === "/discord/contests" ? { contests: [{ meetingId: "active-meeting", meetingTitle: "Build session", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: iso(-5) }] }
@@ -35,7 +36,7 @@ const server = createServer((request, response) => {
     : path === "/admin/users" ? { users: [{ id: "user-1", localUsername: "admin", role: "admin", active: 1, memberId: "member-1", memberExternalId: "A-101", memberFirstName: "Avery", memberLastName: "Stone", createdAt: iso(-30 * 24 * 60) }] }
     : path === "/admin/kiosks" ? { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.8.0", pairedAt: iso(-1440) }] }
     : path === "/admin/simulator" ? { simulator: { name: "Browser test", active: 1, online: 1, lastSeenAt: iso(0), readerOnline: false, releaseVersion: "browser simulator" } }
-    : path === "/admin/integrations" ? { integrations: [{ provider: "google", saved: true, configured: true, state: "configured", verifiedAt: iso(-60) }, { provider: "resend", saved: true, configured: false, state: "verification_required" }, { provider: "discord", saved: false, configured: false, state: "not_configured" }] }
+    : path === "/admin/integrations" ? { integrations: [{ provider: "google", enabled: true, saved: true, configured: true, state: "configured", verifiedAt: iso(-60) }, { provider: "resend", enabled: true, saved: true, configured: false, state: "verification_required" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] }
     : { error: "Preview route not implemented" };
   response.statusCode = payload.error ? 404 : 200; response.end(JSON.stringify(payload));
 });

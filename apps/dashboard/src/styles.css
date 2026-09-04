@@ -274,15 +274,20 @@ main[aria-busy="true"] .setup-progress { display: none; }
 .section-intro > span { color: var(--primary); font-size: .78rem; font-weight: 700; }
 .integration-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .8rem; margin-top: 1.2rem; }
 .integration-card { overflow: hidden; border: 1px solid var(--line); background: var(--bg); border-radius: .75rem; }
-.integration-title { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .7rem; align-items: start; padding: 1rem; cursor: pointer; list-style: none; }
-.integration-title::-webkit-details-marker { display: none; }
+.integration-title { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: .7rem; align-items: center; padding: 1rem; }
 .integration-heading { display: grid; gap: .2rem; min-width: 0; }
 .integration-heading strong { color: var(--ink); font-size: 1.1rem; }
 .integration-heading small { color: var(--muted); font-size: .75rem; font-weight: 500; line-height: 1.4; }
-.integration-title > span:last-child { align-self: start; padding: .3rem .55rem; border-radius: 2rem; font-size: .68rem; font-weight: 800; white-space: nowrap; }
+.integration-state { padding: .3rem .55rem; border-radius: 2rem; font-size: .68rem; font-weight: 800; white-space: nowrap; }
 .integration-title .configured { color: #075c43; background: #d7f5e9; }
 .integration-title .verification-required { color: #6f4b00; background: #fff0bf; }
 .integration-title .not-configured { color: var(--muted); background: var(--surface-soft); }
+.integration-toggle { display: inline-flex; align-items: center; gap: .4rem; font-size: .75rem; font-weight: 800; }
+.integration-toggle input { width: 1.2rem; height: 1.2rem; margin: 0; }
+.integration-details { border-top: 1px solid var(--line); }
+.integration-details > summary { padding: .7rem 1rem; color: var(--primary); cursor: pointer; font-weight: 800; }
+.integration-card.disabled .integration-title { padding: .65rem .8rem; }
+.integration-message { margin: 0 1rem 1rem; }
 .integration-body { padding: 0 1rem 1rem; border-top: 1px solid var(--line); }
 .integration-card input { margin-top: .35rem; }
 .callback-note { padding: .6rem; overflow-wrap: anywhere; background: var(--surface-soft); border-radius: .5rem; font-size: .68rem; }
@@ -576,8 +581,8 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
   .table-toolbar .calendar-control { min-width: 0; }
   .calendar-outcomes li { grid-template-columns: 1fr; gap: .2rem; }
   .dialog-actions { display: grid; grid-template-columns: 1fr 1fr; }
-  .integration-title { grid-template-columns: 1fr; }
-  .integration-title > span:last-child { justify-self: start; }
+  .integration-title { grid-template-columns: 1fr auto; }
+  .integration-heading { grid-column: 1 / -1; }
 }
 
 /* Dense operational views need a readable floor on shared displays and tablets. */

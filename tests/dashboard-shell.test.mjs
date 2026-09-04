@@ -423,6 +423,9 @@ test("Kiosks refresh hides redundant success while preserving actionable feedbac
 
 test("integration setup distinguishes saved credentials from verified connections", async () => {
   const source = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
+  const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   assert.match(source, /Verification required/);
   assert.match(source, /result\.created \?/);
   assert.match(source, /credentials saved\. Complete verification below/);
@@ -430,7 +433,14 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /resend\/verify\/complete/);
   assert.match(source, /discord\/verify\/start/);
   assert.match(source, /Verify with Google/);
-  assert.match(source, /<details className="integration-card"/);
+  assert.match(source, /role="switch" aria-label=\{`Enable/);
+  assert.match(source, /const ordered = \[\.\.\.providers\]\.sort/);
+  assert.match(source, /integration-card\$\{enabled \? "" : " disabled"\}/);
+  assert.match(source, /enabled && <details className="integration-details"/);
+  assert.match(source, /method: "PATCH"/);
+  assert.match(shell, /\/integrations\/capabilities/);
+  assert.match(meetings, /discordEnabled && <button.*Sync all to Discord/);
+  assert.match(attendance, /discordEnabled && <button.*Send Discord absence notice/);
   assert.doesNotMatch(source, /Previous credentials were replaced|\/test"/);
 });
 

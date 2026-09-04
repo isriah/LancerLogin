@@ -55,6 +55,20 @@ test("half-width dashboard does not overflow", async ({ page }) => {
   expect(widths.scroll).toBeLessThanOrEqual(widths.client);
 });
 
+test("integration enablement is accessible, sorted, and compact when disabled", async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.goto("/settings/integrations");
+  const cards = page.locator(".integration-card");
+  await expect(cards).toHaveCount(3);
+  await expect(cards.nth(0)).toContainText("Google OAuth");
+  await expect(cards.nth(1)).toContainText("Resend email");
+  await expect(cards.nth(2)).toContainText("Discord bot");
+  await expect(page.getByRole("switch", { name: "Enable Discord bot" })).not.toBeChecked();
+  await expect(cards.nth(2).locator(".integration-details")).toHaveCount(0);
+  const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(widths.scroll).toBeLessThanOrEqual(widths.client);
+});
+
 test("Reports keeps operational filters while pending contests route through the shell", async ({ page }) => {
   await page.goto("/reports");
   await expect(page.getByRole("heading", { name: "Reports", exact: true })).toBeVisible();

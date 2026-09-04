@@ -135,6 +135,8 @@ test("Google-only bootstrap encrypts OAuth credentials before the first sign-in"
   assert.ok(integration);
   assert.equal(integration.values.some((value) => String(value).includes("google-client-secret")), false);
   assert.ok(database.batches[0].some((statement) => statement.sql.includes("integration.saved")));
+  const installation = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO installations"));
+  assert.equal(installation?.values.at(-1), 1);
   assert.equal((await result.text()).includes("google-client-secret"), false);
 });
 
@@ -630,6 +632,57 @@ test("first integration save encrypts secrets and requires verification", async 
   assert.ok(database.calls.some((call) => call.values.includes("integration.saved")));
 });
 
+test("integration status exposes enablement without credentials and capabilities are role-safe", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("google_enabled AS googleEnabled", { googleEnabled: 1, resendEnabled: 0, discordEnabled: 1 });
+  database.lists.set("SELECT i.provider", [{ provider: "google", updatedAt: "2026-09-03T00:00:00Z", verifiedAt: "2026-09-03T00:01:00Z", verificationPending: 0 }]);
+  database.lists.set("SELECT provider, verified_at AS verifiedAt", [{ provider: "google", verifiedAt: "2026-09-03T00:01:00Z" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const status = await worker.fetch(request("/admin/integrations", undefined, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(status.status, 200);
+  assert.deepEqual((await status.json() as { integrations: Array<{ provider: string; enabled: boolean; configured: boolean; state: string }> }).integrations.map(({ provider, enabled, configured, state }) => ({ provider, enabled, configured, state })), [
+    { provider: "google", enabled: true, configured: true, state: "configured" },
+    { provider: "resend", enabled: false, configured: false, state: "disabled" },
+    { provider: "discord", enabled: true, configured: false, state: "not_configured" },
+  ]);
+  assert.equal((await worker.fetch(request("/integrations/capabilities"), env)).status, 401);
+  const capabilities = await worker.fetch(request("/integrations/capabilities", undefined, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(capabilities.status, 200);
+  assert.deepEqual(await capabilities.json(), { integrations: { google: { enabled: true, configured: true }, resend: { enabled: false, configured: false }, discord: { enabled: true, configured: false } } });
+});
+
+test("Admins can persist enablement and disabled providers cannot start workflows", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("google_enabled AS googleEnabled", { googleEnabled: 0, resendEnabled: 0, discordEnabled: 0 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const enabled = await worker.fetch(request("/admin/integrations/discord", { enabled: true }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
+  assert.equal(enabled.status, 200);
+  assert.deepEqual(await enabled.json(), { provider: "discord", enabled: true });
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("discord_enabled = ?") && call.values[0] === 1));
+  assert.ok(database.calls.some((call) => call.values.includes("integration.enabled")));
+  const resend = await worker.fetch(request("/admin/integrations/resend/verify/start", { email: "admin@example.test" }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(resend.status, 409);
+  const discord = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(discord.status, 503);
+});
+
+test("Google disablement requires an active Admin local credential and updates sign-in mode", async () => {
+  const blockedDatabase = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: blockedDatabase } as unknown as Env;
+  const blocked = await worker.fetch(request("/admin/integrations/google", { enabled: false }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
+  assert.equal(blocked.status, 409);
+  assert.match((await blocked.json() as { error: string }).error, /no active Admin has a usable local sign-in/);
+  assert.equal(blockedDatabase.batches.length, 0);
+
+  const database = new FakeDatabase();
+  database.rows.set("password_hash IS NOT NULL", { id: "admin-1" });
+  const allowed = await worker.fetch(request("/admin/integrations/google", { enabled: false }, { method: "PATCH", cookie: await sessionCookie("admin") }), { ...env, DB: database } as unknown as Env);
+  assert.equal(allowed.status, 200);
+  assert.ok(database.batches[0].some((call) => call.sql.includes("google_enabled = ?") && call.values[0] === 0));
+  assert.ok(database.batches[0].some((call) => call.sql.includes("auth_mode = CASE")));
+  assert.ok(database.calls.some((call) => call.values.includes("integration.disabled")));
+});
+
 test("kiosk attendance automatically resolves the one eligible meeting from the scan time", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
@@ -649,6 +702,7 @@ test("kiosk attendance automatically resolves the one eligible meeting from the 
 
 test("Resend becomes configured only after an actual email and one-time code", async () => {
   const database = new FakeDatabase();
+  database.rows.set("google_enabled AS googleEnabled", { googleEnabled: 0, resendEnabled: 1, discordEnabled: 0 });
   const encrypted = await encryptIntegration({ apiKey: "resend-secret", fromEmail: "attendance@example.test" }, sessionSecret);
   database.rows.set("FROM encrypted_integrations", { id: "resend-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: null });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
@@ -708,7 +762,7 @@ test("Google-only installations cannot remove their sole sign-in integration", a
 });
 
 test("removing Google from a dual-auth installation retains local sign-in", async () => {
-  const database = new FakeDatabase(); database.rows.set("auth_mode AS authMode", { authMode: "both" });
+  const database = new FakeDatabase(); database.rows.set("password_hash IS NOT NULL", { id: "admin-1" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/admin/integrations/google", {}, { method: "DELETE", cookie: await sessionCookie("admin") }), env);
   assert.equal(result.status, 200); assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("SET auth_mode = 'local'")));
@@ -881,6 +935,7 @@ test("Discord calendar sync retries a rate limit only after Discord's retry dela
 
 test("Operators can list and resolve Discord attendance contests", async () => {
   const database = new FakeDatabase();
+  database.rows.set("google_enabled AS googleEnabled", { googleEnabled: 0, resendEnabled: 0, discordEnabled: 1 });
   database.lists.set("FROM discord_attendance_contests c", [{ meetingId: "meeting-1", memberId: "member-1", externalId: "A-1", firstName: "Avery", lastName: "Stone", status: "open", createdAt: "2026-08-30T00:00:00Z" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const cookie = await sessionCookie("operator");

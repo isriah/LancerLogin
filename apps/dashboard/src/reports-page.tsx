@@ -15,19 +15,19 @@ const savedViewKey = "lancerlogin-reports-view";
 const percent = (top: number, bottom: number) => bottom ? Math.round(top / bottom * 100) : 0;
 const meetingIsOptional = (meeting: Meeting) => !Boolean(meeting.required);
 
-export function ReportsPage() {
+export function ReportsPage({ discordEnabled }: { discordEnabled: boolean }) {
   const [meetings, setMeetings] = useState<Meeting[]>([]); const [rows, setRows] = useState<Record<string, Row[]>>({}); const [roster, setRoster] = useState<Record<string, boolean>>({}); const [contests, setContests] = useState<Contest[]>([]); const [notice, setNotice] = useState("Loading reports…");
   useDashboardLoadingOverlay(notice === "Loading reports…", "Loading reports…");
   const { path, navigate } = usePath(); const [sort, setSort] = useState<"rate" | "first" | "last">("rate"); const [range, setRange] = useState("10"); const [from, setFrom] = useState(""); const [to, setTo] = useState(""); const [meetingType, setMeetingType] = useState<"all" | "regular" | "optional">("all"); const [rosterFilter, setRosterFilter] = useState<"active" | "all">("active"); const [baseline, setBaseline] = useState(""); const [useBaseline, setUseBaseline] = useState(false); const [reviewing, setReviewing] = useState<Contest>(); const [reviewNote, setReviewNote] = useState(""); const [reviewError, setReviewError] = useState(""); const [reviewBusy, setReviewBusy] = useState(false);
 
   async function load() {
-    const [meetingResult, rosterResult, contestResult] = await Promise.all([api<MeetingResponse>("/meetings"), api<{ members: RosterMember[] }>("/admin/members"), api<{ contests: Contest[] }>("/discord/contests")]);
+    const [meetingResult, rosterResult, contestResult] = await Promise.all([api<MeetingResponse>("/meetings"), api<{ members: RosterMember[] }>("/admin/members"), discordEnabled ? api<{ contests: Contest[] }>("/discord/contests") : Promise.resolve({ contests: [] as Contest[] })]);
     const completed = meetingResult.meetings.filter((meeting) => !meeting.isTest && Date.parse(meeting.endsAt) <= Date.now()).sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt));
     const results = await Promise.all(completed.map(async (meeting) => [meeting.id, (await api<{ attendance: Row[] }>(`/attendance?meetingId=${encodeURIComponent(meeting.id)}&includeInactive=1`)).attendance] as const));
     const reportingBaseline = meetingResult.attendanceReportingStartsOn ?? "";
     setMeetings(completed); setRows(Object.fromEntries(results)); setRoster(Object.fromEntries(rosterResult.members.map((member) => [member.id, Boolean(member.active)]))); setContests(contestResult.contests.filter((contest) => contest.status === "open")); setBaseline(reportingBaseline); setUseBaseline(Boolean(reportingBaseline)); setNotice("");
   }
-  useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, []);
+  useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, [discordEnabled]);
 
   const effectiveFrom = useBaseline ? baseline : from;
   const filteredMeetings = useMemo(() => meetings.filter((meeting) => (!effectiveFrom || meeting.startsAt.slice(0, 10) >= effectiveFrom) && (!to || meeting.startsAt.slice(0, 10) <= to) && (meetingType === "all" || (meetingType === "optional" ? meetingIsOptional(meeting) : !meetingIsOptional(meeting)))), [meetings, effectiveFrom, to, meetingType]);

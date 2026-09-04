@@ -1035,7 +1035,13 @@ Release: next public-documentation visual refresh.
 
 ### WU-063 — Dashboard meeting-selector visual conformance
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-063-meeting-selector-conformance`
+Base: `7ab4a83aee56d70cbbd2747df45f6be9a119beda`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\095a\\LancerLogin Workspace`
+Task: `01a06d76-a306-72c0-b11d-9aafbfeb3d0a`
 
 Goal: make the Dashboard meeting-selector dropdown match the established dashboard form-control language without changing meeting navigation.
 Dependencies: none
@@ -1047,7 +1053,13 @@ Release: next dashboard polish bundle.
 
 ### WU-064 — Discord kiosk-status message self-healing
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-064-discord-status-self-healing`
+Base: `7ab4a83aee56d70cbbd2747df45f6be9a119beda`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\723a\\LancerLogin Workspace`
+Task: `01a06d76-90db-7712-b8ef-0c5a0632ddc5`
 
 Goal: make manual and scheduled Discord kiosk-status synchronization recover automatically when its previously tracked Discord message has been deleted.
 Dependencies: none

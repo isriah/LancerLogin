@@ -38,7 +38,9 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
   await page.route("**/discord/kiosk-status", async (route) => {
     syncRequests += 1;
     expect(route.request().method()).toBe("POST");
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ changed: true, messageId: "status-1", online: true }) });
+    await route.fulfill(syncRequests === 1
+      ? { status: 200, contentType: "application/json", body: JSON.stringify({ changed: true, messageId: "replacement-status-1", online: true }) }
+      : { status: 502, contentType: "application/json", body: JSON.stringify({ error: "Discord denied this request because the bot cannot access the selected channel." }) });
   });
 
   for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
@@ -62,6 +64,9 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
   await page.getByRole("button", { name: "Sync Discord status" }).click();
   await expect(page.getByRole("status")).toHaveText("Persistent Discord kiosk status updated.");
   expect(syncRequests).toBe(1);
+  await page.getByRole("button", { name: "Sync Discord status" }).click();
+  await expect(page.getByRole("alert")).toHaveText("Discord denied this request because the bot cannot access the selected channel.");
+  expect(syncRequests).toBe(2);
 
   await page.route("**/integrations/capabilities", (route) => route.fulfill({
     status: 200,

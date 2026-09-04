@@ -52,6 +52,11 @@ class DiscordRateLimitError extends HttpError {
   readonly retryAfterMs: number;
   constructor(retryAfterMs: number) { super(503, `Discord is rate limiting calendar sync. Wait ${Math.ceil(retryAfterMs / 1000)} seconds before trying again.`); this.retryAfterMs = retryAfterMs; }
 }
+class DiscordResponseError extends HttpError {
+  readonly discordStatus: number;
+  readonly discordCode?: number;
+  constructor(status: number, message: string, code?: number) { super(502, `Discord rejected the request (${status})${message ? `: ${message}` : ""}`); this.discordStatus = status; this.discordCode = code; }
+}
 async function parseJson<T>(request: Request, maxBytes = 262_144): Promise<T> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new HttpError(415, "Content-Type must be application/json");
   if (Number(request.headers.get("content-length") ?? 0) > maxBytes) throw new HttpError(413, "Request body is too large");
@@ -852,7 +857,8 @@ async function discordRequest(config: Record<string, string>, path: string, init
       continue;
     }
     const message = typeof body.message === "string" ? body.message.replace(/\s+/g, " ").slice(0, 180) : "";
-    throw new HttpError(502, `Discord rejected the request (${result.status})${message ? `: ${message}` : ""}`);
+    const code = Number(body.code);
+    throw new DiscordResponseError(result.status, message, Number.isFinite(code) ? code : undefined);
   }
   throw new HttpError(502, "Discord request did not complete");
 }
@@ -1043,7 +1049,19 @@ async function syncDiscordKioskStatus(env: Env): Promise<{ changed: boolean; mes
   const contentHash = await sha256(content);
   const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'kiosk-status'").first<{ externalId?: string; contentHash?: string }>();
   if (existing?.externalId && existing.contentHash === contentHash) return { changed: false, messageId: existing.externalId, online, kioskId: kiosk?.id };
-  const path = existing?.externalId ? `/channels/${config.channelId}/messages/${existing.externalId}` : `/channels/${config.channelId}/messages`; const { body } = await discordRequest(config, path, { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) }); const messageId = String(body.id ?? existing?.externalId ?? ""); const now = new Date().toISOString();
+  const messagesPath = `/channels/${encodeURIComponent(config.channelId)}/messages`;
+  const payload = { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) };
+  let messageId: string;
+  try {
+    const { body } = await discordRequest(config, existing?.externalId ? `${messagesPath}/${encodeURIComponent(existing.externalId)}` : messagesPath, payload);
+    messageId = String(body.id ?? existing?.externalId ?? "");
+  } catch (error) {
+    if (!(error instanceof DiscordResponseError) || error.discordStatus !== 404 || error.discordCode !== 10_008 || !existing?.externalId) throw error;
+    const { body } = await discordRequest(config, messagesPath, { ...payload, method: "POST" });
+    messageId = String(body.id ?? "");
+  }
+  if (!messageId) throw new HttpError(502, "Discord did not return a kiosk-status message identifier");
+  const now = new Date().toISOString();
   await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', 'kiosk-status', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(messageId, contentHash, now).run();
   return { changed: true, messageId, online, kioskId: kiosk?.id };
 }

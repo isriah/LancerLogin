@@ -812,7 +812,7 @@ Release: v0.17.0 Dashboard meeting creation and kiosk version visibility.
 
 ### WU-052 — Kiosk scan and offline visual feedback
 
-Status: in progress
+Status: merged (`935640d`)
 
 Owner: Codex task
 Branch: `codex/wu-052-kiosk-scan-feedback` (requested; provisioning Worktree)
@@ -820,6 +820,7 @@ Base: `bb9ecca51a4531ec4ed33efd345e46ca7f293877`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\3dd2\\LancerLogin Workspace` (detached)
 Task: `01a06b96-7800-7b51-af9b-502dd452c8bb`
 Candidate: `2cfb0d7f90d9bc83e2f9b4c5126fc19bc5bae991`; commit subject and kiosk presentation/test files match this WU.
+Integration: candidate `2cfb0d7f90d9bc83e2f9b4c5126fc19bc5bae991` was merged as `935640d`; on the combined WU-047/WU-052 tree, `npm run verify:kiosk` and the 49-test full browser suite passed.
 
 Goal: make scan processing, duplicate attendance, and offline outcomes immediately recognizable from the physical kiosk screen.
 Dependencies: none
@@ -827,7 +828,7 @@ Scope: add a blue full-screen gradient sweep during the processing state; flash 
 Sources: `docs/idea_inbox.md` (IN-069, IN-070, IN-071); `apps/kiosk/src/kiosk-presentation.mjs`; `apps/kiosk/src/kiosk-states.mjs`; `apps/kiosk/src/scanner.mjs`; `apps/kiosk/src/ui.mjs`; `tests/kiosk-runtime.test.mjs`; `tests/fixtures/kiosk-preview-server.mjs`; `docs/KIOSK.md`.
 Acceptance: processing produces a bounded blue sweep; duplicate attendance produces a bounded purple flash; offline recognized and unrecognized/rejected outcomes remain textually distinct and use green and red feedback respectively; the connectivity icon pulses only while offline; all motion has a clear reduced-motion fallback; existing state durations and attendance outcomes remain correct.
 Verification: `npm run verify:kiosk`; focused state-contract and CSS assertions plus physical-kiosk-sized browser coverage for processing, duplicate, offline success/failure, connectivity recovery, and reduced motion.
-Release: v0.17.0 kiosk status and scan-feedback release.
+Release: planned v0.18.0 meeting operations and kiosk feedback release.
 
 ### WU-053 — Dashboard visual-language standard
 

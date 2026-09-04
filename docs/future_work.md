@@ -674,7 +674,7 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-044 — Canonical meeting-detail workspace
 
-Status: in progress
+Status: merged (`d47e9e2fde3b5421ced3170e7d473152daa2dd47`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-044-meeting-detail-workspace`

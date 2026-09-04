@@ -776,6 +776,30 @@ Acceptance: `/settings/updates` exits its loading overlay within a defined bound
 Verification: `npm run verify:dashboard`; focused mocked slow, unavailable, and recovered release-feed coverage; browser coverage for bounded loading, degraded local information, and non-overlapping refresh behavior.
 Release: v0.16.0 Dashboard meeting-browser and update reliability release.
 
+### WU-051 — Kiosk release-version footer
+
+Status: ready
+
+Goal: show the running kiosk software version on the physical attendance interface while keeping reader failures visible.
+Dependencies: none
+Scope: expose the local `LANCERLOGIN_VERSION` through the loopback-only display-state response and replace the successful `Fingerprint reader online` footer copy with that version. Retain an explicit reader-offline warning, queue count, uptime, pairing behavior, and the dashboard heartbeat version. Exclude version selection, update behavior, dashboard Kiosks-page changes, and new diagnostic details.
+Sources: `docs/idea_inbox.md` (IN-068); `apps/kiosk/src/service.mjs`; `apps/kiosk/src/ui.mjs`; `tests/kiosk-runtime.test.mjs`; `docs/KIOSK.md`.
+Acceptance: a paired physical kiosk displays its running release version in the footer when the reader is online; development and missing-version states use a clear safe fallback; a reader failure still replaces the version text with the existing offline warning; no credential, biometric, or additional host detail is exposed.
+Verification: `npm run verify:kiosk`; focused display-state and kiosk-rendering coverage for release, development/fallback, and reader-offline states.
+Release: v0.17.0 kiosk status and scan-feedback release.
+
+### WU-052 — Kiosk scan and offline visual feedback
+
+Status: ready
+
+Goal: make scan processing, duplicate attendance, and offline outcomes immediately recognizable from the physical kiosk screen.
+Dependencies: none
+Scope: add a blue full-screen gradient sweep during the processing state; flash purple for the duplicate state; use green feedback for a recognized scan saved for later sync and red for an unrecognized or rejected scan while offline; and pulse the network-connectivity icon whenever cloud connectivity is unavailable. Preserve the existing semantic display-state contract, text feedback, queue ordering, R503 aura behavior, debounce, organization theming, and `prefers-reduced-motion` handling. Exclude sensor-protocol changes, new attendance outcomes, network-setting changes, and browser-simulator expansion.
+Sources: `docs/idea_inbox.md` (IN-069, IN-070, IN-071); `apps/kiosk/src/kiosk-presentation.mjs`; `apps/kiosk/src/kiosk-states.mjs`; `apps/kiosk/src/scanner.mjs`; `apps/kiosk/src/ui.mjs`; `tests/kiosk-runtime.test.mjs`; `tests/fixtures/kiosk-preview-server.mjs`; `docs/KIOSK.md`.
+Acceptance: processing produces a bounded blue sweep; duplicate attendance produces a bounded purple flash; offline recognized and unrecognized/rejected outcomes remain textually distinct and use green and red feedback respectively; the connectivity icon pulses only while offline; all motion has a clear reduced-motion fallback; existing state durations and attendance outcomes remain correct.
+Verification: `npm run verify:kiosk`; focused state-contract and CSS assertions plus physical-kiosk-sized browser coverage for processing, duplicate, offline success/failure, connectivity recovery, and reduced motion.
+Release: v0.17.0 kiosk status and scan-feedback release.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

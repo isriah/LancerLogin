@@ -553,3 +553,35 @@ Recorded: 2026-09-04
 Source: WU Idea Inbox
 Request: Clarification for `/settings/update`: it eventually loads, but takes an extremely long time; investigate the latency.
 Disposition: WU-050
+
+## IN-068
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: On the actual kiosk interface, show the kiosk software version in place of Fingerprint reader online.
+Disposition: WU-051
+
+## IN-069
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: While a fingerprint is being processed, sweep a gradient matching the fingerprint reader's blue light across the kiosk screen to make it clear that the finger was read and processing is underway.
+Disposition: WU-052
+
+## IN-070
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: When a fingerprint is already recorded, flash the kiosk screen purple to match the fingerprint reader feedback.
+Disposition: WU-052
+
+## IN-071
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: In offline mode, flash the kiosk screen green or red as appropriate when a fingerprint is recognized or not recognized, and pulse the network-connectivity icon to make the offline state clear.
+Disposition: WU-052

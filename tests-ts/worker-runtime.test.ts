@@ -434,6 +434,10 @@ test("kiosk heartbeats maintain one idempotent Discord status message and schedu
     assert.ok(stateWrite);
 
     database.rows.set("FROM integration_state", { externalId: "message-1", contentHash: stateWrite.values[1] });
+    const manual = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(manual.status, 200);
+    assert.deepEqual(await manual.json(), { changed: false, messageId: "message-1", online: true });
+    assert.ok(database.calls.some((call) => call.values.includes("discord.kiosk_status_updated")));
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
     assert.equal(outbound.length, 1, "unchanged online state should not edit Discord");
 
@@ -701,6 +705,7 @@ test("Admins can persist enablement and disabled providers cannot start workflow
   assert.equal(resend.status, 409);
   const discord = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
   assert.equal(discord.status, 503);
+  assert.equal((await worker.fetch(request("/discord/kiosk-status", {}), env)).status, 401);
 });
 
 test("Google disablement requires an active Admin local credential and updates sign-in mode", async () => {

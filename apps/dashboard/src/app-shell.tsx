@@ -43,7 +43,7 @@ export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { r
   else if (path === "/reports") page = <ReportsPage discordEnabled={integrations.discord.configured} />;
   else if (path === "/roster") page = <RosterPage role={role} />;
   else if (path.startsWith("/roster/")) page = <MemberDetailPage role={role} memberId={decodeURIComponent(path.slice("/roster/".length))} discordEnabled={integrations.discord.enabled} />;
-  else if (path === "/kiosks") page = <KiosksPage role={role} />;
+  else if (path === "/kiosks") page = <KiosksPage role={role} discordConfigured={integrations.discord.configured} />;
   else if (role === "admin" && path === "/simulator") page = <SimulatorPage />;
   else if (role === "admin" && path === "/settings/organization") page = <OrganizationSettings initialBranding={branding} onChanged={onBrandingChanged} />;
   else if (role === "admin" && path === "/settings/configuration") page = <ConfigurationSettings initialBranding={branding} onChanged={onBrandingChanged} />;

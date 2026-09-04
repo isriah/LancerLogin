@@ -46,7 +46,7 @@ function PairKioskDialog({ active, onClose, onPaired }: { active?: Kiosk; onClos
   </div></div>;
 }
 
-export function KiosksPage({ role }: { role: "admin" | "operator" }) {
+export function KiosksPage({ role, discordConfigured }: { role: "admin" | "operator"; discordConfigured: boolean }) {
   const [kiosks, setKiosks] = useState<Kiosk[]>([]);
   const [simulator, setSimulator] = useState<Simulator | null>(null);
   const [notice, setNotice] = useState("Loading kiosk status…");
@@ -54,6 +54,7 @@ export function KiosksPage({ role }: { role: "admin" | "operator" }) {
   const [pairing, setPairing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [maintenanceHelp, setMaintenanceHelp] = useState(false);
+  const [discordBusy, setDiscordBusy] = useState(false);
   const [name, setName] = useState("");
 
   async function load({ preserveNotice = false }: { preserveNotice?: boolean } = {}) {
@@ -70,6 +71,14 @@ export function KiosksPage({ role }: { role: "admin" | "operator" }) {
   async function retire() { if (!active || !window.confirm(`Retire ${active.name}? Its credential will stop working, but its history will remain.`)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "DELETE", body: JSON.stringify({ confirmation: "RETIRE KIOSK" }) }); setNotice("Kiosk retired. You can pair another device now."); await load({ preserveNotice: true }); } catch (error) { setNotice((error as Error).message); } }
   async function command(type: KioskCommand, label: string, confirmation?: string) { if (!active || confirmation && !window.confirm(confirmation)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}/commands`, { method: "POST", body: JSON.stringify({ command: type }) }); setNotice(`${label} queued. The kiosk normally receives it within five seconds.`); } catch (error) { setNotice((error as Error).message); } }
   async function stopSimulator() { try { await api("/admin/simulator", { method: "POST", body: JSON.stringify({ action: "stop" }) }); setNotice("Browser simulator stopped."); await load({ preserveNotice: true }); } catch (error) { setNotice((error as Error).message); } }
+  async function syncDiscordStatus() {
+    setDiscordBusy(true); setNotice("Syncing physical kiosk health to Discord…");
+    try {
+      const result = await api<{ changed: boolean }>("/discord/kiosk-status", { method: "POST", body: JSON.stringify({}) });
+      setNotice(result.changed ? "Persistent Discord kiosk status updated." : "Persistent Discord kiosk status is already current.");
+    } catch (error) { setNotice((error as Error).message); }
+    finally { setDiscordBusy(false); }
+  }
 
   return <section className="page-stack" aria-labelledby="kiosks-title">
     <div className="page-intro"><h1 id="kiosks-title">Kiosks</h1></div>
@@ -94,6 +103,7 @@ export function KiosksPage({ role }: { role: "admin" | "operator" }) {
             {maintenanceHelp && <div className="settings-callout" role="status"><strong>Open maintenance on the physical kiosk</strong><p>Press and hold the organization name or logo for three seconds, then enter the local settings PIN. Enrollment, reader tests, slot suggestions, replacement warnings, and mapping removal are available there so fingerprint templates never leave the sensor.</p></div>}
           </>}
         </> : <p>Pair a Raspberry Pi to begin unattended fingerprint attendance. Pairing and replacement are managed here after onboarding.</p>}
+        {discordConfigured && <section className="kiosk-discord-status" aria-labelledby="discord-kiosk-status-title"><div><h3 id="discord-kiosk-status-title">Discord kiosk status</h3><p>Keep the persistent attendance-channel message aligned with this physical kiosk’s current health.</p></div><button type="button" disabled={discordBusy} onClick={() => void syncDiscordStatus()}>{discordBusy ? "Syncing…" : "Sync Discord status"}</button></section>}
       </article>
       <article className="task-card"><h2>Browser simulator</h2><div className="kiosk-state"><strong>{simulator?.name ?? "Not configured"}</strong><span className={`status-pill ${simulator?.active && simulator.online ? "online" : "offline"}`}>{simulator?.active ? simulator.online ? "Online" : "Offline" : "Not paired"}</span></div><p>Uses the kiosk scan surface with browser-selected simulated reads. Events are audited and do not count as physical kiosk activity.</p>{role === "admin" && simulator?.active === 1 && <div className="kiosk-actions"><a className="primary-button action-link" href="/simulator">Open simulator</a><button type="button" onClick={() => void stopSimulator()}>Stop simulator</button></div>}</article>
     </div>

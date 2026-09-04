@@ -238,7 +238,7 @@ async function manageMember(request: Request, env: Env, memberId: string): Promi
 async function memberHistory(request: Request, env: Env, externalId: string): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const [member, settings] = await Promise.all([
-    db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, active, created_at AS rosterAddedAt, attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id = 'primary' AND external_id = ?").bind(externalId).first<{ id: string; memberId: string; firstName: string; lastName: string; email?: string; active: number; rosterAddedAt?: string; attendanceRequiredFrom?: string }>(),
+    db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active, created_at AS rosterAddedAt, attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id = 'primary' AND external_id = ?").bind(externalId).first<{ id: string; memberId: string; firstName: string; lastName: string; email?: string; discordUserId?: string; active: number; rosterAddedAt?: string; attendanceRequiredFrom?: string }>(),
     db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>(),
   ]);
   if (!member) throw new HttpError(404, "Member not found");

@@ -75,6 +75,40 @@ test("member links share route state across Roster, Reports, direct loads, and b
   await expect(page.getByRole("heading", { name: "Morgan Diaz" })).toBeVisible();
 });
 
+test("member detail shows Discord identity only while the integration is enabled", async ({ page }) => {
+  await page.goto("/roster/A-101");
+  await expect(page.getByText("Discord identity", { exact: true })).toBeVisible();
+  await expect(page.getByText("123456789012", { exact: true })).toBeVisible();
+
+  await page.goto("/roster/A-102");
+  await expect(page.getByText("Discord identity", { exact: true })).toBeVisible();
+  await expect(page.getByText("Not linked", { exact: true })).toBeVisible();
+
+  await page.route("**/integrations/capabilities", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: false, configured: true } } }),
+  }));
+  await page.goto("/roster/A-101");
+  await expect(page.getByRole("heading", { name: "Avery Stone" })).toBeVisible();
+  await expect(page.getByText("Discord identity", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("123456789012", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Not linked", { exact: true })).toHaveCount(0);
+});
+
+test("Operator can view member Discord identity without Admin member controls", async ({ page }) => {
+  await page.route("**/auth/session", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ user: { role: "operator" } }),
+  }));
+  await page.goto("/roster/A-101");
+  await expect(page.getByText("Discord identity", { exact: true })).toBeVisible();
+  await expect(page.getByText("123456789012", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+});
+
 test("branding controls and dark surfaces are themed", async ({ page }) => {
   await page.goto("/settings/organization");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");

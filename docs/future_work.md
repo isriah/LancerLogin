@@ -775,6 +775,7 @@ Branch: `codex/wu-049-displaced-meeting-utilities` (requested; provisioning Work
 Base: `48e07f97df38fa3c00f2caa4ed61be3d05eeb84e`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\edd5\\LancerLogin Workspace` (detached)
 Task: `01a06ba8-7f31-7780-bbed-1ea8fb19b335`
+Candidate: `081c6d25d44039af07167d00f329b33bdd56ca3a`; commit subject and Dashboard/Kiosks/Reports/documentation/test files match this WU.
 
 Goal: give utilities displaced by the Dashboard redesign one clear, non-duplicated home.
 Dependencies: WU-044, WU-045, and WU-047

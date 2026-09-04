@@ -14,6 +14,7 @@ const metadata: Record<Provider, { title: string; detail: string }> = {
 const publicApiBase = apiBaseUrl.startsWith("http") ? apiBaseUrl : `${window.location.origin}${apiBaseUrl || "/api"}`;
 const googleCallback = `${publicApiBase}/auth/google/callback`;
 const googleVerifyUrl = `${publicApiBase}/auth/google/start?verify=1`;
+const googleOAuthGuideUrl = "https://isriah.github.io/LancerLogin/setup.html#google-oauth";
 const discordCallback = `${window.location.origin}/api/discord/interactions`;
 
 function CopyValue({ label, value }: { label: string; value: string }) {
@@ -27,14 +28,7 @@ function Step({ children }: { children: ReactNode }) { return <li><div className
 
 function ProviderGuide({ provider, values, onChange }: { provider: Provider; values: Record<string, string>; onChange: (key: string, value: string) => void }) {
   const field = (key: string) => values[`${provider}.${key}`] ?? "";
-  if (provider === "google") return <div className="integration-guide"><h3>Set up Google OAuth</h3><ol>
-    <Step>Open the <a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noreferrer">Google Auth Platform</a>, select or create a project, and choose <strong>Get started</strong>.</Step>
-    <Step>Complete Branding with your organization’s app name and support email. Under Audience, use <strong>Internal</strong> for one Google Workspace organization or <strong>External</strong> and add your initial users as test users.</Step>
-    <Step>Open <strong>Clients</strong>, choose <strong>Create client</strong>, and select <strong>Web application</strong>.</Step>
-    <Step>Select Copy, then immediately paste this value into <strong>Authorized redirect URIs</strong> in Google. Save the client.<CopyValue label="Authorized redirect URI" value={googleCallback} /></Step>
-    <Step>Copy the client ID in Google, then paste it here.<SetupField provider={provider} field="clientId" label="OAuth client ID" value={field("clientId")} onChange={onChange} /></Step>
-    <Step>Copy the client secret in Google, then paste it here.<SetupField provider={provider} field="clientSecret" label="OAuth client secret" type="password" value={field("clientSecret")} help="Store a recovery copy in your organization’s password manager." onChange={onChange} /></Step>
-  </ol><p className="guide-note">LancerLogin requests only identity, email, and basic profile scopes. Each Google account must also have dashboard access on the Roster page.</p></div>;
+  if (provider === "google") return <div className="integration-guide"><h3>Set up Google OAuth</h3><p>Use Google Auth Platform to configure Branding, Audience, Data Access, and one <strong>Web application</strong> client. The guide explains Internal versus External access, Testing versus In production, and when Google verification applies.</p><a className="oauth-guide-link" href={googleOAuthGuideUrl} target="_blank" rel="noreferrer">Open the complete Google OAuth guide<span aria-hidden="true"> ↗</span></a><CopyValue label="Authorized redirect URI" value={googleCallback} /><p className="guide-note">Register the exact value above under Authorized redirect URIs. LancerLogin requests only <code>openid</code>, <code>email</code>, and <code>profile</code>; do not add other scopes for sign-in.</p><SetupField provider={provider} field="clientId" label="OAuth client ID" value={field("clientId")} onChange={onChange} /><SetupField provider={provider} field="clientSecret" label="OAuth client secret" type="password" value={field("clientSecret")} help="Store a recovery copy in your organization’s password manager." onChange={onChange} /></div>;
   if (provider === "resend") return <div className="integration-guide"><h3>Set up Resend email</h3><ol>
     <Step>Create or sign in to <a href="https://resend.com" target="_blank" rel="noreferrer">Resend</a>.</Step>
     <Step>Open <a href="https://resend.com/domains" target="_blank" rel="noreferrer">Domains</a>, add a domain or subdomain your organization controls, and add the DNS records Resend provides. Continue after its status is <strong>Verified</strong>.</Step>

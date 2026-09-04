@@ -56,10 +56,35 @@ for (const viewport of dashboardConformanceReferences.viewports) {
   }
 }
 
+for (const viewport of dashboardConformanceReferences.viewports) {
+  for (const theme of dashboardConformanceReferences.themes) {
+    test(`first-Admin Google guidance fits at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+      await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: false }) }));
+      await page.goto("/dashboard");
+      await page.getByLabel("Google OAuth").check();
+
+      const guideLink = page.getByRole("link", { name: /Open the complete Google OAuth guide/ });
+      await expect(guideLink).toHaveAttribute("href", "https://isriah.github.io/LancerLogin/setup.html#google-oauth");
+      await guideLink.focus();
+      await expect(guideLink).toBeFocused();
+      expect((await guideLink.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await expect(page.getByText(`${new URL(page.url()).origin}/api/auth/google/callback`, { exact: true })).toBeVisible();
+      expect((await page.locator(".oauth-walkthrough").getByRole("button", { name: "Copy" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await expectResponsiveFit(page);
+    });
+  }
+}
+
 test("first-Admin modes expose associated validation and a pending state", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
-  await page.addInitScript(() => localStorage.setItem("lancerlogin-theme", "dark"));
+  await page.addInitScript(() => {
+    localStorage.setItem("lancerlogin-theme", "dark");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => undefined } });
+  });
   await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: false }) }));
   await page.route("**/setup/bootstrap", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -70,6 +95,19 @@ test("first-Admin modes expose associated validation and a pending state", async
   await expect(page.getByRole("heading", { level: 1, name: "Create your installation" })).toBeVisible();
   await page.getByLabel("Both methods").check();
   await expect(page.getByRole("group", { name: "Google OAuth guided setup" })).toBeVisible();
+  const guideLink = page.getByRole("link", { name: /Open the complete Google OAuth guide/ });
+  await expect(guideLink).toHaveAttribute("href", "https://isriah.github.io/LancerLogin/setup.html#google-oauth");
+  await guideLink.focus();
+  await expect(guideLink).toBeFocused();
+  expect((await guideLink.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  const callback = `${new URL(page.url()).origin}/api/auth/google/callback`;
+  await expect(page.getByText(callback, { exact: true })).toBeVisible();
+  const copyCallback = page.locator(".oauth-walkthrough").getByRole("button", { name: "Copy" });
+  await copyCallback.focus();
+  await expect(copyCallback).toBeFocused();
+  expect((await copyCallback.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await copyCallback.click();
+  await expect(page.locator(".oauth-walkthrough").getByRole("button", { name: "Copied" })).toBeVisible();
   await page.getByLabel("One-time setup code").fill("not-the-right-code");
   await page.getByLabel("Organization name").fill("Reference Arts Collective");
   await page.getByLabel("Admin username").fill("admin");

@@ -985,13 +985,15 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-060 — Dashboard design convergence audit
 
-Status: in progress
+Status: merged (`f964c66`)
 
 Owner: Codex task
 Branch: `codex/wu-060-dashboard-design-convergence` (requested; provisioning Worktree)
 Base: `be8e891`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\92b6\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:102c938d-541a-4faa-a47d-518eaff732c6`
+Candidate: `6c6679b2b25ba7e2c85af2281e6d962137bcfc4f` (detached Worktree candidate; commit subject and convergence-audit coverage match this WU).
+Integration: candidate `6c6679b2b25ba7e2c85af2281e6d962137bcfc4f` was merged as `f964c664b3c5cc42259daf52a1c2568e42cfb1f5`. The 4-test convergence audit traversed all 14 governed routes at 1280x900 and 390x844 in light and dark reference-brand modes and found no remaining heading, labeling, target-size, clipping, or page-overflow violation. `npm run verify:dashboard` and the 102-test full browser suite passed on the integrated tree. WU-060 changed only durable browser audit coverage, so API verification was not required; the WU-059 integrated API gate remained green. No standards exception remains.
 
 Goal: prove the integrated governed dashboard has no unresolved violation of the visual-language standard and repair any final cross-surface inconsistency.
 Dependencies: WU-054, WU-055, WU-056, WU-057, WU-058, and WU-059

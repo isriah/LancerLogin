@@ -34,19 +34,24 @@ test("roster columns stay vertically centered with actions at the desktop right 
   await expect(cells).toHaveCount(4);
   await expect(row.getByRole("button", { name: "Edit" })).toBeVisible();
 
-  const rowBounds = await row.boundingBox();
-  const cellBounds = await cells.evaluateAll((elements) => elements.map((element) => {
-    const bounds = element.getBoundingClientRect();
-    return { x: bounds.x, right: bounds.right, centerY: bounds.y + bounds.height / 2 };
-  }));
+  await page.evaluate(() => document.fonts.ready);
+  const rowGeometry = await row.evaluate((element) => {
+    const rowBounds = element.getBoundingClientRect();
+    return {
+      centerY: rowBounds.y + rowBounds.height / 2,
+      cells: Array.from(element.children).map((cell) => {
+        const bounds = cell.getBoundingClientRect();
+        return { x: bounds.x, right: bounds.right, centerY: bounds.y + bounds.height / 2 };
+      }),
+    };
+  });
   const headerCenters = await header.locator(":scope > *").evaluateAll((elements) => elements.map((element) => {
     const bounds = element.getBoundingClientRect();
     return bounds.y + bounds.height / 2;
   }));
-  expect(rowBounds).not.toBeNull();
-  for (const cell of cellBounds) expect(Math.abs(cell.centerY - (rowBounds!.y + rowBounds!.height / 2))).toBeLessThanOrEqual(1);
+  for (const cell of rowGeometry.cells) expect(Math.abs(cell.centerY - rowGeometry.centerY)).toBeLessThanOrEqual(1);
   for (const center of headerCenters) expect(Math.abs(center - headerCenters[0])).toBeLessThanOrEqual(1);
-  expect(cellBounds[3].x).toBeGreaterThan(cellBounds[2].right);
+  expect(rowGeometry.cells[3].x).toBeGreaterThan(rowGeometry.cells[2].right);
 });
 
 test("member links share route state across Roster, Reports, direct loads, and browser history", async ({ page }) => {

@@ -129,16 +129,55 @@ test("integration enablement is accessible, sorted, and compact when disabled", 
   expect(widths.scroll).toBeLessThanOrEqual(widths.client);
 });
 
-test("Reports keeps operational filters while pending contests route through the shell", async ({ page }) => {
+test("contest notifier opens an accessible review popup with context and refreshes after resolution", async ({ page }) => {
+  let contests = [{ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: "2026-09-03T20:05:00Z" }];
+  let failNextResolution = false;
+  await page.route(/\/discord\/contests(?:\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ contests }) }));
+  await page.route(/\/discord\/contests\/resolve$/, async (route) => {
+    const body = route.request().postDataJSON() as { reviewNote?: string };
+    if (!body.reviewNote?.trim()) { await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "A review reason is required before resolving this contest" }) }); return; }
+    if (failNextResolution) { failNextResolution = false; await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Review service unavailable" }) }); return; }
+    contests = [];
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ resolved: true, attendanceChanged: true }) });
+  });
   await page.goto("/reports");
   await expect(page.getByRole("heading", { name: "Reports", exact: true })).toBeVisible();
   await expect(page.getByLabel("Meeting type")).toBeVisible();
   await expect(page.getByLabel("Roster")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Contests awaiting review" })).toBeHidden();
-  await page.getByRole("button", { name: "1 attendance contest awaiting review. Open Home." }).click();
-  await expect(page.getByRole("heading", { name: "Home", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Attendance contests" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
+  const indicator = page.getByRole("button", { name: "1 attendance contest awaiting review. Open contest review." });
+  await indicator.click();
+  const dialog = page.getByRole("dialog", { name: "Contests awaiting review" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Jordan Lee")).toBeVisible();
+  await expect(dialog.getByText("A-103")).toBeVisible();
+  await expect(dialog.getByText("Build session · Sep 3, 2026")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Close contest review dialog" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(indicator).toBeFocused();
+  await indicator.click();
+  await dialog.getByRole("button", { name: "Approve and mark present" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("A review reason is required before resolving this contest.");
+  await dialog.getByLabel("Review reason").fill("Operator confirmed the kiosk error.");
+  await dialog.getByRole("button", { name: "Approve and mark present" }).click();
+  await expect(dialog.getByRole("status")).toHaveText("Contest approved.");
+  await expect(dialog.getByText("No attendance contests need review.")).toBeVisible();
+  await expect(indicator).toHaveCount(0);
+
+  contests = [{ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: "2026-09-03T20:05:00Z" }];
+  failNextResolution = true;
+  await page.goto("/dashboard");
+  const homeContests = page.getByRole("region", { name: "Attendance contests" });
+  await expect(homeContests).toContainText("Jordan Lee");
+  await expect(homeContests).toContainText("A-103");
+  await expect(homeContests).toContainText("Build session · Sep 3, 2026");
+  await homeContests.getByLabel("Review reason").fill("Operator reviewed the original attendance.");
+  await homeContests.getByRole("button", { name: "Keep attendance" }).click();
+  await expect(homeContests.getByRole("alert")).toHaveText("Contest resolution failed: Review service unavailable");
+  await homeContests.getByRole("button", { name: "Keep attendance" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Attendance contest reviewed and audited." })).toBeVisible();
+  await expect(homeContests).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /attendance contest.*awaiting review/i })).toHaveCount(0);
 });
 
 test("Reports filters completed Regular and Optional meetings without hiding All meetings", async ({ page }) => {

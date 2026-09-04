@@ -28,7 +28,7 @@ const server = createServer((request, response) => {
     : path === "/integrations/capabilities" ? { integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: true } } }
     : path === "/meetings" ? { meetings, lateScanMinutes: 30 }
     : path === "/meeting-templates" ? { templates: [] }
-    : path === "/discord/contests" ? { contests: [{ meetingId: "active-meeting", meetingTitle: "Build session", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: iso(-5) }] }
+    : path === "/discord/contests" ? { contests: [{ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: meetings[2].startsAt, memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: iso(-5) }] }
     : path === "/attendance" ? { finalized: false, attendanceClosesAt: iso(90), attendance: [{ memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", disposition: "active", checkedInAt: iso(-20) }, { memberId: "member-2", externalId: "A-102", firstName: "Morgan", lastName: "Diaz", disposition: "present", checkedInAt: iso(-25), checkedOutAt: iso(-2) }, { memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", disposition: "absent" }] }
     : path === "/admin/members/A-101/history" ? memberDetail(members[0])
     : path === "/admin/members/A-102/history" ? memberDetail(members[1])

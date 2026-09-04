@@ -286,7 +286,7 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
   assert.match(source, /private GitHub deployment repository/);
   assert.match(source, /authorize Upgrade manually/);
   assert.match(source, /window\.open\(workflowUrl, "_blank", "noopener,noreferrer"\)/);
-  assert.match(source, /<div className="panel-heading"><h2>Dashboard<\/h2><button className="primary-button"/);
+  assert.match(source, /<div className="panel-heading"><div><h2>Dashboard<\/h2><p>Cloudflare dashboard installation<\/p><\/div><button className="primary-button"/);
   assert.match(source, /Opens the guarded workflow in your private deployment repository in a new tab/);
   assert.match(source, /Update to latest stable/);
   assert.match(source, /command: "install_latest"/);
@@ -569,6 +569,35 @@ test("dashboard styling uses self-hosted typography and themed organization cont
   assert.match(styles, /--bg: #111315/);
   assert.match(organization, /<ColorEditor label="Primary color"/);
   assert.match(organization, /logo-backdrop-options/);
+});
+
+test("Settings routes share semantic page, form, status, and destructive-action contracts", async () => {
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const organization = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
+  const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
+  const access = await readFile("apps/dashboard/src/user-settings.tsx", "utf8");
+  const integrations = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
+  const privacy = await readFile("apps/dashboard/src/privacy-settings.tsx", "utf8");
+  const data = await readFile("apps/dashboard/src/data-settings.tsx", "utf8");
+  const updates = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
+
+  for (const route of ["organization", "configuration", "access", "integrations", "privacy", "data", "guided-setup", "updates"]) {
+    assert.match(shell, new RegExp(`/settings/${route}`));
+  }
+  for (const source of [organization, configuration, shell, integrations, privacy, data, updates]) assert.match(source, /<h1/);
+  assert.match(access, /aria-invalid=\{confirmation !== "" && password !== confirmation\}/);
+  assert.match(access, /aria-describedby=\{confirmation !== "" && password !== confirmation \? "password-confirmation-error"/);
+  assert.match(data, /aria-describedby="data-action-description"/);
+  assert.match(data, /aria-invalid=\{Boolean\(error\)\}/);
+  assert.match(integrations, /integration-state ui-status/);
+  assert.match(integrations, /className="danger-button"[\s\S]*?Remove integration/);
+  assert.match(privacy, /disabled=\{busy\}/);
+  assert.match(updates, /data-tone=\{updateTone\}/);
+  assert.match(styles, /\/\* WU-059: Settings workspace conformance\. \*\//);
+  assert.match(styles, /\.settings-page select,.settings-integrations select \{ appearance: none; padding-right: var\(--space-12\)/);
+  assert.match(styles, /\.settings-page \.danger-button,.settings-integrations \.danger-button/);
+  assert.match(styles, /@media \(max-width: 430px\) \{[\s\S]*\.settings-navigation \{ grid-template-columns: 1fr; \}/);
 });
 
 test("dashboard loading stays in an accessible overlay and the brand gradient is viewport-stable", async () => {

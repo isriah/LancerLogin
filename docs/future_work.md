@@ -746,7 +746,7 @@ Scope: place eligible Discord calendar sync, absence notification, and contest r
 Sources: `docs/idea_inbox.md` (IN-063); WU-022; WU-030; WU-034; WU-039; WU-044; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/contest-indicator.tsx`; `apps/api/src/index.ts`; `docs/INTEGRATIONS.md`; `docs/DASHBOARD.md`; `docs/SECURITY.md`.
 Acceptance: verified enabled Discord exposes only time-eligible meeting actions; disabled or unverified Discord exposes none; meeting contests are reviewable with existing validation and audit behavior; the global notifier still reaches all pending contests and refreshes after resolution.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused authorization, provider-state, timing-boundary, contest-resolution, notifier, and browser coverage.
-Release: planned v0.18.0 meeting operations and kiosk feedback release.
+Release: v0.18.0 meeting operations and kiosk feedback.
 
 ### WU-048 — Split meeting management by scope
 
@@ -766,7 +766,7 @@ Scope: move Edit, Duplicate, and Delete to `/meetings/[ID]` in focused accessibl
 Sources: `docs/idea_inbox.md` (IN-064); WU-008; WU-021; WU-044; WU-045; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/modal-focus.ts`; `apps/dashboard/src/styles.css`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`.
 Acceptance: detail-page dialogs correctly manage an occurrence or its future series; successful deletion returns to Dashboard and can be undone; table bulk selection and row navigation remain independent; search, bulk delete, and Sync all retain their outcomes.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused recurrence-scope, deletion/Undo, dialog accessibility, checkbox isolation, bulk action, and browser coverage.
-Release: planned v0.18.0 meeting operations and kiosk feedback release.
+Release: v0.18.0 meeting operations and kiosk feedback.
 
 ### WU-049 — Consolidate displaced meeting utilities
 
@@ -786,7 +786,7 @@ Scope: retain attendance CSV export in Reports; move persistent Discord kiosk-st
 Sources: `docs/idea_inbox.md` (IN-065); WU-030; WU-039; WU-044; WU-045; WU-047; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/reports-page.tsx`; `apps/dashboard/src/kiosks-page.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`; `docs/KIOSK.md`; `docs/INTEGRATIONS.md`.
 Acceptance: CSV export remains in Reports; authorized kiosk-status sync appears on Kiosks only when Discord is enabled and verified; Dashboard no longer duplicates live-roster or contest content; meeting detail and the global notifier remain complete replacement paths.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused Reports export, Kiosks integration gating, contest-access, navigation, and combined browser coverage.
-Release: planned v0.18.0 meeting operations and kiosk feedback release.
+Release: v0.18.0 meeting operations and kiosk feedback.
 
 ### WU-050 — Updates-page latency and degraded loading
 
@@ -844,7 +844,7 @@ Scope: add a blue full-screen gradient sweep during the processing state; flash 
 Sources: `docs/idea_inbox.md` (IN-069, IN-070, IN-071); `apps/kiosk/src/kiosk-presentation.mjs`; `apps/kiosk/src/kiosk-states.mjs`; `apps/kiosk/src/scanner.mjs`; `apps/kiosk/src/ui.mjs`; `tests/kiosk-runtime.test.mjs`; `tests/fixtures/kiosk-preview-server.mjs`; `docs/KIOSK.md`.
 Acceptance: processing produces a bounded blue sweep; duplicate attendance produces a bounded purple flash; offline recognized and unrecognized/rejected outcomes remain textually distinct and use green and red feedback respectively; the connectivity icon pulses only while offline; all motion has a clear reduced-motion fallback; existing state durations and attendance outcomes remain correct.
 Verification: `npm run verify:kiosk`; focused state-contract and CSS assertions plus physical-kiosk-sized browser coverage for processing, duplicate, offline success/failure, connectivity recovery, and reduced motion.
-Release: planned v0.18.0 meeting operations and kiosk feedback release.
+Release: v0.18.0 meeting operations and kiosk feedback.
 
 ### WU-053 — Dashboard visual-language standard
 
@@ -861,7 +861,7 @@ Scope: add the canonical dashboard UI standard and required planning/review chec
 Sources: user-approved Dashboard Visual-Language Standard plan; `apps/dashboard/src/styles.css`; `docs/DASHBOARD.md`; `docs/DEVELOPMENT.md`; WCAG 2.2 and WAI-ARIA Authoring Practices.
 Acceptance: future dashboard sessions have one mandatory, linked contract with explicit typography, spacing, alignment, form-control, responsive, theme, and accessibility defaults; the checklist requires documented exceptions and desktop/mobile, theme, keyboard, and control-state review; central font roles preserve the current rendered families and support later configuration without component-level font rewrites; no existing page is broadly restyled.
 Verification: `npm run verify:dashboard`; validate documentation links and checklist content; inspect representative dashboard markup for feasibility; confirm the font-role tokens preserve current Roboto/Bebas Neue rendering; manually exercise the checklist at 1280x900 and 390x844 in light, dark, and representative adopter-brand themes.
-Release: no immediate user-visible release impact; apply the contract to subsequently selected dashboard work.
+Release: v0.18.0 meeting operations and kiosk feedback (development standard; no broad UI retrofit in this release).
 
 ## Release bundling
 

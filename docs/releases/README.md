@@ -2,6 +2,7 @@
 
 Every Git tag must have a matching `vX.Y.Z.md` file in this directory. The release workflow fails if the file is missing and publishes it as the GitHub Release body. Notes must describe user-visible changes, data migrations, configuration changes, known limits, and manual verification steps.
 
+- [v0.18.0](v0.18.0.md) - Meeting operations and kiosk feedback
 - [v0.17.0](v0.17.0.md) - Dashboard meeting creation and kiosk version visibility
 - [v0.16.0](v0.16.0.md) - Dashboard meeting browser and update reliability
 - [v0.15.0](v0.15.0.md) - Meeting detail, integration controls, and dashboard refinement

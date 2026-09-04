@@ -537,3 +537,19 @@ Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Consolidate the non-meeting-specific utilities removed with the standalone Attendance page. Keep attendance CSV export in Reports, move persistent Discord kiosk-status sync into the Kiosks page beside its existing health information, replace the separate Home live-roster section with each meeting's detail roster, and remove the duplicate Home contest list after contest review is available from meeting details and the top-right notifier.
 Disposition: WU-049
+
+## IN-066
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Investigate and fix `/settings/update`, which hangs indefinitely on its loading animation.
+Disposition: WU-050
+
+## IN-067
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Clarification for `/settings/update`: it eventually loads, but takes an extremely long time; investigate the latency.
+Disposition: WU-050

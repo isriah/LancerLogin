@@ -757,6 +757,18 @@ Acceptance: CSV export remains in Reports; authorized kiosk-status sync appears 
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused Reports export, Kiosks integration gating, contest-access, navigation, and combined browser coverage.
 Release: v0.15.0 Dashboard and meeting-workspace redesign.
 
+### WU-050 — Updates-page latency and degraded loading
+
+Status: ready
+
+Goal: make the Updates settings page usable promptly when the public release feed is slow or unavailable.
+Dependencies: none
+Scope: bound the external release-check latency; prevent overlapping periodic refreshes; render locally available installation and kiosk update information independently of the public GitHub release response; and present an actionable degraded state when the latest release cannot be determined. Preserve the required pre-update backup, guarded private-workflow handoff, kiosk updater behavior, update authorization, and credential boundaries. Exclude deployment automation, release-selection changes, and new update capabilities.
+Sources: `docs/idea_inbox.md` (IN-066, IN-067); WU-023; `apps/dashboard/src/updates-page.tsx`; `apps/dashboard/src/update-indicator.tsx`; `apps/dashboard/src/dashboard-api.ts`; `docs/DASHBOARD.md`; `docs/BOOTSTRAPPING.md`.
+Acceptance: `/settings/updates` exits its loading overlay within a defined bounded interval even when the public release feed stalls; locally available installed-version, workflow, and kiosk information remains usable when the feed fails; the unavailable latest-release state is clear; periodic retries cannot accumulate concurrently; and successful update flows retain their current safeguards and outcomes.
+Verification: `npm run verify:dashboard`; focused mocked slow, unavailable, and recovered release-feed coverage; browser coverage for bounded loading, degraded local information, and non-overlapping refresh behavior.
+Release: next dashboard reliability bundle.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

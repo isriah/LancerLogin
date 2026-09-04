@@ -99,17 +99,21 @@ test("Settings keeps its parent bubble and the current subpage at desktop and mo
   }
 });
 
-test("meeting actions move below meeting data on a narrow screen", async ({ page }) => {
+test("meeting selection remains reachable beside meeting data on a narrow screen", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/meetings");
   const row = page.locator(".meeting-directory tbody tr").first();
-  const title = row.locator(".meeting-title-cell");
-  const actions = row.locator(".meeting-actions-cell");
+  const selection = row.locator(".meeting-selection");
   await expect(row).toBeVisible();
   await expect(row.locator(".meeting-mobile-details")).toBeVisible();
-  const [titleBounds, actionsBounds] = await Promise.all([title.boundingBox(), actions.boundingBox()]);
-  expect(actionsBounds!.y).toBeGreaterThan(titleBounds!.y + titleBounds!.height);
-  for (const button of await actions.getByRole("button").all()) expect((await button.boundingBox())!.width).toBeGreaterThan(80);
+  await expect(row.locator(".meeting-actions-cell")).toHaveCount(0);
+  const bounds = await selection.boundingBox();
+  expect(bounds!.width).toBeGreaterThanOrEqual(44);
+  expect(bounds!.height).toBeGreaterThanOrEqual(44);
+  const meetingDirectoryUrl = page.url();
+  await selection.click();
+  await expect(selection.getByRole("checkbox")).toBeChecked();
+  await expect(page).toHaveURL(meetingDirectoryUrl);
 });
 
 test("roster actions remain available below member data on a narrow screen", async ({ page }) => {

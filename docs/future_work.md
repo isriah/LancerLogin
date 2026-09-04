@@ -750,7 +750,7 @@ Release: planned v0.18.0 meeting operations and kiosk feedback release.
 
 ### WU-048 — Split meeting management by scope
 
-Status: in progress
+Status: merged (`7131f53`)
 
 Owner: Codex task
 Branch: `codex/wu-048-split-meeting-management`
@@ -758,6 +758,7 @@ Base: `48e07f97df38fa3c00f2caa4ed61be3d05eeb84e`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\1f49\\LancerLogin Workspace`
 Task: `01a06ba8-6e00-7490-8405-2297d6640890`
 Candidate: `e71e936ac88660279fe5ea524206697850fdd698`; commit subject and API/dashboard/documentation/test files match this WU.
+Integration: reviewed and merged as `7131f53`; combined `verify:api`, `verify:dashboard`, and `verify:docs` passed, then the obsolete mobile row-action assertion was updated to the retained selection contract; its focused rerun and the clean full browser suite passed (51/51).
 
 Goal: put single-meeting management on meeting detail while retaining bulk operations in Dashboard Table view.
 Dependencies: WU-044 and WU-045
@@ -765,7 +766,7 @@ Scope: move Edit, Duplicate, and Delete to `/meetings/[ID]` in focused accessibl
 Sources: `docs/idea_inbox.md` (IN-064); WU-008; WU-021; WU-044; WU-045; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/modal-focus.ts`; `apps/dashboard/src/styles.css`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`.
 Acceptance: detail-page dialogs correctly manage an occurrence or its future series; successful deletion returns to Dashboard and can be undone; table bulk selection and row navigation remain independent; search, bulk delete, and Sync all retain their outcomes.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused recurrence-scope, deletion/Undo, dialog accessibility, checkbox isolation, bulk action, and browser coverage.
-Release: v0.15.0 Dashboard and meeting-workspace redesign.
+Release: planned v0.18.0 meeting operations and kiosk feedback release.
 
 ### WU-049 — Consolidate displaced meeting utilities
 

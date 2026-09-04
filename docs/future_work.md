@@ -1013,10 +1013,10 @@ Base: `64c5b1fa960ecb96127ee5b58addc75e363f8574`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\b57d\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:f2caa650-435f-48d7-81d2-0ad3c1b54fcb`
 Recovery: the recorded provisioning client never produced an addressable task, and the detached Worktree remained at the recorded base with no candidate commit. A replacement task may be launched from current `main`; do not reuse the stale provisioning client.
-Replacement branch: `codex/wu-061-google-oauth-guidance-v2` (requested; provisioning Worktree)
+Replacement branch: `codex/wu-061-google-oauth-guidance-v2`
 Replacement base: `dc72fcf`
 Replacement Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\cbca\\LancerLogin Workspace`
-Replacement task: provisioning client `client-new-thread:e674f441-5105-4192-a775-2ee93eb5da0e`
+Replacement task: `01a06ecc-a2d5-7fb1-a72d-79499dfe9c48` (provisioned from client `client-new-thread:e674f441-5105-4192-a775-2ee93eb5da0e`)
 
 Goal: make Google OAuth setup accurate, current, and easy to complete from either first-Admin setup or Settings without crowding the dashboard with screenshots.
 Dependencies: none
@@ -1093,10 +1093,10 @@ Release: later Discord channel-management feature bundle after its dependencies 
 Status: in progress
 
 Owner: Codex task
-Branch: `codex/wu-066-wide-desktop-dashboard` (requested; provisioning Worktree)
+Branch: `codex/wu-066-wide-desktop-dashboard`
 Base: `8122e57`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\1a4d\\LancerLogin Workspace`
-Task: provisioning client `client-new-thread:96955809-e03b-4bcf-8f6c-8a88b8d2be32`
+Task: `01a06ecc-b195-77b2-a9f9-7527edf4f914` (provisioned from client `client-new-thread:96955809-e03b-4bcf-8f6c-8a88b8d2be32`)
 
 Goal: use wide desktop displays more effectively so the authenticated dashboard does not require browser zoom to avoid excessive side whitespace.
 Dependencies: WU-063 (both units change shared dashboard layout styling; integrate the focused selector work first)
@@ -1111,10 +1111,10 @@ Release: next dashboard layout and polish bundle.
 Status: in progress
 
 Owner: Codex task
-Branch: `codex/wu-067-contest-review-context` (requested; provisioning Worktree)
+Branch: `codex/wu-067-contest-review-context`
 Base: `8122e57`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\d558\\LancerLogin Workspace`
-Task: provisioning client `client-new-thread:088b5b89-9cd0-43fb-9211-fc6ea30788fb`
+Task: `01a06ecc-c13b-7711-a74e-16c62b27b01e` (provisioned from client `client-new-thread:088b5b89-9cd0-43fb-9211-fc6ea30788fb`)
 
 Goal: give reviewers enough member history and raw scan context to judge each attendance contest from either review surface.
 Dependencies: WU-064 (both units change the Discord Worker surface and related integration coverage; integrate the reliability repair first)

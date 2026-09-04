@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, apiBaseUrl } from "./dashboard-api";
 import { clearUpdateCheckCache, formatVersion, isNewerRelease } from "./update-indicator";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
+import { createSingleFlight, fetchLatestRelease, type Release } from "./update-release";
 
-type Release = { tag_name?: string; html_url?: string };
 type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; releaseVersion?: string };
 type Command = { id: string; type: string; createdAt: string; completedAt?: string; success?: number; resultMessage?: string };
 
@@ -16,17 +16,36 @@ const commandLabel = (command?: Command, kiosk?: Kiosk, latest?: Release) => {
 };
 
 export function UpdatesPage() {
-  const [current, setCurrent] = useState("Loading…"); const [workflowUrl, setWorkflowUrl] = useState(""); const [latest, setLatest] = useState<Release>(); const [kiosk, setKiosk] = useState<Kiosk>(); const [commands, setCommands] = useState<Command[]>([]); const [notice, setNotice] = useState("Checking the community release feed…"); const [busy, setBusy] = useState(false); const [kioskBusy, setKioskBusy] = useState(false);
-  useDashboardLoadingOverlay(current === "Loading…", "Checking for updates…");
-  async function load() {
-    const [installation, kiosks, release] = await Promise.all([api<{ releaseVersion: string; workflowUrl: string }>("/admin/update-info"), api<{ kiosks: Kiosk[] }>("/admin/kiosks"), fetch("https://api.github.com/repos/isriah/LancerLogin/releases/latest", { headers: { accept: "application/vnd.github+json" } }).then((result) => result.ok ? result.json() as Promise<Release> : Promise.reject(new Error("Latest release is temporarily unavailable")))]);
-    const active = kiosks.kiosks.find((item) => item.active === 1); setCurrent(formatVersion(installation.releaseVersion)); setWorkflowUrl(installation.workflowUrl); setKiosk(active); setLatest(release);
-    if (active) { const status = await api<{ commands: Command[] }>(`/admin/kiosks/${encodeURIComponent(active.id)}/commands`); setCommands(status.commands.filter((command) => command.type === "install_latest")); }
-    setNotice(isNewerRelease(release.tag_name ?? "", installation.releaseVersion) ? "A newer community release is available. Review its notes before upgrading." : "This installation is current.");
+  const [current, setCurrent] = useState("Unavailable"); const [workflowUrl, setWorkflowUrl] = useState(""); const [latest, setLatest] = useState<Release>(); const [kiosk, setKiosk] = useState<Kiosk>(); const [commands, setCommands] = useState<Command[]>([]); const [notice, setNotice] = useState("Loading installed update information…"); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [kioskBusy, setKioskBusy] = useState(false);
+  useDashboardLoadingOverlay(loading, "Checking for updates…");
+  async function loadCommands(active: Kiosk) {
+    const status = await api<{ commands: Command[] }>(`/admin/kiosks/${encodeURIComponent(active.id)}/commands`); setCommands(status.commands.filter((command) => command.type === "install_latest"));
   }
-  useEffect(() => { clearUpdateCheckCache(); void load().catch((error: Error) => setNotice(error.message)); const timer = window.setInterval(() => void load().catch(() => undefined), 5_000); return () => window.clearInterval(timer); }, []);
+  async function load() {
+    const releaseRequest = fetchLatestRelease().then((release) => ({ release })).catch((error: Error) => ({ error }));
+    let installation: { releaseVersion: string; workflowUrl: string };
+    let active: Kiosk | undefined;
+    try {
+      const [nextInstallation, kiosks] = await Promise.all([api<{ releaseVersion: string; workflowUrl: string }>("/admin/update-info"), api<{ kiosks: Kiosk[] }>("/admin/kiosks")]);
+      installation = nextInstallation; active = kiosks.kiosks.find((item) => item.active === 1); setCurrent(formatVersion(installation.releaseVersion)); setWorkflowUrl(installation.workflowUrl); setKiosk(active);
+    } catch (error) {
+      setNotice((error as Error).message); return;
+    } finally {
+      setLoading(false);
+    }
+    const commandsRequest = active ? loadCommands(active).catch(() => undefined) : Promise.resolve(setCommands([]));
+    const releaseResult = await releaseRequest;
+    if ("release" in releaseResult) {
+      setLatest(releaseResult.release); setNotice(isNewerRelease(releaseResult.release.tag_name ?? "", installation.releaseVersion) ? "A newer community release is available. Review its notes before upgrading." : "This installation is current.");
+    } else {
+      setLatest(undefined); setNotice(`${releaseResult.error.message} Installed information is available; the release feed will retry automatically.`);
+    }
+    await commandsRequest;
+  }
+  const refresh = useRef<(() => Promise<void>) | null>(null); if (!refresh.current) refresh.current = createSingleFlight(load);
+  useEffect(() => { clearUpdateCheckCache(); const refreshUpdates = refresh.current!; void refreshUpdates().catch((error: Error) => { setLoading(false); setNotice(error.message); }); const timer = window.setInterval(() => void refreshUpdates().catch(() => undefined), 5_000); return () => window.clearInterval(timer); }, []);
   async function begin() { if (!workflowUrl) { setNotice("The private deployment workflow is unavailable."); return; } setBusy(true); try { const result = await fetch(`${apiBaseUrl}/admin/data/backup?scope=installation`, { credentials: "include" }); if (!result.ok) throw new Error("The required pre-update backup could not be created."); const blob = await result.blob(); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = result.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "lancerlogin-installation-backup.json"; link.click(); URL.revokeObjectURL(url); const github = window.open(workflowUrl, "_blank", "noopener,noreferrer"); setNotice(github ? "Backup downloaded. Your private GitHub deployment repository opened in a new tab so you can authorize Upgrade manually." : "Backup downloaded. Allow pop-ups for this dashboard to open your private GitHub deployment repository in a new tab and authorize Upgrade manually."); } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); } }
-  async function updateKiosk() { if (!kiosk) return; setKioskBusy(true); try { await api(`/admin/kiosks/${encodeURIComponent(kiosk.id)}/commands`, { method: "POST", body: JSON.stringify({ command: "install_latest" }) }); await load(); } catch (error) { setNotice((error as Error).message); } finally { setKioskBusy(false); } }
+  async function updateKiosk() { if (!kiosk) return; setKioskBusy(true); try { await api(`/admin/kiosks/${encodeURIComponent(kiosk.id)}/commands`, { method: "POST", body: JSON.stringify({ command: "install_latest" }) }); await refresh.current!(); } catch (error) { setNotice((error as Error).message); } finally { setKioskBusy(false); } }
   const kioskOnline = Boolean(kiosk?.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < 90_000); const latestCommand = commands[0];
   return <section className="settings-page" aria-labelledby="updates-title"><div className="page-intro"><h1 id="updates-title">Updates</h1></div><p className="setup-status" role="status">{notice}</p><section className="release-comparisons"><article><div className="panel-heading"><h2>Dashboard</h2><button className="primary-button" type="button" disabled={busy || !workflowUrl} onClick={() => void begin()}>{busy ? "Preparing backup…" : "Back up and begin update"}</button></div><div className="version-grid"><div><span>Installed</span><strong>{current}</strong></div><div><span>Latest release</span><strong>{latest?.tag_name ? formatVersion(latest.tag_name) : "Unavailable"}</strong>{latest?.html_url && <a href={latest.html_url} target="_blank" rel="noreferrer">Read release notes</a>}</div></div><ol className="update-steps"><li>Downloads an entire-installation backup.</li><li>Opens the guarded workflow in your private deployment repository in a new tab.</li><li>You select <strong>upgrade</strong>, keep <strong>Latest stable</strong> selected, and enter your installation slug.</li><li>GitHub validates the exact existing resources before applying migrations or deploying.</li></ol></article>{kiosk && <article><div className="panel-heading"><div><h2>Physical kiosk</h2><p>{kiosk.name}</p></div><button className="primary-button" type="button" disabled={kioskBusy || !kioskOnline || !latest || !isNewerRelease(latest.tag_name ?? "", kiosk.releaseVersion ?? "0.0.0")} onClick={() => void updateKiosk()}>{kioskBusy ? "Queueing…" : "Update to latest stable"}</button></div><div className="version-grid"><div><span>Installed</span><strong>{kiosk.releaseVersion ?? "Unknown"}</strong></div><div><span>Latest compatible</span><strong>{latest?.tag_name ? formatVersion(latest.tag_name) : "Unavailable"}</strong>{!kioskOnline && <small>The kiosk must be online to update.</small>}</div></div><p className={`kiosk-update-status${latestCommand?.completedAt && latestCommand.success === 0 ? " failed" : ""}`} role="status">{commandLabel(latestCommand, kiosk, latest)}</p></article>}</section></section>;
 }

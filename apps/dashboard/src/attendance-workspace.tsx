@@ -2,22 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./dashboard-api";
 import { ContestReviewList, type Contest } from "./contest-review-list";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
+import { MeetingDeleteDialog, MeetingDuplicateDialog, MeetingEditDialog, pendingMeetingDeletionKey, type Meeting, type PendingMeetingDeletion } from "./meeting-management";
 import { usePath } from "./router";
 
-type Frequency = "daily" | "weekly" | "biweekly" | "monthly";
-type Meeting = {
-  id: string;
-  title: string;
-  startsAt: string;
-  endsAt: string;
-  attendanceClosesAt: string;
-  required: boolean | number;
-  notes?: string | null;
-  seriesId?: string | null;
-  recurrenceFrequency?: Frequency | null;
-  recurrenceUntil?: string | null;
-  recurrenceSequence?: number | null;
-};
+type Frequency = NonNullable<Meeting["recurrenceFrequency"]>;
 type AttendanceRow = {
   memberId: string;
   externalId: string;
@@ -46,6 +34,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const [discordBusy, setDiscordBusy] = useState<"calendar" | "absence">();
   const [notice, setNotice] = useState("Loading meeting…");
   const [memberNotices, setMemberNotices] = useState<Record<string, string>>({});
+  const [managementAction, setManagementAction] = useState<"edit" | "duplicate" | "delete">();
   const [clock, setClock] = useState(() => Date.now());
   const loadSequence = useRef(0);
   useDashboardLoadingOverlay(notice === "Loading meeting…", "Loading meeting…");
@@ -152,6 +141,8 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
     } catch (error) { setDiscordNotice((error as Error).message); }
     finally { setDiscordBusy(undefined); }
   }
+  async function managementComplete(message: string) { await load(); setNotice(message); }
+  function deleted(deletion: PendingMeetingDeletion) { window.sessionStorage.setItem(pendingMeetingDeletionKey, JSON.stringify(deletion)); navigate("/dashboard"); }
 
   const recurrence = meeting?.recurrenceFrequency
     ? `${frequencyLabel(meeting.recurrenceFrequency)}${meeting.recurrenceSequence ? ` · Occurrence ${meeting.recurrenceSequence}` : ""}${meeting.recurrenceUntil ? ` · Through ${new Date(meeting.recurrenceUntil).toLocaleDateString()}` : ""}`
@@ -165,7 +156,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
       <label>Switch meeting<select value={meeting?.id ?? ""} onChange={(event) => { if (event.target.value) navigate(`/meetings/${encodeURIComponent(event.target.value)}`); }}><option value="">Choose a meeting</option>{meetings.map((item) => <option key={item.id} value={item.id}>{new Date(item.startsAt).toLocaleDateString()} · {item.title}</option>)}</select></label>
     </div>
     {meeting ? <>
-      <header className="meeting-detail-heading"><div><span className={`meeting-lifecycle ${lifecycle}`}>{lifecycleLabel(lifecycle!)}</span><h1 id="meeting-detail-title">{meeting.title}</h1></div><button className="primary-button" type="button" onClick={() => void manualRefresh()}>Refresh attendance</button></header>
+      <header className="meeting-detail-heading"><div><span className={`meeting-lifecycle ${lifecycle}`}>{lifecycleLabel(lifecycle!)}</span><h1 id="meeting-detail-title">{meeting.title}</h1></div><div className="meeting-detail-actions"><button type="button" onClick={() => setManagementAction("edit")}>Edit</button><button type="button" onClick={() => setManagementAction("duplicate")}>Duplicate</button><button className="danger-button" type="button" onClick={() => setManagementAction("delete")}>Delete</button><button className="primary-button" type="button" onClick={() => void manualRefresh()}>Refresh attendance</button></div></header>
       <dl className="meeting-summary" aria-label="Meeting summary">
         <div><dt>Date</dt><dd>{new Date(meeting.startsAt).toLocaleDateString()}</dd></div>
         <div><dt>Time</dt><dd>{new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}–{new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</dd></div>
@@ -183,6 +174,9 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
       </div>}
       <div className="attendance-utilities"><span role="status" aria-live="polite">{notice}</span><span className="progress-count">{rows.filter((row) => row.disposition === "present").length} present</span></div>
       <section className="attendance-card" aria-labelledby="meeting-attendance-title"><div className="panel-heading"><h2 id="meeting-attendance-title">Attendance</h2></div>{rows.length ? <div className="attendance-table" role="table" aria-label="Meeting attendance"><div className="attendance-row header" role="row"><span>Member</span><span>Status</span><span>Actions</span></div>{rows.map((row) => <div className="attendance-row" role="row" key={row.memberId}><span><strong>{row.firstName} {row.lastName}</strong><small>{row.externalId}</small>{memberNotices[row.memberId] && <small className="member-action-notice" role="status">{memberNotices[row.memberId]}</small>}</span><span className={`attendance-state ${row.disposition}`}>{row.disposition === "not_required" ? "Not required" : row.disposition}</span><span className="correction-actions"><button type="button" disabled={row.disposition === "present"} onClick={() => void correct(row, "present")}>Present</button><button type="button" disabled={row.disposition === "excused"} onClick={() => void correct(row, "excused")}>Excuse</button><button type="button" disabled={row.disposition === "absent"} onClick={() => void correct(row, "absent")}>Absent</button>{role === "admin" && <button type="button" disabled={row.disposition === "not_required"} onClick={() => void clear(row)}>Clear</button>}</span></div>)}</div> : <p className="empty-state">No active roster records are available.</p>}</section>
+      {managementAction === "edit" && <MeetingEditDialog meeting={meeting} onClose={() => setManagementAction(undefined)} onSaved={managementComplete} />}
+      {managementAction === "duplicate" && <MeetingDuplicateDialog meeting={meeting} onClose={() => setManagementAction(undefined)} onCreated={managementComplete} />}
+      {managementAction === "delete" && <MeetingDeleteDialog meeting={meeting} meetings={meetings} onClose={() => setManagementAction(undefined)} onDeleted={deleted} />}
     </> : <section className="empty-page"><h1 id="meeting-detail-title">Meeting unavailable</h1><p role="status">{notice}</p><p>The meeting may have been removed, or the link may be incorrect. Choose another meeting or return to Dashboard.</p></section>}
   </section>;
 }

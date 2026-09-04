@@ -567,6 +567,22 @@ test("Operator can update meeting details without destructive access", async () 
   assert.equal((await worker.fetch(request("/admin/data", { scope: "attendance", confirmation: "DELETE ATTENDANCE" }, { method: "DELETE", cookie: await sessionCookie("operator") }), env)).status, 403);
 });
 
+test("Operator can update only an occurrence or this and future series occurrences", async () => {
+  const future = new FakeDatabase();
+  future.rows.set("series_id = ? AND id = ?", { startsAt: "2026-09-08T20:00:00.000Z" });
+  future.lists.set("series_id = ? AND starts_at >= ?", [
+    { id: "meeting-2", startsAt: "2026-09-08T20:00:00.000Z" },
+    { id: "meeting-3", startsAt: "2026-09-15T20:00:00.000Z" },
+  ]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: future } as unknown as Env;
+  const result = await worker.fetch(request("/meeting-series/series-1", { meetingId: "meeting-2", title: "Updated series", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T23:00:00.000Z", required: false, notes: "Shifted" }, { method: "PATCH", cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 200);
+  const updates = future.batches.at(-1)?.filter((call) => call.sql.includes("UPDATE meetings SET")) ?? [];
+  assert.equal(updates.length, 2);
+  assert.deepEqual(updates.map((call) => call.values.at(-1)), ["meeting-2", "meeting-3"]);
+  assert.ok(future.batches.at(-1)?.some((call) => call.sql.includes("meeting.series_updated")));
+});
+
 test("Operator can hide one meeting or this and future series occurrences", async () => {
   const single = new FakeDatabase();
   single.rows.set("series_id AS seriesId", { id: "meeting-1", seriesId: null, startsAt: "2026-09-01T20:00:00.000Z" });

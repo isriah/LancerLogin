@@ -925,13 +925,15 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-057 — Roster and reporting conformance
 
-Status: in progress
+Status: merged (`ac5c769`, corrected by `9162f04`)
 
 Owner: Codex task
 Branch: `codex/wu-057-roster-reporting-conformance` (requested; provisioning Worktree)
 Base: `b84368d`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\c676\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:cc64a84b-fc1a-4c34-a46d-6c6242ad2cf9`
+Candidate: `8c6d81fe5d8e9da36a3f769e51f588536f88fc2`; the task created branch `codex/wu-057-roster-reporting`, and its commit subject and Reports/Roster/member-detail/test files match this WU.
+Integration: candidate `8c6d81fe5d8e9da36a3f769e51f588536f88fc2d` was merged as `ac5c76915855030586535ff0f66382a4695ad9a1`; integration review corrected formatter-sensitive static assertions, restored native member-link semantics, and widened the new report filter container in `9162f047aaa2f2b42f2530ed69a953a671c78466`. `npm run verify:api`, `npm run verify:dashboard`, the 7-test focused Reports/Roster matrix, the 17-test dashboard smoke suite, and the 83-test full browser suite passed on the corrected integrated code.
 
 Goal: make Reports, Roster, member detail, and member-management overlays consistently scannable and operable under the dashboard contract.
 Dependencies: WU-056

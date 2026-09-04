@@ -18,6 +18,9 @@ const governedRoutes = [
   ["/settings/updates", "Updates"],
 ] as const;
 
+const wideRoutes = new Set(["/dashboard", "/meetings/active-meeting", "/reports", "/roster", "/roster/A-101", "/kiosks"]);
+const auditedViewports = [{ width: 2560, height: 1440 }, ...dashboardConformanceReferences.viewports] as const;
+
 async function useReferenceContext(page: Page) {
   await page.route("**/setup/status", (route) => route.fulfill({
     status: 200,
@@ -40,7 +43,7 @@ async function useReferenceContext(page: Page) {
   }));
 }
 
-async function expectGovernedSurface(page: Page, heading: string) {
+async function expectGovernedSurface(page: Page, heading: string, route: string) {
   await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
   await expect(page.locator("main h1")).toHaveCount(1);
   await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
@@ -89,9 +92,15 @@ async function expectGovernedSurface(page: Page, heading: string) {
   expect(audit.unlabeled).toEqual([]);
   expect(audit.shortTargets).toEqual([]);
   expect(audit.clipped).toEqual([]);
+
+  const shell = page.locator(".dashboard-shell");
+  await expect(shell).toHaveAttribute("data-layout", wideRoutes.has(route) ? "wide" : "readable");
+  if (page.viewportSize()!.width === 2560 && wideRoutes.has(route)) {
+    expect((await shell.boundingBox())!.width).toBeGreaterThanOrEqual(2000);
+  }
 }
 
-for (const viewport of dashboardConformanceReferences.viewports) {
+for (const viewport of auditedViewports) {
   for (const theme of dashboardConformanceReferences.themes) {
     test(`all governed routes converge at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       await page.setViewportSize(viewport);
@@ -105,7 +114,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       for (const [route, heading] of governedRoutes) {
         await page.goto(route);
         await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
-        await expectGovernedSurface(page, heading);
+        await expectGovernedSurface(page, heading, route);
       }
     });
   }

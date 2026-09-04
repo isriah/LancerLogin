@@ -625,16 +625,17 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-042 — Roster table alignment and action placement
 
-Status: in progress
+Status: blocked
 
 Owner: Codex coordinator
 Branch: `codex/wu-042-roster-table-alignment`
 Base: `d8fb5c809c22236724c52a9a6f7fac0cf40b0571`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\6ab2\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:1b6c1737-c4c5-4a2a-b908-be245086164f`
+Integration: merge `53f67cb` is preserved on `main`; `npm run verify:dashboard` passed, but the post-merge `npm run test:browser` roster-centering assertion observed a 1.5 px offset against its 1 px tolerance.
 
 Goal: make roster rows scan cleanly and keep member actions in their intended column.
-Dependencies: none
+Dependencies: correct or justify the integrated roster-centering geometry assertion, then rerun the full browser suite on `main`
 Scope: vertically center roster table headers and row values; place member actions in the right-side Actions column at supported desktop widths with a usable responsive fallback. Preserve member links, permissions, and action behavior.
 Sources: `docs/idea_inbox.md` (IN-052, IN-053, IN-054); WU-028; `apps/dashboard/src/roster-page.tsx`; `apps/dashboard/src/styles.css`; `docs/DASHBOARD.md`.
 Acceptance: roster headings and values align vertically, desktop actions appear on the right rather than beneath the identity block, and narrow layouts remain readable and operable.

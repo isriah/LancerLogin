@@ -905,7 +905,13 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-056 — Dashboard and meeting-workspace conformance
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-056-dashboard-meeting-conformance` (requested; provisioning Worktree)
+Base: `dd9fdfd`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7a10\\LancerLogin Workspace` (detached)
+Task: provisioning client `client-new-thread:f70d9333-7379-4fe1-b898-7a9ef93c6a84`
 
 Goal: make Dashboard meeting browsing and every canonical meeting-detail state conform without changing meeting or attendance behavior.
 Dependencies: WU-055

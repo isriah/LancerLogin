@@ -16,6 +16,27 @@ test("roster stays primary and Admin actions open focused dialogs", async ({ pag
   await page.getByRole("button", { name: "Close add member dialog" }).click();
 });
 
+test("member links share route state across Roster, Reports, direct loads, and browser history", async ({ page }) => {
+  await page.goto("/roster");
+  await page.getByRole("link", { name: "Avery Stone" }).click();
+  await expect(page).toHaveURL(/\/roster\/A-101$/);
+  await expect(page.getByRole("heading", { name: "Avery Stone" })).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/roster$/);
+  await expect(page.getByRole("heading", { name: "Roster", exact: true })).toBeVisible();
+  await page.goForward();
+  await expect(page.getByRole("heading", { name: "Avery Stone" })).toBeVisible();
+
+  await page.goto("/reports");
+  await page.getByRole("link", { name: /Avery Stone/ }).click();
+  await expect(page).toHaveURL(/\/roster\/A-101$/);
+  await expect(page.getByRole("heading", { name: "Avery Stone" })).toBeVisible();
+
+  await page.goto("/roster/A-102");
+  await expect(page.getByRole("heading", { name: "Morgan Diaz" })).toBeVisible();
+});
+
 test("branding controls and dark surfaces are themed", async ({ page }) => {
   await page.goto("/settings/organization");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");

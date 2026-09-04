@@ -1,11 +1,13 @@
 import { MouseEvent, useEffect, useState } from "react";
 
+const routeChangeEvent = "lancerlogin:route-change";
+
 export function normalizePath(path: string) { const cleaned = path.replace(/\/+$/, "") || "/"; return cleaned === "/" ? "/dashboard" : cleaned; }
 
 export function usePath() {
   const [location, setLocation] = useState(() => ({ path: normalizePath(window.location.pathname), search: window.location.search }));
-  useEffect(() => { const update = () => setLocation({ path: normalizePath(window.location.pathname), search: window.location.search }); window.addEventListener("popstate", update); return () => window.removeEventListener("popstate", update); }, []);
-  function navigate(next: string, replace = false) { const target = new URL(next, window.location.origin); const pathName = normalizePath(target.pathname); window.history[replace ? "replaceState" : "pushState"]({}, "", `${pathName}${target.search}`); setLocation({ path: pathName, search: target.search }); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  useEffect(() => { const update = () => setLocation({ path: normalizePath(window.location.pathname), search: window.location.search }); window.addEventListener("popstate", update); window.addEventListener(routeChangeEvent, update); return () => { window.removeEventListener("popstate", update); window.removeEventListener(routeChangeEvent, update); }; }, []);
+  function navigate(next: string, replace = false) { const target = new URL(next, window.location.origin); const pathName = normalizePath(target.pathname); window.history[replace ? "replaceState" : "pushState"]({}, "", `${pathName}${target.search}`); window.dispatchEvent(new Event(routeChangeEvent)); window.scrollTo({ top: 0, behavior: "smooth" }); }
   return { ...location, navigate };
 }
 

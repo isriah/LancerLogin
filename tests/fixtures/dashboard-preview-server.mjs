@@ -15,6 +15,7 @@ const members = [
   { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", email: "avery@example.org", active: 1, hasDashboardAccess: true },
   { id: "member-2", memberId: "A-102", firstName: "Morgan", lastName: "Diaz", email: "morgan@example.org", active: 1, hasDashboardAccess: false },
 ];
+const memberDetail = (member) => ({ member, history: [{ meetingId: "past-regular", title: "Completed build session", startsAt: meetings[0].startsAt, endsAt: meetings[0].endsAt, checkedInAt: iso(-4 * 24 * 60 + 5), checkedOutAt: iso(-4 * 24 * 60 + 115), disposition: "present" }] });
 
 const server = createServer((request, response) => {
   const origin = request.headers.origin ?? "http://127.0.0.1:5173";
@@ -28,6 +29,8 @@ const server = createServer((request, response) => {
     : path === "/meeting-templates" ? { templates: [] }
     : path === "/discord/contests" ? { contests: [{ meetingId: "active-meeting", meetingTitle: "Build session", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: iso(-5) }] }
     : path === "/attendance" ? { finalized: false, attendanceClosesAt: iso(90), attendance: [{ memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", disposition: "active", checkedInAt: iso(-20) }, { memberId: "member-2", externalId: "A-102", firstName: "Morgan", lastName: "Diaz", disposition: "present", checkedInAt: iso(-25), checkedOutAt: iso(-2) }, { memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", disposition: "absent" }] }
+    : path === "/admin/members/A-101/history" ? memberDetail(members[0])
+    : path === "/admin/members/A-102/history" ? memberDetail(members[1])
     : path === "/admin/members" ? request.method === "POST" ? { imported: 1, deactivated: 0, warnings: [] } : { members }
     : path === "/admin/users" ? { users: [{ id: "user-1", localUsername: "admin", role: "admin", active: 1, memberId: "member-1", memberExternalId: "A-101", memberFirstName: "Avery", memberLastName: "Stone", createdAt: iso(-30 * 24 * 60) }] }
     : path === "/admin/kiosks" ? { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.8.0", pairedAt: iso(-1440) }] }

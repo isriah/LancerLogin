@@ -633,3 +633,67 @@ Recorded: 2026-09-04
 Source: WU Idea Inbox
 Request: Add a Discord configuration toggle for a designated-channel-only Channel manager mode. When enabled, maintain the channel with a regularly updated persistent status message at the top; a following how-to message covering the Discord pairing command and attendance contests; and automatic absence-ping messages sent after each meeting's late-scan window closes, retained for the Discord contest window, then self-deleted. Move the Discord contest-window setting from Settings > Configuration to the Discord section of Settings > Integrations.
 Disposition: WU-065
+
+## IN-078
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Increase horizontal space utilization on wide desktop displays. At 27-inch 1440p, the dashboard leaves excessive side whitespace unless browser zoom is raised to 150%; use more width without requiring that much zoom.
+Disposition: WU-066
+
+## IN-079
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: In both the contest-handler popup and the card that opens it, show the member's total submitted-contest count and whether that member had a partial scan (scan in but not scan out) for the contested meeting.
+Disposition: WU-067
+
+## IN-080
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: On a meeting page and on each meeting card of a member page, show that member's scan-in and scan-out times for the meeting.
+Disposition: WU-068
+
+## IN-081
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Add a per-member Mean anomalous time statistic. A scan is anomalous when check-in is more than N minutes late or check-out is more than X minutes early; show each member's mean of the late/early time values for anomalous scans. Make N and X configurable in organization settings.
+Disposition: WU-069
+
+## IN-082
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Display the Mean anomalous time statistic on the member's page.
+Disposition: WU-069
+
+## IN-083
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Add a privileged attendance-channel configuration to the Discord bot integration. Each day after the late-scan allowance, send that channel a report of anomalous scan-ins and scan-outs.
+Disposition: WU-070
+
+## IN-084
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Add configurable meeting weights. In organization settings, support weight categories with selectable weights and optional automatic criteria such as meeting duration, without hard-coded values (for example, standard 1x, over 3 hours 2x, over 5 hours 3x). Support adding more categories. When a meeting meets an automatic criterion at creation, auto-select the relevant weight checkbox on the meeting creator and meeting page, while allowing manual weight assignment even when no automatic criterion is met.
+Disposition: WU-071
+
+## IN-085
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Let members request an attendance report in Discord through a command that returns an ephemeral message listing meetings they were absent for and their current attendance percentage.
+Disposition: WU-072

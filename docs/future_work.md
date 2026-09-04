@@ -1081,6 +1081,90 @@ Acceptance: the toggle and contest-window setting are available only to Admins i
 Verification: `npm run verify:migrations`, `npm run verify:api`, and `npm run verify:dashboard`; focused provider-fake coverage for enable/disable, message ordering and self-healing, cutoff scheduling, retries, expiry deletion, contest validity, controlled mentions, and unrelated-message safety; focused Admin/Operator and responsive Settings browser coverage; supported-server manual validation before release.
 Release: later Discord channel-management feature bundle after its dependencies and product decision are resolved.
 
+### WU-066 — Wide-desktop dashboard utilization
+
+Status: ready
+
+Goal: use wide desktop displays more effectively so the authenticated dashboard does not require browser zoom to avoid excessive side whitespace.
+Dependencies: WU-063 (both units change shared dashboard layout styling; integrate the focused selector work first)
+Scope: adjust the authenticated dashboard shell and governed page-width behavior for wide desktop viewports; preserve readable line lengths within text-heavy cards while allowing data, calendar, table, and operational workspaces to use materially more horizontal space. Reuse the established layout, spacing, radius, typography, and semantic-color tokens. Exclude font scaling, browser-zoom control, public documentation, kiosk and simulator presentation, navigation redesign, and unrelated card-level restyling.
+Sources: `docs/idea_inbox.md` (IN-078); `docs/UI-STANDARDS.md`; `docs/DASHBOARD.md`; `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/styles.css`; `tests/dashboard-shell.test.mjs`; `tests-browser/convergence-audit.spec.ts`; governed route browser coverage.
+Acceptance: at 2560x1440 and 100% browser zoom, governed dashboard workspaces use the available width without excessive outer gutters while text remains readable and page hierarchy stays intact; existing 1280x900 and 390x844 layouts remain conforming; light/dark modes, representative adopter colors, keyboard focus, dialogs, contained table scrolling, and responsive navigation show no clipping or page-level horizontal overflow. No standards exception is expected.
+Verification: `npm run verify:dashboard`; focused all-route browser checks at 2560x1440, 1280x900, and 390x844 in light/dark modes with representative adopter colors, keyboard navigation, dialogs, tables, and overflow inspection; unfiltered browser suite after integration.
+Release: next dashboard layout and polish bundle.
+
+### WU-067 — Contest-review member and scan context
+
+Status: ready
+
+Goal: give reviewers enough member history and raw scan context to judge each attendance contest from either review surface.
+Dependencies: WU-064 (both units change the Discord Worker surface and related integration coverage; integrate the reliability repair first)
+Scope: extend the authorized contest query with the member's lifetime submitted-contest count, including the current contest and every preserved status, plus whether the contested meeting has a raw check-in without a raw check-out; display both facts on the global contest-handler popup and the meeting-detail contest card. Preserve the current meeting/member identity, occurrence date, reason-required resolution workflow, signed contest submission, authorization, and notifier refresh. Exclude contest scoring, automatic resolution, attendance-policy changes, deletion of contest history, and unrelated Discord messaging.
+Sources: `docs/idea_inbox.md` (IN-079); `docs/DASHBOARD.md`; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `apps/api/src/index.ts`; `apps/dashboard/src/contest-indicator.tsx`; `apps/dashboard/src/contest-review-list.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `tests-ts/worker-runtime.test.ts`; `tests-browser/displaced-meeting-utilities.spec.ts`; `tests-browser/meeting-detail.spec.ts`.
+Acceptance: every authorized contest result carries a count of all contests submitted for that member and a raw partial-scan flag for that meeting; both review surfaces show the same labeled values; a check-in without check-out is identified even if a later correction changed the attendance disposition; no-scan and completed-scan cases remain distinct; Operators and Admins retain access while unauthorized or unverified paths remain unavailable.
+Verification: `npm run verify:api`; `npm run verify:dashboard`; focused API coverage for count/status history and partial/no/complete scan cases; focused global-popup and meeting-detail browser coverage at desktop/mobile with keyboard and light/dark checks; unfiltered browser suite after integration.
+Release: next attendance-review and Discord operations bundle.
+
+### WU-068 — Meeting attendance scan-time visibility
+
+Status: ready
+
+Goal: show each member's recorded check-in and check-out times directly in the canonical meeting attendance workspace.
+Dependencies: WU-063 (both units touch the meeting-browser/detail dashboard presentation and shared styling; integrate selector conformance first)
+Scope: display the existing attendance response's `checkedInAt` and `checkedOutAt` values for every member row on `/meetings/[ID]`, with a clear unavailable value when a scan is absent and without obscuring status or correction actions. Preserve the member-detail history, which already shows both timestamps and satisfies that half of IN-080; preserve attendance derivation, corrections, refresh timing, roles, and raw event history. Exclude new scan capture, attendance-policy changes, reports, exports, and member-history redesign.
+Sources: `docs/idea_inbox.md` (IN-080); `docs/UI-STANDARDS.md`; `docs/DASHBOARD.md`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/member-detail-page.tsx`; `apps/dashboard/src/styles.css`; `apps/api/src/index.ts`; `tests/dashboard-shell.test.mjs`; `tests-browser/meeting-detail.spec.ts`; `tests-browser/meeting-workspace-conformance.spec.ts`.
+Acceptance: meeting attendance rows expose locally formatted check-in and check-out times from the authoritative response for complete, partial, and no-scan cases; active/present/absent/corrected semantics and actions remain unchanged; labels and table relationships are understandable by assistive technology; the added information remains usable without page overflow at 1280x900 and 390x844 in light/dark and representative adopter-brand modes. No standards exception is expected.
+Verification: `npm run verify:dashboard`; focused meeting-detail browser coverage for complete, partial, missing, and corrected records plus keyboard and responsive layout checks; `npm run verify:api` only if the existing attendance contract must change; unfiltered browser suite after integration.
+Release: next attendance workspace bundle.
+
+### WU-069 — Configurable attendance-anomaly metric
+
+Status: blocked
+
+Goal: define configurable late-arrival and early-departure thresholds and expose each member's mean anomalous time on member detail.
+Dependencies: product decision required on whether the mean uses all preserved eligible history or the active reporting period, whether check-in and check-out deviations are averaged as individual scan values or first combined per meeting, and the displayed unit/rounding rule
+Scope: after the aggregation contract is approved, add Admin-only organization settings for the late-arrival and early-departure thresholds; derive anomalies from raw check-in relative to scheduled start and raw check-out relative to scheduled end; calculate the per-member mean according to the approved population; and show the labeled statistic and empty state on member detail. Preserve the organization-wide late-scan allowance as a separate attendance-closing rule, participation start dates, corrections, excuses, optional-meeting semantics, raw events, roles, and existing reporting calculations. Exclude Discord anomaly delivery, automatic attendance corrections, kiosk feedback, and meeting weighting.
+Sources: `docs/idea_inbox.md` (IN-081 and IN-082); `docs/DECISIONS.md`; `docs/DASHBOARD.md`; `docs/UI-STANDARDS.md`; `apps/api/migrations/`; `apps/api/src/index.ts`; `apps/api/src/attendance-lifecycle.ts`; `apps/dashboard/src/organization-settings.tsx`; `apps/dashboard/src/member-detail-page.tsx`; attendance lifecycle, member-history, Settings, and roster/reporting tests.
+Acceptance: after the named policy decision is recorded, Admins can save bounded nonnegative thresholds with validation and audit history; Operators cannot change them; anomaly calculations use scheduled meeting boundaries and authoritative raw scans without conflating the late-scan allowance; member detail shows the approved mean and a clear no-anomalies state; participation and reporting-period rules match the approved aggregation contract; upgrades receive documented defaults without changing existing attendance outcomes.
+Verification: `npm run verify:migrations`; `npm run verify:api`; `npm run verify:dashboard`; focused calculation coverage for exact thresholds, late/early/both/partial scans, participation dates, corrections, empty history, and approved aggregation semantics; focused Admin/Operator Settings and member-detail browser checks at required themes/viewports; unfiltered browser suite after integration.
+Release: later attendance-insights bundle after the aggregation decision is resolved.
+
+### WU-070 — Scheduled Discord anomaly reports
+
+Status: blocked
+
+Goal: deliver a controlled Discord report of anomalous arrivals and departures after the relevant attendance windows close.
+Dependencies: WU-069 and WU-065; product decision required on whether reports reuse WU-065's designated attendance channel or use a separate privileged channel, and whether delivery is one report per closed meeting or one organization-local daily digest with an explicit time zone and send time
+Scope: after the channel and schedule contract is approved, add the Admin-only Discord configuration required by that contract; send idempotent reports containing only members and anomaly values eligible under WU-069 after their meetings can no longer accept scans; persist delivery state for retry safety; and keep messages confined to the approved configured channel. Preserve provider verification, encrypted credentials, controlled mentions, role restrictions, retry behavior, existing absence/contest/status workflows, and unrelated channel content. Exclude changing anomaly calculations, attendance outcomes, general moderation, direct messages, and managing messages outside LancerLogin's tracked report records.
+Sources: `docs/idea_inbox.md` (IN-083); WU-065; WU-069; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `apps/api/migrations/`; `apps/api/src/index.ts`; `apps/dashboard/src/integration-settings.tsx`; Discord scheduler/provider tests; `tests-browser/settings-conformance.spec.ts`.
+Acceptance: after the named decisions and dependencies clear, only Admins can configure report delivery; each eligible reporting period produces at most one tracked message in the approved channel after all included meetings close; retries cannot duplicate delivery; empty periods follow the approved contract; unverified/disabled integrations do not send; content uses controlled mentions and never exposes secrets or modifies unrelated messages.
+Verification: `npm run verify:migrations`; `npm run verify:api`; `npm run verify:dashboard`; focused provider-fake coverage for timing, time-zone boundaries if applicable, idempotence, retry, empty periods, channel isolation, controlled mentions, disabled/unverified states, and dependency semantics; focused Admin/Operator responsive Settings coverage; supported-server manual validation before release.
+Release: later Discord attendance-insights bundle after WU-065, WU-069, and the scheduling decision are complete.
+
+### WU-071 — Configurable meeting weights
+
+Status: blocked
+
+Goal: let organizations define reusable meeting-weight categories, optional duration-based automatic criteria, and manual per-meeting assignments.
+Dependencies: product decision required on what meeting weights change in attendance percentages and reports, how multiple matching automatic criteria resolve, and how assignment edits propagate across recurring-series occurrences
+Scope: after the weighting contract is approved, add an Admin-managed ordered category model with a bounded positive weight and optional duration criterion; allow categories to be added, edited, reordered, and retired without invalidating historical meetings; preselect the approved automatic match during meeting creation while allowing manual assignment with no matching criterion; and expose assignment editing on canonical meeting detail. Preserve required/optional attendance, participation dates, meeting overlap rules, recurrence safety, existing unweighted history, roles, and auditability. Exclude hard-coded category names or thresholds, retroactive silent reassignment, changing kiosk scan behavior, and unrelated template or report redesign.
+Sources: `docs/idea_inbox.md` (IN-084); `docs/DECISIONS.md`; `docs/DASHBOARD.md`; `docs/UI-STANDARDS.md`; `apps/api/migrations/`; `apps/api/src/index.ts`; `apps/dashboard/src/organization-settings.tsx`; `apps/dashboard/src/meeting-management.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/reports-page.tsx`; meeting lifecycle, recurrence, reporting, Settings, and meeting-workspace tests.
+Acceptance: after the named policy decisions are recorded, Admins can manage validated weight categories and optional criteria; meeting creation deterministically preselects the approved match and always permits an authorized manual choice; detail edits obey the approved occurrence/series rule; retired categories remain readable on historical meetings; attendance percentages and exports apply weights exactly according to the approved contract; upgrades preserve prior results with a documented default weight.
+Verification: `npm run verify:migrations`; `npm run verify:api`; `npm run verify:dashboard`; focused coverage for category lifecycle, validation, automatic matching/ties, manual override, recurrence edits, retirement/history, migration defaults, authorization, and weighted calculations; responsive keyboard browser coverage for Organization settings and meeting create/detail at required themes/viewports; unfiltered browser suite after integration.
+Release: later weighted-attendance feature bundle after the product decisions are resolved.
+
+### WU-072 — Discord member attendance-report command
+
+Status: ready
+
+Goal: let a Discord-linked roster member privately request their own current attendance report.
+Dependencies: WU-064 (both units change the Discord interaction handler and provider-fake coverage; integrate the reliability repair first)
+Scope: handle a documented Discord attendance-report application command for a verified installation; bind the requester to exactly one active linked roster member; return an ephemeral response containing that member's absent meetings and current attendance percentage using the dashboard's canonical participation-start and operational-reporting-period semantics; bound long histories to Discord response limits with an explicit omitted-count summary. Preserve interaction signature verification, server binding, integration enablement/verification, roster pairing, attendance corrections/excuses, controlled mentions, and dashboard report calculations. Exclude reports for another member, public/channel responses, direct messages, changing attendance, PDF/CSV attachments, and Discord-side configuration automation.
+Sources: `docs/idea_inbox.md` (IN-085); `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `apps/api/src/index.ts`; `apps/dashboard/src/reports-page.tsx`; `apps/dashboard/src/member-detail-page.tsx`; `tests-ts/worker-runtime.test.ts`; `tests/integration-workflows.test.mjs`; Discord setup guidance and tests.
+Acceptance: a correctly signed command from the configured server returns only the linked active member's report with current percentage and absent-meeting names/dates; the response is ephemeral and fits provider limits; corrections, excuses, participation start dates, optional meetings, deleted meeting history, and the operational reporting baseline match the canonical dashboard calculation; unlinked, inactive, wrong-server, disabled, unverified, unsigned, and malformed requests receive private actionable responses without attendance disclosure.
+Verification: `npm run verify:api`; `npm run verify:docs` when command-registration guidance changes; focused signed-interaction coverage for successful, empty, long, linked/unlinked, inactive, wrong-server, disabled/unverified, and tampered requests plus parity with canonical reporting semantics; no live Discord traffic in automated tests.
+Release: next Discord self-service feature bundle after WU-064 is integrated.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

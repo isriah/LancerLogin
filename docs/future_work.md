@@ -509,7 +509,13 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-035 — Shared dashboard route-state repair
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-035-shared-route-state` (requested; provisioning Worktree is currently detached)
+Base: `4428c8c8fd73d68d43cb23764b7aa248ef830e6f`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\454a\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:cac6f042-9d0c-4707-8b0e-ec662ffc8b2a`
 
 Goal: make in-app member links render the member-detail page immediately instead of changing only the browser URL.
 Dependencies: none
@@ -545,7 +551,13 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-038 — Kiosks status-message cleanup
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-038-kiosks-status-message-cleanup`
+Base: `4428c8c8fd73d68d43cb23764b7aa248ef830e6f`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\c3df\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:15e7f1a8-a9c8-443e-9f23-1a524c45bf3f`
 
 Goal: remove the redundant “Kiosk status is current.” message without hiding useful kiosk state or errors.
 Dependencies: none
@@ -557,7 +569,13 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-039 — Explicit integration enablement
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-039-integration-enablement` (requested; provisioning Worktree is currently detached)
+Base: `4428c8c8fd73d68d43cb23764b7aa248ef830e6f`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7195\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:5a408630-54fc-40a4-88e3-8af0ff12824c`
 
 Goal: let Admins deliberately enable optional integrations and keep disabled integrations compact and out of operational workflows.
 Dependencies: none

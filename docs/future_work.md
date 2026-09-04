@@ -870,6 +870,7 @@ Status: in progress
 Owner: Codex task
 Branch: `codex/wu-054-dashboard-design-foundations` (requested; provisioning Worktree)
 Base: `cd694a4`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\2053\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:2762d651-3eb1-4b41-9b29-e727801bb044`
 
 Goal: make the dashboard's shared shell, tokens, controls, panels, dialogs, and responsive foundations conform to the visual-language contract before page-specific work begins.

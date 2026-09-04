@@ -1035,13 +1035,14 @@ Release: next public-documentation visual refresh.
 
 ### WU-063 — Dashboard meeting-selector visual conformance
 
-Status: in progress
+Status: merged (`26671ba`)
 
 Owner: Codex task
 Branch: `codex/wu-063-meeting-selector-conformance`
 Base: `7ab4a83aee56d70cbbd2747df45f6be9a119beda`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\095a\\LancerLogin Workspace`
 Task: `01a06d76-a306-72c0-b11d-9aafbfeb3d0a`
+Integration: candidate `131598f6966a996b68fb3b251d6b8692785d8947` was merged as `26671bae6512e7844ab5feeb2a492d878846df33`. `npm run verify:dashboard` and the 106-test unfiltered browser suite passed on the integrated tree. The required desktop/mobile, light/dark, representative adopter-brand, keyboard, focus, disabled-state, clipping, and overflow checks passed with no standards exception.
 
 Goal: make the Dashboard meeting-selector dropdown match the established dashboard form-control language without changing meeting navigation.
 Dependencies: none

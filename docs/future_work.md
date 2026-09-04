@@ -881,7 +881,7 @@ Scope: turn the durable initiative matrix into executable shared checks; converg
 Sources: `docs/PLANS/dashboard-design-conformance.md`; WU-053; `docs/UI-STANDARDS.md`; `apps/dashboard/src/styles.css`; `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/main.tsx`; `apps/dashboard/src/loading-overlay.tsx`; `apps/dashboard/src/contest-indicator.tsx`; `apps/dashboard/src/update-indicator.tsx`; `apps/dashboard/src/modal-focus.ts`.
 Acceptance: shared surfaces use contract tokens and hierarchy without duplicate literals; global controls and overlays have complete hover/focus/disabled/error behavior, 44px targets, correct semantics, focus containment/return, and no clipping or page overflow at reference sizes; an automated matrix identifies every governed route and overlay assigned to WU-055 through WU-060. No standards exception is expected.
 Verification: `npm run verify:dashboard`; focused shell/navigation/theme/loading/dialog browser coverage at 1280x900 and 390x844 in light/dark, adopter-brand, keyboard, and reduced-motion variants; unfiltered browser suite after integration.
-Release: planned v0.19.0 dashboard design conformance.
+Release: v0.19.0 dashboard design conformance.
 
 ### WU-055 — Authentication and guided-setup conformance
 
@@ -901,7 +901,7 @@ Scope: conform boot/auth checks, first-Admin bootstrap, local and Google sign-in
 Sources: `docs/PLANS/dashboard-design-conformance.md`; `docs/UI-STANDARDS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `apps/dashboard/src/main.tsx`; `apps/dashboard/src/setup-workspace.tsx`; `apps/dashboard/src/color-editor.tsx`; `apps/dashboard/src/roster-import-panel.tsx`; `apps/dashboard/src/styles.css`.
 Acceptance: every included state has correct headings, labels, instructions, validation associations, primary-action hierarchy, visible focus, persistent status cues, and responsive fit; setup completion respects reduced motion and remains understandable without animation; reference-size, theme, adopter-brand, keyboard, and applicable Admin-state checks pass. No standards exception is expected.
 Verification: `npm run verify:dashboard`; focused bootstrap/sign-in/setup/completion browser coverage at the required combinations; unfiltered browser suite after integration.
-Release: planned v0.19.0 dashboard design conformance.
+Release: v0.19.0 dashboard design conformance.
 
 ### WU-056 — Dashboard and meeting-workspace conformance
 
@@ -921,7 +921,7 @@ Scope: conform Dashboard Calendar/Table, selector, search, selection, bulk contr
 Sources: `docs/PLANS/dashboard-design-conformance.md`; `docs/UI-STANDARDS.md`; `docs/DASHBOARD.md`; WU-044 through WU-049; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/meeting-management.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/contest-review-list.tsx`; `apps/dashboard/src/styles.css`.
 Acceptance: every included populated, empty, loading, success, error, disabled, configured/unconfigured, timing, and dialog state has consistent hierarchy/alignment/control treatment; all overlays contain and return focus; desktop/mobile, light/dark, adopter-brand, Admin/Operator, keyboard, and reduced-motion checks pass without page overflow or clipped controls. No standards exception is expected.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused meeting-browser/detail/dialog/Discord/contest/attendance browser matrix; unfiltered browser suite after integration.
-Release: planned v0.19.0 dashboard design conformance.
+Release: v0.19.0 dashboard design conformance.
 
 ### WU-057 — Roster and reporting conformance
 
@@ -941,7 +941,7 @@ Scope: conform Reports filters, saved views, trend, leaderboard, CSV, preserved-
 Sources: `docs/PLANS/dashboard-design-conformance.md`; `docs/UI-STANDARDS.md`; `docs/DASHBOARD.md`; `apps/dashboard/src/reports-page.tsx`; `apps/dashboard/src/roster-page.tsx`; `apps/dashboard/src/member-detail-page.tsx`; `apps/dashboard/src/roster-import-panel.tsx`; `apps/dashboard/src/styles.css`.
 Acceptance: all included controls and states use shared roles, tables remain readable with only contained overflow, multiline rows align deliberately, dialogs manage focus, and reference-size, theme, adopter-brand, role, keyboard, and reduced-motion checks pass without clipped content. No standards exception is expected.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused Reports/Roster/member/import browser matrix; unfiltered browser suite after integration.
-Release: planned v0.19.0 dashboard design conformance.
+Release: v0.19.0 dashboard design conformance.
 
 ### WU-058 — Kiosks dashboard conformance
 
@@ -961,7 +961,7 @@ Scope: conform `/kiosks` paired/unpaired, healthy/degraded/offline, Admin/Operat
 Sources: `docs/PLANS/dashboard-design-conformance.md`; `docs/UI-STANDARDS.md`; `docs/KIOSK.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `apps/dashboard/src/kiosks-page.tsx`; `apps/dashboard/src/styles.css`.
 Acceptance: all included states have consistent card hierarchy, aligned diagnostics/actions, semantic status treatment, 44px controls, focused pairing behavior, and no clipping or page overflow across the required sizes, themes, adopter brand, roles, keyboard, and reduced-motion settings. No standards exception is expected.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and `npm run verify:kiosk` if shared kiosk contracts change; focused Kiosks dashboard browser matrix; unfiltered browser suite after integration.
-Release: planned v0.19.0 dashboard design conformance.
+Release: v0.19.0 dashboard design conformance.
 
 ### WU-059 — Settings workspace conformance
 
@@ -981,7 +981,7 @@ Scope: conform Organization, Configuration, Access, Integrations, Privacy, Data,
 Sources: `docs/PLANS/dashboard-design-conformance.md`; `docs/UI-STANDARDS.md`; `docs/DASHBOARD.md`; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `apps/dashboard/src/organization-settings.tsx`; `apps/dashboard/src/configuration-settings.tsx`; `apps/dashboard/src/user-settings.tsx`; `apps/dashboard/src/integration-settings.tsx`; `apps/dashboard/src/privacy-settings.tsx`; `apps/dashboard/src/data-settings.tsx`; `apps/dashboard/src/updates-page.tsx`; `apps/dashboard/src/styles.css`.
 Acceptance: every included page, expanded/collapsed card, form state, status, and dialog uses the shared hierarchy and control contract; labels/errors are associated, selects retain inset arrows, destructive actions remain distinct, and required size/theme/brand/role/keyboard/reduced-motion checks pass without clipping or page overflow. No standards exception is expected.
 Verification: `npm run verify:api`, `npm run verify:dashboard`, and `npm run verify:docs` when guidance changes; focused browser matrix for all eight Settings routes and overlays; unfiltered browser suite after integration.
-Release: planned v0.19.0 dashboard design conformance.
+Release: v0.19.0 dashboard design conformance.
 
 ### WU-060 — Dashboard design convergence audit
 
@@ -1001,7 +1001,7 @@ Scope: execute the complete route/overlay/state matrix on the integrated tree; r
 Sources: `docs/PLANS/dashboard-design-conformance.md`; `docs/UI-STANDARDS.md`; WU-054 through WU-059; all governed dashboard components and browser tests.
 Acceptance: the final matrix covers every governed page, subpage, popup, dialog, overlay, shared element, and meaningful state at 1280x900 and 390x844 in light/dark with primary `#7c3aed`, secondary `#0f766e`, applicable Admin/Operator roles, keyboard operation, and reduced motion; there is no page-level horizontal overflow, clipped content/focus, invalid heading/control semantics, duplicated design literals, or unresolved standards violation. Any unavoidable exception is explicit and blocks completion unless accepted as conforming by the contract.
 Verification: `npm run verify:api` if behavior-adjacent corrections occur; `npm run verify:dashboard`; complete focused conformance matrix; unfiltered browser suite; `npm run verify:release` during v0.19.0 packaging; exact-commit GitHub Verify before tagging.
-Release: planned v0.19.0 dashboard design conformance.
+Release: v0.19.0 dashboard design conformance.
 
 ## Release bundling
 

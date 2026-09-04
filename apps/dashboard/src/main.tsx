@@ -28,6 +28,14 @@ type SetupStatus = { configured: boolean; installation?: { authMode: "google" | 
 const themeStorageKey = "lancerlogin-theme";
 function savedTheme(): "light" | "dark" { try { return localStorage.getItem(themeStorageKey) === "light" ? "light" : "dark"; } catch { return "dark"; } }
 
+function ThemeToggle({ theme, onTheme }: { theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
+  const dark = theme === "dark";
+  return <button className="theme-toggle" type="button" role="switch" aria-checked={dark} aria-label="Dark mode" onClick={() => onTheme(dark ? "light" : "dark")}>
+    <span className="theme-toggle-label" aria-hidden="true">{dark ? "Dark" : "Light"}</span>
+    <span className="theme-toggle-track" aria-hidden="true"><span /></span>
+  </button>;
+}
+
 function App() {
   const [completed, setCompleted] = useState<string[]>([]);
   const [slug, setSlug] = useState("my-organization");
@@ -45,7 +53,11 @@ function App() {
       .catch(() => setRemoteStatus("unavailable"));
   }, []);
 
-  function chooseTheme(next: "light" | "dark") { setTheme(next); try { localStorage.setItem(themeStorageKey, next); } catch { /* Browser storage can be unavailable in private contexts. */ } }
+  function chooseTheme(next: "light" | "dark") {
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem(themeStorageKey, next); } catch { /* Browser storage can be unavailable in private contexts. */ }
+  }
 
   if (apiBaseUrl) return <ProvisionedEntry status={remoteStatus} onConfigured={(status) => setRemoteStatus(status)} theme={theme} onTheme={chooseTheme} />;
 
@@ -67,7 +79,7 @@ function App() {
     <main id="main" className="main">
       <header className="topbar">
         <div><p className="kicker">Installation setup</p><h1>Connect your own Cloudflare account</h1></div>
-        <button className="theme-button" type="button" onClick={() => chooseTheme(theme === "light" ? "dark" : "light")} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? "Dark" : "Light"} mode</button>
+        <ThemeToggle theme={theme} onTheme={chooseTheme} />
       </header>
 
       <section className="notice" aria-labelledby="privacy-title">
@@ -107,8 +119,7 @@ function ProvisionedEntry({ status, onConfigured, theme, onTheme }: { status: Se
   if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
   const branding = status.configured ? status.settings : undefined;
   const style = branding ? brandTheme(branding.primaryColor, branding.secondaryColor) : undefined;
-  const nextTheme = theme === "dark" ? "light" : "dark";
-  return <div className="app" data-theme={theme} style={style}><div className="provisioned-main"><header className="setup-header"><a className="brand-home-link" href="/dashboard" aria-label="Go to dashboard home">{branding?.logoData ? <AdaptiveBrandLogo src={branding.logoData} alt="" backdrop={branding.logoBackdrop} className="header-logo" /> : <div className="brand-mark" aria-hidden="true">L</div>}<span className="brand-heading"><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></span></a><button className="theme-button" type="button" onClick={() => onTheme(nextTheme)}>{nextTheme === "dark" ? "Dark" : "Light"} mode</button></header>{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} /> : <FirstAdminSetup onConfigured={onConfigured} />}</div></div>;
+  return <div className="app" data-theme={theme} style={style}><div className="provisioned-main"><header className="setup-header"><a className="brand-home-link" href="/dashboard" aria-label="Go to dashboard home">{branding?.logoData ? <AdaptiveBrandLogo src={branding.logoData} alt="" backdrop={branding.logoBackdrop} className="header-logo" /> : <div className="brand-mark" aria-hidden="true">L</div>}<span className="brand-heading"><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></span></a><ThemeToggle theme={theme} onTheme={onTheme} /></header>{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} /> : <FirstAdminSetup onConfigured={onConfigured} />}</div></div>;
 }
 
 function CenteredState({ theme, title, detail }: { theme: "light" | "dark"; title: string; detail: string }) {

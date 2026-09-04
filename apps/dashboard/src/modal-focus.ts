@@ -30,7 +30,7 @@ export function useModalFocus(dialog: RefObject<HTMLElement | null>, active: boo
       else if (!event.shiftKey && current === last) { event.preventDefault(); first.focus(); }
     };
     document.addEventListener("keydown", keydown);
-    window.requestAnimationFrame(() => (focusable()[0] ?? dialog.current)?.focus());
+    window.requestAnimationFrame(() => (dialog.current?.querySelector<HTMLElement>("[data-modal-initial-focus]") ?? focusable()[0] ?? dialog.current)?.focus());
     return () => { document.removeEventListener("keydown", keydown); previouslyFocused?.focus(); };
   }, [active, dialog]);
 }

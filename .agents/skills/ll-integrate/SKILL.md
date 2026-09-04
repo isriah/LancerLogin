@@ -15,11 +15,12 @@ Read `AGENTS.md`, `docs/WORKFLOW.md`, and `docs/future_work.md` before acting. I
 For a named WU, confirm that its scope, branch or recorded detached candidate, and commit match the ledger and that no other active WU owns the same branch or candidate.
 
 1. Inspect the branch or candidate-commit diff against its recorded base and current `main`.
-2. Run the WU's focused verification. If updating/rebasing against current `main` is safe and needed, do so, then repeat affected verification.
+2. Confirm the branch's focused verification. If updating/rebasing against the integration branch is safe and needed, do so, then repeat affected verification.
 3. Review against the WU's acceptance criteria and repository safety rules.
 4. Merge one branch only. Do not combine unrelated units in one integration.
-5. Update the WU to `merged` with the merge commit and release impact, commit the ledger update, and archive the implementation task after its final evidence is recorded.
+5. On the merged tree, rerun every affected area check and the combined browser suite when browser behavior or fixtures changed. Branch-local success is not sufficient evidence for the integrated tree.
+6. Only after the merged-tree checks pass, update the WU to `merged` with the merge commit and release impact, commit the ledger update, and archive the implementation task after its final evidence is recorded.
 
-If the branch/candidate is missing, unverified, materially conflicting, or outside scope, do not merge. Preserve it and record the precise evidence as `blocked` or return the WU to `ready` when no implementation is present. Do not create replacement tasks automatically.
+If the branch/candidate is missing, unverified, materially conflicting, or outside scope, do not merge. If a post-merge check fails, keep the candidate and integration history recoverable, do not mark the WU merged, and diagnose whether the cause is product behavior, merge interaction, or test isolation. Record the precise evidence as `blocked` or return the WU to `ready` when no implementation is present. Do not create replacement tasks automatically.
 
 Never release, deploy, mutate cloud resources, or update the Pi as part of integration unless the user separately authorizes it.

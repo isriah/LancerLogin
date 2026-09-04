@@ -17,12 +17,16 @@ Run the smallest command that covers the files being changed:
 | GitHub/Cloudflare provisioning | `npm run verify:provisioning` | Account-neutral workflow, setup, maintenance, and template checks |
 | Anonymous usage collector | `npm run verify:telemetry` | Collector configuration/runtime tests plus collector typecheck |
 
+For a changed browser interaction, use `npm run test:browser -- <test-file-or--grep>` during implementation and the unfiltered `npm run test:browser` after integration. The wrapper gives each worktree its own transform cache and deterministic three-port range and refuses to reuse an existing fixture server.
+
 If a change crosses areas, run each affected scope. Migration changes also require `npm run verify:migrations`.
 
 ## Release preparation
 
 Run `npm run verify:all` once after the focused checks pass. It applies every D1 migration to a fresh isolated local database, typechecks all workspaces, runs the complete test suite, and produces all production builds.
 
-Before creating a release tag, run `npm run verify:release`. This adds the high-severity dependency audit. Main-branch CI runs the same release gate.
+Before creating a release tag, run `npm run verify:release`. This adds the bounded high-severity audit of every dependency recorded in `package-lock.json`. npm gets one 110-second fetch window inside a 120-second process ceiling. If the registry is unavailable, rerun only the failed GitHub job on the unchanged commit; do not weaken or bypass the gate.
+
+The GitHub **Verify** workflow reports repository verification, dependency audit, browser smoke, and action lint separately. Verification and browser jobs install with `npm ci --no-audit`; security findings come from the one explicit, bounded audit job rather than duplicate implicit audits. The audit job uses Node 24's current npm client, materializes the dependency tree with lifecycle scripts and implicit auditing disabled, then runs the sole bounded audit command. It runs for dependency-manifest changes, scheduled default-branch monitoring, manual verification, and `Release vX.Y.Z` candidate commits; ordinary code-only and documentation-only changes do not wait on the external registry. A release still requires the whole exact-commit workflow to succeed.
 
 The tag workflow does not repeat the full gate. It requires a successful **Verify** run on `main` for the exact tagged commit, checks the version and patch-notes file, packages the kiosk artifacts, and publishes the immutable release. A tag created before its exact commit passes CI fails closed and may be retried after verification succeeds.

@@ -5,13 +5,13 @@ description: "Assess a selected LancerLogin work-unit batch for safe parallel ex
 
 # LancerLogin Batch Planner
 
-Read `AGENTS.md`, `docs/WORKFLOW.md`, and `docs/future_work.md` before acting. This skill helps the user prepare a small, explicitly selected batch; it is not a persistent coordinator.
+Read `AGENTS.md` and `docs/WORKFLOW.md`, then scan `docs/future_work.md` for active statuses and dependencies before reading the full selected entries. This skill helps the user prepare a small, explicitly selected batch; it is not a persistent coordinator.
 
 Interpret the requested mode from the remaining prompt text. Accept individual WU IDs, `all` (every unit currently `ready`), or an inclusive range such as `WU-011..WU-018`. Expand the selection immediately before responding and identify non-ready or invalid units.
 
 - **list [selector]**: Read-only. Show the selected units' goal, scope, sources, verification, release impact, and likely overlap.
-- **assess <selector>**: Determine which selected ready units are safe to run in parallel. Inspect the named sources where a shared surface is plausible. State a first parallel batch and the units that must wait, with reasons.
-- **launch <selector>**: Use only after explicit user authorization. First perform `assess`, then create a separate named Worktree task for each approved independent unit. Give each task a prompt that requires a `WU-###:` commit subject. Record its branch, base, and provisioning evidence in the ledger before starting it. If task creation exposes only a client ID or detached Worktree, record that candidate evidence; do not claim a confirmed implementation task, create a duplicate, or launch a later cohort.
+- **assess <selector>**: Determine which selected ready units are safe to run in parallel. Honor `Dependencies:` first. Inspect the named sources where a shared surface is plausible, distinguishing actual contract/edited-region overlap from unrelated regions in a large file. State a first parallel batch and the units that must wait, with reasons.
+- **launch <selector>**: Use only after explicit user authorization. First perform `assess`, then create a separate named Worktree task for each approved independent unit. Give each task a prompt that requires a `WU-###:` commit subject. Record its branch, base, Worktree, and provisioning evidence in the ledger before starting it. Browser tests use `npm run test:browser`, which isolates cache and ports per worktree. If task creation exposes only a client ID or detached Worktree, record that candidate evidence; do not claim a confirmed implementation task, create a duplicate, or launch a later cohort.
 - **launch suggested**: Treat this as approval of the first parallel batch proposed by the immediately preceding `assess` response in this same task. Re-read the ledger and verify that every proposed WU is still `ready`, no new active WU overlaps it, and the selection has not changed. If it is still valid, launch exactly that batch. Otherwise, do not launch anything; provide a fresh assessment and wait for approval.
 - **integrate <WU-ID>**: Invoke `$ll-integrate <WU-ID>` and follow that skill.
 

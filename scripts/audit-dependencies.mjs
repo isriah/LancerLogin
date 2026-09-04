@@ -3,7 +3,14 @@ import { spawn } from "node:child_process";
 const timeoutMs = 120_000;
 const npmCli = process.env.npm_execpath;
 if (!npmCli) throw new Error("npm_execpath is unavailable; cannot run the required dependency audit.");
-const child = spawn(process.execPath, [npmCli, "audit", "--audit-level=high"], { stdio: "inherit" });
+const child = spawn(process.execPath, [
+  npmCli,
+  "audit",
+  "--package-lock-only",
+  "--audit-level=high",
+  "--fetch-timeout=110000",
+  "--fetch-retries=0",
+], { stdio: "inherit" });
 let timedOut = false;
 
 const timer = setTimeout(() => {

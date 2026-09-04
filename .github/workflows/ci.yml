@@ -3,8 +3,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "23 10 * * 1"
+  workflow_dispatch:
 jobs:
   actionlint:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -12,22 +16,71 @@ jobs:
         with:
           args: -color
   verify:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
-      - run: npm ci
-      - name: Run release verification (bounded dependency audit)
-        run: npm run verify:release
+      - run: npm ci --no-audit
+      - name: Run complete repository verification
+        run: npm run verify:all
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - name: Select dependency-audit runs
+        id: audit-policy
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          run_audit=false
+          reason="ordinary change"
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            run_audit=true
+            reason="scheduled default-branch audit"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            run_audit=true
+            reason="manual exact-commit audit"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$HEAD_COMMIT_MESSAGE" == Release\ v* ]]; then
+            run_audit=true
+            reason="release candidate"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            run_audit=true
+            reason="new branch history"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" ]] && ! git diff --quiet "$BEFORE_SHA" "$GITHUB_SHA" -- package.json package-lock.json ':(glob)**/package.json' ':(glob)**/package-lock.json'; then
+            run_audit=true
+            reason="dependency manifest changed"
+          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] && ! git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- package.json package-lock.json ':(glob)**/package.json' ':(glob)**/package-lock.json'; then
+            run_audit=true
+            reason="dependency manifest changed"
+          fi
+          echo "run=$run_audit" >> "$GITHUB_OUTPUT"
+          echo "Dependency audit policy: $reason (run=$run_audit)"
+      - uses: actions/setup-node@v7
+        if: steps.audit-policy.outputs.run == 'true'
+        with: { node-version: 24, cache: npm }
+      - name: Materialize the audited dependency tree without lifecycle scripts
+        if: steps.audit-policy.outputs.run == 'true'
+        run: npm ci --ignore-scripts --no-audit
+      - name: Audit the complete dependency lockfile
+        if: steps.audit-policy.outputs.run == 'true'
+        run: npm run audit:release
   browser-smoke:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
-      - run: npm ci
+      - run: npm ci --no-audit
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser

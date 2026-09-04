@@ -14,9 +14,12 @@ This file contains durable rules for every task in this repository. Read the tas
 
 Read only the documentation relevant to the selected work. Use Plan mode before code changes when a request is ambiguous, materially multi-step, or has a product, security, migration, or architecture decision.
 
+For a list-only request, read `docs/idea_inbox.md`, report the `untriaged` IDs and requests verbatim, and stop. Listing does not authorize triage, ledger edits, or `$ll-start`.
+
 ## Work-unit rules
 
 - A work unit is one independently reviewable outcome. Do not begin one just because it is listed; the user must select or authorize it.
+- Record material dependencies explicitly with `Dependencies:`; a blocked unit names the exact dependency or decision that must clear it.
 - One implementation task normally owns one work unit and one branch. Use a Worktree only when work runs in parallel or must be isolated from the local checkout.
 - Before parallel work, compare code areas, shared contracts, migrations, authorization, deployment configuration, and shared documentation. Run overlapping units serially.
 - Implementation tasks do not edit the shared ledger, merge to `main`, release, deploy, mutate cloud resources, or update the Pi. The task that performs integration records the merge in the ledger.
@@ -27,6 +30,7 @@ Read only the documentation relevant to the selected work. Use Plan mode before 
 - Keep changes within the selected scope and acceptance criteria.
 - Add or update focused tests when behavior changes or a regression can be captured.
 - Run the focused verification documented in `docs/DEVELOPMENT.md`.
+- Treat branch-local checks as candidate evidence. After integration, rerun the combined affected checks before recording a unit as merged.
 - Inspect the final diff for scope, regressions, security, and documentation gaps.
 - Commit a small, single-purpose change and report the commit, changed files, verification, and remaining risks.
 
@@ -41,6 +45,7 @@ Read only the documentation relevant to the selected work. Use Plan mode before 
 ## Git, releases, and deployment
 
 - Prefer small, single-purpose commits. Inspect `git status` and `git diff` before committing; include only intended files.
+- Before any push, tag, workflow wait, or GitHub Release, name the authorized remote and repository and verify their URLs. Never infer that `origin` is an authorized release target.
 - Run dependent shell mutations and verification as separate commands. Do not use PowerShell semicolon chaining for dependent Git operations.
 - Releases require explicit user authorization and follow `docs/RELEASE-CHECKLIST.md`. A merged work unit is not a release.
 - A private adopter deployment, Pi update, service restart, or cloud-resource mutation requires an explicit current user request.
@@ -53,4 +58,4 @@ Read only the documentation relevant to the selected work. Use Plan mode before 
 
 ## GitHub CLI
 
-Use `& "C:\\Program Files\\GitHub CLI\\gh.exe"` for GitHub CLI commands. Verify the exact commit's public workflow before creating a release tag; never change a version or tag to bypass a failed release gate.
+Use `& "C:\\Program Files\\GitHub CLI\\gh.exe"` for GitHub CLI commands. Pass the explicitly authorized repository to GitHub CLI commands, verify that repository's exact commit workflow before creating a release tag, and never change a version or tag to bypass a failed release gate.

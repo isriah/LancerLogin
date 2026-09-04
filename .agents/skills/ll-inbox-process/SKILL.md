@@ -19,14 +19,14 @@ Do not modify product code, branches, task reservations, releases, deployment st
 - For each candidate, provide a short outcome, scope and non-goals, relevant sources, observable acceptance criteria, focused verification, dependencies or overlap, and likely release bundle. Use candidate labels, not official WU IDs.
 - For material grouping, product, scope, or release-bundle choices, use the structured Plan-mode decision framework in `AGENTS.md` when available.
 
-Finish with a promotion-ready proposal that identifies the included `IN-###` entries and wait for the user's feedback or explicit approval. Do not invoke `$ll-wu-create`.
+Finish with a promotion-ready proposal that identifies the included `IN-###` entries. If the current user request already explicitly authorizes promotion of all or named ideas, treat that as approval and continue directly to **Record approved units** after presenting the proposal; do not ask for the same approval twice. Otherwise, wait for feedback or explicit approval. Do not invoke `$ll-wu-create`.
 
 ## Record approved units
 
 When the user explicitly approves selected candidates in the same task, incorporate their feedback and automatically record those approved candidates as work units.
 
 - Re-read `docs/idea_inbox.md` and `docs/future_work.md` immediately before editing. Do not promote while another task is changing the ledger; report that conflict and ask the user to retry after it is resolved. Assign the next available WU IDs, use the documented work-unit format, and promote only the proposal's named `IN-###` entries.
-- Set `Status: ready` only when the candidate is safe to implement; otherwise use `Status: blocked` and state the exact missing decision.
+- Set `Status: ready` only when the candidate is safe to implement; otherwise use `Status: blocked`. Add `Dependencies: none` or the exact WU/decision dependency to every new unit.
 - Add only the approved units. Change each source inbox entry to `promoted` and record its WU ID(s); use `covered` or `discarded` only when the user approves that disposition and state why. Do not reserve, create implementation tasks, merge, release, deploy, mutate cloud resources, or update the Pi.
 - Review the diff, preserve unrelated changes, and commit only `docs/idea_inbox.md` and `docs/future_work.md` with a concise inbox-promotion message.
 - Report the created WU IDs, status, assumptions or blockers, and commit SHA. Do not ask for a redundant promotion confirmation after the user's approval.

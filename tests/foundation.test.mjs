@@ -179,14 +179,16 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.doesNotMatch(workflow, /run:[\s\S]{0,300}\$\{\{ inputs\.(?:operation|confirmation|installation_slug) \}\}/);
 });
 
-test("CI runs the complete release gate and tags require that exact verified commit", async () => {
+test("CI isolates browser runs and applies the selective release audit policy", async () => {
   const packageDocument = JSON.parse(await readFile("package.json", "utf8"));
   assert.equal(packageDocument.scripts["verify:migrations"], "node scripts/verify-d1-migrations.mjs");
   assert.match(packageDocument.scripts["verify:all"], /verify:migrations.*typecheck.*test.*build/);
   assert.match(packageDocument.scripts["verify:release"], /verify:all.*audit:release/);
   assert.equal(packageDocument.scripts["audit:release"], "node scripts/audit-dependencies.mjs");
   const audit = await readFile("scripts/audit-dependencies.mjs", "utf8");
-  assert.match(audit, /audit", "--audit-level=high/);
+  assert.match(audit, /"audit",[\s\S]*"--package-lock-only",[\s\S]*"--audit-level=high"/);
+  assert.match(audit, /--fetch-timeout=110000/);
+  assert.match(audit, /--fetch-retries=0/);
   assert.match(audit, /timeoutMs = 120_000/);
   assert.match(audit, /registry may be unavailable or unresponsive/);
   const verifier = await readFile("scripts/verify-d1-migrations.mjs", "utf8");
@@ -196,10 +198,27 @@ test("CI runs the complete release gate and tags require that exact verified com
   assert.match(verifier, /fingerprint_template\|raw_fingerprint\|biometric_template/);
   assert.doesNotMatch(verifier, /--remote|CLOUDFLARE_API_TOKEN/);
   const ciWorkflow = await readFile(".github/workflows/ci.yml", "utf8");
-  assert.match(ciWorkflow, /npm run verify:release/);
+  assert.match(ciWorkflow, /npm run verify:all/);
+  assert.equal((ciWorkflow.match(/npm ci --no-audit/g) ?? []).length, 2);
+  assert.match(ciWorkflow, /schedule:[\s\S]*cron:/);
+  assert.match(ciWorkflow, /workflow_dispatch:/);
+  assert.match(ciWorkflow, /dependency-audit:[\s\S]*npm run audit:release/);
+  const dependencyAuditJob = ciWorkflow.match(/  dependency-audit:([\s\S]*?)  browser-smoke:/)?.[1];
+  assert.ok(dependencyAuditJob);
+  assert.match(dependencyAuditJob, /node-version: 24/);
+  assert.match(dependencyAuditJob, /npm ci --ignore-scripts --no-audit/);
+  assert.match(dependencyAuditJob, /dependency manifest changed/);
+  assert.match(dependencyAuditJob, /HEAD_COMMIT_MESSAGE.*Release\\ v\*/);
   assert.match(ciWorkflow, /timeout-minutes: 20/);
   assert.match(ciWorkflow, /rhysd\/actionlint:1\.7\.12/);
   assert.match(ciWorkflow, /npm run test:browser/);
+  assert.equal(packageDocument.scripts["test:browser"], "node scripts/run-browser-tests.mjs");
+  const browserRunner = await readFile("scripts/run-browser-tests.mjs", "utf8");
+  assert.match(browserRunner, /PWTEST_CACHE_DIR/);
+  assert.match(browserRunner, /LANCERLOGIN_BROWSER_PORT_BASE/);
+  const playwrightConfig = await readFile("playwright.config.ts", "utf8");
+  assert.match(playwrightConfig, /LANCERLOGIN_BROWSER_PORT_BASE/);
+  assert.doesNotMatch(playwrightConfig, /reuseExistingServer: true|reuseExistingServer: !process\.env\.CI/);
   const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
   assert.match(releaseWorkflow, /actions: read/);
   assert.match(releaseWorkflow, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$commit&status=success/);

@@ -12,6 +12,8 @@ This file is LancerLogin's authoritative, organized list of planned work. It rep
 
 `docs/idea_inbox.md` is the live, durable raw-intake record. Process its `untriaged` entries into work units here through `$ll-inbox-process`; do not treat it as an execution backlog. `docs/feedback/` remains a historical record for screenshots and prior observations.
 
+For a compact active-state scan, use `rg -n "^### WU-|^Status:|^Dependencies:" docs/future_work.md` and inspect full entries only for active candidates. A request to list raw ideas reads only `docs/idea_inbox.md` and makes no changes.
+
 ## Work-unit format
 
 Use one heading per unit. Keep it small enough to understand, implement, test, and merge with a coherent user-visible outcome. Large initiatives may have a parent heading and several independently selectable child units.
@@ -22,6 +24,7 @@ Use one heading per unit. Keep it small enough to understand, implement, test, a
 Status: ready | in progress | merged | blocked
 
 Goal: <the user-visible outcome>
+Dependencies: none | <WU IDs or exact decision>
 Scope: <included behavior and important exclusions>
 Sources: <relevant docs, feedback files, screenshots, decisions, or code areas>
 Acceptance: <observable completion criteria>
@@ -33,6 +36,7 @@ For a parallel unit, also add:
 Owner: <coordination task or assignee>
 Branch: <branch name>
 Base: <starting main commit>
+Worktree: <path>
 
 For a detached recovery candidate, also add:
 

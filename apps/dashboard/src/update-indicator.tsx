@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "./dashboard-api";
+import { fetchLatestRelease } from "./update-release";
 
 type Check = { current: string; latest: string; available: boolean };
 const cacheKey = "lancerlogin-update-check";
-const latestReleaseUrl = "https://api.github.com/repos/isriah/LancerLogin/releases/latest";
 
 export function isNewerRelease(candidate: string, installed: string) {
   const parse = (value: string) => value.replace(/^v/, "").split(".").slice(0, 3).map((part) => Number.parseInt(part, 10));
@@ -19,8 +19,8 @@ export const formatVersion = (value?: string) => value ? value.replace(/^v/, "")
 export async function checkForUpdate(): Promise<Check> {
   const cached = localStorage.getItem(cacheKey);
   if (cached) { try { const value = JSON.parse(cached) as Check & { checkedAt: number }; if (Date.now() - value.checkedAt < 6 * 60 * 60_000) return value; } catch { localStorage.removeItem(cacheKey); } }
-  const [installation, releaseResponse] = await Promise.all([api<{ releaseVersion: string }>("/admin/update-info"), fetch(latestReleaseUrl, { headers: { accept: "application/vnd.github+json" } })]);
-  if (!releaseResponse.ok) throw new Error("Release check unavailable"); const release = await releaseResponse.json() as { tag_name?: string }; const latest = formatVersion(release.tag_name); const current = formatVersion(installation.releaseVersion); const result = { current, latest, available: Boolean(latest && isNewerRelease(latest, current)) }; localStorage.setItem(cacheKey, JSON.stringify({ ...result, checkedAt: Date.now() })); return result;
+  const [installation, release] = await Promise.all([api<{ releaseVersion: string }>("/admin/update-info"), fetchLatestRelease()]);
+  const latest = formatVersion(release.tag_name); const current = formatVersion(installation.releaseVersion); const result = { current, latest, available: Boolean(latest && isNewerRelease(latest, current)) }; localStorage.setItem(cacheKey, JSON.stringify({ ...result, checkedAt: Date.now() })); return result;
 }
 
 export function UpdateIndicator({ openUpdates }: { openUpdates: () => void }) {

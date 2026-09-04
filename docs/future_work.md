@@ -905,13 +905,15 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-056 — Dashboard and meeting-workspace conformance
 
-Status: in progress
+Status: merged (`cced1d5`)
 
 Owner: Codex task
 Branch: `codex/wu-056-dashboard-meeting-conformance` (requested; provisioning Worktree)
 Base: `dd9fdfd`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7a10\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:f70d9333-7379-4fe1-b898-7a9ef93c6a84`
+Candidate: `e8520c7`; commit subject and dashboard/meeting UI, styling, and conformance tests match this WU.
+Integration: candidate `e8520c7` was merged as `cced1d5ed1670be54749499244095640285b67bf`; after correcting candidate-only document routing and mobile header assertions, `npm run verify:api`, `npm run verify:dashboard`, the 8-test focused meeting matrix, and the 76-test full browser suite passed on the integrated code.
 
 Goal: make Dashboard meeting browsing and every canonical meeting-detail state conform without changing meeting or attendance behavior.
 Dependencies: WU-055

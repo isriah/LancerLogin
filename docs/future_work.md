@@ -692,7 +692,14 @@ Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-045 — Dashboard meeting browser and navigation
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-045-dashboard-meeting-browser`
+Base: `31808256cb9a2b8cc68f96e5520d8bfe983b8d34`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\48d9\\LancerLogin Workspace` (currently detached during provisioning)
+Task: provisioning client `client-new-thread:7b52e569-87ee-4479-814e-5a5494988be1`
+Candidate: detached provisioning Worktree `C:\\Users\\Izz\\.codex\\worktrees\\48d9\\LancerLogin Workspace` at the recorded base; requested branch exists, but no addressable task ID has been confirmed yet.
 
 Goal: make Dashboard the single place to browse and select meetings.
 Dependencies: WU-044

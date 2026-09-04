@@ -404,6 +404,22 @@ main[aria-busy="true"] .setup-progress { display: none; }
 .section-heading h3 { margin-bottom: 0; font-size: 1.15rem; }
 .section-heading button,.settings-callout button { padding: .55rem .7rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .5rem; cursor: pointer; }
 .rolling-calendar,.home-section { min-width: 0; overflow: hidden; border: 1px solid var(--line); background: var(--surface); border-radius: .85rem; }
+.meeting-browser-controls { display: grid; grid-template-columns: minmax(16rem,.7fr) minmax(18rem,1fr) auto; gap: .9rem; align-items: end; padding: 1rem 1.15rem; border: 1px solid var(--line); background: var(--surface); border-radius: .85rem; }
+.meeting-browser-controls > label,.meeting-browser-controls fieldset { min-width: 0; margin: 0; }
+.meeting-browser-controls > .primary-button { min-height: 2.75rem; margin: 0; }
+.meeting-view-toggle { padding: 0; border: 0; }
+.meeting-view-toggle legend { margin-bottom: .4rem; color: var(--muted); font-size: .8rem; font-weight: 800; }
+.meeting-view-toggle > div { display: inline-grid; grid-template-columns: repeat(2,1fr); padding: .2rem; border: 1px solid var(--line); background: var(--surface-soft); border-radius: .6rem; }
+.meeting-view-toggle label { min-height: 2.75rem; display: grid; place-items: center; margin: 0; padding: .45rem .9rem; border-radius: .45rem; cursor: pointer; }
+.meeting-view-toggle label.selected { color: var(--on-primary); background: var(--primary); }
+.meeting-view-toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.meeting-view-toggle label:has(input:focus-visible) { outline: 3px solid color-mix(in srgb,var(--primary) 35%,transparent); outline-offset: 2px; }
+.calendar-heading { align-items: center; }
+.calendar-heading > div:first-child { display: grid; gap: .2rem; }
+.calendar-heading p { margin: 0; color: var(--muted); font-size: .78rem; font-weight: 700; }
+.calendar-navigation { display: flex; gap: .45rem; }
+.calendar-navigation button { min-width: 2.75rem; min-height: 2.75rem; margin: 0; }
+.calendar-navigation button:disabled { cursor: default; opacity: .55; }
 .calendar-weekdays,.calendar-grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); }
 .calendar-weekdays { color: var(--muted); background: var(--surface-soft); font-size: .68rem; font-weight: 800; text-align: center; text-transform: uppercase; }
 .calendar-weekdays span { padding: .45rem; }
@@ -520,6 +536,10 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .meeting-create-form input[type="checkbox"]:checked::after,.meeting-edit-form input[type="checkbox"]:checked::after,.meeting-directory input[type="checkbox"]:checked::after { transform: rotate(45deg) scale(1); }
 .meeting-create-form input[type="checkbox"]:focus-visible,.meeting-edit-form input[type="checkbox"]:focus-visible,.meeting-directory input[type="checkbox"]:focus-visible { outline: 3px solid color-mix(in srgb,var(--primary) 30%,transparent); outline-offset: 2px; }
 .meeting-directory { width: 100%; }
+.embedded-meetings-page { gap: 1rem; }
+.meeting-browser-row { cursor: pointer; }
+.meeting-browser-row:hover { background: var(--surface-soft); }
+.meeting-browser-row:focus-visible { outline: 3px solid color-mix(in srgb,var(--primary) 35%,transparent); outline-offset: -3px; }
 .table-toolbar { display: flex; justify-content: space-between; gap: 1rem; align-items: end; margin-bottom: 1rem; }
 .table-toolbar h2 { margin: 0; }
 .table-toolbar label { width: min(25rem,100%); margin: 0; }
@@ -613,6 +633,11 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 
 @media (max-width: 760px) {
 .meeting-source-picker { grid-template-columns: 1fr; }
+  .meeting-browser-controls { grid-template-columns: 1fr; align-items: stretch; }
+  .meeting-view-toggle > div,.meeting-browser-controls > .primary-button { width: 100%; }
+  .meeting-browser-select select { width: 100%; }
+  .calendar-heading { align-items: stretch; flex-direction: column; }
+  .calendar-navigation { display: grid; grid-template-columns: 2.75rem minmax(0,1fr) 2.75rem; }
   .toolbar-end { justify-content: space-between; }
   .update-indicator { white-space: normal; }
   .table-toolbar { display: grid; align-items: start; }
@@ -663,7 +688,7 @@ label { font-size: .9rem; }
   .dashboard-toolbar { grid-template-columns: 2.75rem minmax(0,1fr); gap: .65rem; }
   .mobile-menu-toggle { z-index: 92; width: 2.75rem; height: 2.75rem; display: grid; place-content: center; gap: .28rem; padding: 0; border: 1px solid var(--line); color: var(--ink); background: var(--surface); border-radius: .6rem; cursor: pointer; }
   .mobile-menu-toggle span { width: 1.15rem; height: 2px; display: block; background: currentColor; border-radius: 1px; }
-  .mobile-nav-scrim { position: fixed; inset: 0; z-index: 90; display: block; border: 0; background: rgba(5,12,9,.58); cursor: pointer; }
+  .mobile-nav-scrim { position: fixed; inset: 0 0 0 min(19rem,calc(100vw - 3rem)); z-index: 90; display: block; border: 0; background: rgba(5,12,9,.58); cursor: pointer; }
   .primary-navigation { width: min(19rem,calc(100vw - 3rem)); display: none; grid-template-columns: 1fr; align-content: start; gap: .45rem; position: fixed; inset: 0 auto 0 0; z-index: 91; padding: 5.25rem 1rem 1rem; overflow-y: auto; border: 0; border-radius: 0; background: var(--surface); box-shadow: 1rem 0 3rem rgba(0,0,0,.28); }
   .primary-navigation.mobile-open { display: grid; }
   .primary-navigation a { min-width: 0; min-height: 2.75rem; padding: .75rem .9rem; text-align: left; overflow-wrap: anywhere; white-space: normal; }

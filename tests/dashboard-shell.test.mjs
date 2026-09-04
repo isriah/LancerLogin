@@ -7,7 +7,7 @@ const branding = { organizationName: "Example Club", subtitle: "Welcome", primar
 
 test("operator dashboard excludes protected administration", () => {
   const navigation = navigationFor("operator");
-  assert.deepEqual(navigation, ["Dashboard", "Meetings", "Attendance", "Reports", "Roster", "Kiosks"]);
+  assert.deepEqual(navigation, ["Dashboard", "Reports", "Roster", "Kiosks"]);
 });
 
 test("admin dashboard includes protected administration", () => {
@@ -45,7 +45,7 @@ test("live Admin workspace uses the authorized kiosk route and exits completed o
   assert.match(source, /Browser simulator/);
   assert.match(source, /inline-messages error/);
   assert.match(source, /role="dialog"/);
-  assert.match(source, /Go to dashboard home/);
+  assert.match(source, /Go to Dashboard/);
   assert.doesNotMatch(source, /<details className="admin-tools"/);
 });
 
@@ -152,7 +152,7 @@ test("data controls expose separate backup, restore, and deletion per category",
   assert.match(styles, /\.file-picker input\[type="file"\]::file-selector-button/);
 });
 
-test("dashboard uses distinct routes and keeps roster accounts together", async () => {
+test("dashboard consolidates meeting navigation and keeps roster accounts together", async () => {
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
   const importer = await readFile("apps/dashboard/src/roster-import-panel.tsx", "utf8");
@@ -160,6 +160,10 @@ test("dashboard uses distinct routes and keeps roster accounts together", async 
   for (const route of ["/dashboard", "/meetings", "/attendance", "/reports", "/roster", "/kiosks", "/settings/data", "/settings/updates"]) {
     assert.match(shell, new RegExp(route.replaceAll("/", "\\/")));
   }
+  assert.match(shell, /\["\/dashboard", "Dashboard"\]/);
+  assert.doesNotMatch(shell, /\["\/meetings", "Meetings"\]|\["\/attendance", "Attendance"\]/);
+  assert.match(shell, /LegacyMeetingsRedirect/);
+  assert.match(shell, /dashboardMeetingViewKey, "table"/);
   assert.match(users, /Dashboard access/);
   assert.match(importer, /id="roster-import-errors" className="inline-messages error" role="alert"/);
   assert.match(importer, /requestAnimationFrame/);
@@ -223,12 +227,18 @@ test("settings subpages preserve the parent navigation bubble without duplicatin
   for (const source of [organization, configuration, integrations]) assert.doesNotMatch(source, /Changes apply after you save them|Changes apply to every meeting after you save them|Saved secret values are encrypted and never displayed/);
 });
 
-test("home shows a five-week rolling calendar, canonical meeting links, live attendance, and contest review", async () => {
+test("Dashboard provides remembered calendar and table meeting browsers", async () => {
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
+  const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const router = await readFile("apps/dashboard/src/router.tsx", "utf8");
   assert.match(home, /length: 35/);
+  assert.match(home, /lancerlogin-dashboard-meeting-view/);
+  assert.match(home, /Meeting view/);
+  assert.match(home, /Add meeting/);
+  assert.match(home, /setCalendarOffset/);
+  assert.match(home, /MeetingsPage discordEnabled=\{discordEnabled\} navigate=\{navigate\} embedded/);
   assert.match(home, /previousMonth/);
   assert.match(home, /previous-month/);
   assert.doesNotMatch(home, /Last week through the next three weeks/);
@@ -239,6 +249,7 @@ test("home shows a five-week rolling calendar, canonical meeting links, live att
   assert.match(home, /Attendance contests/);
   assert.match(home, /ContestReviewList/);
   assert.match(home, /navigate\(`\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}`\)/);
+  assert.match(meetings, /className="meeting-browser-row"/);
   assert.match(attendance, /api<\{ meeting: Meeting \}>\(`\/meetings\/\$\{encodeURIComponent\(meetingId\)\}`\)/);
   assert.match(shell, /path\.startsWith\("\/meetings\/"\)/);
   assert.match(shell, /LegacyAttendanceRedirect/);

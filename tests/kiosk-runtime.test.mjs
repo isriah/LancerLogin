@@ -11,6 +11,8 @@ import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/s
 import { kioskApp, kioskHtml, kioskReaderStatus, kioskStatusStyles, kioskStyles } from "../apps/kiosk/src/ui.mjs";
 import { decodePairingKey } from "../apps/kiosk/src/pairing-key.mjs";
 import { createScanner } from "../apps/kiosk/src/scanner.mjs";
+import { kioskStates as presentationStates } from "../apps/kiosk/src/kiosk-presentation.mjs";
+import { kioskStates as deviceStates } from "../apps/kiosk/src/kiosk-states.mjs";
 import { createNetworkManager } from "../apps/kiosk/src/network-manager.mjs";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
 import { prepareLegacyFingerprintImport } from "../apps/kiosk/scripts/prepare-legacy-fingerprint-import.mjs";
@@ -341,6 +343,41 @@ test("continuous scanner records a mapped match without a meeting ID", async () 
   assert.deepEqual(led, ["processing", "welcome"]);
 });
 
+test("scan feedback preserves semantic states, copy, durations, and reader aura behavior", () => {
+  assert.deepEqual(
+    Object.fromEntries(["processing", "duplicate", "offline", "unknown", "rejected"].map((id) => [id, presentationStates[id]])),
+    {
+      processing: { message: "Checking scan", detail: "Hold still", tone: "processing" },
+      duplicate: { message: "Already recorded", detail: "Attendance was not changed", tone: "notice", durationMs: 2200 },
+      offline: { message: "Saved for sync", detail: "This scan is stored on the kiosk and will sync automatically", tone: "offline", durationMs: 2600 },
+      unknown: { message: "Fingerprint not recognized", detail: "Try the same finger again, or ask an operator for help", tone: "error", durationMs: 2600 },
+      rejected: { message: "Scan needs help", detail: "Ask an operator for help", tone: "error", durationMs: 2800 },
+    },
+  );
+  assert.deepEqual(deviceStates.processing.led, { color: 3, mode: 3, speed: 64, cycles: 0 });
+  assert.deepEqual(deviceStates.duplicate.led, { color: 3, mode: 2, speed: 56, cycles: 2 });
+  assert.deepEqual(deviceStates.offline.led, { color: 1, mode: 2, speed: 64, cycles: 1 });
+});
+
+test("scanner keeps offline saved, rejected, and unknown outcomes textually distinct", async () => {
+  async function displaysFor(scanSensor, flushAttendance) {
+    const displays = [];
+    const scanner = createScanner({
+      scanSensor, setLed: async () => undefined, mappings: { memberForSlot: async () => "ROSTER-001" },
+      queue: { enqueue: async () => true }, loadPairing: async () => ({ kioskToken: "secret" }), flushAttendance,
+      onDisplay: async (state, values) => displays.push({ state, ...values }), onReader: () => undefined, onCloud: () => undefined,
+      now: () => Date.parse("2026-09-01T20:00:00.000Z"), delay: async () => undefined, eventId: () => "scan-1",
+    });
+    await scanner.tick();
+    return displays;
+  }
+
+  assert.deepEqual((await displaysFor(async () => ({ status: "match", slot: 12 }), async () => { throw new Error("offline"); })).map(({ state }) => state), ["processing", "offline"]);
+  const rejected = await displaysFor(async () => ({ status: "match", slot: 12 }), async () => ({ acknowledgements: [{ eventId: "scan-1", rejected: true, error: "No eligible meeting" }] }));
+  assert.deepEqual(rejected, [{ state: "processing" }, { state: "rejected", detail: "No eligible meeting" }]);
+  assert.deepEqual(await displaysFor(async () => ({ status: "not_found" }), async () => ({ acknowledgements: [] })), [{ state: "unknown" }]);
+});
+
 test("R503 enrollment creates and stores a template without returning biometric data", async () => {
   const replies = [acknowledgement(0), acknowledgement(0), acknowledgement(0x02), acknowledgement(0), acknowledgement(0), acknowledgement(0), acknowledgement(0)];
   const instructions = [];
@@ -381,6 +418,13 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskApp, /uptimeSeconds/);
   assert.match(kioskApp, /networkType === "ethernet"/);
   assert.match(kioskStatusStyles, /network-status\.ethernet/);
+  assert.match(kioskStyles, /processing-sweep 900ms ease-out 1/);
+  assert.match(kioskStyles, /duplicate-flash 420ms ease-in-out 3/);
+  assert.match(kioskStyles, /kiosk-shell-offline[^}]*success-pulse/);
+  assert.match(kioskStyles, /network-status\.offline[^}]*network-offline-pulse/);
+  assert.match(kioskStyles, /prefers-reduced-motion:reduce/);
+  assert.match(kioskStyles, /kiosk-shell-processing\{box-shadow:[^}]*processing-sweep-color/);
+  assert.match(kioskStyles, /network-status\.offline\{opacity:1;transform:none\}/);
   assert.match(kioskHtml, /\/recovery\.js/);
   assert.match(networkApp, /setTimeout\(openNetwork,3000\)/);
   assert.match(networkApp, /touch-keyboard/);

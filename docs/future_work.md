@@ -785,16 +785,17 @@ Release: v0.16.0 Dashboard meeting-browser and update reliability release.
 
 ### WU-051 — Kiosk release-version footer
 
-Status: in progress
+Status: blocked
 
 Owner: Codex coordinator
 Branch: `codex/wu-051-kiosk-release-version-footer`
 Base: `d1577c807e711dc3091a168359f1a117a9260c42`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\5c7c\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:0a148572-a8a9-4e21-b6a1-a54e6bff4b98`
+Integration: candidate `232547d` was merged as `4911370`; merged-tree `npm run verify:kiosk` passed, but the full browser suite failed 43/44 when the recorded WU-046 create-dialog API-error alert focus race reproduced. Do not mark merged until the WU-046 corrective commit is integrated and the full browser suite passes.
 
 Goal: show the running kiosk software version on the physical attendance interface while keeping reader failures visible.
-Dependencies: none
+Dependencies: integrate WU-046 corrective commit `ddeb281`, then rerun the full `npm run test:browser` gate
 Scope: expose the local `LANCERLOGIN_VERSION` through the loopback-only display-state response and replace the successful `Fingerprint reader online` footer copy with that version. Retain an explicit reader-offline warning, queue count, uptime, pairing behavior, and the dashboard heartbeat version. Exclude version selection, update behavior, dashboard Kiosks-page changes, and new diagnostic details.
 Sources: `docs/idea_inbox.md` (IN-068); `apps/kiosk/src/service.mjs`; `apps/kiosk/src/ui.mjs`; `tests/kiosk-runtime.test.mjs`; `docs/KIOSK.md`.
 Acceptance: a paired physical kiosk displays its running release version in the footer when the reader is online; development and missing-version states use a clear safe fallback; a reader failure still replaces the version text with the existing offline warning; no credential, biometric, or additional host detail is exposed.

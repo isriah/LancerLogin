@@ -31,6 +31,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const [contests, setContests] = useState<Contest[]>([]);
   const [discordConfigured, setDiscordConfigured] = useState(false);
   const [discordNotice, setDiscordNotice] = useState("");
+  const [discordNoticeTone, setDiscordNoticeTone] = useState<"neutral" | "success" | "error">("neutral");
   const [discordBusy, setDiscordBusy] = useState<"calendar" | "absence">();
   const [notice, setNotice] = useState("Loading meeting…");
   const [memberNotices, setMemberNotices] = useState<Record<string, string>>({});
@@ -127,18 +128,18 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   }
   async function syncDiscordCalendar() {
     if (!meeting) return;
-    setDiscordBusy("calendar"); setDiscordNotice("Syncing this meeting to the Discord calendar…");
-    try { await api("/discord/calendar", { method: "POST", body: JSON.stringify({ meetingId: meeting.id }) }); setDiscordNotice("Discord calendar updated for this meeting."); }
-    catch (error) { setDiscordNotice((error as Error).message); }
+    setDiscordBusy("calendar"); setDiscordNotice("Syncing this meeting to the Discord calendar…"); setDiscordNoticeTone("neutral");
+    try { await api("/discord/calendar", { method: "POST", body: JSON.stringify({ meetingId: meeting.id }) }); setDiscordNotice("Discord calendar updated for this meeting."); setDiscordNoticeTone("success"); }
+    catch (error) { setDiscordNotice((error as Error).message); setDiscordNoticeTone("error"); }
     finally { setDiscordBusy(undefined); }
   }
   async function notifyDiscordAbsences() {
     if (!meeting) return;
-    setDiscordBusy("absence"); setDiscordNotice("Sending the Discord absence notice…");
+    setDiscordBusy("absence"); setDiscordNotice("Sending the Discord absence notice…"); setDiscordNoticeTone("neutral");
     try {
       const result = await api<{ posted: boolean; linkedMissingCount: number }>("/discord/missing", { method: "POST", body: JSON.stringify({ meetingId: meeting.id }) });
-      setDiscordNotice(result.posted ? `Discord absence notice sent to ${result.linkedMissingCount} linked member${result.linkedMissingCount === 1 ? "" : "s"}.` : "No linked absent members need a Discord notice.");
-    } catch (error) { setDiscordNotice((error as Error).message); }
+      setDiscordNotice(result.posted ? `Discord absence notice sent to ${result.linkedMissingCount} linked member${result.linkedMissingCount === 1 ? "" : "s"}.` : "No linked absent members need a Discord notice."); setDiscordNoticeTone("success");
+    } catch (error) { setDiscordNotice((error as Error).message); setDiscordNoticeTone("error"); }
     finally { setDiscordBusy(undefined); }
   }
   async function managementComplete(message: string) { await load(); setNotice(message); }
@@ -151,13 +152,13 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const absenceEligible = Boolean(meeting && clock >= Date.parse(meeting.startsAt));
 
   return <section className="attendance-workspace meeting-detail-workspace" aria-labelledby="meeting-detail-title">
-    <div className="meeting-detail-navigation">
+    <nav className="meeting-detail-navigation" aria-label="Meeting detail navigation">
       <button type="button" onClick={() => navigate("/dashboard")}>Back to Dashboard</button>
       <label>Switch meeting<select value={meeting?.id ?? ""} onChange={(event) => { if (event.target.value) navigate(`/meetings/${encodeURIComponent(event.target.value)}`); }}><option value="">Choose a meeting</option>{meetings.map((item) => <option key={item.id} value={item.id}>{new Date(item.startsAt).toLocaleDateString()} · {item.title}</option>)}</select></label>
-    </div>
+    </nav>
     {meeting ? <>
       <header className="meeting-detail-heading"><div><span className={`meeting-lifecycle ${lifecycle}`}>{lifecycleLabel(lifecycle!)}</span><h1 id="meeting-detail-title">{meeting.title}</h1></div><div className="meeting-detail-actions"><button type="button" onClick={() => setManagementAction("edit")}>Edit</button><button type="button" onClick={() => setManagementAction("duplicate")}>Duplicate</button><button className="danger-button" type="button" onClick={() => setManagementAction("delete")}>Delete</button><button className="primary-button" type="button" onClick={() => void manualRefresh()}>Refresh attendance</button></div></header>
-      <dl className="meeting-summary" aria-label="Meeting summary">
+      <dl className="meeting-summary ui-card" aria-label="Meeting summary">
         <div><dt>Date</dt><dd>{new Date(meeting.startsAt).toLocaleDateString()}</dd></div>
         <div><dt>Time</dt><dd>{new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}–{new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</dd></div>
         <div><dt>Attendance</dt><dd>{meeting.required ? "Required" : "Optional"}</dd></div>
@@ -166,17 +167,17 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
         <div className="meeting-summary-notes"><dt>Notes</dt><dd>{meeting.notes || "No notes"}</dd></div>
       </dl>
       {discordConfigured && <div className="meeting-discord-layout">
-        <section className="task-card meeting-discord-operations" aria-labelledby="meeting-discord-title"><div className="panel-heading"><div><h2 id="meeting-discord-title">Discord operations</h2><p>Actions apply only to this meeting.</p></div></div><div className="meeting-operation-list">
+        <section className="task-card meeting-discord-operations ui-card" aria-labelledby="meeting-discord-title"><div className="panel-heading"><div><h2 id="meeting-discord-title">Discord operations</h2><p>Actions apply only to this meeting.</p></div></div><div className="meeting-operation-list">
           <article><div><h3>Calendar event</h3><p>{calendarEligible ? `Available through the scheduled end at ${new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : "Unavailable because the scheduled meeting end has passed."}</p></div><button type="button" disabled={!calendarEligible || Boolean(discordBusy)} onClick={() => void syncDiscordCalendar()}>{discordBusy === "calendar" ? "Syncing…" : "Sync Discord calendar"}</button></article>
           <article><div><h3>Absence notice</h3><p>{absenceEligible ? "Notify linked members currently marked absent." : `Available when the meeting starts at ${new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`}</p></div><button type="button" disabled={!absenceEligible || Boolean(discordBusy)} onClick={() => void notifyDiscordAbsences()}>{discordBusy === "absence" ? "Sending…" : "Send Discord absence notice"}</button></article>
-        </div>{discordNotice && <p className="meeting-discord-notice" role="status" aria-live="polite">{discordNotice}</p>}</section>
-        <section className="task-card meeting-contests" aria-labelledby="meeting-contests-title"><div className="panel-heading"><div><h2 id="meeting-contests-title">Attendance contests</h2><p>Review requests submitted for this meeting.</p></div><span className="progress-count">{contests.length} open</span></div>{contests.length ? <ContestReviewList contests={contests} onResolved={(resolution, contest) => { setContests((current) => current.filter((item) => item.meetingId !== contest.meetingId || item.memberId !== contest.memberId)); setDiscordNotice(`Contest ${resolution}.`); if (resolution === "approved") void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message)); }} /> : <p className="empty-state">No attendance contests need review for this meeting.</p>}</section>
+        </div>{discordNotice && <p className="meeting-discord-notice ui-status" data-tone={discordNoticeTone} role="status" aria-live="polite">{discordNotice}</p>}</section>
+        <section className="task-card meeting-contests ui-card" aria-labelledby="meeting-contests-title"><div className="panel-heading"><div><h2 id="meeting-contests-title">Attendance contests</h2><p>Review requests submitted for this meeting.</p></div><span className="progress-count">{contests.length} open</span></div>{contests.length ? <ContestReviewList contests={contests} onResolved={(resolution, contest) => { setContests((current) => current.filter((item) => item.meetingId !== contest.meetingId || item.memberId !== contest.memberId)); setDiscordNotice(`Contest ${resolution}.`); setDiscordNoticeTone("success"); if (resolution === "approved") void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message)); }} /> : <p className="empty-state">No attendance contests need review for this meeting.</p>}</section>
       </div>}
       <div className="attendance-utilities"><span role="status" aria-live="polite">{notice}</span><span className="progress-count">{rows.filter((row) => row.disposition === "present").length} present</span></div>
-      <section className="attendance-card" aria-labelledby="meeting-attendance-title"><div className="panel-heading"><h2 id="meeting-attendance-title">Attendance</h2></div>{rows.length ? <div className="attendance-table" role="table" aria-label="Meeting attendance"><div className="attendance-row header" role="row"><span>Member</span><span>Status</span><span>Actions</span></div>{rows.map((row) => <div className="attendance-row" role="row" key={row.memberId}><span><strong>{row.firstName} {row.lastName}</strong><small>{row.externalId}</small>{memberNotices[row.memberId] && <small className="member-action-notice" role="status">{memberNotices[row.memberId]}</small>}</span><span className={`attendance-state ${row.disposition}`}>{row.disposition === "active" ? "Active · not checked out" : row.disposition === "not_required" ? "Not required" : row.disposition}</span><span className="correction-actions"><button type="button" disabled={row.disposition === "present"} onClick={() => void correct(row, "present")}>Present</button><button type="button" disabled={row.disposition === "excused"} onClick={() => void correct(row, "excused")}>Excuse</button><button type="button" disabled={row.disposition === "absent"} onClick={() => void correct(row, "absent")}>Absent</button>{role === "admin" && <button type="button" disabled={row.disposition === "not_required"} onClick={() => void clear(row)}>Clear</button>}</span></div>)}</div> : <p className="empty-state">No active roster records are available.</p>}</section>
+      <section className="attendance-card ui-card" aria-labelledby="meeting-attendance-title"><div className="panel-heading"><h2 id="meeting-attendance-title">Attendance</h2></div>{rows.length ? <div className="attendance-table" role="table" aria-label="Meeting attendance"><div className="attendance-row header" role="row"><span role="columnheader">Member</span><span role="columnheader">Status</span><span role="columnheader">Actions</span></div>{rows.map((row) => <div className="attendance-row" role="row" key={row.memberId}><span role="cell"><strong>{row.firstName} {row.lastName}</strong><small>{row.externalId}</small>{memberNotices[row.memberId] && <small className="member-action-notice" role="status">{memberNotices[row.memberId]}</small>}</span><span role="cell" className={`attendance-state ${row.disposition}`}>{row.disposition === "active" ? "Active · not checked out" : row.disposition === "not_required" ? "Not required" : row.disposition}</span><span role="cell" className="correction-actions"><button type="button" disabled={row.disposition === "present"} onClick={() => void correct(row, "present")}>Present</button><button type="button" disabled={row.disposition === "excused"} onClick={() => void correct(row, "excused")}>Excuse</button><button type="button" disabled={row.disposition === "absent"} onClick={() => void correct(row, "absent")}>Absent</button>{role === "admin" && <button type="button" disabled={row.disposition === "not_required"} onClick={() => void clear(row)}>Clear</button>}</span></div>)}</div> : <p className="empty-state">No active roster records are available.</p>}</section>
       {managementAction === "edit" && <MeetingEditDialog meeting={meeting} onClose={() => setManagementAction(undefined)} onSaved={managementComplete} />}
       {managementAction === "duplicate" && <MeetingDuplicateDialog meeting={meeting} onClose={() => setManagementAction(undefined)} onCreated={managementComplete} />}
       {managementAction === "delete" && <MeetingDeleteDialog meeting={meeting} meetings={meetings} onClose={() => setManagementAction(undefined)} onDeleted={deleted} />}
-    </> : <section className="empty-page"><h1 id="meeting-detail-title">Meeting unavailable</h1><p role="status">{notice}</p><p>The meeting may have been removed, or the link may be incorrect. Choose another meeting or return to Dashboard.</p></section>}
+    </> : <section className="empty-page ui-card"><h1 id="meeting-detail-title">Meeting unavailable</h1><p className="ui-status" data-tone="error" role="status">{notice}</p><p>The meeting may have been removed, or the link may be incorrect. Choose another meeting or return to Dashboard.</p></section>}
   </section>;
 }

@@ -2,6 +2,8 @@
 
 Supported hardware: Raspberry Pi 3B+, 4, or 5 with at least 1 GB RAM; Waveshare 7-inch DSI LCD (E); R503 fingerprint reader; Wi-Fi or Ethernet. Fingerprint templates remain exclusively inside the R503.
 
+The dashboard's Kiosks page keeps physical heartbeat, reader, network, queue, sync, and release health together. When Discord is enabled and verified, the same physical-health card lets an Admin or Operator manually refresh the persistent kiosk-status message; automatic heartbeat and five-minute reconciliation remain best-effort and never block kiosk operation.
+
 ## Install or upgrade the Pi
 
 The Kiosks page links the guided installer from the latest immutable GitHub release. Run it with `--dry-run` to preview or `--install` with `sudo` to proceed. It requires Raspberry Pi OS, Node.js 18 or newer at `/usr/bin/node`, NetworkManager, and an enabled UART exposed as `/dev/serial0`.

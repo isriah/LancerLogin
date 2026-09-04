@@ -263,12 +263,11 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(home, /previousMonth/);
   assert.match(home, /previous-month/);
   assert.doesNotMatch(home, /Last week through the next three weeks/);
-  assert.match(home, /Meetings in progress/);
-  assert.match(home, /active\.length > 0.*live-pill/);
-  assert.match(home, /Date\.parse\(meeting\.endsAt\) >= now/);
-  assert.match(home, /Active · not checked out/);
-  assert.match(home, /Attendance contests/);
-  assert.match(home, /ContestReviewList/);
+  assert.doesNotMatch(home, /Meetings in progress|live-roster|Active · not checked out/);
+  assert.doesNotMatch(home, /Attendance contests|ContestReviewList|\/discord\/contests/);
+  assert.match(attendance, /className="attendance-table"/);
+  assert.match(attendance, /Active · not checked out/);
+  assert.match(attendance, /ContestReviewList contests=\{contests\}/);
   assert.match(home, /navigate\(`\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}`\)/);
   assert.match(meetings, /className="meeting-browser-row"/);
   assert.match(attendance, /api<\{ meeting: Meeting \}>\(`\/meetings\/\$\{encodeURIComponent\(meetingId\)\}`\)/);
@@ -333,6 +332,8 @@ test("reports are an operational workspace with filters, trend, saved views, and
   assert.match(reports, /attendanceReportingStartsOn/);
   assert.match(reports, /Operational baseline/);
   assert.match(reports, /All preserved history/);
+  assert.match(reports, /Download attendance CSV/);
+  assert.match(reports, /\/exports\/attendance\.csv/);
   assert.match(styles, /\.report-filters/);
 });
 
@@ -346,7 +347,7 @@ test("contest review requires a reason and keeps failures beside the unresolved 
   assert.match(reports, /id="contest-review-reason-error"[^>]+role="alert"/);
 });
 
-test("pending contests are signaled in the shell instead of occupying Reports", async () => {
+test("pending contests use meeting detail and the global notifier instead of Dashboard or Reports", async () => {
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const indicator = await readFile("apps/dashboard/src/contest-indicator.tsx", "utf8");
   const reviewList = await readFile("apps/dashboard/src/contest-review-list.tsx", "utf8");
@@ -364,7 +365,7 @@ test("pending contests are signaled in the shell instead of occupying Reports", 
   assert.match(reviewList, /contest\.meetingTitle.*occurrenceDate\(contest\)/s);
   assert.match(reviewList, /A review reason is required before resolving this contest\./);
   assert.match(reviewList, /window\.dispatchEvent\(new Event\(contestsChangedEvent\)\)/);
-  assert.match(home, /ContestReviewList contests=\{open\}/);
+  assert.doesNotMatch(home, /ContestReviewList|\/discord\/contests|Attendance contests/);
   assert.match(styles, /\.reports-page \.contest-report \{ display: none; \}/);
 });
 
@@ -474,6 +475,12 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*\.kiosk-card-heading \.primary-button \{ width: 100%; \}/);
   assert.doesNotMatch(styles, /\.kiosk-page-heading/);
   assert.doesNotMatch(source, /openSetup/);
+  assert.match(source, /discordConfigured && <section className="kiosk-discord-status"/);
+  assert.match(source, /\/discord\/kiosk-status/);
+  assert.match(source, /Sync Discord status/);
+  assert.match(source, /Persistent Discord kiosk status (?:updated|is already current)/);
+  assert.match(styles, /\.kiosk-discord-status \{[^}]*align-items: center[^}]*var\(--ui-surface-subtle\)[^}]*var\(--radius-card\)/);
+  assert.match(styles, /\.kiosk-discord-status button \{[^}]*min-height: var\(--control-min-block-size\)/);
 });
 
 test("Kiosks refresh hides redundant success while preserving actionable feedback", async () => {
@@ -508,6 +515,7 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(shell, /\/integrations\/capabilities/);
   assert.match(shell, /HomePage[^>]+discordEnabled=\{integrations\.discord\.configured\}/);
   assert.match(shell, /ReportsPage discordEnabled=\{integrations\.discord\.configured\}/);
+  assert.match(shell, /KiosksPage role=\{role\} discordConfigured=\{integrations\.discord\.configured\}/);
   assert.match(meetings, /discordEnabled && <button.*Sync all to Discord/);
   assert.match(attendance, /capabilities\.integrations\.discord\.configured/);
   assert.match(attendance, /Send Discord absence notice/);

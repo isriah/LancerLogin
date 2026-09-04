@@ -692,14 +692,14 @@ Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-045 — Dashboard meeting browser and navigation
 
-Status: in progress
+Status: merged (`9f20755`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-045-dashboard-meeting-browser`
 Base: `31808256cb9a2b8cc68f96e5520d8bfe983b8d34`
-Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\48d9\\LancerLogin Workspace` (currently detached during provisioning)
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\48d9\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:7b52e569-87ee-4479-814e-5a5494988be1`
-Candidate: detached provisioning Worktree `C:\\Users\\Izz\\.codex\\worktrees\\48d9\\LancerLogin Workspace` at the recorded base; requested branch exists, but no addressable task ID has been confirmed yet.
+Candidate: `21d0fd3112cbf7122282c83be955353559510dea`; commit subject and dashboard navigation/test files match this WU.
 
 Goal: make Dashboard the single place to browse and select meetings.
 Dependencies: WU-044
@@ -707,7 +707,7 @@ Scope: rename Home to Dashboard while retaining `/dashboard`; remove Meetings an
 Sources: `docs/idea_inbox.md` (IN-058, IN-059, IN-060); WU-035; WU-044; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/router.tsx`; `apps/dashboard/src/styles.css`; `docs/DASHBOARD.md`; `docs/ARCHITECTURE.md`.
 Acceptance: Dashboard offers remembered Calendar and Table meeting browsers with consistent selector and Add meeting access; calendar navigation changes the visible date range; every meeting selection opens its canonical detail route; primary navigation and legacy `/meetings` behavior match the approved design.
 Verification: `npm run verify:dashboard`; focused desktop/mobile browser coverage for view persistence, calendar navigation, table search, selection routes, redirects, and Back/Forward behavior.
-Release: v0.15.0 Dashboard and meeting-workspace redesign.
+Release: v0.16.0 Dashboard meeting-browser and update reliability release.
 
 ### WU-046 — Dashboard meeting-creation dialog
 

@@ -1005,13 +1005,14 @@ Release: v0.19.0 dashboard design conformance.
 
 ### WU-061 — Google OAuth setup guidance
 
-Status: in progress
+Status: ready
 
 Owner: Codex task
 Branch: `codex/wu-061-google-oauth-guidance` (requested; provisioning Worktree)
 Base: `64c5b1fa960ecb96127ee5b58addc75e363f8574`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\b57d\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:f2caa650-435f-48d7-81d2-0ad3c1b54fcb`
+Recovery: the recorded provisioning client never produced an addressable task, and the detached Worktree remained at the recorded base with no candidate commit. A replacement task may be launched from current `main`; do not reuse the stale provisioning client.
 
 Goal: make Google OAuth setup accurate, current, and easy to complete from either first-Admin setup or Settings without crowding the dashboard with screenshots.
 Dependencies: none

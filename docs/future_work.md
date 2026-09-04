@@ -865,13 +865,15 @@ Release: v0.18.0 meeting operations and kiosk feedback (development standard; no
 
 ### WU-054 — Dashboard design inventory and shared foundations
 
-Status: in progress
+Status: merged (`d35c649`)
 
 Owner: Codex task
 Branch: `codex/wu-054-dashboard-design-foundations` (requested; provisioning Worktree)
 Base: `cd694a4`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\2053\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:2762d651-3eb1-4b41-9b29-e727801bb044`
+Candidate: `04c1f3b43f2f1909ccab188c3067c40a331bd506`; commit subject and shared dashboard foundation/test files match this WU.
+Integration: candidate `04c1f3b43f2f1909ccab188c3067c40a331bd506` was merged as `d35c64989fdf2b5fba1b79531665a883e45c5f2a`; on the merged tree, `npm run verify:dashboard` and the 61-test full browser suite passed.
 
 Goal: make the dashboard's shared shell, tokens, controls, panels, dialogs, and responsive foundations conform to the visual-language contract before page-specific work begins.
 Dependencies: WU-053

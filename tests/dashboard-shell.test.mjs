@@ -65,7 +65,9 @@ test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", 
   assert.match(source, /googleClientId: usesGoogle/);
   assert.match(source, /googleClientSecret: usesGoogle/);
   assert.match(source, /\/api\/auth\/google\/callback/);
-  assert.match(source, /console\.cloud\.google\.com\/auth\/clients\/create/);
+  assert.match(source, /setup\.html#google-oauth/);
+  assert.match(source, /Authorized redirect URI/);
+  assert.match(source, /navigator\.clipboard\.writeText/);
   assert.match(source, /Confirm Admin password/);
   assert.match(source, /localPassword !== localPasswordConfirmation/);
   assert.match(source, /Allow anonymous usage reporting/);
@@ -553,6 +555,9 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /resend\/verify\/complete/);
   assert.match(source, /discord\/verify\/start/);
   assert.match(source, /Verify with Google/);
+  assert.match(source, /setup\.html#google-oauth/);
+  assert.match(source, /Authorized redirect URI/);
+  assert.match(source, /<code>openid<\/code>, <code>email<\/code>, and <code>profile<\/code>/);
   assert.match(source, /role="switch" aria-label=\{`Enable/);
   assert.match(source, /const ordered = \[\.\.\.providers\]\.sort/);
   assert.match(source, /integration-card\$\{enabled \? "" : " disabled"\}/);

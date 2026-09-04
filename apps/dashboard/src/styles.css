@@ -952,6 +952,7 @@ label { font-size: .9rem; }
 .oauth-walkthrough { display: grid; gap: var(--space-3); padding: var(--space-4); margin: 0 0 var(--space-4); border-color: var(--ui-border); background: var(--ui-surface-subtle); border-radius: var(--radius-card); }
 .oauth-walkthrough > * { margin: 0; }
 .oauth-walkthrough ol { gap: var(--space-2); color: var(--ui-text-muted); font-size: var(--text-small); }
+.oauth-guide-link { width: fit-content; min-height: var(--control-min-block-size); display: inline-flex; align-items: center; padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); color: var(--primary); background: var(--ui-surface); border-radius: var(--radius-control); font-size: var(--text-small); font-weight: 800; text-decoration: none; }
 .form-error,.auth-message { padding: var(--space-3) var(--space-4); margin: 0; border: 1px solid var(--ui-error); border-radius: var(--radius-control); font-size: var(--text-small); }
 .login-card form { gap: var(--space-3); }
 .login-card .primary-button,.google-button { min-height: var(--control-min-block-size); margin: 0; }
@@ -1205,7 +1206,8 @@ label { font-size: .9rem; }
 .integration-body { display: grid; gap: var(--space-4); padding: var(--space-5); border-color: var(--ui-border); }
 .integration-body form { display: grid; gap: var(--space-4); }
 .integration-guide { margin: 0; padding: var(--space-4); border-color: var(--ui-border); background: var(--ui-surface-subtle); border-radius: var(--radius-card); }
-.integration-guide h3,.integration-guide ol,.guide-note { margin-block: 0; }
+.integration-guide h3,.integration-guide p,.integration-guide ol,.guide-note { margin-block: 0; }
+.integration-guide { display: grid; gap: var(--space-3); }
 .integration-guide ol { gap: var(--space-3); color: var(--ui-text-muted); font-size: var(--text-small); }
 .copy-value { gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--ui-border); background: var(--ui-surface); border-radius: var(--radius-card); }
 .copy-value button { min-height: var(--control-min-block-size); }

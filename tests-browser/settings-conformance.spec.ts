@@ -115,6 +115,38 @@ test("Settings validation, integration states, telemetry, and data dialogs remai
   await expectResponsiveFit(page);
 });
 
+for (const viewport of dashboardConformanceReferences.viewports) {
+  for (const theme of dashboardConformanceReferences.themes) {
+    test(`Google integration guidance fits at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.addInitScript((savedTheme) => {
+        localStorage.setItem("lancerlogin-theme", savedTheme);
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => undefined } });
+      }, theme);
+      await useSettingsContext(page);
+      await page.goto("/settings/integrations");
+
+      await page.getByText("Manage configuration", { exact: true }).click();
+      const googleCard = page.locator(".integration-card").filter({ hasText: "Google OAuth" });
+      const guideLink = googleCard.getByRole("link", { name: /Open the complete Google OAuth guide/ });
+      await expect(guideLink).toHaveAttribute("href", "https://isriah.github.io/LancerLogin/setup.html#google-oauth");
+      await guideLink.focus();
+      await expect(guideLink).toBeFocused();
+      expect((await guideLink.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+      await expect(googleCard.locator(".copy-value code")).toHaveText(/^http:\/\/127\.0\.0\.1:\d+\/auth\/google\/callback$/);
+      const copyCallback = googleCard.getByRole("button", { name: "Copy" });
+      await copyCallback.focus();
+      await expect(copyCallback).toBeFocused();
+      expect((await copyCallback.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await copyCallback.click();
+      await expect(googleCard.getByRole("button", { name: "Copied" })).toBeVisible();
+      await expectResponsiveFit(page);
+    });
+  }
+}
+
 test("Operator role cannot open any Settings route", async ({ page }) => {
   await useSettingsContext(page, "operator");
   for (const [path] of routes) {

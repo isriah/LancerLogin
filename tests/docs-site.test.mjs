@@ -72,6 +72,22 @@ test("setup and integration guides include sanitized annotated visual callouts",
   assert.match(setup, /LANCERLOGIN_SETUP_CODE/);
   assert.match(setup, /https:\/\/dash\.cloudflare\.com\//);
   assert.match(setup, /Copy the exact callback/);
+  assert.match(setup, /id="google-oauth"/);
+  assert.match(setup, /Google Auth Platform/);
+  assert.match(setup, /Branding.*Audience.*Clients.*Data Access.*Verification Center/s);
+  assert.match(setup, /<strong>Internal<\/strong>/);
+  assert.match(setup, /<strong>External<\/strong>/);
+  assert.match(setup, /<strong>Testing<\/strong>/);
+  assert.match(setup, /<strong>In production<\/strong>/);
+  assert.match(setup, /<code>openid<\/code>.*<code>email<\/code>.*<code>profile<\/code>/s);
+  assert.match(setup, /https:\/\/&lt;slug&gt;-dashboard\.pages\.dev\/api\/auth\/google\/callback/);
+  assert.match(setup, /support\.google\.com\/cloud\/answer\/15544987/);
+  assert.match(setup, /support\.google\.com\/cloud\/answer\/15549049/);
+  assert.match(setup, /support\.google\.com\/cloud\/answer\/15549945/);
+  assert.match(setup, /support\.google\.com\/cloud\/answer\/15549135/);
+  assert.match(setup, /support\.google\.com\/cloud\/answer\/15549257/);
+  assert.match(setup, /Google's Verification Center and LancerLogin's integration verification are separate/);
+  assert.doesNotMatch(setup, /client-secret-[A-Za-z0-9_-]+|[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com/i);
 
   const operations = await readFile("docs-site/operations.html", "utf8");
   assert.match(operations, /integration-controls\.png/);

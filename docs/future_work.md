@@ -737,6 +737,7 @@ Branch: `codex/wu-047-meeting-detail-discord-contests` (requested; provisioning 
 Base: `bb9ecca51a4531ec4ed33efd345e46ca7f293877`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\9227\\LancerLogin Workspace` (detached)
 Task: `01a06b96-69d0-7be1-877b-c2efc817c9f0`
+Candidate: `45bae194be479cd29ccf4b37b08b783aba3eadbf`; commit subject and API/dashboard/documentation/test files match this WU.
 
 Goal: keep meeting-specific Discord and contest actions on the meeting they affect.
 Dependencies: WU-034, WU-039, and WU-044

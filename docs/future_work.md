@@ -726,7 +726,7 @@ Scope: move the existing creation fields into an accessible dialog opened from t
 Sources: `docs/idea_inbox.md` (IN-061); WU-008; WU-020; WU-045; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/modal-focus.ts`; `apps/dashboard/src/styles.css`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`.
 Acceptance: keyboard and pointer users can open, complete, cancel, and recover validation errors in the dialog; successful one-time or recurring creation closes it, announces the correct count, and updates the currently selected Dashboard view and selector without changing routes.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused browser coverage for dialog focus, validation, duplication, recurrence, Discord-sync outcomes, refresh, and responsive layout.
-Release: v0.15.0 Dashboard and meeting-workspace redesign.
+Release: v0.17.0 Dashboard meeting creation and kiosk version visibility.
 
 ### WU-047 — Meeting-detail Discord and contest operations
 
@@ -800,7 +800,7 @@ Scope: expose the local `LANCERLOGIN_VERSION` through the loopback-only display-
 Sources: `docs/idea_inbox.md` (IN-068); `apps/kiosk/src/service.mjs`; `apps/kiosk/src/ui.mjs`; `tests/kiosk-runtime.test.mjs`; `docs/KIOSK.md`.
 Acceptance: a paired physical kiosk displays its running release version in the footer when the reader is online; development and missing-version states use a clear safe fallback; a reader failure still replaces the version text with the existing offline warning; no credential, biometric, or additional host detail is exposed.
 Verification: `npm run verify:kiosk`; focused display-state and kiosk-rendering coverage for release, development/fallback, and reader-offline states.
-Release: v0.17.0 kiosk status and scan-feedback release.
+Release: v0.17.0 Dashboard meeting creation and kiosk version visibility.
 
 ### WU-052 — Kiosk scan and offline visual feedback
 

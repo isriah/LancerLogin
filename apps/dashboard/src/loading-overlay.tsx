@@ -7,6 +7,7 @@ export function useDashboardLoadingOverlay(loading: boolean, label = "Loading da
     overlay.className = "dashboard-loading-overlay";
     overlay.setAttribute("role", "status");
     overlay.setAttribute("aria-live", "polite");
+    overlay.setAttribute("aria-atomic", "true");
     const indicator = document.createElement("span");
     indicator.className = "dashboard-loading-indicator";
     indicator.setAttribute("aria-hidden", "true");

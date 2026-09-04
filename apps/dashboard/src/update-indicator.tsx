@@ -37,7 +37,7 @@ export function UpdateAvailablePopup({ openUpdates }: { openUpdates: () => void 
   if (!check?.available || dismissed) return null;
   const available = check;
   function dismiss() { localStorage.setItem(`lancerlogin-update-dismissed:${available.latest}`, "true"); setDismissed(true); }
-  return <aside className="update-available-popup" role="status" aria-label="Update available"><div><strong>LancerLogin {check.latest} is ready</strong><span>This dashboard is running {check.current}. Review and install the available update.</span></div><button className="primary-button" type="button" onClick={openUpdates}>Open Updates</button><button className="popup-dismiss" type="button" aria-label="Dismiss update notice" onClick={dismiss}>×</button></aside>;
+  return <aside className="ui-card ui-status update-available-popup" role="status" aria-label="Update available"><div><strong>LancerLogin {check.latest} is ready</strong><span>This dashboard is running {check.current}. Review and install the available update.</span></div><button className="primary-button" type="button" onClick={openUpdates}>Open Updates</button><button className="popup-dismiss" type="button" aria-label="Dismiss update notice" onClick={dismiss}>×</button></aside>;
 }
 
 export function clearUpdateCheckCache() { localStorage.removeItem(cacheKey); }

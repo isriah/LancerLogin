@@ -12,7 +12,7 @@
   "scripts": {
     "test": "node --test tests/**/*.test.mjs && node --experimental-strip-types --test tests-ts/**/*.test.ts",
     "test:api": "node --test tests/attendance-service.test.mjs tests/d1-repository.test.mjs tests/integration-workflows.test.mjs tests/pairing-service.test.mjs tests/roster-import.test.mjs tests/security.test.mjs tests/setup-progress.test.mjs tests/telemetry.test.mjs tests/worker.test.mjs && node --experimental-strip-types --test tests-ts/attendance-lifecycle.test.ts tests-ts/integration-runtime.test.ts tests-ts/runtime-security.test.ts tests-ts/worker-runtime.test.ts",
-    "test:dashboard": "node --test tests/dashboard-shell.test.mjs && node --experimental-strip-types --test tests-ts/dashboard-update.test.ts",
+    "test:dashboard": "node --test tests/dashboard-shell.test.mjs && node --experimental-strip-types --test tests-ts/dashboard-update.test.ts tests-ts/dashboard-conformance.test.ts",
     "test:browser": "node scripts/run-browser-tests.mjs",
     "test:docs": "node --test tests/docs-site.test.mjs",
     "test:kiosk": "node --test tests/kiosk-runtime.test.mjs",

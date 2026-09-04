@@ -464,33 +464,52 @@ main[aria-busy="true"] .setup-progress { display: none; }
 .calendar-day button { width: 100%; display: grid; min-width: 0; padding: .35rem; margin-top: .35rem; overflow: hidden; border: 0; color: var(--on-primary); text-align: left; background: var(--primary); border-radius: .35rem; font-size: .66rem; font-weight: 750; cursor: pointer; }
 .calendar-day button span { opacity: .86; font-size: .6rem; font-weight: 500; }
 .attendance-state.active { color: #155eef; background: #eaf2ff; }
-.kiosk-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
-.kiosk-grid .task-card { min-width: 0; }
-.kiosk-state { display: flex; align-items: center; flex-wrap: wrap; gap: .45rem .7rem; }
-.kiosk-state-healthy { justify-content: center; min-height: 3.1rem; }
-.status-pill { display: inline-block; width: fit-content; padding: .35rem .75rem; border-radius: 2rem; font-size: .72rem; font-weight: 800; white-space: nowrap; }
-.status-pill.online { color: #075c43; background: #d7f5e9; }
-.status-pill.offline { color: #843a32; background: #fae4e1; }
-.kiosk-health-pill { display: inline-flex; align-items: center; min-height: 2.15rem; padding: .35rem .9rem; }
-.kiosk-grid dl { display: grid; gap: .4rem; }
-.kiosk-grid dl div { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem 0; border-bottom: 1px solid var(--line); }
-.kiosk-grid dt { color: var(--muted); }
-.kiosk-grid dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.kiosk-grid { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(17rem,.75fr); gap: var(--space-4); align-items: start; }
+.kiosk-grid .task-card { min-width: 0; padding: var(--card-padding); border-color: var(--ui-border); background: var(--ui-surface); border-radius: var(--radius-panel); }
+.kiosk-grid .task-card > h2,.kiosk-grid .task-card > p { margin-bottom: var(--space-2); }
+.kiosk-state { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); min-height: var(--control-min-block-size); margin: var(--space-3) 0 var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--ui-border); background: var(--ui-surface-subtle); border-radius: var(--radius-card); }
+.kiosk-state strong { min-width: 0; overflow-wrap: anywhere; }
+.status-pill { display: inline-flex; width: fit-content; align-items: center; min-height: 2rem; padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); font-family: var(--font-body); font-size: var(--text-caption); font-weight: 800; white-space: nowrap; }
+.kiosk-health-pill { min-height: var(--control-min-block-size); padding-inline: var(--space-4); }
+.kiosk-diagnostics { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 var(--space-5); margin: 0; }
+.kiosk-diagnostics div { display: grid; grid-template-columns: minmax(8rem,.7fr) minmax(0,1fr); gap: var(--space-3); align-items: center; min-width: 0; padding: var(--space-3) 0; border-bottom: 1px solid var(--ui-border); }
+.kiosk-diagnostics dt { color: var(--ui-text-muted); font-size: var(--text-small); }
+.kiosk-diagnostics dd { display: grid; justify-items: end; gap: var(--space-1); min-width: 0; margin: 0; text-align: right; overflow-wrap: anywhere; }
+.kiosk-diagnostics dd small { color: var(--ui-text-muted); font-size: var(--text-caption); }
+.kiosk-diagnostics .kiosk-diagnostic-error { grid-column: 1 / -1; border-color: color-mix(in srgb,var(--ui-error) 35%,var(--ui-border)); }
+.kiosk-diagnostic-error dd { color: var(--ui-error); }
 .kiosk-discord-status { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-top: var(--space-4); padding: var(--space-4); border: 1px solid var(--ui-border); background: var(--ui-surface-subtle); border-radius: var(--radius-card); }
 .kiosk-discord-status h3,.kiosk-discord-status p { margin: 0; }
 .kiosk-discord-status p { margin-top: var(--space-1); color: var(--ui-text-muted); font-size: var(--text-small); }
 .kiosk-discord-status button { flex: 0 0 auto; min-height: var(--control-min-block-size); padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface); border-radius: var(--radius-control); cursor: pointer; }
 .kiosk-discord-status button:disabled { cursor: wait; opacity: .65; }
-.kiosk-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .25rem; }
+.kiosk-discord-status.unavailable { border-style: dashed; }
+.kiosk-card-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-1); }
 .kiosk-card-heading h2 { margin: 0; }
 .kiosk-card-heading .primary-button { flex: 0 0 auto; width: auto; margin: 0; }
-.kiosk-actions { display: flex; align-items: end; flex-wrap: wrap; gap: .65rem; margin-top: 1rem; }
+.kiosk-actions { display: flex; align-items: end; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
 .kiosk-actions label { flex: 1 1 15rem; margin: 0; }
-.kiosk-actions input,.kiosk-pairing-dialog input { width: 100%; margin-top: .35rem; padding: .7rem; border: 1px solid var(--line); color: var(--ink); background: var(--bg); border-radius: .55rem; }
-.kiosk-actions button { min-height: 2.7rem; padding: .55rem .8rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface-soft); border-radius: .55rem; cursor: pointer; }
-.kiosk-pairing-dialog { width: min(42rem,100%); max-height: calc(100vh - 2rem); overflow: auto; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 1rem; box-shadow: 0 2rem 6rem rgba(0,0,0,.35); }
-.kiosk-pairing-dialog form { display: grid; gap: 1rem; padding: 1.25rem; }
+.kiosk-actions input,.kiosk-pairing-dialog input { width: 100%; min-height: var(--control-min-block-size); margin-top: var(--space-2); padding: var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); }
+.kiosk-actions button,.kiosk-actions .action-link { min-height: var(--control-min-block-size); display: inline-flex; align-items: center; justify-content: center; width: auto; margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); cursor: pointer; }
+.kiosk-actions .primary-button { border-color: var(--primary); color: var(--on-primary); background: var(--primary); }
+.kiosk-actions .danger-button { border-color: var(--ui-error); color: #fff; background: #a9322d; }
+.kiosk-maintenance { margin-top: var(--space-4); border-color: color-mix(in srgb,var(--ui-warning) 38%,var(--ui-border)); background: var(--ui-warning-surface); }
+.kiosk-maintenance p { margin: var(--space-1) 0 0; color: var(--ui-warning); }
+.kiosk-history h2 { margin-bottom: var(--space-3); }
+.kiosk-history .table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--ui-border); border-radius: var(--radius-card); }
+.kiosk-history .ui-table { min-width: 38rem; }
+.kiosk-history .ui-table td { overflow-wrap: anywhere; vertical-align: top; }
+.kiosk-notice { padding: var(--space-3) var(--space-4); border: 1px solid var(--ui-border); border-radius: var(--radius-card); }
+.kiosk-pairing-dialog { width: min(42rem,100%); max-height: calc(100vh - var(--space-8)); overflow: auto; }
+.kiosk-pairing-dialog form { display: grid; gap: var(--space-4); padding: var(--space-5); }
 .kiosk-pairing-dialog label { margin: 0; }
+.kiosk-pairing-dialog .installer-link { min-height: var(--control-min-block-size); display: inline-flex; align-items: center; width: fit-content; }
+.kiosk-pairing-dialog .check { min-height: var(--control-min-block-size); display: grid; grid-template-columns: auto minmax(0,1fr); gap: var(--space-3); align-items: center; cursor: pointer; }
+.kiosk-pairing-dialog .check input { width: 1.15rem; min-height: 1.15rem; margin: 0; }
+.kiosk-pairing-dialog > form > .primary-button { width: auto; margin: 0; justify-self: start; }
+.kiosk-pairing-dialog .pairing-key { margin: 0; }
+.kiosk-pairing-dialog .pairing-key button { min-height: var(--control-min-block-size); padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); }
+.kiosk-pairing-dialog .dialog-actions .primary-button { width: auto; margin: 0; }
 .logo-preview-grid { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .7rem; }
 .logo-preview-grid > div { display: grid; justify-items: start; gap: .6rem; min-width: 0; padding: 1rem; border: 1px solid var(--line); border-radius: .7rem; }
 .logo-preview-grid > div[data-preview-theme="light"] { color: #111714; background: #f3f5f2; }
@@ -1094,6 +1113,25 @@ label { font-size: .9rem; }
   .roster-summary-card { align-items: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) { .trend-chart span { transition: none; } }
+
+/* WU-058: dashboard-owned kiosk health and management conformance. */
+.page-stack[aria-labelledby="kiosks-title"] h1 { font-size: var(--text-page-heading); }
+.page-stack[aria-labelledby="kiosks-title"] h2,.kiosk-pairing-dialog h2 { font-size: var(--text-section-heading); }
+.page-stack[aria-labelledby="kiosks-title"] button:hover,.page-stack[aria-labelledby="kiosks-title"] a:hover,.kiosk-pairing-dialog button:hover,.kiosk-pairing-dialog a:hover { filter: brightness(.96); }
+.kiosk-pairing-dialog input:focus-visible,.kiosk-actions input:focus-visible { border-color: var(--primary); outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+@media (max-width: 900px) { .kiosk-grid { grid-template-columns: 1fr; } }
+@media (max-width: 760px) {
+  .kiosk-diagnostics { grid-template-columns: 1fr; }
+  .kiosk-diagnostics .kiosk-diagnostic-error { grid-column: auto; }
+  .kiosk-card-heading { align-items: stretch; flex-direction: column; }
+  .kiosk-card-heading .primary-button,.kiosk-actions button,.kiosk-actions .action-link { width: 100%; }
+  .kiosk-actions { display: grid; grid-template-columns: 1fr; align-items: stretch; }
+  .kiosk-actions label { min-width: 0; }
+  .kiosk-pairing-dialog form { padding: var(--space-4); }
+  .kiosk-pairing-dialog > form > .primary-button { width: 100%; justify-self: stretch; }
+  .kiosk-pairing-dialog .dialog-actions { display: grid; grid-template-columns: 1fr; }
+  .kiosk-pairing-dialog .dialog-actions button { width: 100%; }
+}
 
 :root { --simulator-surface: #424a53; }
 .simulator-kiosk { min-height: 480px; position: relative; grid-template-rows: auto 1fr auto; padding: 28px 32px 20px; color: #fff; background: var(--simulator-surface); text-align: center; overflow: hidden; }.simulator-origin { position: absolute; top: 14px; right: 18px; margin: 0; color: #f2c14e; font-size: .7rem; font-weight: 900; letter-spacing: .08em; }.simulator-kiosk .scan-panel { min-height: 320px; display: grid; justify-items: center; align-content: center; gap: 18px; }.simulator-kiosk .reader-mark { width: 132px; height: 132px; border-radius: 50%; border: 14px solid color-mix(in srgb,var(--simulator-surface),#000 34%); box-shadow: inset 0 0 0 18px var(--secondary); }.simulator-kiosk .scan-panel-processing .reader-mark { border-color: color-mix(in srgb,var(--secondary),#000 38%); }.simulator-kiosk .scan-panel-welcome .reader-mark,.simulator-kiosk .scan-panel-goodbye .reader-mark { border-color: color-mix(in srgb,var(--primary),#000 26%); }.simulator-kiosk .scan-panel-rejected .reader-mark { border-color: #b80100; }.simulator-kiosk h1 { max-width: 42rem; margin: 0; font-size: clamp(2rem,5vw,3.5rem); line-height: 1.08; }.simulator-kiosk .simulator-kicker,.simulator-kiosk .simulator-member { margin: 0; color: #fff; font-weight: 800; }.simulator-kiosk .simulator-kicker { color: #f2c14e; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }.simulator-kiosk .debug-status { width: min(720px,100%); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0; color: #d3d8df; font-size: .85rem; }.simulator-boundary { margin: 0; padding: .75rem 1rem; border: 1px solid var(--line); border-radius: .6rem; background: var(--surface-soft); color: var(--muted); }.simulator-controls button:disabled { cursor: wait; opacity: .65; }@media(max-width:760px){.simulator-kiosk{min-height:360px;padding:38px 20px 16px}.simulator-kiosk .scan-panel{min-height:250px}.simulator-kiosk .reader-mark{width:104px;height:104px;border-width:12px;box-shadow:inset 0 0 0 15px var(--secondary)}}

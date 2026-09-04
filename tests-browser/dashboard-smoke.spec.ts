@@ -240,13 +240,17 @@ test("global contest review distinguishes partial, missing, and complete raw sca
     }
     const widths = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
     expect(widths.scrollWidth).toBeLessThanOrEqual(widths.clientWidth);
+    await page.keyboard.press("Escape");
+    await expect(indicator).toBeFocused();
     const theme = page.getByRole("switch", { name: "Dark mode" });
     if (!await theme.isChecked()) await theme.click();
     await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
-    await theme.click();
-    await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
+    await indicator.click();
+    await expect(page.getByRole("dialog", { name: "Contests awaiting review" }).getByText("Partial — checked in, no check-out", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(indicator).toBeFocused();
+    await theme.click();
+    await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
   }
 });
 

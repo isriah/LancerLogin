@@ -759,7 +759,14 @@ Release: v0.15.0 Dashboard and meeting-workspace redesign.
 
 ### WU-050 — Updates-page latency and degraded loading
 
-Status: ready
+Status: merged (`d379e9e`)
+
+Owner: Codex task
+Branch: `codex/wu-050-updates-page-latency`
+Base: `75e9f9c9ceb10d8697ffc79f36326c5a97b1f224`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\wu050\\LancerLogin Workspace`
+Task: `01a06b0c-a678-7c43-9062-ddd2d7b90adf`
+Candidate: `d2f4ec1230aa05b34f4e67e690fbeeccb89f5303`; commit subject and Updates page/test files match this WU.
 
 Goal: make the Updates settings page usable promptly when the public release feed is slow or unavailable.
 Dependencies: none
@@ -767,7 +774,7 @@ Scope: bound the external release-check latency; prevent overlapping periodic re
 Sources: `docs/idea_inbox.md` (IN-066, IN-067); WU-023; `apps/dashboard/src/updates-page.tsx`; `apps/dashboard/src/update-indicator.tsx`; `apps/dashboard/src/dashboard-api.ts`; `docs/DASHBOARD.md`; `docs/BOOTSTRAPPING.md`.
 Acceptance: `/settings/updates` exits its loading overlay within a defined bounded interval even when the public release feed stalls; locally available installed-version, workflow, and kiosk information remains usable when the feed fails; the unavailable latest-release state is clear; periodic retries cannot accumulate concurrently; and successful update flows retain their current safeguards and outcomes.
 Verification: `npm run verify:dashboard`; focused mocked slow, unavailable, and recovered release-feed coverage; browser coverage for bounded loading, degraded local information, and non-overlapping refresh behavior.
-Release: next dashboard reliability bundle.
+Release: v0.16.0 Dashboard meeting-browser and update reliability release.
 
 ## Release bundling
 

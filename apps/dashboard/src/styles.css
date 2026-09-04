@@ -986,7 +986,7 @@ label { font-size: .9rem; }
 .reports-page h1,.roster-page h1,.member-detail-page h1 { font-size: var(--text-page-heading); }
 .reports-page h2,.roster-page h2,.member-detail-page h2,.roster-import-dialog h2,.member-dialog h2 { font-size: var(--text-section-heading); }
 .reports-page .task-card,.roster-page .task-card,.member-detail-page .task-card { border-color: var(--ui-border); color: var(--ui-text); background: var(--ui-surface); border-radius: var(--radius-panel); }
-.report-filters { display: grid; gap: var(--space-3); }
+.report-filters { display: grid; grid-template-columns: minmax(0,1fr); gap: var(--space-3); }
 .report-filter-heading,.report-action-card { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
 .report-filter-heading > div,.report-action-card > div { display: grid; gap: var(--space-1); min-width: 0; }
 .report-filter-heading h2,.report-filter-heading p,.report-action-card h2,.report-action-card p { margin: 0; }

@@ -339,9 +339,9 @@ test("reports are an operational workspace with filters, trend, saved views, and
 
 test("contest review requires a reason and keeps failures beside the unresolved contest", async () => {
   const reports = await readFile("apps/dashboard/src/reports-page.tsx", "utf8");
-  assert.match(reports, /const \[reviewError, setReviewError\] = useState\(""\)/);
+  assert.match(reports, /const\s*\[reviewError,\s*setReviewError\]\s*=\s*useState\(""\)/);
   assert.match(reports, /A review reason is required before resolving this contest\./);
-  assert.match(reports, /reviewNote: trimmedReviewNote/);
+  assert.match(reports, /reviewNote:\s*trimmedReviewNote/);
   assert.match(reports, /Contest resolution failed: \$\{message\}/);
   assert.match(reports, /Review reason<textarea[^>]+required aria-invalid=\{Boolean\(reviewError\)\}/);
   assert.match(reports, /id="contest-review-reason-error"[^>]+role="alert"/);
@@ -391,14 +391,14 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   assert.match(styles, /\.roster-directory \.roster-actions \{ width: 100%; justify-content: space-between/);
   assert.match(styles, /\.roster-row-actions button \{ min-height: 2\.25rem/);
   assert.match(roster, /className="roster-row-actions"/);
-  assert.match(roster, /discordConfigured \? " with-discord"/);
+  assert.match(roster, /discordConfigured\s*\?\s*" with-discord"/);
   assert.match(roster, /className="roster-action-cell"/);
   assert.match(styles, /\.panel-heading \{[^}]*align-items: center/);
   assert.match(styles, /\.roster-directory h2 \{ margin-bottom: 0/);
   assert.match(styles, /\.wizard-steps \.setup-finish-button \{[^}]*background: var\(--primary\)/);
   assert.match(setup, /className="primary-button setup-finish-button"/);
   assert.match(roster, /<span className="roster-action-cell" role="columnheader">Actions<\/span>/);
-  assert.doesNotMatch(roster, /current\.active \? "Active" : "Inactive"/);
+  assert.doesNotMatch(roster, /current\.active\s*\?\s*"Active"\s*:\s*"Inactive"/);
 });
 
 test("shared dashboard foundations expose reusable contract patterns", async () => {
@@ -437,10 +437,10 @@ test("Dashboard and meeting workspace apply the shared conformance contract", as
 test("roster discovery searches every requested member field and scopes active members", async () => {
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
-  assert.match(roster, /const \[query, setQuery\] = useState\(""\)/);
-  assert.match(roster, /const \[scope, setScope\] = useState<"active" \| "all">\("active"\)/);
-  assert.match(roster, /\$\{member\.firstName\} \$\{member\.lastName\} \$\{member\.email \?\? ""\} \$\{member\.memberId\}/);
-  assert.match(roster, /scope === "all" \|\| member\.active/);
+  assert.match(roster, /const\s*\[query,\s*setQuery\]\s*=\s*useState\(""\)/);
+  assert.match(roster, /const\s*\[scope,\s*setScope\]\s*=\s*useState<"active"\s*\|\s*"all">\("active"\)/);
+  assert.match(roster, /\$\{member\.firstName\} \$\{member\.lastName\} \$\{member\.email\s*\?\?\s*""\} \$\{member\.memberId\}/);
+  assert.match(roster, /scope\s*===\s*"all"\s*\|\|\s*member\.active/);
   assert.match(roster, /placeholder="Name, email, or member ID"/);
   assert.match(roster, /<option value="active">Active members<\/option>/);
   assert.match(roster, /<option value="all">All members<\/option>/);
@@ -461,9 +461,9 @@ test("member detail routes preserve deep links, history, and role-limited action
   assert.match(detail, /Check-out/);
   assert.match(roster, /attendanceRequiredFrom/);
   assert.match(detail, /Attendance required from/);
-  assert.match(detail, /role === "admin"/);
+  assert.match(detail, /role\s*===\s*"admin"/);
   assert.match(shell, /discordEnabled=\{integrations\.discord\.enabled\}/);
-  assert.match(detail, /discordEnabled && <div><dt>Discord identity<\/dt>/);
+  assert.match(detail, /discordEnabled\s*&&\s*<div><dt>Discord identity<\/dt>/);
   assert.match(detail, /detail\.member\.discordUserId/);
   assert.match(detail, /member-discord-unlinked">Not linked/);
 });
@@ -589,6 +589,6 @@ test("roster dialogs trap keyboard focus and restore it when closed", async () =
   const importer = await readFile("apps/dashboard/src/roster-import-panel.tsx", "utf8");
   assert.match(helper, /event\.key !== "Tab"/);
   assert.match(helper, /previouslyFocused\?\.focus\(\)/);
-  assert.match(roster, /useModalFocus\(dialog, open/);
-  assert.match(importer, /useModalFocus\(dialog, modal && visible/);
+  assert.match(roster, /useModalFocus\(dialog,\s*open/);
+  assert.match(importer, /useModalFocus\(dialog,\s*modal\s*&&\s*visible/);
 });

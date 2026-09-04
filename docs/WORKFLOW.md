@@ -60,7 +60,7 @@ To assess the whole ready ledger, use `$ll-coordinator assess all`. To approve i
 
 When a branch is ready, invoke `$ll-integrate WU-###`. Integration is serial: inspect the handoff, update the branch against current `main`, run affected verification, merge, and record the result. Archive the implementation task only after its final evidence is recorded.
 
-To integrate several completed branches without retyping IDs, use `$ll-integrate all`. It proposes the safe serial merge order and includes explicitly recorded detached candidates, but makes no changes. Approve its immediately preceding proposal with `$ll-integrate suggested`; it revalidates every candidate and stops at the first conflict or failed verification.
+To inspect several completed branches without making changes, use `$ll-integrate preview all`; it reports the safe serial merge order and includes explicitly recorded detached candidates. Use `$ll-integrate all` to authorize immediate integration of every eligible candidate. It reports the order and exclusions, revalidates each candidate before merging it, and stops at the first stale record, missing evidence, conflict, or failed verification.
 
 ### 6. Release deliberately
 
@@ -94,7 +94,7 @@ Scheduled tasks are for stable, periodic work such as a daily CI review, a relea
 - `$ll-wu-create`: turn a request into a proposed WU; no product implementation.
 - `$ll-inbox-process`: triage and promote approved inbox entries.
 - `$ll-wu-develop`: implement one selected WU.
-- `$ll-integrate`: review and merge one completed WU branch, or assess/approve a completed batch.
+- `$ll-integrate`: review and merge one completed WU branch, preview a completed batch, or integrate every eligible candidate.
 - `$ll-coordinator`: assess or launch a compatible implementation batch.
 - `$ll-release`: preview or package merged unreleased WUs.
 

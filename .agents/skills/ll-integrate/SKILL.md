@@ -7,10 +7,11 @@ description: "Review and serially merge completed LancerLogin work-unit branches
 
 Read `AGENTS.md`, `docs/WORKFLOW.md`, and `docs/future_work.md` before acting. Inspect the implementation handoff, its branch or recorded candidate commit, changed files, and verification. Read the relevant product documentation when the WU changes a high-risk surface.
 
-## Batch modes
+## Invocation modes
 
-- **all**: Read-only. Inspect every `in progress` WU. A candidate is eligible for proposal when either its recorded branch has a commit beyond its base, or its ledger entry explicitly records a detached candidate commit and Worktree. For current/future detached Worktrees, only associate a commit automatically when its subject starts with that WU ID. Propose the safe serial merge order, focused verification, and excluded units; do not change files.
-- **suggested**: Treat this as approval of the batch proposed by the immediately preceding `all` response in the same task. Re-read the ledger and revalidate every candidate. Integrate one proposed WU at a time using the procedure below. Stop at the first missing evidence, conflict, or failed verification; preserve remaining candidates and report the exact next action. Never start implementation tasks, release, deploy, or update the Pi.
+- **preview all**: Read-only. Inspect every `in progress` WU. A candidate is eligible when either its recorded branch has a commit beyond its base, or its ledger entry explicitly records a detached candidate commit and Worktree. For current/future detached Worktrees, only associate a commit automatically when its subject starts with that WU ID. Report the safe serial merge order, focused verification, and excluded units; do not change files.
+- **all**: Treat the invocation as explicit authorization to integrate every currently eligible candidate. Re-read the ledger, inspect every `in progress` WU using the `preview all` eligibility rules, and report the safe serial order, focused verification, and exclusions before starting. Then revalidate and integrate one eligible WU at a time using the procedure below. Stop at the first stale record, missing evidence, conflict, or failed verification; preserve the remaining candidates and report the exact next action. If no candidate is eligible, make no changes.
+- **suggested**: Unsupported. Explain that `preview all` is the read-only assessment and `all` authorizes immediate batch integration; do not integrate anything for this invocation.
 
 For a named WU, confirm that its scope, branch or recorded detached candidate, and commit match the ledger and that no other active WU owns the same branch or candidate.
 

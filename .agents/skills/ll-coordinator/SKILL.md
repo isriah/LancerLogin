@@ -15,7 +15,7 @@ Interpret the requested mode from the remaining prompt text. Accept individual W
 - **launch suggested**: Treat this as approval of the first parallel batch proposed by the immediately preceding `assess` response in this same task. Re-read the ledger and verify that every proposed WU is still `ready`, no new active WU overlaps it, and the selection has not changed. If it is still valid, launch exactly that batch. Otherwise, do not launch anything; provide a fresh assessment and wait for approval.
 - **integrate <WU-ID>**: Invoke `$ll-integrate <WU-ID>` and follow that skill.
 
-Use `$ll-integrate all` and `$ll-integrate suggested` for batch integration. Do not provide a separate coordinator integration mode.
+Use `$ll-integrate preview all` for a read-only integration assessment and `$ll-integrate all` to authorize immediate serial integration of every eligible candidate. Do not provide a separate coordinator integration mode.
 
 Treat a possible overlap in a migration/schema, shared contract, authorization policy, deployment configuration, or shared documentation as serial until inspection proves otherwise. Each implementation task has exactly one WU, one branch, and one Worktree. Never create a duplicate task for an active WU.
 

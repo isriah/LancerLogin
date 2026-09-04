@@ -56,7 +56,7 @@ Parallel development is permitted only for work units with no material overlap. 
 
 For approved independent units, create one Codex Worktree and one `codex/wu-<id>-<short-name>` branch per implementation task from a committed base. Implementation tasks change only their selected unit's code, tests, and directly relevant documentation; they do not edit this ledger, merge, release, deploy, or update the Pi. Integrate completed branches one at a time and then update this ledger with merge and release-bundle evidence.
 
-Implementation commits use the `WU-###:` prefix. If Codex produces a detached Worktree, retain it and record an explicit candidate commit/path; `$ll-integrate all` can propose it for review. Do not start a duplicate task for a WU with recorded branch, task, or candidate evidence.
+Implementation commits use the `WU-###:` prefix. If Codex produces a detached Worktree, retain it and record an explicit candidate commit/path; `$ll-integrate preview all` can propose it for review, and `$ll-integrate all` can include it in an authorized batch. Do not start a duplicate task for a WU with recorded branch, task, or candidate evidence.
 
 Use `docs/WORKFLOW.md` for the operating procedure and recovery guidance. Do not use a persistent coordinator or scheduled heartbeat to provision, poll, or recover a backlog. Planning, diagnosis, and review may run in parallel when they do not write shared state.
 

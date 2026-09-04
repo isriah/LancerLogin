@@ -16,7 +16,7 @@ Read `AGENTS.md`, `docs/WORKFLOW.md`, `docs/idea_inbox.md`, and `docs/future_wor
    - `in progress` units with a branch or explicitly recorded detached candidate that may be ready for integration;
    - `ready` units suitable for a next implementation batch; and
    - merged units that may be unreleased.
-3. For an integration candidate, use the read-only assessment criteria from `$ll-integrate all`. For ready units, use the read-only assessment criteria from `$ll-coordinator assess all` when a compatibility judgment is needed. Do not launch tasks, merge, or edit the ledger while making this view.
+3. For an integration candidate, use the read-only assessment criteria from `$ll-integrate preview all`. For ready units, use the read-only assessment criteria from `$ll-coordinator assess all` when a compatibility judgment is needed. Do not launch tasks, merge, or edit the ledger while making this view.
 
 Summarize only actionable items. For untriaged ideas, show the inbox ID and request without a candidate design. For each ready WU, show its ID, one-line outcome, dependencies or overlap, and focused verification. For integration candidates, show the WU ID, candidate evidence, and next verification. State clearly when a category has no actionable items.
 

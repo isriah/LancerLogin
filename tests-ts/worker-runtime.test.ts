@@ -890,6 +890,16 @@ test("Discord missing-member workflow mentions only linked absent members and re
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("Discord absence notices remain unavailable before the scheduled meeting start", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM meetings", { id: "meeting-1", title: "Studio", startsAt: new Date(Date.now() + 60_000).toISOString() });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/discord/missing", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 409);
+  assert.deepEqual(await result.json(), { error: "Attendance has not started for this meeting" });
+  assert.equal(database.calls.some((call) => call.sql.includes("discord_attendance_notifications")), false);
+});
+
 test("Discord calendar sync explains missing scheduled-event permission without exposing credentials", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
@@ -904,6 +914,21 @@ test("Discord calendar sync explains missing scheduled-event permission without 
     const body = await result.json() as { error: string };
     assert.match(body.error, /Manage Events permission/);
     assert.doesNotMatch(JSON.stringify(body), /discord-secret/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("individual Discord calendar sync stops after the scheduled meeting end", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2020-01-01T20:00:00Z", endsAt: "2020-01-01T21:00:00Z", notes: null });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let called = false;
+  globalThis.fetch = async () => { called = true; return new Response(); };
+  try {
+    const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(result.status, 409);
+    assert.deepEqual(await result.json(), { error: "Discord calendar sync is unavailable after the scheduled meeting end" });
+    assert.equal(called, false);
+    assert.equal(database.calls.some((call) => call.sql.includes("discord.calendar_synced")), false);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -957,6 +982,7 @@ test("Discord calendar sync retries a rate limit only after Discord's retry dela
 test("Operators can list and resolve Discord attendance contests", async () => {
   const database = new FakeDatabase();
   database.rows.set("google_enabled AS googleEnabled", { googleEnabled: 0, resendEnabled: 0, discordEnabled: 1 });
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ciphertext: "unused", iv: "unused", updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
   database.lists.set("FROM discord_attendance_contests c", [{ meetingId: "meeting-1", meetingTitle: "Studio", meetingStartsAt: "2026-08-30T20:00:00Z", memberId: "member-1", externalId: "A-1", firstName: "Avery", lastName: "Stone", status: "open", createdAt: "2026-08-30T00:00:00Z" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const cookie = await sessionCookie("operator");
@@ -975,6 +1001,19 @@ test("Operators can list and resolve Discord attendance contests", async () => {
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("UPDATE discord_attendance_contests")));
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO attendance_corrections")));
   assert.ok(database.calls.some((call) => call.values.includes("discord.contest_resolved")));
+});
+
+test("unverified Discord exposes no contest list or resolution operation", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ciphertext: "unused", iv: "unused", updatedAt: "2026-08-30T00:00:00Z", verifiedAt: null, enabled: 1 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("operator");
+  const listed = await worker.fetch(request("/discord/contests", undefined, { cookie }), env);
+  assert.equal(listed.status, 409);
+  assert.deepEqual(await listed.json(), { error: "Discord must be enabled and verified" });
+  const resolved = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved", reviewNote: "Verified in person." }, { cookie }), env);
+  assert.equal(resolved.status, 409);
+  assert.equal(database.batches.length, 0);
 });
 
 test("a signed Discord button creates a contest only for the delivered linked member", async () => {

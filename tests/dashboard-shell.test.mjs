@@ -98,7 +98,7 @@ test("guided setup keeps branding local and makes its compact progress accessibl
   assert.doesNotMatch(configuration, /Changes apply to every meeting/);
 });
 
-test("meeting detail keeps attendance operations focused and excludes displaced utilities", async () => {
+test("meeting detail keeps meeting-specific attendance, Discord, and contest operations together", async () => {
   const source = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
@@ -109,14 +109,19 @@ test("meeting detail keeps attendance operations focused and excludes displaced 
   assert.ok(source.includes('role === "admin" && <button type="button" disabled={row.disposition === "not_required"}'));
   assert.doesNotMatch(source, /\/admin\/kiosks|AttendanceCalendar|Export CSV/);
   assert.doesNotMatch(source, /\/discord\/link|Email missed|Email report/);
-  assert.doesNotMatch(source, /\/discord\/contests/);
-  assert.doesNotMatch(source, /Missing-member contests/);
+  assert.match(source, /\/discord\/calendar/);
+  assert.match(source, /\/discord\/missing/);
+  assert.match(source, /\/discord\/contests\?meetingId=/);
+  assert.match(source, /ContestReviewList contests=\{contests\}/);
+  assert.match(source, /clock <= Date\.parse\(meeting\.endsAt\)/);
+  assert.match(source, /clock >= Date\.parse\(meeting\.startsAt\)/);
   assert.match(meetings, /\/meetings\/\$\{encodeURIComponent\(editing\.id\)\}/);
   assert.match(meetings, /method: "DELETE"/);
   assert.match(meetings, /\/restore/);
   assert.match(meetings, /Delete this and future meetings/);
   assert.match(meetings, /<th>Date<\/th><th>Start<\/th><th>End<\/th>/);
   assert.match(meetings, /Sync all to Discord/);
+  assert.doesNotMatch(meetings, />Sync Discord<|calendarByMeeting/);
   assert.match(meetings, /calendarOutcomes/);
   assert.match(meetings, /addMinutes\(value\.date, startTime, 150\)/);
   assert.doesNotMatch(source, /Kiosk meeting ID/);
@@ -339,7 +344,9 @@ test("pending contests are signaled in the shell instead of occupying Reports", 
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(shell, /ContestIndicator/);
+  assert.match(shell, /ContestIndicator enabled=\{integrations\.discord\.configured\}/);
   assert.match(indicator, /\/discord\/contests/);
+  assert.match(indicator, /capabilities\.integrations\.discord\.configured/);
   assert.match(indicator, /aria-haspopup="dialog"/);
   assert.match(indicator, /useModalFocus/);
   assert.match(indicator, /contestsChangedEvent/);
@@ -490,8 +497,12 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /enabled && <details className="integration-details"/);
   assert.match(source, /method: "PATCH"/);
   assert.match(shell, /\/integrations\/capabilities/);
+  assert.match(shell, /HomePage[^>]+discordEnabled=\{integrations\.discord\.configured\}/);
+  assert.match(shell, /ReportsPage discordEnabled=\{integrations\.discord\.configured\}/);
   assert.match(meetings, /discordEnabled && <button.*Sync all to Discord/);
-  assert.doesNotMatch(attendance, /discordEnabled|Send Discord absence notice/);
+  assert.match(attendance, /capabilities\.integrations\.discord\.configured/);
+  assert.match(attendance, /Send Discord absence notice/);
+  assert.match(attendance, /Sync Discord calendar/);
   assert.doesNotMatch(source, /Previous credentials were replaced|\/test"/);
 });
 

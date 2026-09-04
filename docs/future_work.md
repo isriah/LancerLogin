@@ -1015,6 +1015,7 @@ Task: provisioning client `client-new-thread:f2caa650-435f-48d7-81d2-0ad3c1b54fc
 Recovery: the recorded provisioning client never produced an addressable task, and the detached Worktree remained at the recorded base with no candidate commit. A replacement task may be launched from current `main`; do not reuse the stale provisioning client.
 Replacement branch: `codex/wu-061-google-oauth-guidance-v2` (requested; provisioning Worktree)
 Replacement base: `dc72fcf`
+Replacement Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\cbca\\LancerLogin Workspace`
 Replacement task: provisioning client `client-new-thread:e674f441-5105-4192-a775-2ee93eb5da0e`
 
 Goal: make Google OAuth setup accurate, current, and easy to complete from either first-Admin setup or Settings without crowding the dashboard with screenshots.
@@ -1093,7 +1094,8 @@ Status: in progress
 
 Owner: Codex task
 Branch: `codex/wu-066-wide-desktop-dashboard` (requested; provisioning Worktree)
-Base: `dc72fcf`
+Base: `8122e57`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\1a4d\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:96955809-e03b-4bcf-8f6c-8a88b8d2be32`
 
 Goal: use wide desktop displays more effectively so the authenticated dashboard does not require browser zoom to avoid excessive side whitespace.
@@ -1110,7 +1112,8 @@ Status: in progress
 
 Owner: Codex task
 Branch: `codex/wu-067-contest-review-context` (requested; provisioning Worktree)
-Base: `dc72fcf`
+Base: `8122e57`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\d558\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:088b5b89-9cd0-43fb-9211-fc6ea30788fb`
 
 Goal: give reviewers enough member history and raw scan context to judge each attendance contest from either review surface.

@@ -817,6 +817,7 @@ Branch: `codex/wu-052-kiosk-scan-feedback` (requested; provisioning Worktree)
 Base: `bb9ecca51a4531ec4ed33efd345e46ca7f293877`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\3dd2\\LancerLogin Workspace` (detached)
 Task: `01a06b96-7800-7b51-af9b-502dd452c8bb`
+Candidate: `2cfb0d7f90d9bc83e2f9b4c5126fc19bc5bae991`; commit subject and kiosk presentation/test files match this WU.
 
 Goal: make scan processing, duplicate attendance, and offline outcomes immediately recognizable from the physical kiosk screen.
 Dependencies: none

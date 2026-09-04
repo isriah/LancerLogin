@@ -534,7 +534,13 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-036 — Member-detail Discord identity
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-036-member-discord-identity`
+Base: `171c559d1e78c4ae64d32a989591c37e332784f4`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\ad73\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:7010c0b8-d022-4070-aa3f-d6bf26cf9be5`
 
 Goal: show Discord linkage clearly on a member's detail page only while Discord integration is enabled.
 Dependencies: WU-039
@@ -613,7 +619,13 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-041 — Reports selector clarity and spacing
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-041-reports-selector-clarity`
+Base: `171c559d1e78c4ae64d32a989591c37e332784f4`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\de8b\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:84f36e78-e477-4df7-bc6b-7cbc294092f7`
 
 Goal: keep Reports selectors legible and explain the operational reporting-period choice.
 Dependencies: none
@@ -662,7 +674,13 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-044 — Canonical meeting-detail workspace
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-044-meeting-detail-workspace`
+Base: `171c559d1e78c4ae64d32a989591c37e332784f4`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\67e0\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:35c12d2f-7d14-4f7a-836f-7b34644d7da5`
 
 Goal: give every meeting one durable detail route containing its operational context and attendance workflow.
 Dependencies: none

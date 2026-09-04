@@ -373,7 +373,7 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
   const setup = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
-  assert.match(styles, /--card-padding: 1\.35rem/);
+  assert.match(styles, /--card-padding: var\(--space-5\)/);
   assert.match(styles, /\.kiosk-monitor[^\n]*padding: var\(--card-padding\)/);
   assert.match(styles, /\.attendance-layout \{[^}]*margin-top: 1rem/);
   assert.match(styles, /\.attendance-card \.panel-heading \{ padding: var\(--card-padding\)/);
@@ -399,6 +399,16 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   assert.match(setup, /className="primary-button setup-finish-button"/);
   assert.match(roster, /<span className="roster-action-cell">Actions<\/span>/);
   assert.doesNotMatch(roster, /current\.active \? "Active" : "Inactive"/);
+});
+
+test("shared dashboard foundations expose reusable contract patterns", async () => {
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  for (const pattern of ["ui-card", "ui-form", "ui-control", "ui-table", "ui-status", "ui-dialog", "ui-control-group"]) {
+    assert.match(styles, new RegExp(`\\.${pattern}`));
+  }
+  assert.match(styles, /\.ui-control[^}]*min-height: var\(--control-min-block-size\)/);
+  assert.match(styles, /\.ui-table th[^}]*font-size: var\(--text-caption\)/);
+  assert.match(styles, /\.ui-status\[data-tone="error"\][^}]*var\(--ui-error\)/);
 });
 
 test("roster discovery searches every requested member field and scopes active members", async () => {

@@ -1010,7 +1010,7 @@ Status: in progress
 Owner: Codex task
 Branch: `codex/wu-061-google-oauth-guidance` (requested; provisioning Worktree)
 Base: `64c5b1fa960ecb96127ee5b58addc75e363f8574`
-Worktree: provisioning
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\b57d\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:f2caa650-435f-48d7-81d2-0ad3c1b54fcb`
 
 Goal: make Google OAuth setup accurate, current, and easy to complete from either first-Admin setup or Settings without crowding the dashboard with screenshots.

@@ -925,7 +925,13 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-057 — Roster and reporting conformance
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-057-roster-reporting-conformance` (requested; provisioning Worktree)
+Base: `b84368d`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\c676\\LancerLogin Workspace` (detached)
+Task: provisioning client `client-new-thread:cc64a84b-fc1a-4c34-a46d-6c6242ad2cf9`
 
 Goal: make Reports, Roster, member detail, and member-management overlays consistently scannable and operable under the dashboard contract.
 Dependencies: WU-056

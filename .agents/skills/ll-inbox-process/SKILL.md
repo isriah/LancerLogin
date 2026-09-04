@@ -11,7 +11,8 @@ Read `AGENTS.md`, `docs/WORKFLOW.md`, `docs/idea_inbox.md`, and `docs/future_wor
 
 Do not modify product code, branches, task reservations, releases, deployment state, cloud resources, or the Pi during triage. Do not alter `docs/idea_inbox.md` or `docs/future_work.md` until the user approves candidates for promotion.
 
-- Consider only entries with `Status: untriaged`. If none exist, report that the durable inbox is empty; do not inspect task history to look for ideas and do not claim that unread task messages are complete.
+- At invocation, freeze the triage snapshot as the exact IDs and contents of entries currently marked `Status: untriaged`. Consider only those entries for this run. Inbox entries appended after the snapshot are outside the run and must remain untriaged and otherwise unchanged; their arrival alone is not a conflict and must not interrupt triage or promotion.
+- If the snapshot contains no entries, report that the durable inbox is empty; do not inspect task history to look for ideas and do not claim that unread task messages are complete.
 - Deduplicate and group only items that share a coherent user-visible outcome, surface, acceptance criteria, and focused verification.
 - Identify ideas already covered by an existing work unit and propose the smallest amendment or follow-up instead of a duplicate.
 - Split ideas that span independent surfaces, dependencies, or verification into separately selectable candidates.
@@ -25,8 +26,8 @@ Finish with a promotion-ready proposal that identifies the included `IN-###` ent
 
 When the user explicitly approves selected candidates in the same task, incorporate their feedback and automatically record those approved candidates as work units.
 
-- Re-read `docs/idea_inbox.md` and `docs/future_work.md` immediately before editing. Do not promote while another task is changing the ledger; report that conflict and ask the user to retry after it is resolved. Assign the next available WU IDs, use the documented work-unit format, and promote only the proposal's named `IN-###` entries.
+- Re-read `docs/idea_inbox.md` and `docs/future_work.md` immediately before editing. Continue when the only inbox change is the addition of entries outside the frozen snapshot, preserving those entries byte-for-byte. Stop if any snapshotted entry was changed, removed, or given a disposition, or if another task changed the work-unit ledger; report the exact conflict. Assign the next available WU IDs from the current ledger, use the documented work-unit format, and promote only the proposal's named snapshot IDs.
 - Set `Status: ready` only when the candidate is safe to implement; otherwise use `Status: blocked`. Add `Dependencies: none` or the exact WU/decision dependency to every new unit.
 - Add only the approved units. Change each source inbox entry to `promoted` and record its WU ID(s); use `covered` or `discarded` only when the user approves that disposition and state why. Do not reserve, create implementation tasks, merge, release, deploy, mutate cloud resources, or update the Pi.
-- Review the diff, preserve unrelated changes, and commit only `docs/idea_inbox.md` and `docs/future_work.md` with a concise inbox-promotion message.
+- Review the working and staged diffs, preserve unrelated changes, and commit only the approved snapshot promotions and their `docs/future_work.md` additions with a concise inbox-promotion message. When later inbox entries exist in the same file, stage only the approved promotion hunks and verify `git diff --cached` does not include those later entries; leave them uncommitted for their own future triage.
 - Report the created WU IDs, status, assumptions or blockers, and commit SHA. Do not ask for a redundant promotion confirmation after the user's approval.

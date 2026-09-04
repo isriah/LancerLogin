@@ -337,3 +337,59 @@ Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Add Discord pairing like the old system: a Discord command that accepts a member ID and pairs the Discord account with that member.
 Disposition: WU-032
+
+## IN-041
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Make the top-right Contests awaiting review notifier open a popup containing the same contest list as the card, so contests can be addressed there. In both views, show the contested date as well as the meeting name, and place the user ID next to the member name rather than next to the meeting title.
+Disposition: WU-034
+
+## IN-042
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Fix member deep links: clicking a member from Roster or Reports updates the browser URL to the member-detail route but does not change the displayed page. Use shared dashboard route state so the member-detail page renders after an in-app click.
+Disposition: WU-035
+
+## IN-043
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Show a member's Discord ID on their `/roster/[ID]` member-detail page.
+Disposition: WU-036
+
+## IN-044
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: On the member-detail page, show the Discord ID only when Discord integration is enabled; if integration is enabled but the member is unlinked, show a muted bubble indicating that state.
+Disposition: WU-036
+
+## IN-045
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Fix Attendance-page calendar selection: clicking a meeting does not properly switch the active meeting.
+Disposition: WU-037
+
+## IN-046
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Remove the Kiosk status is current. card from the Kiosks page.
+Disposition: WU-038
+
+## IN-047
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Add an enable toggle for each integration, defaulted off; show configuration options only when enabled. List integrations vertically with enabled entries above disabled ones, and render each disabled integration as one fully condensed row.
+Disposition: WU-039

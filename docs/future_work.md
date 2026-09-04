@@ -495,6 +495,78 @@ Acceptance: browser smoke exercises the current contest and destructive-action w
 Verification: `npm run test:browser`; `npm run verify:release`; exact main-branch GitHub Verify workflow.
 Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
+### WU-034 — Contest-review popup and context
+
+Status: ready
+
+Goal: let operators review pending attendance contests from the top-right notifier with enough meeting and member context to act confidently.
+Dependencies: none
+Scope: make the contest notifier open an accessible popup containing the actionable contest list; show the meeting occurrence date with its name and place the member ID beside the member name in both the popup and Home contest view. Preserve review-reason validation, contest policy, audit history, and existing resolution outcomes. Exclude notification delivery and unrelated Reports changes.
+Sources: `docs/idea_inbox.md` (IN-041); WU-019; WU-030; `apps/dashboard/src/contest-indicator.tsx`; `apps/dashboard/src/home-page.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`.
+Acceptance: the notifier opens a keyboard-accessible contest popup; each item shows member name and ID together plus meeting name and occurrence date; valid contest actions complete from the popup and Home with clear success or failure feedback.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused browser coverage for popup accessibility, contest context, and resolution actions.
+Release: v0.14.1 dashboard navigation and integration refinement.
+
+### WU-035 — Shared dashboard route-state repair
+
+Status: ready
+
+Goal: make in-app member links render the member-detail page immediately instead of changing only the browser URL.
+Dependencies: none
+Scope: repair the shared dashboard routing state used by Roster and Reports member links, including browser-history behavior. Preserve direct deep links, authorization, unknown-route handling, and other dashboard navigation. Exclude member-detail content changes.
+Sources: `docs/idea_inbox.md` (IN-042); WU-006; `apps/dashboard/src/router.tsx`; `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/roster-page.tsx`; `apps/dashboard/src/reports-page.tsx`; `docs/DASHBOARD.md`.
+Acceptance: clicking a member in Roster or Reports updates the URL and visible page in one action; Back/Forward and direct `/roster/[ID]` loads remain correct.
+Verification: `npm run verify:dashboard`; focused browser coverage for Roster/Reports navigation, direct loads, and browser history.
+Release: v0.14.1 dashboard navigation and integration refinement.
+
+### WU-036 — Member-detail Discord identity
+
+Status: ready
+
+Goal: show Discord linkage clearly on a member's detail page only while Discord integration is enabled.
+Dependencies: WU-039
+Scope: add the member's paired Discord ID to `/roster/[ID]` when Discord is enabled; show a muted unlinked-state bubble when enabled without a pairing; hide the field when Discord is disabled. Preserve pairing, access control, and credential secrecy. Exclude pairing or integration-configuration changes.
+Sources: `docs/idea_inbox.md` (IN-043, IN-044); WU-032; WU-039; `apps/dashboard/src/member-detail-page.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`; `docs/INTEGRATIONS.md`.
+Acceptance: enabled Discord shows either the paired ID or an accessible muted unlinked state on member detail; disabled Discord shows neither; no secret integration values are returned.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused conditional member-detail and authorization coverage.
+Release: v0.14.1 dashboard navigation and integration refinement.
+
+### WU-037 — Attendance calendar selection repair
+
+Status: ready
+
+Goal: make an Attendance calendar click select and display the intended current or past meeting.
+Dependencies: none
+Scope: synchronize Attendance calendar selection, route query state, and the meeting selector for current and past meetings. Preserve future-meeting routing to Meetings, attendance actions, and meeting eligibility semantics. Exclude calendar layout and meeting-edit behavior.
+Sources: `docs/idea_inbox.md` (IN-045); WU-014; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/router.tsx`; `docs/DASHBOARD.md`.
+Acceptance: clicking a current or past calendar meeting updates the selected meeting, URL, and displayed attendance together; future meetings still route to Meetings; direct query links and selector changes remain usable.
+Verification: `npm run verify:dashboard`; focused browser coverage for calendar selection, direct query loads, selector changes, and future-meeting routing.
+Release: v0.14.1 dashboard navigation and integration refinement.
+
+### WU-038 — Kiosks status-message cleanup
+
+Status: ready
+
+Goal: remove the redundant “Kiosk status is current.” message without hiding useful kiosk state or errors.
+Dependencies: none
+Scope: stop rendering the success message produced by a normal Kiosks status refresh while retaining loading, failure, action-result, device-health, and recovery feedback. Exclude kiosk API, hardware, pairing, and recovery behavior changes.
+Sources: `docs/idea_inbox.md` (IN-046); WU-017; `apps/dashboard/src/kiosks-page.tsx`; `docs/KIOSK.md`.
+Acceptance: a successful normal refresh does not render the named card; actionable kiosk status and operation feedback remain visible and accessible.
+Verification: `npm run verify:dashboard`; focused Kiosks-page coverage for successful loading, failures, and action results.
+Release: v0.14.1 dashboard navigation and integration refinement.
+
+### WU-039 — Explicit integration enablement
+
+Status: ready
+
+Goal: let Admins deliberately enable optional integrations and keep disabled integrations compact and out of operational workflows.
+Dependencies: none
+Scope: add a persisted enable toggle for Google, Resend, and Discord; default new or unconfigured integrations off while preserving existing configured integrations as enabled during migration; gate configuration controls and provider-powered workflows on enabled state; list enabled integrations above disabled ones and render disabled integrations as condensed rows. Preserve encrypted credentials, verification requirements, Google sign-in safety, authorization, and audit history. Exclude new providers and credential-format changes.
+Sources: `docs/idea_inbox.md` (IN-047); `apps/dashboard/src/integration-settings.tsx`; `apps/api/src/index.ts`; `apps/api/migrations/`; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `docs/DECISIONS.md`.
+Acceptance: each provider has an accessible persisted enable toggle; disabled providers expose no configuration form or operational delivery; enabled entries sort first; existing configured providers remain enabled after migration; Google cannot be disabled when that would remove the installation's only usable sign-in method.
+Verification: `npm run verify:migrations`, `npm run verify:api`, and `npm run verify:dashboard`; focused enable/disable, migration, provider-gating, Google lockout-prevention, sorting, and responsive accessibility coverage.
+Release: v0.14.1 dashboard navigation and integration refinement.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

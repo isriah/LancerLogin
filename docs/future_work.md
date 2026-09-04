@@ -965,13 +965,15 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-059 — Settings workspace conformance
 
-Status: in progress
+Status: merged (`34c25db`, corrected by `c5865d5`)
 
 Owner: Codex task
 Branch: `codex/wu-059-settings-workspace-conformance` (requested; provisioning Worktree)
 Base: `ae18d75`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\93cc\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:60d35335-3bd4-473a-902b-3fa205ba9b38`
+Candidate: `7cb7caf14f9fdf963d83396f12cc3449d138dfc6` (detached Worktree candidate; commit subject and all eight Settings route/test files match this WU).
+Integration: candidate `7cb7caf14f9fdf963d83396f12cc3449d138dfc6` was merged as `34c25dbed5dc14771bab8167028b14cc50dca47e`; integration review narrowed the new Settings form selectors so they could not override Reports controls in `c5865d5b61fedb1196783bf4bb5d57072ac1b0e6`. `npm run verify:api`, `npm run verify:dashboard`, the 6-test focused Settings matrix, the focused Reports selector regression, and the 98-test full browser suite passed on the corrected integrated code. No guidance changed, so `verify:docs` was not required.
 
 Goal: make every Settings category and its operational states conform to one predictable dashboard form and panel system.
 Dependencies: WU-058

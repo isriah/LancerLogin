@@ -241,6 +241,9 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(home, /MeetingsPage discordEnabled=\{discordEnabled\} navigate=\{navigate\} embedded meetings=\{meetings\} onMeetingsChange=\{load\}/);
   assert.match(home, /MeetingCreationDialog open=\{creating\}/);
   assert.match(meetings, /useModalFocus\(dialog, open, busy, close\)/);
+  assert.match(meetings, /useEffect\(\(\) => \{ if \(error\) errorAlert\.current\?\.focus\(\); \}, \[error\]\)/);
+  assert.match(meetings, /ref=\{errorAlert\} id="meeting-create-error"/);
+  assert.doesNotMatch(meetings, /requestAnimationFrame\(\(\) => document\.getElementById\("meeting-create-error"\)/);
   assert.match(meetings, /onCreated\(result\.meetings\.length\)/);
   assert.match(meetings, /Duplicate an existing meeting/);
   assert.match(home, /previousMonth/);

@@ -51,7 +51,8 @@ for (const viewport of mobileViewports) {
 
 test("mobile controls retain a 44px touch target", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/attendance");
+  await page.goto("/meetings/active-meeting");
+  await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
   const controls = await page.locator(".dashboard-shell button, .dashboard-shell input, .dashboard-shell select").evaluateAll((elements) =>
     elements.filter((element) => {
       const style = getComputedStyle(element);

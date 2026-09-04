@@ -552,7 +552,7 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-038 — Kiosks status-message cleanup
 
-Status: in progress
+Status: merged (`18443fa`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-038-kiosks-status-message-cleanup`

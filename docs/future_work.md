@@ -534,7 +534,7 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-036 — Member-detail Discord identity
 
-Status: in progress
+Status: merged (`e5cd88688bf1a4030cd6993711d51420ac8433d9`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-036-member-discord-identity`

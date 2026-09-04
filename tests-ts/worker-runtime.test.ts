@@ -1065,19 +1065,33 @@ test("Discord calendar sync retries a rate limit only after Discord's retry dela
   } finally { globalThis.fetch = originalFetch; globalThis.setTimeout = originalSetTimeout; }
 });
 
-test("Operators can list and resolve Discord attendance contests", async () => {
+test("Operators and Admins can list contest lifetime counts and raw partial, no-scan, and complete context", async () => {
   const database = new FakeDatabase();
   database.rows.set("google_enabled AS googleEnabled", { googleEnabled: 0, resendEnabled: 0, discordEnabled: 1 });
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ciphertext: "unused", iv: "unused", updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
-  database.lists.set("FROM discord_attendance_contests c", [{ meetingId: "meeting-1", meetingTitle: "Studio", meetingStartsAt: "2026-08-30T20:00:00Z", memberId: "member-1", externalId: "A-1", firstName: "Avery", lastName: "Stone", status: "open", createdAt: "2026-08-30T00:00:00Z" }]);
+  database.lists.set("FROM discord_attendance_contests c", [
+    { meetingId: "meeting-1", meetingTitle: "Studio", meetingStartsAt: "2026-08-30T20:00:00Z", memberId: "member-1", externalId: "A-1", firstName: "Avery", lastName: "Stone", status: "open", createdAt: "2026-08-30T00:00:00Z", lifetimeContestCount: 4, hasRawCheckIn: 1, hasRawCheckOut: 0 },
+    { meetingId: "meeting-1", meetingTitle: "Studio", meetingStartsAt: "2026-08-30T20:00:00Z", memberId: "member-2", externalId: "A-2", firstName: "Morgan", lastName: "Diaz", status: "reviewed", createdAt: "2026-08-29T00:00:00Z", lifetimeContestCount: 2, hasRawCheckIn: 0, hasRawCheckOut: 0 },
+    { meetingId: "meeting-1", meetingTitle: "Studio", meetingStartsAt: "2026-08-30T20:00:00Z", memberId: "member-3", externalId: "A-3", firstName: "Jordan", lastName: "Lee", status: "rejected", createdAt: "2026-08-28T00:00:00Z", lifetimeContestCount: 1, hasRawCheckIn: 1, hasRawCheckOut: 1 },
+  ]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const cookie = await sessionCookie("operator");
   const listed = await worker.fetch(request("/discord/contests?meetingId=meeting-1", undefined, { cookie }), env);
   assert.equal(listed.status, 200);
-  const contests = (await listed.json() as { contests: { meetingTitle: string; meetingStartsAt: string }[] }).contests;
-  assert.equal(contests.length, 1);
-  assert.deepEqual({ meetingTitle: contests[0].meetingTitle, meetingStartsAt: contests[0].meetingStartsAt }, { meetingTitle: "Studio", meetingStartsAt: "2026-08-30T20:00:00Z" });
-  assert.ok(database.calls.some((call) => call.sql.includes("mt.starts_at AS meetingStartsAt")));
+  const contests = (await listed.json() as { contests: { meetingTitle: string; meetingStartsAt: string; status: string; lifetimeContestCount: number; hasPartialScan: boolean; rawScanStatus: string }[] }).contests;
+  assert.deepEqual(contests.map(({ status, lifetimeContestCount, hasPartialScan, rawScanStatus }) => ({ status, lifetimeContestCount, hasPartialScan, rawScanStatus })), [
+    { status: "open", lifetimeContestCount: 4, hasPartialScan: true, rawScanStatus: "partial" },
+    { status: "reviewed", lifetimeContestCount: 2, hasPartialScan: false, rawScanStatus: "none" },
+    { status: "rejected", lifetimeContestCount: 1, hasPartialScan: false, rawScanStatus: "complete" },
+  ]);
+  const listQuery = database.calls.find((call) => call.sql.includes("FROM discord_attendance_contests c"));
+  assert.ok(listQuery?.sql.includes("mt.starts_at AS meetingStartsAt"));
+  assert.match(listQuery?.sql ?? "", /SELECT COUNT\(\*\) FROM discord_attendance_contests history WHERE history\.installation_id = c\.installation_id AND history\.member_id = c\.member_id/);
+  assert.doesNotMatch(listQuery?.sql ?? "", /history\.status/);
+  assert.match(listQuery?.sql ?? "", /FROM attendance_events check_in/);
+  assert.match(listQuery?.sql ?? "", /FROM attendance_events check_out/);
+  assert.doesNotMatch(listQuery?.sql ?? "", /attendance_corrections/);
+  assert.equal((await worker.fetch(request("/discord/contests", undefined, { cookie: await sessionCookie("admin") }), env)).status, 200);
   const missingReason = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved", reviewNote: "   " }, { cookie }), env);
   assert.equal(missingReason.status, 400);
   assert.deepEqual(await missingReason.json(), { error: "A review reason is required before resolving this contest" });
@@ -1093,6 +1107,8 @@ test("unverified Discord exposes no contest list or resolution operation", async
   const database = new FakeDatabase();
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ciphertext: "unused", iv: "unused", updatedAt: "2026-08-30T00:00:00Z", verifiedAt: null, enabled: 1 });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const unsigned = await worker.fetch(request("/discord/contests"), env);
+  assert.equal(unsigned.status, 401);
   const cookie = await sessionCookie("operator");
   const listed = await worker.fetch(request("/discord/contests", undefined, { cookie }), env);
   assert.equal(listed.status, 409);

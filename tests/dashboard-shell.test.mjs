@@ -364,6 +364,12 @@ test("pending contests use meeting detail and the global notifier instead of Das
   assert.match(reviewList, /meetingStartsAt/);
   assert.match(reviewList, /<strong>\{contest\.firstName\} \{contest\.lastName\}<small>\{contest\.externalId\}/);
   assert.match(reviewList, /contest\.meetingTitle.*occurrenceDate\(contest\)/s);
+  assert.match(reviewList, /Submitted contests/);
+  assert.match(reviewList, /contest\.lifetimeContestCount/);
+  assert.match(reviewList, /Meeting scans/);
+  assert.match(reviewList, /Partial — checked in, no check-out/);
+  assert.match(reviewList, /Complete — checked in and out/);
+  assert.match(reviewList, /No scans/);
   assert.match(reviewList, /A review reason is required before resolving this contest\./);
   assert.match(reviewList, /window\.dispatchEvent\(new Event\(contestsChangedEvent\)\)/);
   assert.doesNotMatch(home, /ContestReviewList|\/discord\/contests|Attendance contests/);

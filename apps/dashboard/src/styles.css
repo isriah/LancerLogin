@@ -564,6 +564,10 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .contest-review-list .contest-summary { display: grid; gap: .3rem; }
 .contest-review-list .contest-summary strong { display: flex; flex-wrap: wrap; gap: .45rem; align-items: baseline; }
 .contest-review-list .contest-summary small { color: var(--muted); font-size: .75rem; font-weight: 750; }
+.contest-review-list .contest-context { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; }
+.contest-review-list .contest-context > div { display: grid; grid-template-columns: minmax(7rem,auto) minmax(0,1fr); gap: var(--space-2); align-items: baseline; }
+.contest-review-list .contest-context dt { color: var(--ui-text-muted); font-size: var(--text-caption); font-weight: 750; }
+.contest-review-list .contest-context dd { margin: 0; color: var(--ui-text); font-size: var(--text-small); font-weight: 750; }
 .contest-review-list label { display: grid; gap: .35rem; margin: 0; font-weight: 750; }
 .contest-review-list textarea { width: 100%; min-height: 4.5rem; padding: .6rem; resize: vertical; border: 1px solid var(--line); color: var(--ink); background: var(--surface-soft); border-radius: .5rem; }
 .contest-review-list .inline-messages,.contest-review-list .contest-actions { grid-column: 1 / -1; }

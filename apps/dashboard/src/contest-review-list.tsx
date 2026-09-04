@@ -11,12 +11,16 @@ export type Contest = {
   lastName: string;
   status: "open" | "approved" | "rejected" | "reviewed";
   createdAt: string;
+  lifetimeContestCount: number;
+  hasPartialScan: boolean;
+  rawScanStatus: "none" | "partial" | "complete";
 };
 
 export const contestsChangedEvent = "lancerlogin:contests-changed";
 
 const contestKey = (contest: Contest) => `${contest.meetingId}:${contest.memberId}`;
 const occurrenceDate = (contest: Contest) => new Date(contest.meetingStartsAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+const rawScanLabel = (status: Contest["rawScanStatus"]) => status === "partial" ? "Partial — checked in, no check-out" : status === "complete" ? "Complete — checked in and out" : "No scans";
 
 export function ContestReviewList({ contests, onResolved }: { contests: Contest[]; onResolved?: (resolution: Contest["status"], contest: Contest) => void }) {
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -37,5 +41,5 @@ export function ContestReviewList({ contests, onResolved }: { contests: Contest[
     } finally { setBusy(""); }
   }
 
-  return <div className="contest-list contest-review-list">{contests.map((contest) => { const key = contestKey(contest); const error = errors[key]; const itemBusy = busy === key; return <article key={key}><div className="contest-summary"><strong>{contest.firstName} {contest.lastName}<small>{contest.externalId}</small></strong><span>{contest.meetingTitle} · {occurrenceDate(contest)}</span></div><label htmlFor={`contest-review-reason-${key}`}>Review reason<textarea id={`contest-review-reason-${key}`} value={notes[key] ?? ""} maxLength={500} required disabled={itemBusy} aria-invalid={Boolean(error)} aria-describedby={error ? `contest-review-error-${key}` : undefined} onChange={(event) => { const value = event.target.value; setNotes((current) => ({ ...current, [key]: value })); setErrors((current) => ({ ...current, [key]: "" })); }} /></label>{error && <p id={`contest-review-error-${key}`} className="inline-messages error" role="alert">{error}</p>}<div className="contest-actions"><button type="button" disabled={itemBusy} onClick={() => void resolve(contest, "reviewed")}>Keep attendance</button><button type="button" disabled={itemBusy} onClick={() => void resolve(contest, "rejected")}>Reject contest</button><button className="primary-button" type="button" disabled={itemBusy} onClick={() => void resolve(contest, "approved")}>Approve and mark present</button></div></article>; })}</div>;
+  return <div className="contest-list contest-review-list">{contests.map((contest) => { const key = contestKey(contest); const error = errors[key]; const itemBusy = busy === key; return <article key={key}><div className="contest-summary"><strong>{contest.firstName} {contest.lastName}<small>{contest.externalId}</small></strong><span>{contest.meetingTitle} · {occurrenceDate(contest)}</span><dl className="contest-context"><div><dt>Submitted contests</dt><dd>{contest.lifetimeContestCount}</dd></div><div><dt>Meeting scans</dt><dd>{rawScanLabel(contest.rawScanStatus)}</dd></div></dl></div><label htmlFor={`contest-review-reason-${key}`}>Review reason<textarea id={`contest-review-reason-${key}`} value={notes[key] ?? ""} maxLength={500} required disabled={itemBusy} aria-invalid={Boolean(error)} aria-describedby={error ? `contest-review-error-${key}` : undefined} onChange={(event) => { const value = event.target.value; setNotes((current) => ({ ...current, [key]: value })); setErrors((current) => ({ ...current, [key]: "" })); }} /></label>{error && <p id={`contest-review-error-${key}`} className="inline-messages error" role="alert">{error}</p>}<div className="contest-actions"><button type="button" disabled={itemBusy} onClick={() => void resolve(contest, "reviewed")}>Keep attendance</button><button type="button" disabled={itemBusy} onClick={() => void resolve(contest, "rejected")}>Reject contest</button><button className="primary-button" type="button" disabled={itemBusy} onClick={() => void resolve(contest, "approved")}>Approve and mark present</button></div></article>; })}</div>;
 }

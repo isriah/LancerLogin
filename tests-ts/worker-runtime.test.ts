@@ -449,6 +449,71 @@ test("kiosk heartbeats maintain one idempotent Discord status message and schedu
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("missing tracked Discord kiosk status messages are replaced and the new mapping is idempotent", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: "2026-08-29T00:00:00Z", readerOnline: 1, releaseVersion: "0.1.3" });
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z" });
+  database.rows.set("FROM integration_state", { externalId: "deleted-message", contentHash: "stale-content" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const outbound: Array<{ input: string; init?: RequestInit }> = []; let replacements = 0;
+  globalThis.fetch = async (input, init) => {
+    outbound.push({ input: String(input), init });
+    if (init?.method === "PATCH") return new Response(JSON.stringify({ code: 10_008, message: "Unknown Message" }), { status: 404, headers: { "content-type": "application/json" } });
+    replacements += 1;
+    return new Response(JSON.stringify({ id: `replacement-message-${replacements}` }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    const recovered = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(recovered.status, 200);
+    assert.deepEqual(await recovered.json(), { changed: true, messageId: "replacement-message-1", online: false });
+    assert.equal(outbound.length, 2);
+    assert.match(outbound[0].input, /channels\/223456789012345678\/messages\/deleted-message$/);
+    assert.equal(outbound[0].init?.method, "PATCH");
+    assert.match(outbound[1].input, /channels\/223456789012345678\/messages$/);
+    assert.equal(outbound[1].init?.method, "POST");
+    assert.deepEqual(JSON.parse(String(outbound[1].init?.body)).allowed_mentions, { parse: [] });
+
+    const replacementWrite = database.calls.find((call) => call.sql.includes("INSERT INTO integration_state") && call.values.includes("replacement-message-1"));
+    assert.ok(replacementWrite);
+    database.rows.set("FROM integration_state", { externalId: "replacement-message-1", contentHash: replacementWrite.values[1] });
+    const unchanged = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(unchanged.status, 200);
+    assert.deepEqual(await unchanged.json(), { changed: false, messageId: "replacement-message-1", online: false });
+    assert.equal(outbound.length, 2, "the persisted replacement mapping should prevent a follow-up Discord request");
+
+    database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: new Date().toISOString(), readerOnline: 1, releaseVersion: "0.1.3" });
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    assert.equal(outbound.length, 4, "scheduled reconciliation should also replace one missing tracked message");
+    assert.equal(outbound[2].init?.method, "PATCH");
+    assert.equal(outbound[3].init?.method, "POST");
+    assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO integration_state") && call.values.includes("replacement-message-2")));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Discord kiosk status does not recreate a message for unrelated Discord failures", async () => {
+  for (const failure of [
+    { status: 404, body: { code: 10_003, message: "Unknown Channel" } },
+    { status: 500, body: { message: "Internal Server Error" } },
+  ]) {
+    const database = new FakeDatabase();
+    const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+    database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: "2026-08-29T00:00:00Z", readerOnline: 1, releaseVersion: "0.1.3" });
+    database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z" });
+    database.rows.set("FROM integration_state", { externalId: "tracked-message", contentHash: "stale-content" });
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const originalFetch = globalThis.fetch; let outbound = 0;
+    globalThis.fetch = async () => { outbound += 1; return new Response(JSON.stringify(failure.body), { status: failure.status, headers: { "content-type": "application/json" } }); };
+    try {
+      const result = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
+      assert.equal(result.status, 502);
+      assert.match((await result.json() as { error: string }).error, new RegExp(`\\(${failure.status}\\)`));
+      assert.equal(outbound, 1);
+      assert.equal(database.calls.some((call) => call.sql.includes("INSERT INTO integration_state")), false);
+    } finally { globalThis.fetch = originalFetch; }
+  }
+});
+
 test("Operator can create meetings and reasoned attendance corrections", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;

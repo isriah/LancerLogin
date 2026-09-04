@@ -48,6 +48,28 @@ test("branding controls and dark surfaces are themed", async ({ page }) => {
   expect(background).toBe("rgb(17, 19, 21)");
 });
 
+test("theme switch supports keyboard, pointer, and saved state", async ({ page }) => {
+  await page.goto("/dashboard");
+  const toggle = page.getByRole("switch", { name: "Dark mode" });
+  await expect(toggle).toBeChecked();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
+
+  await toggle.press("Space");
+  await expect(toggle).not.toBeChecked();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
+  await expect(toggle.locator(".theme-toggle-label")).toHaveText("Light");
+  await page.reload();
+  await expect(page.getByRole("switch", { name: "Dark mode" })).not.toBeChecked();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
+
+  await page.getByRole("switch", { name: "Dark mode" }).click();
+  await expect(page.getByRole("switch", { name: "Dark mode" })).toBeChecked();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
+  await page.reload();
+  await expect(page.getByRole("switch", { name: "Dark mode" })).toBeChecked();
+  await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
+});
+
 test("half-width dashboard does not overflow", async ({ page }) => {
   await page.setViewportSize({ width: 700, height: 900 });
   await page.goto("/roster");

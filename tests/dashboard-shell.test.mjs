@@ -89,6 +89,8 @@ test("guided setup keeps branding local and makes its compact progress accessibl
   assert.match(entry, /brandTheme\(branding\.primaryColor, branding\.secondaryColor\)/);
   assert.match(entry, /data-theme=\{theme\}/);
   assert.match(entry, /lancerlogin-theme/);
+  assert.match(entry, /role="switch" aria-checked=\{dark\} aria-label="Dark mode"/);
+  assert.match(styles, /\.theme-toggle\[aria-checked="true"\] \.theme-toggle-track/);
   assert.match(workspace, /Logo contrast/);
   assert.match(settings, /id="organization-title">Organization/);
   assert.match(settings, /Save organization settings/);

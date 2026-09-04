@@ -965,7 +965,13 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-059 — Settings workspace conformance
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-059-settings-workspace-conformance` (requested; provisioning Worktree)
+Base: `ae18d75`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\93cc\\LancerLogin Workspace` (detached)
+Task: provisioning client `client-new-thread:60d35335-3bd4-473a-902b-3fa205ba9b38`
 
 Goal: make every Settings category and its operational states conform to one predictable dashboard form and panel system.
 Dependencies: WU-058

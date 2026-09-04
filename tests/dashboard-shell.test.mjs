@@ -98,14 +98,16 @@ test("guided setup keeps branding local and makes its compact progress accessibl
   assert.doesNotMatch(configuration, /Changes apply to every meeting/);
 });
 
-test("Operator workspace exposes kiosk monitoring without an Attendance contest-audit panel", async () => {
+test("meeting detail keeps attendance operations focused and excludes displaced utilities", async () => {
   const source = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
-  assert.match(source, /\/admin\/kiosks/);
-  assert.match(source, /Status refreshes every 30 seconds/);
-  assert.match(source, /Reader \$\{activeKiosk\.readerOnline/);
-  assert.match(source, /Release \$\{activeKiosk\.releaseVersion/);
+  assert.match(source, /Back to Dashboard/);
+  assert.match(source, /Switch meeting/);
+  assert.match(source, /Refresh attendance/);
+  assert.match(source, /Attendance closes/);
+  assert.ok(source.includes('role === "admin" && <button type="button" disabled={row.disposition === "not_required"}'));
+  assert.doesNotMatch(source, /\/admin\/kiosks|AttendanceCalendar|Export CSV/);
   assert.doesNotMatch(source, /\/discord\/link|Email missed|Email report/);
   assert.doesNotMatch(source, /\/discord\/contests/);
   assert.doesNotMatch(source, /Missing-member contests/);
@@ -221,7 +223,7 @@ test("settings subpages preserve the parent navigation bubble without duplicatin
   for (const source of [organization, configuration, integrations]) assert.doesNotMatch(source, /Changes apply after you save them|Changes apply to every meeting after you save them|Saved secret values are encrypted and never displayed/);
 });
 
-test("home shows a five-week rolling calendar, live attendance, and contest review", async () => {
+test("home shows a five-week rolling calendar, canonical meeting links, live attendance, and contest review", async () => {
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
@@ -236,10 +238,11 @@ test("home shows a five-week rolling calendar, live attendance, and contest revi
   assert.match(home, /Active · not checked out/);
   assert.match(home, /Attendance contests/);
   assert.match(home, /ContestReviewList/);
-  assert.match(home, /navigate\(`\/attendance\?meetingId=\$\{encodeURIComponent\(meeting\.id\)\}`\)/);
-  assert.match(attendance, /selectedMeetingId/);
-  assert.match(attendance, /const ordered = \[\.\.\.result\.meetings\]\.sort\(\(left, right\) => Date\.parse\(left\.startsAt\) - Date\.parse\(right\.startsAt\)\)/);
-  assert.match(shell, /new URLSearchParams\(search\)\.get\("meetingId"\)/);
+  assert.match(home, /navigate\(`\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}`\)/);
+  assert.match(attendance, /api<\{ meeting: Meeting \}>\(`\/meetings\/\$\{encodeURIComponent\(meetingId\)\}`\)/);
+  assert.match(shell, /path\.startsWith\("\/meetings\/"\)/);
+  assert.match(shell, /LegacyAttendanceRedirect/);
+  assert.match(shell, /navigate\(meetingId \? `\/meetings\/\$\{encodeURIComponent\(meetingId\)\}` : "\/dashboard", true\)/);
   assert.match(router, /search: window\.location\.search/);
 });
 
@@ -265,16 +268,17 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
 test("attendance actions preserve their layout and mute unavailable choices", async () => {
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
-  assert.match(attendance, /const latestCompleted = ordered\.filter\(\(meeting\) => Date\.parse\(meeting\.endsAt \?\? meeting\.startsAt\) <= Date\.now\(\)\)\.at\(-1\)/);
+  assert.match(attendance, /lifecycle === "in_progress" \|\| lifecycle === "late_scan_window"/);
+  assert.match(attendance, /setInterval\([\s\S]*30_000/);
   assert.match(attendance, /disabled=\{row\.disposition === "present"\}/);
   assert.match(attendance, /Optional note for marking \$\{row\.firstName\} present/);
   assert.match(attendance, /disposition !== "present" && !reason\.trim\(\)/);
   assert.match(attendance, /memberNotices\[row\.memberId\]/);
   assert.match(attendance, /window\.setTimeout/);
   assert.doesNotMatch(attendance, /Kiosk meeting ID|Copy ID|meeting data is current/i);
-  assert.match(attendance, /Send Discord absence notice/);
-  assert.match(attendance, /className="primary-button" type="button" disabled=\{!selected\}/);
-  assert.match(attendance, /toLocaleDateString\(\).*meeting\.title/);
+  assert.match(attendance, /Refresh attendance/);
+  assert.match(attendance, /navigate\(`\/meetings\/\$\{encodeURIComponent\(event\.target\.value\)\}`\)/);
+  assert.match(attendance, /toLocaleDateString\(\).*item\.title/);
   assert.doesNotMatch(attendance, /row\.disposition === "absent" && <button/);
   assert.match(styles, /grid-template-columns: minmax\(10rem,1fr\) 7rem 30rem/);
   assert.match(styles, /\.correction-actions button:disabled/);
@@ -465,7 +469,7 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /method: "PATCH"/);
   assert.match(shell, /\/integrations\/capabilities/);
   assert.match(meetings, /discordEnabled && <button.*Sync all to Discord/);
-  assert.match(attendance, /discordEnabled && <button.*Send Discord absence notice/);
+  assert.doesNotMatch(attendance, /discordEnabled|Send Discord absence notice/);
   assert.doesNotMatch(source, /Previous credentials were replaced|\/test"/);
 });
 

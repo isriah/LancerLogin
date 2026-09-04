@@ -8,7 +8,7 @@ const meetings = [
   { id: "past-regular", title: "Completed build session", startsAt: iso(-4 * 24 * 60), endsAt: iso(-4 * 24 * 60 + 120), attendanceClosesAt: iso(-4 * 24 * 60 + 150), required: 1, isTest: 0 },
   { id: "past-optional", title: "Completed open workshop", startsAt: iso(-3 * 24 * 60), endsAt: iso(-3 * 24 * 60 + 120), attendanceClosesAt: iso(-3 * 24 * 60 + 150), required: 0, isTest: 0 },
   { id: "past-test", title: "Completed test session", startsAt: iso(-2 * 24 * 60), endsAt: iso(-2 * 24 * 60 + 120), attendanceClosesAt: iso(-2 * 24 * 60 + 150), required: 1, isTest: 1 },
-  { id: "active-meeting", title: "Build session", startsAt: iso(-30), endsAt: iso(60), attendanceClosesAt: iso(90), required: 1, isTest: 0 },
+  { id: "active-meeting", title: "Build session", startsAt: iso(-30), endsAt: iso(60), attendanceClosesAt: iso(90), required: 1, isTest: 0, notes: "Bring safety glasses.", seriesId: "weekly-build", recurrenceFrequency: "weekly", recurrenceUntil: iso(28 * 24 * 60), recurrenceSequence: 2 },
   { id: "next-week", title: "Studio night", startsAt: iso(7 * 24 * 60), endsAt: iso(7 * 24 * 60 + 120), attendanceClosesAt: iso(7 * 24 * 60 + 150), required: 1, isTest: 0 },
 ];
 const members = [
@@ -22,11 +22,13 @@ const server = createServer((request, response) => {
   response.setHeader("access-control-allow-origin", origin); response.setHeader("access-control-allow-credentials", "true"); response.setHeader("content-type", "application/json");
   if (request.method === "OPTIONS") { response.statusCode = 204; response.end(); return; }
   const path = new URL(request.url ?? "/", `http://127.0.0.1:${port}`).pathname;
+  const requestedMeeting = path.startsWith("/meetings/") ? meetings.find((meeting) => meeting.id === decodeURIComponent(path.slice("/meetings/".length))) : undefined;
   const payload = path === "/setup/status" ? { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Nova Arts Collective", subtitle: "Make things together", logoData: logo, primaryColor: "#8b2f72", secondaryColor: "#e9b949", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } }
     : path === "/auth/session" ? { user: { role: "admin" } }
     : path === "/admin/setup/progress" ? { completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }
     : path === "/integrations/capabilities" ? { integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: true } } }
     : path === "/meetings" ? { meetings, lateScanMinutes: 30 }
+    : path.startsWith("/meetings/") ? requestedMeeting ? { meeting: requestedMeeting } : { error: "Meeting not found" }
     : path === "/meeting-templates" ? { templates: [] }
     : path === "/discord/contests" ? { contests: [{ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: meetings[2].startsAt, memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: iso(-5) }] }
     : path === "/attendance" ? { finalized: false, attendanceClosesAt: iso(90), attendance: [{ memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", disposition: "active", checkedInAt: iso(-20) }, { memberId: "member-2", externalId: "A-102", firstName: "Morgan", lastName: "Diaz", disposition: "present", checkedInAt: iso(-25), checkedOutAt: iso(-2) }, { memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", disposition: "absent" }] }

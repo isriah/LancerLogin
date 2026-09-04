@@ -8,7 +8,7 @@ import { completeKioskCommand, fetchKioskCommand, fetchKioskConfiguration, norma
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
 import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/src/r503.mjs";
-import { kioskApp, kioskHtml, kioskStatusStyles, kioskStyles } from "../apps/kiosk/src/ui.mjs";
+import { kioskApp, kioskHtml, kioskReaderStatus, kioskStatusStyles, kioskStyles } from "../apps/kiosk/src/ui.mjs";
 import { decodePairingKey } from "../apps/kiosk/src/pairing-key.mjs";
 import { createScanner } from "../apps/kiosk/src/scanner.mjs";
 import { createNetworkManager } from "../apps/kiosk/src/network-manager.mjs";
@@ -160,12 +160,14 @@ test("network policy grants only narrow NetworkManager actions to the kiosk acco
   assert.doesNotMatch(policy, /polkit\.Result\.YES[\s\S]*return polkit\.Result\.YES/);
 });
 
-test("local Wi-Fi scans require an active, unlocked network PIN session", async () => {
+test("loopback display state exposes only a safe release version and local Wi-Fi remains PIN-protected", async () => {
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-network-service-"));
   const previousPinPath = process.env.LANCERLOGIN_NETWORK_PIN;
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousReleaseVersion = process.env.LANCERLOGIN_VERSION;
   process.env.LANCERLOGIN_NETWORK_PIN = join(directory, "network-pin.json");
   process.env.NODE_ENV = "test";
+  delete process.env.LANCERLOGIN_VERSION;
   let service;
   try {
     service = await import("../apps/kiosk/src/service.mjs");
@@ -173,6 +175,16 @@ test("local Wi-Fi scans require an active, unlocked network PIN session", async 
     await new Promise((resolve) => service.server.listen(0, "127.0.0.1", resolve));
     const { port } = service.server.address();
     const request = (path, options) => fetch(`http://127.0.0.1:${port}${path}`, options);
+
+    assert.equal(service.localReleaseVersion("0.17.0"), "0.17.0");
+    assert.equal(service.localReleaseVersion("development"), "development");
+    assert.equal(service.localReleaseVersion(undefined), "development");
+    assert.equal(service.localReleaseVersion("private host detail"), "development");
+    const displayState = await (await request("/display-state")).json();
+    assert.equal(displayState.releaseVersion, "development");
+    assert.equal("credential" in displayState, false);
+    assert.equal("sensorPath" in displayState, false);
+    assert.equal("releaseVersion" in await (await request("/health")).json(), false);
 
     assert.equal((await request("/network/wifi")).status, 403);
     assert.equal((await request("/network/pin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: "123456" }) })).status, 201);
@@ -187,6 +199,7 @@ test("local Wi-Fi scans require an active, unlocked network PIN session", async 
     if (service?.server.listening) await new Promise((resolve, reject) => service.server.close((error) => error ? reject(error) : resolve()));
     if (previousPinPath === undefined) delete process.env.LANCERLOGIN_NETWORK_PIN; else process.env.LANCERLOGIN_NETWORK_PIN = previousPinPath;
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousNodeEnv;
+    if (previousReleaseVersion === undefined) delete process.env.LANCERLOGIN_VERSION; else process.env.LANCERLOGIN_VERSION = previousReleaseVersion;
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -390,4 +403,14 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(maintenanceApp, /buildSlotKeypad/);
   assert.match(recoveryApp, /displayReloadToken/);
   assert.doesNotMatch(kioskHtml, /https?:\/\//);
+});
+
+test("kiosk footer shows the release version without masking reader failures", () => {
+  assert.equal(kioskReaderStatus({ readerOnline: true, releaseVersion: "0.17.0" }), "LancerLogin 0.17.0");
+  assert.equal(kioskReaderStatus({ readerOnline: true, releaseVersion: "development" }), "LancerLogin development");
+  assert.equal(kioskReaderStatus({ readerOnline: true }), "LancerLogin development");
+  assert.equal(kioskReaderStatus({ readerOnline: true, releaseVersion: "  " }), "LancerLogin development");
+  assert.equal(kioskReaderStatus({ readerOnline: false, releaseVersion: "0.17.0" }), "Fingerprint reader offline");
+  assert.match(kioskApp, /kioskReaderStatus\(value\)/);
+  assert.doesNotMatch(kioskApp, /Fingerprint reader online/);
 });

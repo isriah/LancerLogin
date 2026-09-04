@@ -250,6 +250,7 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(home, /length: 35/);
   assert.match(home, /lancerlogin-dashboard-meeting-view/);
   assert.match(home, /Meeting view/);
+  assert.match(home, /className="meeting-browser-select"><span>Meeting<\/span><select className="ui-control ui-native-select"/);
   assert.match(home, /Add meeting/);
   assert.match(home, /setCalendarOffset/);
   assert.match(home, /MeetingsPage discordEnabled=\{discordEnabled\} navigate=\{navigate\} embedded meetings=\{meetings\} onMeetingsChange=\{load\}/);
@@ -432,6 +433,11 @@ test("Dashboard and meeting workspace apply the shared conformance contract", as
   assert.match(styles, /\.meeting-lifecycle\.in_progress[^}]*var\(--ui-success\)/);
   assert.match(styles, /\.attendance-state\.absent[^}]*var\(--ui-error\)/);
   assert.match(styles, /\.attendance-state\.excused[^}]*var\(--ui-warning\)/);
+  assert.match(styles, /\.ui-native-select \{[^}]*appearance: none[^}]*padding-right: var\(--space-12\)[^}]*var\(--ui-text-muted\)/);
+  assert.match(styles, /\.ui-native-select:hover:not\(:disabled\) \{[^}]*var\(--primary\)[^}]*var\(--ui-border\)/);
+  assert.match(styles, /\.ui-native-select:focus-visible \{[^}]*var\(--ui-focus\)/);
+  assert.match(styles, /\.ui-native-select:disabled \{[^}]*var\(--ui-text-muted\)[^}]*not-allowed/);
+  assert.match(styles, /\.meeting-browser-select \{[^}]*gap: var\(--space-2\)[^}]*font-family: var\(--font-body\)/);
 });
 
 test("roster discovery searches every requested member field and scopes active members", async () => {

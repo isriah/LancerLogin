@@ -16,6 +16,39 @@ test("roster stays primary and Admin actions open focused dialogs", async ({ pag
   await page.getByRole("button", { name: "Close add member dialog" }).click();
 });
 
+test("roster columns stay vertically centered with actions at the desktop right edge", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.route("**/admin/members", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      discordConfigured: true,
+      members: [{ id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", email: "avery@example.org", discordUserId: "123456789012", attendanceRequiredFrom: "2026-01-01", active: 1 }],
+    }),
+  }));
+  await page.goto("/roster");
+
+  const header = page.locator(".roster-row.header");
+  const row = page.locator(".roster-row:not(.header)").first();
+  const cells = row.locator(":scope > *");
+  await expect(cells).toHaveCount(4);
+  await expect(row.getByRole("button", { name: "Edit" })).toBeVisible();
+
+  const rowBounds = await row.boundingBox();
+  const cellBounds = await cells.evaluateAll((elements) => elements.map((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x, right: bounds.right, centerY: bounds.y + bounds.height / 2 };
+  }));
+  const headerCenters = await header.locator(":scope > *").evaluateAll((elements) => elements.map((element) => {
+    const bounds = element.getBoundingClientRect();
+    return bounds.y + bounds.height / 2;
+  }));
+  expect(rowBounds).not.toBeNull();
+  for (const cell of cellBounds) expect(Math.abs(cell.centerY - (rowBounds!.y + rowBounds!.height / 2))).toBeLessThanOrEqual(1);
+  for (const center of headerCenters) expect(Math.abs(center - headerCenters[0])).toBeLessThanOrEqual(1);
+  expect(cellBounds[3].x).toBeGreaterThan(cellBounds[2].right);
+});
+
 test("member links share route state across Roster, Reports, direct loads, and browser history", async ({ page }) => {
   await page.goto("/roster");
   await page.getByRole("link", { name: "Avery Stone" }).click();

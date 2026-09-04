@@ -355,9 +355,12 @@ main[aria-busy="true"] .setup-progress { display: none; }
 .roster-import { width: min(42rem,100%); }
 .roster-list { overflow: hidden; border: 1px solid var(--line); background: var(--surface); border-radius: .8rem; }
 .roster-row { display: grid; grid-template-columns: minmax(10rem,1fr) minmax(7rem,.5fr) minmax(15rem,max-content); gap: .8rem; align-items: center; min-width: 0; padding: .75rem 1rem; border-top: 1px solid var(--line); }
+.roster-row.with-discord { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(15rem,max-content); }
 .roster-row:first-child { border-top: 0; }
 .roster-row.header { color: var(--muted); background: var(--surface-soft); font-size: .7rem; font-weight: 800; text-transform: uppercase; }
-.roster-row > span:first-child { display: grid; min-width: 0; }
+.roster-row > * { align-self: center; }
+.roster-identity { display: grid; min-width: 0; }
+.roster-action-cell { justify-self: end; }
 .member-link,.back-link { color: var(--primary); text-decoration: none; }
 .member-link:hover,.back-link:hover { text-decoration: underline; }
 .roster-row small,.roster-row code { overflow-wrap: anywhere; color: var(--muted); }
@@ -450,7 +453,7 @@ code,a { overflow-wrap: anywhere; }
 p { overflow-wrap: break-word; text-wrap: pretty; }
 strong,small { overflow-wrap: break-word; }
 @media (max-width: 1050px) { .summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.data-category { grid-template-columns: repeat(2,minmax(0,1fr)); }.integration-grid { grid-template-columns: 1fr; }.user-layout { grid-template-columns: 1fr; }.user-list article { grid-template-columns: repeat(2,minmax(0,1fr)); } }
-@media (max-width: 760px) { .dashboard-toolbar { grid-template-columns: 1fr; }.sign-out-button { justify-self: end; }.two-column-page,.settings-form,.version-grid { grid-template-columns: 1fr; }.settings-form .logo-preview,.settings-form .color-grid,.settings-form > button { grid-column: auto; }.data-category,.reset-card { grid-template-columns: 1fr; }.summary-grid { grid-template-columns: 1fr; }.roster-row { grid-template-columns: minmax(9rem,1fr) 6rem; }.roster-row > span:last-child,.roster-row.header > span:last-child { display: none; } }
+@media (max-width: 760px) { .dashboard-toolbar { grid-template-columns: 1fr; }.sign-out-button { justify-self: end; }.two-column-page,.settings-form,.version-grid { grid-template-columns: 1fr; }.settings-form .logo-preview,.settings-form .color-grid,.settings-form > button { grid-column: auto; }.data-category,.reset-card { grid-template-columns: 1fr; }.summary-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .rolling-calendar { overflow-x: auto; }.calendar-weekdays,.calendar-grid { min-width: 48rem; }.live-roster,.kiosk-grid,.logo-preview-grid { grid-template-columns: 1fr; }.live-roster > div:nth-child(odd) { border-right: 0; }.settings-callout { display: grid; } }
 @media (prefers-reduced-motion: reduce) { .confetti { display: none; }.completion-dialog { animation: none; } }
 
@@ -533,6 +536,7 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .roster-row-actions button { min-height: 2.25rem; padding: .45rem .55rem; border: 1px solid var(--line); color: var(--ink); background: var(--surface-soft); border-radius: .45rem; font-weight: 750; cursor: pointer; }
 .roster-row-actions button:last-child { color: #843a32; border-color: #e5b6b0; background: #fae4e1; }
 .roster-directory h2 { margin-bottom: 0; }
+@media (max-width: 900px) { .roster-row,.roster-row.with-discord { grid-template-columns: minmax(0,1fr) auto; }.roster-row.header { display: none; }.roster-member-id,.roster-discord-id { display: grid; gap: .1rem; }.roster-member-id { justify-self: end; text-align: right; }.roster-member-id::before,.roster-discord-id::before { color: var(--muted); font-family: "Roboto",ui-sans-serif,system-ui,sans-serif; font-size: .68rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }.roster-member-id::before { content: "Member ID"; }.roster-discord-id { grid-column: 1 / -1; }.roster-discord-id::before { content: "Discord ID"; }.roster-action-cell { grid-column: 1 / -1; width: 100%; justify-self: stretch; }.roster-row-actions { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); width: 100%; }.roster-row-actions button { min-width: 0; } }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 1rem; background: rgba(5,12,9,.72); }
 .dialog-backdrop > [role="dialog"],.member-dialog { width: min(62rem,100%); max-height: calc(100vh - 2rem); overflow: auto; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 1rem; box-shadow: 0 2rem 6rem rgba(0,0,0,.35); }
 .roster-import-dialog,.member-dialog form { display: grid; gap: 1rem; padding: 1.25rem; }

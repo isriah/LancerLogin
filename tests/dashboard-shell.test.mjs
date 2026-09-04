@@ -332,16 +332,23 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   assert.match(styles, /\.leaderboard-card \{ grid-row: span 2; \}/);
   assert.match(styles, /\.roster-row-actions \{ display: flex/);
   assert.match(styles, /\.roster-row \{[^}]*minmax\(15rem,max-content\)/);
+  assert.match(styles, /\.roster-row\.with-discord \{[^}]*grid-template-columns:[^}]*minmax\(15rem,max-content\)/);
+  assert.match(styles, /\.roster-row > \* \{ align-self: center/);
+  assert.match(styles, /\.roster-action-cell \{ justify-self: end/);
+  assert.match(styles, /\.roster-row\.header \{ display: none/);
+  assert.match(styles, /\.roster-action-cell \{ grid-column: 1 \/ -1; width: 100%; justify-self: stretch/);
   assert.match(styles, /\.roster-actions \{[^}]*align-items: center/);
   assert.match(styles, /\.roster-directory \.panel-heading \{ align-items: start; flex-direction: column/);
   assert.match(styles, /\.roster-directory \.roster-actions \{ width: 100%; justify-content: space-between/);
   assert.match(styles, /\.roster-row-actions button \{ min-height: 2\.25rem/);
   assert.match(roster, /className="roster-row-actions"/);
+  assert.match(roster, /discordConfigured \? " with-discord"/);
+  assert.match(roster, /className="roster-action-cell"/);
   assert.match(styles, /\.panel-heading \{[^}]*align-items: center/);
   assert.match(styles, /\.roster-directory h2 \{ margin-bottom: 0/);
   assert.match(styles, /\.wizard-steps \.setup-finish-button \{[^}]*background: var\(--primary\)/);
   assert.match(setup, /className="primary-button setup-finish-button"/);
-  assert.match(roster, /<span>Actions<\/span>/);
+  assert.match(roster, /<span className="roster-action-cell">Actions<\/span>/);
   assert.doesNotMatch(roster, /current\.active \? "Active" : "Inactive"/);
 });
 

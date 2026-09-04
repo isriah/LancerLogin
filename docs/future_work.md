@@ -814,6 +814,22 @@ Acceptance: processing produces a bounded blue sweep; duplicate attendance produ
 Verification: `npm run verify:kiosk`; focused state-contract and CSS assertions plus physical-kiosk-sized browser coverage for processing, duplicate, offline success/failure, connectivity recovery, and reduced motion.
 Release: v0.17.0 kiosk status and scan-feedback release.
 
+### WU-053 — Dashboard visual-language standard
+
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-053-dashboard-ui-standard`
+Base: `2a5d0c3`
+
+Goal: give dashboard development one durable visual-language contract that reduces recurring spacing, typography, alignment, and native-control inconsistencies.
+Dependencies: none
+Scope: add the canonical dashboard UI standard and required planning/review checklist; route dashboard work to it from agent, dashboard, and development guidance; establish central semantic tokens for typography, spacing, control sizing, radii, surfaces, focus, and status roles; preserve the current Roboto/Bebas Neue identity through configurable font-role variables. Grandfather existing styling until its owning surface is intentionally changed. Exclude broad UI cleanup, a new style linter, formal WCAG conformance, kiosk and public-documentation styling, and end-user typography settings.
+Sources: user-approved Dashboard Visual-Language Standard plan; `apps/dashboard/src/styles.css`; `docs/DASHBOARD.md`; `docs/DEVELOPMENT.md`; WCAG 2.2 and WAI-ARIA Authoring Practices.
+Acceptance: future dashboard sessions have one mandatory, linked contract with explicit typography, spacing, alignment, form-control, responsive, theme, and accessibility defaults; the checklist requires documented exceptions and desktop/mobile, theme, keyboard, and control-state review; central font roles preserve the current rendered families and support later configuration without component-level font rewrites; no existing page is broadly restyled.
+Verification: `npm run verify:dashboard`; validate documentation links and checklist content; inspect representative dashboard markup for feasibility; confirm the font-role tokens preserve current Roboto/Bebas Neue rendering; manually exercise the checklist at 1280x900 and 390x844 in light, dark, and representative adopter-brand themes.
+Release: no immediate user-visible release impact; apply the contract to subsequently selected dashboard work.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

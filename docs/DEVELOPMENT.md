@@ -21,6 +21,10 @@ For a changed browser interaction, use `npm run test:browser -- <test-file-or--g
 
 If a change crosses areas, run each affected scope. Migration changes also require `npm run verify:migrations`.
 
+### Dashboard visual changes
+
+Read [UI-STANDARDS.md](UI-STANDARDS.md) before planning or changing dashboard presentation. Acceptance criteria and verification must cover the guide's required checklist: reused tokens and patterns, hierarchy and alignment, control states and keyboard focus, light/dark and representative adopter-brand themes, and the 1280x900 desktop and 390x844 mobile reference sizes. Record any deliberate exception in the work-unit handoff. Do not expand a focused change into a retrofit of unrelated legacy styling.
+
 ## Release preparation
 
 Run `npm run verify:all` once after the focused checks pass. It applies every D1 migration to a fresh isolated local database, typechecks all workspaces, runs the complete test suite, and produces all production builds.

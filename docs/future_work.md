@@ -1003,6 +1003,30 @@ Acceptance: the final matrix covers every governed page, subpage, popup, dialog,
 Verification: `npm run verify:api` if behavior-adjacent corrections occur; `npm run verify:dashboard`; complete focused conformance matrix; unfiltered browser suite; `npm run verify:release` during v0.19.0 packaging; exact-commit GitHub Verify before tagging.
 Release: v0.19.0 dashboard design conformance.
 
+### WU-061 — Google OAuth setup guidance
+
+Status: ready
+
+Goal: make Google OAuth setup accurate, current, and easy to complete from either first-Admin setup or Settings without crowding the dashboard with screenshots.
+Dependencies: none
+Scope: update the first-Admin and Settings > Integrations Google OAuth instructions to reflect the current Google Auth Platform flow and the setup choices available to adopters; replace long dashboard walkthroughs with concise safe guidance and a link to a thorough public documentation section containing sanitized Google-console screenshots; keep the exact installation-specific authorized redirect URI visible and copyable. Preserve OAuth scopes, client credential handling, active-Admin verification, Google-only lockout prevention, and the rule that dashboard UI does not embed setup screenshots. Exclude authentication-policy, provider-client, callback, credential-storage, and unrelated integration changes.
+Sources: `docs/idea_inbox.md` (IN-072); current official Google Auth Platform documentation; `apps/dashboard/src/main.tsx`; `apps/dashboard/src/integration-settings.tsx`; `docs-site/setup.html`; `docs-site/assets/google-oauth-setup.png`; `docs/BOOTSTRAPPING.md`; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `tests/docs-site.test.mjs`; `tests-browser/auth-setup-conformance.spec.ts`; `tests-browser/settings-conformance.spec.ts`.
+Acceptance: first-Admin setup and Settings > Integrations describe the currently available Google project, branding, audience, client, and verification choices without obsolete labels; both dashboard paths link to one thorough public guide; the public guide includes sanitized screenshots and the exact Pages callback pattern; no dashboard screenshot is added; and secrets, authorization, verification, and lockout safeguards remain unchanged.
+Verification: `npm run verify:dashboard`; `npm run verify:docs`; focused first-Admin and Integrations browser coverage for links, callback values, and responsive keyboard access; manually compare the public guide with current official Google Auth Platform guidance.
+Release: next documentation and setup-guidance bundle.
+
+### WU-062 — Public documentation visual conformance
+
+Status: ready
+
+Goal: make the complete public documentation site feel like LancerLogin while remaining readable, responsive, and accessible in light and dark environments.
+Dependencies: WU-061 (both units change the public setup guide, shared documentation styles, and documentation coverage; settle OAuth content before the site-wide presentation pass)
+Scope: restyle all public documentation pages and shared components using the dashboard visual language where it fits a task-first documentation site; use fixed primary `#B80100` and secondary `#EEB822` brand colors rather than adopter-configurable colors; provide complete light and dark palettes that follow the user's device preference; align typography, navigation, headings, cards, notices, controls, tables, code, screenshots, annotations, and footer treatment; preserve content, sanitized assets, static GitHub Pages hosting, task-first information architecture, and reduced-motion behavior. Exclude dashboard, kiosk, adopter branding configuration, documentation content expansion other than presentation-accessibility fixes, and client-side theme persistence or deployment changes.
+Sources: `docs/idea_inbox.md` (IN-073); `docs/UI-STANDARDS.md` as an applicable visual-language reference only; `docs-site/index.html`; `docs-site/setup.html`; `docs-site/kiosk.html`; `docs-site/operations.html`; `docs-site/privacy.html`; `docs-site/releases.html`; `docs-site/technical.html`; `docs-site/styles.css`; `docs-site/assets/`; `tests/docs-site.test.mjs`; `.github/workflows/docs.yml`.
+Acceptance: every public page uses the fixed red/gold identity consistently; light and dark device preferences produce complete high-contrast palettes without flashes, unreadable states, clipped content, or horizontal page overflow; navigation, focus, headings, links, notices, tables, code, screenshots, and annotations remain understandable by keyboard and at desktop and mobile widths; existing documentation content and links remain intact; no adopter-controlled color or dashboard/kiosk presentation changes are introduced.
+Verification: `npm run verify:docs`; add focused structural assertions for brand tokens, light/dark support, focus, and shared page wiring; browser-check all seven pages at 1280x900 and 390x844 in light and dark modes with keyboard navigation, reduced motion, screenshot/table overflow, and contrast review.
+Release: next public-documentation visual refresh.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

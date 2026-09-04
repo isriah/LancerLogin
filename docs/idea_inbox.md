@@ -585,3 +585,19 @@ Recorded: 2026-09-04
 Source: WU Idea Inbox
 Request: In offline mode, flash the kiosk screen green or red as appropriate when a fingerprint is recognized or not recognized, and pulse the network-connectivity icon to make the offline state clear.
 Disposition: WU-052
+
+## IN-072
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Update Google OAuth integration setup instructions to match the actual process and available options. Do not add dashboard screenshots; link from the dashboard to more thorough documentation that includes screenshots.
+Disposition: WU-061
+
+## IN-073
+
+Status: promoted
+Recorded: 2026-09-04
+Source: WU Idea Inbox
+Request: Perform a full documentation styling pass to match the web-dashboard branding and style guides. Use fixed primary and secondary colors `#B80100` and `#EEB822` rather than customizable colors, and support light and dark mode.
+Disposition: WU-062

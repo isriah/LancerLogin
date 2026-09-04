@@ -1090,13 +1090,14 @@ Release: later Discord channel-management feature bundle after its dependencies 
 
 ### WU-066 — Wide-desktop dashboard utilization
 
-Status: in progress
+Status: merged (`2cbb739`)
 
 Owner: Codex task
 Branch: `codex/wu-066-wide-desktop-dashboard`
 Base: `8122e57`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\1a4d\\LancerLogin Workspace`
 Task: `01a06ecc-b195-77b2-a9f9-7527edf4f914` (provisioned from client `client-new-thread:96955809-e03b-4bcf-8f6c-8a88b8d2be32`)
+Integration: candidate `410107f578315a6d07cad2cb9b08e07d22745eb7` was merged as `2cbb7391bc15e2a42b8bd4367935357835d7c151`. `npm run verify:dashboard` and the 108-test unfiltered browser suite passed on the integrated tree. The six-case all-route audit covered 2560x1440, 1280x900, and 390x844 in light/dark modes; focused coverage also passed for representative adopter colors, keyboard focus/return, responsive navigation, dialogs, tables, clipping, and page overflow. No standards exception remains.
 
 Goal: use wide desktop displays more effectively so the authenticated dashboard does not require browser zoom to avoid excessive side whitespace.
 Dependencies: WU-063 (both units change shared dashboard layout styling; integrate the focused selector work first)

@@ -422,6 +422,10 @@ main[aria-busy="true"] .setup-progress { display: none; }
 .ui-form { display: grid; gap: var(--space-3); }
 .ui-form > label { min-width: 0; margin: 0; }
 .ui-control,.ui-form input,.ui-form select,.ui-form textarea { width: 100%; min-height: var(--control-min-block-size); padding: var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); }
+.ui-native-select { appearance: none; padding-right: var(--space-12); background-image: linear-gradient(45deg,transparent 50%,var(--ui-text-muted) 50%),linear-gradient(135deg,var(--ui-text-muted) 50%,transparent 50%); background-position: calc(100% - 1.5rem) calc(50% + .1rem),calc(100% - 1.12rem) calc(50% + .1rem); background-size: .38rem .38rem,.38rem .38rem; background-repeat: no-repeat; cursor: pointer; }
+.ui-native-select:hover:not(:disabled) { border-color: color-mix(in srgb,var(--primary) 55%,var(--ui-border)); }
+.ui-native-select:focus-visible { border-color: var(--primary); outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+.ui-native-select:disabled { color: var(--ui-text-muted); background-color: var(--ui-surface-subtle); cursor: not-allowed; opacity: .7; }
 .ui-table { width: 100%; border-collapse: collapse; color: var(--ui-text); background: var(--ui-surface); }
 .ui-table th,.ui-table td { padding: var(--space-3); border-bottom: 1px solid var(--ui-border); text-align: left; }
 .ui-table th { color: var(--ui-text-muted); font-size: var(--text-caption); }
@@ -802,6 +806,8 @@ label { font-size: .9rem; }
 .meeting-browser-controls { grid-template-columns: minmax(15rem,.75fr) minmax(18rem,1fr) auto; gap: var(--space-4); align-items: end; padding: var(--space-4); border-color: var(--ui-border); background: var(--ui-surface); border-radius: var(--radius-panel); }
 .meeting-browser-controls > .primary-button { width: auto; min-height: var(--control-min-block-size); padding: var(--space-3) var(--space-4); border-radius: var(--radius-control); }
 .meeting-browser-controls > label,.meeting-view-toggle legend { color: var(--ui-text-muted); font-size: var(--text-caption); }
+.meeting-browser-select { display: grid; gap: var(--space-2); font-family: var(--font-body); font-weight: 800; }
+.meeting-browser-select select { min-width: 0; margin: 0; color: var(--ui-text); font-family: var(--font-body); font-size: var(--text-body); font-weight: 400; }
 .meeting-view-toggle legend { margin-bottom: var(--space-2); }
 .meeting-view-toggle > div { width: 100%; padding: var(--space-1); border-color: var(--ui-border); background: var(--ui-surface-subtle); border-radius: var(--radius-card); }
 .meeting-view-toggle label { min-height: var(--control-min-block-size); padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); }

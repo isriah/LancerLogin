@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 
 test("Dashboard owns meeting navigation and remembers the selected browser", async ({ page }) => {
   await page.goto("/dashboard");
@@ -30,8 +31,11 @@ test("calendar range controls and all meeting choices open canonical detail rout
   await page.getByRole("button", { name: "Show previous five weeks" }).click();
   await expect(range).toHaveText(initialRange!);
 
-  await page.getByRole("combobox", { name: "Meeting" }).selectOption("active-meeting");
-  await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
+  const meetingSelector = page.getByRole("combobox", { name: "Meeting" });
+  await meetingSelector.focus();
+  await expect(meetingSelector).toBeFocused();
+  await meetingSelector.press("End");
+  await expect(page).toHaveURL(/\/meetings\/next-week$/);
   await page.goBack();
   await expect(page).toHaveURL(/\/dashboard$/);
   await page.locator('.calendar-day button[title^="Build session,"]').click();
@@ -40,6 +44,70 @@ test("calendar range controls and all meeting choices open canonical detail rout
   await page.goForward();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
 });
+
+for (const viewport of dashboardConformanceReferences.viewports) {
+  for (const theme of dashboardConformanceReferences.themes) {
+    test(`Dashboard meeting selector conforms at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+      await page.route("**/setup/status", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          configured: true,
+          installation: { authMode: "local" },
+          settings: {
+            organizationName: "Reference Arts Collective",
+            subtitle: "Shared operations",
+            logoData: "",
+            primaryColor: dashboardConformanceReferences.brand.primary,
+            secondaryColor: dashboardConformanceReferences.brand.secondary,
+            appearance: theme,
+            logoBackdrop: "auto",
+            lateScanMinutes: 30,
+            discordContestWindowHours: 24,
+          },
+        }),
+      }));
+
+      await page.goto("/dashboard");
+      const selector = page.getByRole("combobox", { name: "Meeting" });
+      await expect(selector).toBeVisible();
+      await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+      await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
+
+      const appearance = await selector.evaluate((element) => {
+        const select = element as HTMLSelectElement;
+        const style = getComputedStyle(select);
+        const bounds = select.getBoundingClientRect();
+        return {
+          appearance: style.appearance,
+          backgroundImage: style.backgroundImage,
+          borderRadius: style.borderRadius,
+          fontFamily: style.fontFamily,
+          height: bounds.height,
+          clipped: bounds.left < 0 || bounds.right > innerWidth,
+          pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      });
+      expect(appearance.appearance).toBe("none");
+      expect(appearance.backgroundImage).not.toBe("none");
+      expect(appearance.borderRadius).not.toBe("0px");
+      expect(appearance.fontFamily).toContain("Roboto");
+      expect(appearance.height).toBeGreaterThanOrEqual(44);
+      expect(appearance.clipped).toBe(false);
+      expect(appearance.pageOverflow).toBeLessThanOrEqual(0);
+
+      await selector.focus();
+      await expect(selector).toBeFocused();
+      await expect(selector).toHaveCSS("outline-style", "solid");
+      await selector.evaluate((element) => element.setAttribute("disabled", ""));
+      await expect(selector).toBeDisabled();
+      await expect(selector).toHaveCSS("cursor", "not-allowed");
+      await expect(selector).toHaveCSS("opacity", "0.7");
+    });
+  }
+}
 
 test("legacy Meetings opens the searchable Dashboard table and rows navigate independently", async ({ page }) => {
   await page.goto("/meetings");

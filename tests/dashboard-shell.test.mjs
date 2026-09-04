@@ -411,6 +411,29 @@ test("shared dashboard foundations expose reusable contract patterns", async () 
   assert.match(styles, /\.ui-status\[data-tone="error"\][^}]*var\(--ui-error\)/);
 });
 
+test("Dashboard and meeting workspace apply the shared conformance contract", async () => {
+  const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
+  const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
+  const management = await readFile("apps/dashboard/src/meeting-management.tsx", "utf8");
+  const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  assert.match(home, /dashboard-meeting-status[^>]+data-tone=\{noticeTone\}/);
+  assert.match(home, /No meetings are scheduled in this five-week range\./);
+  assert.match(meetings, /meeting-directory-heading/);
+  assert.match(meetings, /className="ui-table"/);
+  assert.match(meetings, /data-tone=\{calendarAllTone\}/);
+  assert.match(management, /aria-describedby=\{descriptionId\}/);
+  assert.match(attendance, /role="columnheader"/);
+  assert.match(attendance, /data-tone=\{discordNoticeTone\}/);
+  assert.match(attendance, /className="empty-page ui-card"/);
+  for (const selector of ["meeting-browser-controls", "dashboard-meeting-calendar", "meeting-detail-heading", "meeting-lifecycle", "attendance-state", "meeting-management-dialog"]) {
+    assert.match(styles, new RegExp(`\\.${selector}`));
+  }
+  assert.match(styles, /\.meeting-lifecycle\.in_progress[^}]*var\(--ui-success\)/);
+  assert.match(styles, /\.attendance-state\.absent[^}]*var\(--ui-error\)/);
+  assert.match(styles, /\.attendance-state\.excused[^}]*var\(--ui-warning\)/);
+});
+
 test("roster discovery searches every requested member field and scopes active members", async () => {
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");

@@ -42,8 +42,9 @@ export function MeetingFields({ value, onChange, initialFocus = false }: { value
 function ManagementDialog({ titleId, title, description, busy, onClose, children }: { titleId: string; title: string; description: string; busy: boolean; onClose: () => void; children: ReactNode }) {
   const dialog = useRef<HTMLElement>(null);
   useModalFocus(dialog, true, busy, onClose);
-  return <div className="dialog-backdrop"><section ref={dialog} className="meeting-management-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
-    <div className="dialog-heading"><div><h2 id={titleId}>{title}</h2><p>{description}</p></div><button type="button" aria-label={`Close ${title.toLocaleLowerCase()}`} disabled={busy} onClick={onClose}>×</button></div>
+  const descriptionId = `${titleId}-description`;
+  return <div className="dialog-backdrop"><section ref={dialog} className="meeting-management-dialog ui-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} aria-busy={busy} tabIndex={-1}>
+    <div className="dialog-heading"><div><h2 id={titleId}>{title}</h2><p id={descriptionId}>{description}</p></div><button type="button" aria-label={`Close ${title.toLocaleLowerCase()}`} disabled={busy} onClick={onClose}>×</button></div>
     {children}
   </section></div>;
 }

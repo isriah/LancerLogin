@@ -113,13 +113,40 @@ test("Kiosks hides routine refresh success and preserves action feedback", async
   await page.route("**/admin/kiosks/kiosk-1", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
   await page.goto("/kiosks");
   await expect(page.getByRole("heading", { name: "Kiosks", exact: true })).toBeVisible();
+  const physicalKiosk = page.locator(".kiosk-grid > .task-card").filter({ has: page.getByRole("heading", { name: "Physical kiosk" }) });
+  const replaceButton = physicalKiosk.getByRole("button", { name: "Replace kiosk" });
+  await expect(replaceButton).toBeVisible();
+  await expect(page.locator(".page-intro").getByRole("button", { name: "Replace kiosk" })).toHaveCount(0);
   await expect(page.getByText("Kiosk status is current.")).toHaveCount(0);
   await expect(page.locator(".setup-status")).toHaveCount(0);
+
+  await replaceButton.click();
+  const dialog = page.getByRole("dialog", { name: "Replace physical kiosk" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("redeeming this key retires Front desk")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Create one-time pairing key" })).toBeDisabled();
+  await dialog.getByRole("checkbox").check();
+  await expect(dialog.getByRole("button", { name: "Create one-time pairing key" })).toBeEnabled();
+  await dialog.getByRole("button", { name: "Close pairing dialog" }).click();
 
   await page.getByRole("button", { name: "Rename" }).click();
   await page.getByLabel("Device name").fill("Lobby kiosk");
   await page.getByRole("button", { name: "Save name" }).click();
   await expect(page.getByRole("status")).toHaveText("Kiosk renamed.");
+});
+
+test("Kiosks keeps pairing actions Admin-only and contained on narrow screens", async ({ page }) => {
+  await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role: "operator" } }) }));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/kiosks");
+
+  const physicalKiosk = page.locator(".kiosk-grid > .task-card").filter({ has: page.getByRole("heading", { name: "Physical kiosk" }) });
+  await expect(physicalKiosk).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(Add|Replace) kiosk$/ })).toHaveCount(0);
+  const [cardBounds, pageWidth] = await Promise.all([physicalKiosk.boundingBox(), page.evaluate(() => document.documentElement.clientWidth)]);
+  expect(cardBounds).not.toBeNull();
+  expect(cardBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(cardBounds!.x + cardBounds!.width).toBeLessThanOrEqual(pageWidth);
 });
 
 test("Kiosks keeps refresh failures visible", async ({ page }) => {

@@ -390,6 +390,8 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(source, /\/admin\/pairing-codes/);
   assert.match(source, /Replace kiosk/);
+  assert.match(source, /<div className="page-intro"><h1 id="kiosks-title">Kiosks<\/h1><\/div>/);
+  assert.match(source, /<div className="kiosk-card-heading"><h2>Physical kiosk<\/h2>\{role === "admin" && <button className="primary-button"/);
   assert.match(source, /Retire kiosk/);
   assert.match(source, /Update to latest stable/);
   assert.match(source, /Device history/);
@@ -406,6 +408,10 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.doesNotMatch(source, /Recovery guidance|recoveryGuidance/);
   assert.match(styles, /\.kiosk-state-healthy \{[^}]*justify-content: center[^}]*min-height: 3\.1rem/);
   assert.match(styles, /\.kiosk-health-pill \{[^}]*display: inline-flex[^}]*align-items: center/);
+  assert.match(styles, /\.kiosk-card-heading \{[^}]*display: flex[^}]*justify-content: space-between/);
+  assert.match(styles, /\.kiosk-card-heading \.primary-button \{[^}]*width: auto[^}]*margin: 0/);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*\.kiosk-card-heading \.primary-button \{ width: 100%; \}/);
+  assert.doesNotMatch(styles, /\.kiosk-page-heading/);
   assert.doesNotMatch(source, /openSetup/);
 });
 

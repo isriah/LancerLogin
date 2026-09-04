@@ -135,6 +135,8 @@ test("meeting-local Discord actions and contest review retain their scoped outco
   expect(absenceBodies).toEqual([{ meetingId: "active-meeting" }]);
 
   const contest = page.locator(".meeting-contests .contest-review-list article").filter({ hasText: "Jordan Lee" });
+  await expect(contest.getByText("3", { exact: true })).toBeVisible();
+  await expect(contest.getByText("Partial — checked in, no check-out")).toBeVisible();
   await contest.getByRole("button", { name: "Approve and mark present" }).click();
   await expect(contest.getByRole("alert")).toHaveText("A review reason is required before resolving this contest.");
   await contest.getByLabel("Review reason").fill("Kiosk error confirmed with the member.");
@@ -143,6 +145,36 @@ test("meeting-local Discord actions and contest review retain their scoped outco
   await expect(page.locator(".meeting-contests")).toContainText("No attendance contests need review for this meeting.");
   await expect.poll(() => contestLoads).toBeGreaterThan(loadsBeforeResolution);
   expect(resolutionBodies).toEqual([{ meetingId: "active-meeting", memberId: "member-3", resolution: "approved", reviewNote: "Kiosk error confirmed with the member." }]);
+});
+
+test("meeting contest review distinguishes partial, missing, and complete raw scans responsively", async ({ page }) => {
+  const contests = [
+    { meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", status: "open", createdAt: "2026-09-03T20:05:00Z", lifetimeContestCount: 4, hasPartialScan: true, rawScanStatus: "partial" },
+    { meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-2", externalId: "A-102", firstName: "Morgan", lastName: "Diaz", status: "open", createdAt: "2026-09-03T20:06:00Z", lifetimeContestCount: 2, hasPartialScan: false, rawScanStatus: "none" },
+    { meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: "2026-09-03T20:07:00Z", lifetimeContestCount: 1, hasPartialScan: false, rawScanStatus: "complete" },
+  ];
+  await page.route(/\/discord\/contests(?:\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ contests }) }));
+
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/meetings/active-meeting");
+    const review = page.locator(".meeting-contests");
+    for (const [name, count, scan] of [["Avery Stone", "4", "Partial — checked in, no check-out"], ["Morgan Diaz", "2", "No scans"], ["Jordan Lee", "1", "Complete — checked in and out"]] as const) {
+      const contest = review.locator("article").filter({ hasText: name });
+      await expect(contest.getByText(count, { exact: true })).toBeVisible();
+      await expect(contest.getByText(scan, { exact: true })).toBeVisible();
+    }
+    const widths = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
+    expect(widths.scrollWidth).toBeLessThanOrEqual(widths.clientWidth);
+    const firstReason = review.getByLabel("Review reason").first();
+    await firstReason.focus();
+    await expect(firstReason).toBeFocused();
+    const theme = page.getByRole("switch", { name: "Dark mode" });
+    if (!await theme.isChecked()) await theme.click();
+    await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
+    await theme.click();
+    await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
+  }
 });
 
 test("unverified Discord exposes no meeting actions or global contest notifier", async ({ page }) => {

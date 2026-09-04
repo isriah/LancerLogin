@@ -929,8 +929,16 @@ async function discordMissing(request: Request, env: Env): Promise<Response> {
 }
 async function discordContests(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); await requireIntegrationConfigured(env, "discord"); const meetingId = new URL(request.url).searchParams.get("meetingId"); const where = meetingId ? "AND c.meeting_id = ?" : "";
-  const statement = requireDatabase(env).prepare(`SELECT c.meeting_id AS meetingId, mt.title AS meetingTitle, mt.starts_at AS meetingStartsAt, c.member_id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, c.status, c.created_at AS createdAt, c.resolved_at AS resolvedAt, c.review_note AS reviewNote FROM discord_attendance_contests c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id JOIN meetings mt ON mt.id = c.meeting_id AND mt.installation_id = c.installation_id WHERE c.installation_id = 'primary' ${where} ORDER BY CASE WHEN c.status = 'open' THEN 0 ELSE 1 END, c.created_at DESC`); const result = meetingId ? await statement.bind(meetingId).all() : await statement.all();
-  return response({ contests: result.results ?? [] });
+  const statement = requireDatabase(env).prepare(`SELECT c.meeting_id AS meetingId, mt.title AS meetingTitle, mt.starts_at AS meetingStartsAt, c.member_id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, c.status, c.created_at AS createdAt, c.resolved_at AS resolvedAt, c.review_note AS reviewNote, (SELECT COUNT(*) FROM discord_attendance_contests history WHERE history.installation_id = c.installation_id AND history.member_id = c.member_id) AS lifetimeContestCount, EXISTS (SELECT 1 FROM attendance_events check_in WHERE check_in.installation_id = c.installation_id AND check_in.meeting_id = c.meeting_id AND check_in.member_id = c.member_id AND check_in.action = 'check_in') AS hasRawCheckIn, EXISTS (SELECT 1 FROM attendance_events check_out WHERE check_out.installation_id = c.installation_id AND check_out.meeting_id = c.meeting_id AND check_out.member_id = c.member_id AND check_out.action = 'check_out') AS hasRawCheckOut FROM discord_attendance_contests c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id JOIN meetings mt ON mt.id = c.meeting_id AND mt.installation_id = c.installation_id WHERE c.installation_id = 'primary' ${where} ORDER BY CASE WHEN c.status = 'open' THEN 0 ELSE 1 END, c.created_at DESC`);
+  type ContestRow = Record<string, unknown> & { lifetimeContestCount?: number; hasRawCheckIn?: number; hasRawCheckOut?: number };
+  const result = meetingId ? await statement.bind(meetingId).all<ContestRow>() : await statement.all<ContestRow>();
+  const contests = (result.results ?? []).map(({ hasRawCheckIn, hasRawCheckOut, ...contest }) => ({
+    ...contest,
+    lifetimeContestCount: Number(contest.lifetimeContestCount ?? 0),
+    hasPartialScan: Boolean(hasRawCheckIn) && !Boolean(hasRawCheckOut),
+    rawScanStatus: hasRawCheckIn ? (hasRawCheckOut ? "complete" : "partial") : "none",
+  }));
+  return response({ contests });
 }
 async function resolveDiscordContest(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); await requireIntegrationConfigured(env, "discord"); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; memberId?: string; resolution?: "approved" | "rejected" | "reviewed"; reviewNote?: string }>(request);

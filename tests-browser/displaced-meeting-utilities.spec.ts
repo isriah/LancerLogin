@@ -16,6 +16,8 @@ test("Dashboard delegates live attendance and contest review to complete replace
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
   await expect(page.getByRole("table", { name: "Meeting attendance" })).toContainText("Active · not checked out");
   await expect(page.locator(".meeting-contests")).toContainText("Jordan Lee");
+  await expect(page.locator(".meeting-contests")).toContainText("Submitted contests");
+  await expect(page.locator(".meeting-contests")).toContainText("Partial — checked in, no check-out");
   expect(attendanceLoads).toBeGreaterThan(0);
 });
 

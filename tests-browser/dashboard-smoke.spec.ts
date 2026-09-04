@@ -164,7 +164,7 @@ test("integration enablement is accessible, sorted, and compact when disabled", 
 });
 
 test("contest notifier opens an accessible review popup with context and refreshes after resolution", async ({ page }) => {
-  let contests = [{ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: "2026-09-03T20:05:00Z" }];
+  let contests = [{ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: "2026-09-03T20:05:00Z", lifetimeContestCount: 3, hasPartialScan: true, rawScanStatus: "partial" }];
   let failNextResolution = false;
   await page.route(/\/discord\/contests(?:\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ contests }) }));
   await page.route(/\/discord\/contests\/resolve$/, async (route) => {
@@ -186,6 +186,9 @@ test("contest notifier opens an accessible review popup with context and refresh
   await expect(dialog.getByText("Jordan Lee")).toBeVisible();
   await expect(dialog.getByText("A-103")).toBeVisible();
   await expect(dialog.getByText("Build session · Sep 3, 2026")).toBeVisible();
+  await expect(dialog.getByText("Submitted contests")).toBeVisible();
+  await expect(dialog.getByText("3", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Partial — checked in, no check-out")).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Close contest review dialog" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(indicator).toBeFocused();
@@ -198,7 +201,7 @@ test("contest notifier opens an accessible review popup with context and refresh
   await expect(dialog.getByText("No attendance contests need review.")).toBeVisible();
   await expect(indicator).toHaveCount(0);
 
-  contests = [{ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: "2026-09-03T20:05:00Z" }];
+  contests = [{ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: "2026-09-03T20:05:00Z", lifetimeContestCount: 3, hasPartialScan: true, rawScanStatus: "partial" }];
   failNextResolution = true;
   await page.goto("/dashboard");
   await expect(page.getByRole("region", { name: "Attendance contests" })).toHaveCount(0);
@@ -214,6 +217,37 @@ test("contest notifier opens an accessible review popup with context and refresh
   await refreshedDialog.getByRole("button", { name: "Keep attendance" }).click();
   await expect(refreshedDialog.getByRole("status")).toHaveText("Contest reviewed.");
   await expect(page.getByRole("button", { name: /attendance contest.*awaiting review/i })).toHaveCount(0);
+});
+
+test("global contest review distinguishes partial, missing, and complete raw scans responsively", async ({ page }) => {
+  const contests = [
+    { meetingId: "partial", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", status: "open", createdAt: "2026-09-03T20:05:00Z", lifetimeContestCount: 4, hasPartialScan: true, rawScanStatus: "partial" },
+    { meetingId: "none", meetingTitle: "Studio night", meetingStartsAt: "2026-09-04T20:00:00Z", memberId: "member-2", externalId: "A-102", firstName: "Morgan", lastName: "Diaz", status: "open", createdAt: "2026-09-04T20:05:00Z", lifetimeContestCount: 2, hasPartialScan: false, rawScanStatus: "none" },
+    { meetingId: "complete", meetingTitle: "Open workshop", meetingStartsAt: "2026-09-05T20:00:00Z", memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: "2026-09-05T20:05:00Z", lifetimeContestCount: 1, hasPartialScan: false, rawScanStatus: "complete" },
+  ];
+  await page.route(/\/discord\/contests(?:\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ contests }) }));
+
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/dashboard");
+    const indicator = page.getByRole("button", { name: "3 attendance contests awaiting review. Open contest review." });
+    await indicator.click();
+    const dialog = page.getByRole("dialog", { name: "Contests awaiting review" });
+    for (const [name, count, scan] of [["Avery Stone", "4", "Partial — checked in, no check-out"], ["Morgan Diaz", "2", "No scans"], ["Jordan Lee", "1", "Complete — checked in and out"]] as const) {
+      const contest = dialog.locator("article").filter({ hasText: name });
+      await expect(contest.getByText(count, { exact: true })).toBeVisible();
+      await expect(contest.getByText(scan, { exact: true })).toBeVisible();
+    }
+    const widths = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
+    expect(widths.scrollWidth).toBeLessThanOrEqual(widths.clientWidth);
+    const theme = page.getByRole("switch", { name: "Dark mode" });
+    if (!await theme.isChecked()) await theme.click();
+    await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
+    await theme.click();
+    await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
+    await page.keyboard.press("Escape");
+    await expect(indicator).toBeFocused();
+  }
 });
 
 test("Reports filters completed Regular and Optional meetings without hiding All meetings", async ({ page }) => {

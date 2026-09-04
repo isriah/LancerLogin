@@ -945,13 +945,15 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-058 — Kiosks dashboard conformance
 
-Status: in progress
+Status: merged (`a4a8099`, corrected by `64fb51e`)
 
 Owner: Codex task
 Branch: `codex/wu-058-kiosks-dashboard-conformance` (requested; provisioning Worktree)
 Base: `3611e2b`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\ee83\\LancerLogin Workspace` (detached)
 Task: provisioning client `client-new-thread:18f96031-053a-499d-a5da-3d713d7f909c`
+Candidate: `07ccd9f9aeb2f919df7231fc50b5164818fb7ed4` (detached Worktree candidate; commit subject and Kiosks dashboard/test files match this WU).
+Integration: candidate `07ccd9f9aeb2f919df7231fc50b5164818fb7ed4` was merged as `a4a8099534a911aaa31462d9b83de65526459434`; integration review aligned the pre-existing refresh-failure smoke assertion with the new error-alert semantics in `64fb51e70c0ab54de540e03a276f74c8fa685152`. `npm run verify:api`, `npm run verify:dashboard`, the 9-test focused Kiosks matrix, the 17-test dashboard smoke suite, and the 92-test full browser suite passed on the corrected integrated code. The physical kiosk presentation and shared kiosk contracts were unchanged, so `verify:kiosk` was not required.
 
 Goal: make the dashboard-owned kiosk health and management workspace conform while preserving the physical kiosk boundary.
 Dependencies: WU-057

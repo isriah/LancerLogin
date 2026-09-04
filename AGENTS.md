@@ -8,11 +8,14 @@ This file contains durable rules for every task in this repository. Read the tas
 - Raw ideas: [docs/idea_inbox.md](docs/idea_inbox.md)
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Development and focused verification: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+- Dashboard visual language: [docs/UI-STANDARDS.md](docs/UI-STANDARDS.md)
 - Product and operational decisions: [docs/DECISIONS.md](docs/DECISIONS.md)
 - Kiosk behavior and hardware constraints: [docs/KIOSK.md](docs/KIOSK.md)
 - Releases: [docs/RELEASE-CHECKLIST.md](docs/RELEASE-CHECKLIST.md)
 
 Read only the documentation relevant to the selected work. Use Plan mode before code changes when a request is ambiguous, materially multi-step, or has a product, security, migration, or architecture decision.
+
+Before planning or changing dashboard presentation, read `docs/UI-STANDARDS.md`. Its planning and review checklist is required for touched dashboard UI; existing inconsistencies outside the selected work remain out of scope.
 
 For a list-only request, read `docs/idea_inbox.md`, report the `untriaged` IDs and requests verbatim, and stop. Listing does not authorize triage, ledger edits, or `$ll-start`.
 

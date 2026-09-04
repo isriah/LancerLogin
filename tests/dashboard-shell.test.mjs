@@ -501,7 +501,9 @@ test("dashboard styling uses self-hosted typography and themed organization cont
   const organization = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
   assert.match(entry, /@fontsource\/bebas-neue\/latin-400\.css/);
   assert.match(entry, /@fontsource\/roboto\/latin-700\.css/);
-  assert.match(styles, /font-family: "Bebas Neue"/);
+  assert.match(styles, /--font-body: "Roboto"/);
+  assert.match(styles, /--font-display: "Bebas Neue", sans-serif/);
+  assert.match(styles, /h1, h2, h3, h4, h5, h6, legend \{ font-family: var\(--font-display\)/);
   assert.match(styles, /--bg: #111315/);
   assert.match(organization, /<ColorEditor label="Primary color"/);
   assert.match(organization, /logo-backdrop-options/);

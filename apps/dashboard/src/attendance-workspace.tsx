@@ -1,36 +1,145 @@
-import { useEffect, useState } from "react";
-import { AttendanceCalendar } from "./attendance-calendar";
-import { usePath } from "./router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "./dashboard-api";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
+import { usePath } from "./router";
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
-type Meeting = { id: string; title: string; startsAt: string; endsAt?: string | null; required: boolean | number; notes?: string | null };
-type AttendanceRow = { memberId: string; externalId: string; firstName: string; lastName: string; discordUserId?: string; disposition: "present" | "active" | "absent" | "excused" | "not_required" | "upcoming"; checkedInAt?: string; checkedOutAt?: string; reason?: string };
-type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string; pairedAt: string };
-async function api<T>(path: string, init?: RequestInit): Promise<T> { const result = await fetch(`${apiBaseUrl}${path}`, { credentials: "include", ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers } }); const body = await result.json() as T & { error?: string; details?: string[] }; if (!result.ok) throw new Error(body.details?.join(" ") ?? body.error ?? "Request failed"); return body; }
+type Frequency = "daily" | "weekly" | "biweekly" | "monthly";
+type Meeting = {
+  id: string;
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  attendanceClosesAt: string;
+  required: boolean | number;
+  notes?: string | null;
+  seriesId?: string | null;
+  recurrenceFrequency?: Frequency | null;
+  recurrenceUntil?: string | null;
+  recurrenceSequence?: number | null;
+};
+type AttendanceRow = {
+  memberId: string;
+  externalId: string;
+  firstName: string;
+  lastName: string;
+  discordUserId?: string;
+  disposition: "present" | "active" | "absent" | "excused" | "not_required" | "upcoming";
+  checkedInAt?: string;
+  checkedOutAt?: string;
+  reason?: string;
+};
+type Lifecycle = "upcoming" | "in_progress" | "late_scan_window" | "past";
 
-export function AttendanceWorkspace({ embedded = false, onSignedOut, selectedMeetingId, discordEnabled = false }: { embedded?: boolean; onSignedOut?: () => void; selectedMeetingId?: string; discordEnabled?: boolean }) {
+const frequencyLabel = (value?: Frequency | null) => value === "biweekly" ? "Every two weeks" : value ? `${value[0].toUpperCase()}${value.slice(1)}` : "One time";
+const lifecycleFor = (meeting: Meeting, now = Date.now()): Lifecycle => now < Date.parse(meeting.startsAt) ? "upcoming" : now <= Date.parse(meeting.endsAt) ? "in_progress" : now <= Date.parse(meeting.attendanceClosesAt) ? "late_scan_window" : "past";
+const lifecycleLabel = (lifecycle: Lifecycle) => lifecycle === "in_progress" ? "In progress" : lifecycle === "late_scan_window" ? "Late scan window" : lifecycle[0].toUpperCase() + lifecycle.slice(1);
+
+export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; role: "admin" | "operator" }) {
   const { navigate } = usePath();
-  const [meetings, setMeetings] = useState<Meeting[]>([]); const [selected, setSelected] = useState(""); const [rows, setRows] = useState<AttendanceRow[]>([]); const [kiosks, setKiosks] = useState<Kiosk[]>([]);
-  const [notice, setNotice] = useState("Loading meetings…"); const [memberNotices, setMemberNotices] = useState<Record<string, string>>({});
-  useDashboardLoadingOverlay(notice === "Loading meetings…", "Loading attendance…");
-  async function refreshMeetings() { const result = await api<{ meetings: Meeting[] }>("/meetings"); const ordered = [...result.meetings].sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt)); setMeetings(ordered); const linkedMeeting = selectedMeetingId && ordered.find((meeting) => meeting.id === selectedMeetingId); if (linkedMeeting) setSelected(linkedMeeting.id); else if (!selected) { const latestCompleted = ordered.filter((meeting) => Date.parse(meeting.endsAt ?? meeting.startsAt) <= Date.now()).at(-1); setSelected(latestCompleted?.id ?? ordered[0]?.id ?? ""); } setNotice(ordered.length ? "" : "No meetings have been created yet."); }
-  async function refreshKiosks() { const result = await api<{ kiosks: Kiosk[] }>("/admin/kiosks"); setKiosks(result.kiosks); }
-  async function refreshAttendance(meetingId = selected) { if (!meetingId) { setRows([]); return; } const attendance = await api<{ attendance: AttendanceRow[] }>(`/attendance?meetingId=${encodeURIComponent(meetingId)}`); setRows(attendance.attendance); }
-  useEffect(() => { Promise.all([refreshMeetings(), refreshKiosks()]).catch((error: Error) => setNotice(error.message)); const timer = window.setInterval(() => void refreshKiosks().catch(() => undefined), 30_000); return () => window.clearInterval(timer); }, [selectedMeetingId]);
-  useEffect(() => { refreshAttendance().catch((error: Error) => setNotice(error.message)); }, [selected]);
-  function memberNotice(memberId: string, message: string) { setMemberNotices((current) => ({ ...current, [memberId]: message })); window.setTimeout(() => setMemberNotices((current) => { const next = { ...current }; delete next[memberId]; return next; }), 5000); }
-  async function correct(row: AttendanceRow, disposition: AttendanceRow["disposition"]) { if (row.disposition === "not_required") { memberNotice(row.memberId, "This member was not required for this meeting."); return; } const reason = window.prompt(disposition === "present" ? `Optional note for marking ${row.firstName} present:` : `Reason for marking ${row.firstName} ${disposition}:`); if (reason === null) return; if (disposition !== "present" && !reason.trim()) { memberNotice(row.memberId, "A reason is required for this change."); return; } try { await api("/attendance/corrections", { method: "POST", body: JSON.stringify({ memberId: row.memberId, meetingId: selected, disposition, reason }) }); await refreshAttendance(); memberNotice(row.memberId, `Marked ${disposition}.`); } catch (error) { memberNotice(row.memberId, (error as Error).message); } }
-  async function clear(row: AttendanceRow) { if (!window.confirm(`Clear all recorded attendance for ${row.firstName} ${row.lastName} in this meeting?`)) return; try { const result = await api<{ cleared: number }>("/attendance/cleanup", { method: "POST", body: JSON.stringify({ memberId: row.memberId, meetingId: selected, confirmation: "CLEAR ATTENDANCE" }) }); await refreshAttendance(); memberNotice(row.memberId, result.cleared ? "Attendance records cleared." : "No attendance records needed clearing."); } catch (error) { memberNotice(row.memberId, (error as Error).message); } }
-  async function signOut() { await api("/auth/logout", { method: "POST" }); onSignedOut?.(); }
-  async function downloadCsv() { const result = await fetch(`${apiBaseUrl}/exports/attendance.csv`, { credentials: "include" }); if (!result.ok) { setNotice("CSV export failed."); return; } const blob = await result.blob(); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `lancerlogin-attendance-${new Date().toISOString().slice(0, 10)}.csv`; link.click(); URL.revokeObjectURL(link.href); }
-  async function discord(path: "missing" | "kiosk-status") { try { await api(`/discord/${path}`, { method: "POST", body: JSON.stringify(path === "kiosk-status" ? {} : { meetingId: selected }) }); setNotice(path === "missing" ? "Discord absence notice posted. A contest opens only when a linked member presses its button." : "Persistent Discord kiosk status updated."); } catch (error) { setNotice((error as Error).message); } }
-  const activeKiosk = kiosks.find((kiosk) => kiosk.active === 1); const kioskOnline = Boolean(activeKiosk?.lastSeenAt && Date.now() - Date.parse(activeKiosk.lastSeenAt) < 90_000);
-  return <section className={embedded ? "attendance-workspace embedded" : "attendance-workspace"}>
-    {!embedded && <header className="workspace-header"><h1>Attendance</h1><button className="theme-button" type="button" onClick={signOut}>Sign out</button></header>}
-    {(notice || true) && <div className="attendance-utilities"><span role="status">{notice}</span><span className="toolbar-actions"><button className="text-button" type="button" onClick={downloadCsv}>Export CSV</button>{discordEnabled && <button className="text-button" type="button" onClick={() => discord("kiosk-status")}>Sync kiosk status</button>}</span></div>}
-    <section className="kiosk-monitor" aria-labelledby="kiosk-monitor-title"><h2 id="kiosk-monitor-title">{activeKiosk?.name ?? "No kiosk paired"}</h2><span className={kioskOnline ? "online" : "offline"}>{kioskOnline ? "Online" : activeKiosk ? "Offline" : "Not paired"}</span><p>{activeKiosk?.lastSeenAt ? `Last heartbeat ${new Date(activeKiosk.lastSeenAt).toLocaleString()} · Reader ${activeKiosk.readerOnline ? "online" : "offline"}${activeKiosk.releaseVersion ? ` · Release ${activeKiosk.releaseVersion}` : ""}` : "Pair a kiosk from the Kiosks page. Status refreshes every 30 seconds."}</p></section>
-    <AttendanceCalendar meetings={meetings} onSelect={(meeting) => navigate(Date.parse(meeting.startsAt) > Date.now() ? "/meetings" : `/attendance?meetingId=${encodeURIComponent(meeting.id)}`)} /><div className="attendance-layout"><section className="task-card attendance-meeting-picker" aria-labelledby="attendance-meeting-title"><h2 id="attendance-meeting-title">Meeting</h2><label>View attendance for<select value={selected} onChange={(event) => setSelected(event.target.value)}><option value="">Choose a meeting</option>{meetings.map((meeting) => <option key={meeting.id} value={meeting.id}>{new Date(meeting.startsAt).toLocaleDateString()} · {meeting.title}</option>)}</select></label>{discordEnabled && <button className="primary-button" type="button" disabled={!selected} onClick={() => discord("missing")}>Send Discord absence notice</button>}</section>
-    <section className="attendance-card"><div className="panel-heading"><div><h2>{meetings.find((meeting) => meeting.id === selected)?.title ?? "Choose a meeting"}</h2></div><span className="progress-count">{rows.filter((row) => row.disposition === "present").length} present</span></div>{rows.length ? <div className="attendance-table" role="table" aria-label="Meeting attendance"><div className="attendance-row header" role="row"><span>Member</span><span>Status</span><span>Actions</span></div>{rows.map((row) => <div className="attendance-row" role="row" key={row.memberId}><span><strong>{row.firstName} {row.lastName}</strong><small>{row.externalId}{discordEnabled && row.discordUserId ? ` · Discord ${row.discordUserId}` : ""}</small>{memberNotices[row.memberId] && <small className="member-action-notice" role="status">{memberNotices[row.memberId]}</small>}</span><span className={`attendance-state ${row.disposition}`}>{row.disposition === "not_required" ? "Not required" : row.disposition}</span><span className="correction-actions"><button type="button" disabled={row.disposition === "present"} onClick={() => correct(row, "present")}>Present</button><button type="button" disabled={row.disposition === "excused"} onClick={() => correct(row, "excused")}>Excuse</button><button type="button" disabled={row.disposition === "absent"} onClick={() => correct(row, "absent")}>Absent</button><button type="button" disabled={row.disposition === "not_required"} onClick={() => void clear(row)}>Clear</button></span></div>)}</div> : <p className="empty-state">{selected ? "No active roster records are available." : "Choose a meeting to view attendance."}</p>}</section></div>
+  const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [meeting, setMeeting] = useState<Meeting>();
+  const [rows, setRows] = useState<AttendanceRow[]>([]);
+  const [notice, setNotice] = useState("Loading meeting…");
+  const [memberNotices, setMemberNotices] = useState<Record<string, string>>({});
+  const [clock, setClock] = useState(() => Date.now());
+  const loadSequence = useRef(0);
+  useDashboardLoadingOverlay(notice === "Loading meeting…", "Loading meeting…");
+
+  async function attendanceFor(id = meetingId) { return api<{ attendance: AttendanceRow[] }>(`/attendance?meetingId=${encodeURIComponent(id)}`); }
+  async function refreshAttendance(id = meetingId) { setRows((await attendanceFor(id)).attendance); }
+
+  async function load(): Promise<boolean> {
+    const sequence = ++loadSequence.current;
+    const result = await api<{ meetings: Meeting[] }>("/meetings");
+    if (sequence !== loadSequence.current) return false;
+    const ordered = [...result.meetings].sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt));
+    setMeetings(ordered);
+    setMemberNotices({});
+    const requested = (await api<{ meeting: Meeting }>(`/meetings/${encodeURIComponent(meetingId)}`)).meeting;
+    const attendance = await attendanceFor(requested.id);
+    if (sequence !== loadSequence.current) return false;
+    setMeeting(requested);
+    setRows(attendance.attendance);
+    setClock(Date.now());
+    setNotice("");
+    return true;
+  }
+
+  useEffect(() => {
+    setNotice("Loading meeting…");
+    setMeeting(undefined);
+    setRows([]);
+    void load().catch((error: Error) => setNotice(error.message));
+    return () => { loadSequence.current += 1; };
+  }, [meetingId]);
+
+  const lifecycle = useMemo(() => meeting ? lifecycleFor(meeting, clock) : undefined, [meeting, clock]);
+  useEffect(() => {
+    if (!meeting || !lifecycle) return;
+    if (lifecycle === "in_progress" || lifecycle === "late_scan_window") {
+      const timer = window.setInterval(() => {
+        void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message));
+        setClock(Date.now());
+      }, 30_000);
+      const closesTimer = window.setTimeout(() => setClock(Date.now()), Math.max(0, Date.parse(meeting.attendanceClosesAt) - Date.now() + 1));
+      return () => { window.clearInterval(timer); window.clearTimeout(closesTimer); };
+    }
+    if (lifecycle === "upcoming") {
+      const opensTimer = window.setTimeout(() => setClock(Date.now()), Math.min(2_147_000_000, Math.max(0, Date.parse(meeting.startsAt) - Date.now() + 1)));
+      return () => window.clearTimeout(opensTimer);
+    }
+  }, [meeting?.id, meeting?.startsAt, meeting?.attendanceClosesAt, lifecycle, clock]);
+
+  function memberNotice(memberId: string, message: string) {
+    setMemberNotices((current) => ({ ...current, [memberId]: message }));
+    window.setTimeout(() => setMemberNotices((current) => { const next = { ...current }; delete next[memberId]; return next; }), 5000);
+  }
+  async function correct(row: AttendanceRow, disposition: "present" | "absent" | "excused") {
+    if (row.disposition === "not_required") { memberNotice(row.memberId, "This member was not required for this meeting."); return; }
+    const reason = window.prompt(disposition === "present" ? `Optional note for marking ${row.firstName} present:` : `Reason for marking ${row.firstName} ${disposition}:`);
+    if (reason === null) return;
+    if (disposition !== "present" && !reason.trim()) { memberNotice(row.memberId, "A reason is required for this change."); return; }
+    try {
+      await api("/attendance/corrections", { method: "POST", body: JSON.stringify({ memberId: row.memberId, meetingId, disposition, reason }) });
+      await refreshAttendance();
+      memberNotice(row.memberId, `Marked ${disposition}.`);
+    } catch (error) { memberNotice(row.memberId, (error as Error).message); }
+  }
+  async function clear(row: AttendanceRow) {
+    if (!window.confirm(`Clear all recorded attendance for ${row.firstName} ${row.lastName} in this meeting?`)) return;
+    try {
+      const result = await api<{ cleared: number }>("/attendance/cleanup", { method: "POST", body: JSON.stringify({ memberId: row.memberId, meetingId, confirmation: "CLEAR ATTENDANCE" }) });
+      await refreshAttendance();
+      memberNotice(row.memberId, result.cleared ? "Attendance records cleared." : "No attendance records needed clearing.");
+    } catch (error) { memberNotice(row.memberId, (error as Error).message); }
+  }
+  async function manualRefresh() {
+    setNotice("Refreshing attendance…");
+    try { if (await load()) setNotice("Attendance refreshed."); }
+    catch (error) { setNotice((error as Error).message); }
+  }
+
+  const recurrence = meeting?.recurrenceFrequency
+    ? `${frequencyLabel(meeting.recurrenceFrequency)}${meeting.recurrenceSequence ? ` · Occurrence ${meeting.recurrenceSequence}` : ""}${meeting.recurrenceUntil ? ` · Through ${new Date(meeting.recurrenceUntil).toLocaleDateString()}` : ""}`
+    : "One time";
+
+  return <section className="attendance-workspace meeting-detail-workspace" aria-labelledby="meeting-detail-title">
+    <div className="meeting-detail-navigation">
+      <button type="button" onClick={() => navigate("/dashboard")}>Back to Dashboard</button>
+      <label>Switch meeting<select value={meeting?.id ?? ""} onChange={(event) => { if (event.target.value) navigate(`/meetings/${encodeURIComponent(event.target.value)}`); }}><option value="">Choose a meeting</option>{meetings.map((item) => <option key={item.id} value={item.id}>{new Date(item.startsAt).toLocaleDateString()} · {item.title}</option>)}</select></label>
+    </div>
+    {meeting ? <>
+      <header className="meeting-detail-heading"><div><span className={`meeting-lifecycle ${lifecycle}`}>{lifecycleLabel(lifecycle!)}</span><h1 id="meeting-detail-title">{meeting.title}</h1></div><button className="primary-button" type="button" onClick={() => void manualRefresh()}>Refresh attendance</button></header>
+      <dl className="meeting-summary" aria-label="Meeting summary">
+        <div><dt>Date</dt><dd>{new Date(meeting.startsAt).toLocaleDateString()}</dd></div>
+        <div><dt>Time</dt><dd>{new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}–{new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</dd></div>
+        <div><dt>Attendance</dt><dd>{meeting.required ? "Required" : "Optional"}</dd></div>
+        <div><dt>Recurrence</dt><dd>{recurrence}</dd></div>
+        <div><dt>Attendance closes</dt><dd>{new Date(meeting.attendanceClosesAt).toLocaleString()}</dd></div>
+        <div className="meeting-summary-notes"><dt>Notes</dt><dd>{meeting.notes || "No notes"}</dd></div>
+      </dl>
+      <div className="attendance-utilities"><span role="status" aria-live="polite">{notice}</span><span className="progress-count">{rows.filter((row) => row.disposition === "present").length} present</span></div>
+      <section className="attendance-card" aria-labelledby="meeting-attendance-title"><div className="panel-heading"><h2 id="meeting-attendance-title">Attendance</h2></div>{rows.length ? <div className="attendance-table" role="table" aria-label="Meeting attendance"><div className="attendance-row header" role="row"><span>Member</span><span>Status</span><span>Actions</span></div>{rows.map((row) => <div className="attendance-row" role="row" key={row.memberId}><span><strong>{row.firstName} {row.lastName}</strong><small>{row.externalId}</small>{memberNotices[row.memberId] && <small className="member-action-notice" role="status">{memberNotices[row.memberId]}</small>}</span><span className={`attendance-state ${row.disposition}`}>{row.disposition === "not_required" ? "Not required" : row.disposition}</span><span className="correction-actions"><button type="button" disabled={row.disposition === "present"} onClick={() => void correct(row, "present")}>Present</button><button type="button" disabled={row.disposition === "excused"} onClick={() => void correct(row, "excused")}>Excuse</button><button type="button" disabled={row.disposition === "absent"} onClick={() => void correct(row, "absent")}>Absent</button>{role === "admin" && <button type="button" disabled={row.disposition === "not_required"} onClick={() => void clear(row)}>Clear</button>}</span></div>)}</div> : <p className="empty-state">No active roster records are available.</p>}</section>
+    </> : <section className="empty-page"><h1 id="meeting-detail-title">Meeting unavailable</h1><p role="status">{notice}</p><p>The meeting may have been removed, or the link may be incorrect. Choose another meeting or return to Dashboard.</p></section>}
   </section>;
 }

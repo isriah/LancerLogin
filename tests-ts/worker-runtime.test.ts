@@ -457,6 +457,23 @@ test("Operator can create meetings and reasoned attendance corrections", async (
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("attendance.corrected")));
 });
 
+test("canonical meeting detail is role-protected, durable, and reports its attendance close", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes, is_test AS isTest", { id: "meeting-older-than-list", title: "Archived rehearsal", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", required: 1, notes: "Historical context", recurrenceFrequency: "monthly", recurrenceSequence: 12 });
+  database.rows.set("SELECT late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 45 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/meetings/meeting-older-than-list", undefined, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 200);
+  const body = await result.json() as { meeting: { id: string; attendanceClosesAt: string } };
+  assert.equal(body.meeting.id, "meeting-older-than-list");
+  assert.equal(body.meeting.attendanceClosesAt, "2026-09-01T22:45:00.000Z");
+  assert.ok(database.calls.some((call) => call.sql.includes("id = ? AND deleted_at IS NULL") && call.values.includes("meeting-older-than-list")));
+
+  const missing = await worker.fetch(request("/meetings/missing", undefined, { cookie: await sessionCookie("operator") }), { ...env, DB: new FakeDatabase() } as unknown as Env);
+  assert.equal(missing.status, 404);
+  assert.equal((await worker.fetch(request("/meetings/meeting-older-than-list"), env)).status, 401);
+});
+
 test("Reports may request inactive roster history without changing the default attendance roster", async () => {
   const database = new FakeDatabase();
   database.rows.set("FROM meetings WHERE installation_id = 'primary' AND id = ?", { startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z" });

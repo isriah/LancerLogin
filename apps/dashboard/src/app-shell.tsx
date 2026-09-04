@@ -39,7 +39,8 @@ export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { r
   if (role === "admin" && onboarding) page = <SetupWorkspace key={setupKey} initialBranding={branding} onBrandingChanged={onBrandingChanged} onSignedOut={onSignedOut} embedded onComplete={() => { setOnboarding(false); navigate("/dashboard"); }} />;
   else if (path === "/dashboard") page = <HomePage role={role} navigate={navigate} discordEnabled={integrations.discord.enabled} />;
   else if (path === "/meetings") page = <MeetingsPage discordEnabled={integrations.discord.enabled} />;
-  else if (path === "/attendance") page = <AttendanceWorkspace embedded selectedMeetingId={new URLSearchParams(search).get("meetingId") ?? undefined} discordEnabled={integrations.discord.enabled} />;
+  else if (path.startsWith("/meetings/") && path.slice("/meetings/".length)) page = <AttendanceWorkspace meetingId={decodeURIComponent(path.slice("/meetings/".length))} role={role} />;
+  else if (path === "/attendance") page = <LegacyAttendanceRedirect search={search} navigate={navigate} />;
   else if (path === "/reports") page = <ReportsPage discordEnabled={integrations.discord.enabled} />;
   else if (path === "/roster") page = <RosterPage role={role} />;
   else if (path.startsWith("/roster/")) page = <MemberDetailPage role={role} memberId={decodeURIComponent(path.slice("/roster/".length))} discordEnabled={integrations.discord.enabled} />;
@@ -58,4 +59,5 @@ export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { r
 }
 
 function AccessSettings() { const [members, setMembers] = useState<import("./user-settings").RosterMember[]>([]); useEffect(() => { void api<{ members: import("./user-settings").RosterMember[] }>("/admin/members").then((result) => setMembers(result.members)); }, []); return <section className="settings-page" aria-labelledby="access-title"><div className="page-intro"><h1 id="access-title">Dashboard access</h1></div><UserSettings members={members} /></section>; }
+function LegacyAttendanceRedirect({ search, navigate }: { search: string; navigate: (path: string, replace?: boolean) => void }) { const meetingId = new URLSearchParams(search).get("meetingId"); useEffect(() => { navigate(meetingId ? `/meetings/${encodeURIComponent(meetingId)}` : "/dashboard", true); }, [meetingId, navigate]); return <p className="auth-check" role="status">Opening the meeting workspace…</p>; }
 function GuidedSetupSettings({ onOpenSetup }: { onOpenSetup: () => void }) { return <section className="settings-page" aria-labelledby="guided-setup-title"><div className="page-intro"><h1 id="guided-setup-title">Guided Setup</h1></div><article className="settings-callout"><h2>Reopen setup</h2><p>Return to the guided onboarding workflow without resetting completed steps or deleting installation data.</p><button className="primary-button" type="button" onClick={onOpenSetup}>Open guided setup</button></article></section>; }

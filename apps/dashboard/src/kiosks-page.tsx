@@ -72,11 +72,11 @@ export function KiosksPage({ role }: { role: "admin" | "operator" }) {
   async function stopSimulator() { try { await api("/admin/simulator", { method: "POST", body: JSON.stringify({ action: "stop" }) }); setNotice("Browser simulator stopped."); await load({ preserveNotice: true }); } catch (error) { setNotice((error as Error).message); } }
 
   return <section className="page-stack" aria-labelledby="kiosks-title">
-    <div className="page-intro kiosk-page-heading"><h1 id="kiosks-title">Kiosks</h1>{role === "admin" && <button className="primary-button" type="button" onClick={() => setPairing(true)}>{active ? "Replace kiosk" : "Add kiosk"}</button>}</div>
+    <div className="page-intro"><h1 id="kiosks-title">Kiosks</h1></div>
     {notice && <p className="setup-status" role="status">{notice}</p>}
     <div className="kiosk-grid">
       <article className="task-card">
-        <h2>Physical kiosk</h2>
+        <div className="kiosk-card-heading"><h2>Physical kiosk</h2>{role === "admin" && <button className="primary-button" type="button" onClick={() => setPairing(true)}>{active ? "Replace kiosk" : "Add kiosk"}</button>}</div>
         <div className={`kiosk-state${healthy ? " kiosk-state-healthy" : ""}`}><strong>{active?.name ?? "No kiosk paired"}</strong><span className={`status-pill ${online ? "online" : "offline"}${healthy ? " kiosk-health-pill" : ""}`}>{healthy ? "Healthy" : online ? "Online" : active ? "Offline" : "Not paired"}</span></div>
         {active ? <>
           <dl><div><dt>Fingerprint reader</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div><div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Release</dt><dd>{active.releaseVersion ?? "—"}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div></dl>

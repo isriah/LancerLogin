@@ -497,7 +497,7 @@ Release: v0.14.0 operations, scheduling, and Discord workflow refinement.
 
 ### WU-034 — Contest-review popup and context
 
-Status: in progress
+Status: merged (`39de86f`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-034-contest-review-popup`

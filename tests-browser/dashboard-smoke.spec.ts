@@ -342,5 +342,5 @@ test("Kiosks keeps pairing actions Admin-only and contained on narrow screens", 
 test("Kiosks keeps refresh failures visible", async ({ page }) => {
   await page.route("**/admin/kiosks", (route) => route.abort());
   await page.goto("/kiosks");
-  await expect(page.getByRole("status")).toHaveText("Failed to fetch");
+  await expect(page.getByRole("alert")).toHaveText("Failed to fetch");
 });

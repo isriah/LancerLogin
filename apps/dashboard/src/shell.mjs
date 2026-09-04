@@ -1,8 +1,7 @@
 import { can } from "../../../packages/shared/src/policy.mjs";
 
 const baseNavigation = [
-  ["Dashboard", "view-dashboard"], ["Meetings", "manage-meetings"], ["Attendance", "manage-attendance"],
-  ["Reports", "view-reports"], ["Roster", "view-roster"], ["Kiosks", "view-kiosk-status"],
+  ["Dashboard", "view-dashboard"], ["Reports", "view-reports"], ["Roster", "view-roster"], ["Kiosks", "view-kiosk-status"],
 ];
 const adminNavigation = [["Settings", "manage-security"]];
 const steps = [

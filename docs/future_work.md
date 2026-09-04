@@ -570,13 +570,14 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-039 — Explicit integration enablement
 
-Status: in progress
+Status: merged (`6278dde`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-039-integration-enablement` (requested; provisioning Worktree is currently detached)
 Base: `4428c8c8fd73d68d43cb23764b7aa248ef830e6f`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7195\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:5a408630-54fc-40a4-88e3-8af0ff12824c`
+Candidate: `f4c6cb4d5f2227d035a3a9c73c5b8466e94be27b` in detached Worktree `C:\\Users\\Izz\\.codex\\worktrees\\7195\\LancerLogin Workspace`; commit subject and migration/API/dashboard/test files match this WU.
 
 Goal: let Admins deliberately enable optional integrations and keep disabled integrations compact and out of operational workflows.
 Dependencies: none

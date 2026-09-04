@@ -730,7 +730,12 @@ Release: v0.17.0 Dashboard meeting creation and kiosk version visibility.
 
 ### WU-047 — Meeting-detail Discord and contest operations
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-047-meeting-detail-discord-contests` (requested; provisioning Worktree)
+Base: `bb9ecca51a4531ec4ed33efd345e46ca7f293877`
+Task: provisioning client `client-new-thread:e90ea049-444a-4f9a-add6-b0908971cd8b`
 
 Goal: keep meeting-specific Discord and contest actions on the meeting they affect.
 Dependencies: WU-034, WU-039, and WU-044
@@ -804,7 +809,12 @@ Release: v0.17.0 Dashboard meeting creation and kiosk version visibility.
 
 ### WU-052 — Kiosk scan and offline visual feedback
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-052-kiosk-scan-feedback` (requested; provisioning Worktree)
+Base: `bb9ecca51a4531ec4ed33efd345e46ca7f293877`
+Task: provisioning client `client-new-thread:6d56490c-f3be-4b65-94c2-f3327bde5fe4`
 
 Goal: make scan processing, duplicate attendance, and offline outcomes immediately recognizable from the physical kiosk screen.
 Dependencies: none

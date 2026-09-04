@@ -711,7 +711,13 @@ Release: v0.16.0 Dashboard meeting-browser and update reliability release.
 
 ### WU-046 — Dashboard meeting-creation dialog
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-046-dashboard-meeting-creation-dialog`
+Base: `d1577c807e711dc3091a168359f1a117a9260c42`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\9dd5\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:4b9c0c9a-3725-4a8f-8e4d-2454849d37b0`
 
 Goal: create meetings without leaving the active Dashboard meeting browser.
 Dependencies: WU-045
@@ -778,7 +784,13 @@ Release: v0.16.0 Dashboard meeting-browser and update reliability release.
 
 ### WU-051 — Kiosk release-version footer
 
-Status: ready
+Status: in progress
+
+Owner: Codex coordinator
+Branch: `codex/wu-051-kiosk-release-version-footer`
+Base: `d1577c807e711dc3091a168359f1a117a9260c42`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\5c7c\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:0a148572-a8a9-4e21-b6a1-a54e6bff4b98`
 
 Goal: show the running kiosk software version on the physical attendance interface while keeping reader failures visible.
 Dependencies: none

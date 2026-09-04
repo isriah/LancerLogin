@@ -472,17 +472,21 @@ test("Reports may request inactive roster history without changing the default a
 
 test("member history is stable by roster ID and available to Operators", async () => {
   const database = new FakeDatabase();
-  database.rows.set("external_id = ?", { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: 0, attendanceRequiredFrom: "2026-09-02" });
+  database.rows.set("external_id = ?", { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", discordUserId: "123456789012", active: 0, attendanceRequiredFrom: "2026-09-02" });
   database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
   database.lists.set("FROM meetings meeting", [{ meetingId: "meeting-1", title: "Pre-start meeting", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", checkedInAt: "2026-09-01T20:05:00.000Z", checkedOutAt: "2026-09-01T21:10:00.000Z" }, { meetingId: "meeting-2", title: "Practice", startsAt: "2026-09-02T20:00:00.000Z", endsAt: "2026-09-02T22:00:00.000Z", correction: "excused", reason: "Medical appointment" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/admin/members/A-101/history", undefined, { cookie: await sessionCookie("operator") }), env);
   assert.equal(result.status, 200);
-  const body = await result.json() as { member: { active: boolean; memberId: string; attendanceRequiredFrom?: string }; history: Array<{ disposition: string; checkedInAt?: string; checkedOutAt?: string; reason?: string }> };
-  assert.deepEqual(body.member, { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: false, attendanceRequiredFrom: "2026-09-02" });
+  const body = await result.json() as { member: { active: boolean; memberId: string; discordUserId?: string; attendanceRequiredFrom?: string }; history: Array<{ disposition: string; checkedInAt?: string; checkedOutAt?: string; reason?: string }> };
+  assert.deepEqual(body.member, { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", discordUserId: "123456789012", active: false, attendanceRequiredFrom: "2026-09-02" });
+  assert.doesNotMatch(JSON.stringify(body), /token|ciphertext|publicKey|guildId|channelId/i);
   assert.equal(body.history.length, 1);
   assert.equal(body.history[0].disposition, "excused");
   assert.equal(body.history[0].reason, "Medical appointment");
+
+  const unauthorized = await worker.fetch(request("/admin/members/A-101/history"), env);
+  assert.equal(unauthorized.status, 401);
 });
 
 test("authenticated kiosk configuration returns current display branding", async () => {

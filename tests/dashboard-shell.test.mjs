@@ -390,6 +390,10 @@ test("member detail routes preserve deep links, history, and role-limited action
   assert.match(roster, /attendanceRequiredFrom/);
   assert.match(detail, /Attendance required from/);
   assert.match(detail, /role === "admin"/);
+  assert.match(shell, /discordEnabled=\{integrations\.discord\.enabled\}/);
+  assert.match(detail, /discordEnabled && <dl className="member-discord-identity"/);
+  assert.match(detail, /detail\.member\.discordUserId/);
+  assert.match(detail, /member-discord-unlinked">Not linked/);
 });
 
 test("numeric organization settings can be cleared before they are normalized on save", async () => {

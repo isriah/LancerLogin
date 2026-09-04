@@ -755,7 +755,8 @@ Status: in progress
 Owner: Codex task
 Branch: `codex/wu-048-meeting-management-scope` (requested; provisioning Worktree)
 Base: `48e07f97df38fa3c00f2caa4ed61be3d05eeb84e`
-Task: provisioning client `client-new-thread:b45c6ac0-3ae9-47a5-8ef8-0a2f2fe83207`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\1f49\\LancerLogin Workspace` (detached)
+Task: `01a06ba8-6e00-7490-8405-2297d6640890`
 
 Goal: put single-meeting management on meeting detail while retaining bulk operations in Dashboard Table view.
 Dependencies: WU-044 and WU-045
@@ -772,7 +773,8 @@ Status: in progress
 Owner: Codex task
 Branch: `codex/wu-049-displaced-meeting-utilities` (requested; provisioning Worktree)
 Base: `48e07f97df38fa3c00f2caa4ed61be3d05eeb84e`
-Task: provisioning client `client-new-thread:ea726004-3368-45c0-bbd7-1f225d9a7970`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\edd5\\LancerLogin Workspace` (detached)
+Task: `01a06ba8-7f31-7780-bbed-1ea8fb19b335`
 
 Goal: give utilities displaced by the Dashboard redesign one clear, non-duplicated home.
 Dependencies: WU-044, WU-045, and WU-047

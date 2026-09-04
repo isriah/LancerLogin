@@ -393,3 +393,147 @@ Recorded: 2026-09-03
 Source: WU Idea Inbox
 Request: Add an enable toggle for each integration, defaulted off; show configuration options only when enabled. List integrations vertically with enabled entries above disabled ones, and render each disabled integration as one fully condensed row.
 Disposition: WU-039
+
+## IN-048
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: When a contest is resolved or approved, automatically refresh the top-of-screen contest notifier so it clears when no pending contests remain.
+Disposition: WU-034
+
+## IN-049
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Replace the dark-mode/light-mode button with a toggle control.
+Disposition: WU-040
+
+## IN-050
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Fix the sort-dropdown overflow still shown in https://i.imgur.com/QJYzbFJ.png.
+Disposition: WU-041
+
+## IN-051
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Investigate the Reports-page Reporting period dropdown, which appears functionally useless. If it never has an option, remove it; if it does, explain what the option is before deciding what to do.
+Disposition: WU-041
+
+## IN-052
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Vertically center values in the table shown at https://i.imgur.com/znv288V.png instead of top-aligning them.
+Disposition: WU-042
+
+## IN-053
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: In the same table, place actions on the right rather than below the name area.
+Disposition: WU-042
+
+## IN-054
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: In the same table, vertically center the headers.
+Disposition: WU-042
+
+## IN-055
+
+Status: covered
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Remove the Kiosks-page card reading Kiosk status is current.; the status is already visible in the kiosk-information card.
+Disposition: WU-038 already removed this redundant successful-refresh message.
+
+## IN-056
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Move the Replace kiosk button into the kiosk-information card.
+Disposition: WU-043
+
+## IN-057
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Add right-side padding to selection-dropdown arrows, which currently sit too far to the right (https://i.imgur.com/M7ow2UK.png).
+Disposition: WU-041
+
+## IN-058
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Add forward and backward arrows to calendar views for navigation.
+Disposition: WU-045
+
+## IN-059
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Rename Home to Dashboard while retaining `/dashboard`, and consolidate the current Home, Meetings, and Attendance navigation into a Dashboard-to-meeting-detail flow. Remove Meetings and Attendance from primary navigation after adding canonical `/meetings/[ID]` detail pages. Preserve old bookmarks by redirecting `/meetings` to Dashboard table view, `/attendance?meetingId=[ID]` to the matching meeting detail, and bare `/attendance` to Dashboard.
+Disposition: WU-044, WU-045
+
+## IN-060
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Make Dashboard the meeting browser. Present the existing five-week meeting calendar by default, add a toggle for the existing meetings table, remember the selected Calendar/Table view in that browser, and keep the same meeting dropdown and Add meeting action visible in both views. Calendar events, table meetings, and dropdown selections should all open the canonical meeting deep link.
+Disposition: WU-045
+
+## IN-061
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Turn the existing Create meeting card into an accessible popup opened from the Dashboard meeting-browser header. Preserve one-time and recurring creation, validation, duplication support, and existing best-effort Discord calendar sync. After success, close the popup, refresh the active Dashboard view and meeting selector, and announce how many meetings were created without navigating away.
+Disposition: WU-046
+
+## IN-062
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Add a canonical `/meetings/[ID]` detail page with no calendar. Show a Back to Dashboard action, a dropdown for switching meetings, the meeting title, date, start and end times, Upcoming/In progress/Late scan window/Past state, Required/Optional status, recurrence context, notes, and attendance closing time. Show the existing member attendance list and preserve all current attendance statuses, corrections, excuses, manual present/absent changes, clear actions, and member-local feedback. Add manual refresh and refresh attendance every 30 seconds while the attendance window is open.
+Disposition: WU-044
+
+## IN-063
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Put meeting-specific Discord controls and contests on `/meetings/[ID]`. Hide Discord controls unless Discord is enabled and verified; allow Discord calendar sync until the scheduled meeting end and mute it afterward; mute the Discord absence ping before the meeting starts and allow it from the scheduled start onward. Keep contest review on the relevant meeting detail and use the top-right notifier for access across all pending contests.
+Disposition: WU-047
+
+## IN-064
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Split meeting management by scope after the Dashboard redesign. Put Edit, Duplicate, and Delete on `/meetings/[ID]` in focused dialogs, preserving occurrence-versus-future-series behavior. After deletion, return to Dashboard with the existing Undo capability. Keep meeting search, selection checkboxes, bulk delete, and Sync all to Discord in Dashboard table view, and ensure selecting a meeting does not interfere with checkbox-based bulk selection.
+Disposition: WU-048
+
+## IN-065
+
+Status: promoted
+Recorded: 2026-09-03
+Source: WU Idea Inbox
+Request: Consolidate the non-meeting-specific utilities removed with the standalone Attendance page. Keep attendance CSV export in Reports, move persistent Discord kiosk-status sync into the Kiosks page beside its existing health information, replace the separate Home live-roster section with each meeting's detail roster, and remove the duplicate Home contest list after contest review is available from meeting details and the top-right notifier.
+Disposition: WU-049

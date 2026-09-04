@@ -501,9 +501,9 @@ Status: ready
 
 Goal: let operators review pending attendance contests from the top-right notifier with enough meeting and member context to act confidently.
 Dependencies: none
-Scope: make the contest notifier open an accessible popup containing the actionable contest list; show the meeting occurrence date with its name and place the member ID beside the member name in both the popup and Home contest view. Preserve review-reason validation, contest policy, audit history, and existing resolution outcomes. Exclude notification delivery and unrelated Reports changes.
-Sources: `docs/idea_inbox.md` (IN-041); WU-019; WU-030; `apps/dashboard/src/contest-indicator.tsx`; `apps/dashboard/src/home-page.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`.
-Acceptance: the notifier opens a keyboard-accessible contest popup; each item shows member name and ID together plus meeting name and occurrence date; valid contest actions complete from the popup and Home with clear success or failure feedback.
+Scope: make the contest notifier open an accessible popup containing the actionable contest list; show the meeting occurrence date with its name and place the member ID beside the member name in both the popup and Home contest view; refresh the shared notifier immediately after a contest is resolved from any supported view. Preserve review-reason validation, contest policy, audit history, and existing resolution outcomes. Exclude notification delivery and unrelated Reports changes.
+Sources: `docs/idea_inbox.md` (IN-041, IN-048); WU-019; WU-030; `apps/dashboard/src/contest-indicator.tsx`; `apps/dashboard/src/home-page.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`.
+Acceptance: the notifier opens a keyboard-accessible contest popup; each item shows member name and ID together plus meeting name and occurrence date; valid contest actions complete from the popup and Home with clear success or failure feedback; the notifier count refreshes after every successful resolution and disappears when no open contests remain.
 Verification: `npm run verify:api` and `npm run verify:dashboard`; focused browser coverage for popup accessibility, contest context, and resolution actions.
 Release: v0.14.1 dashboard navigation and integration refinement.
 
@@ -540,10 +540,10 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-037 — Attendance calendar selection repair
 
-Status: ready
+Status: blocked
 
 Goal: make an Attendance calendar click select and display the intended current or past meeting.
-Dependencies: none
+Dependencies: WU-044 and WU-045 (the approved canonical meeting-detail and Dashboard-browser redesign supersedes this standalone Attendance-page repair; reassess only if that redesign is abandoned)
 Scope: synchronize Attendance calendar selection, route query state, and the meeting selector for current and past meetings. Preserve future-meeting routing to Meetings, attendance actions, and meeting eligibility semantics. Exclude calendar layout and meeting-edit behavior.
 Sources: `docs/idea_inbox.md` (IN-045); WU-014; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/router.tsx`; `docs/DASHBOARD.md`.
 Acceptance: clicking a current or past calendar meeting updates the selected meeting, URL, and displayed attendance together; future meetings still route to Meetings; direct query links and selector changes remain usable.
@@ -586,6 +586,126 @@ Sources: `docs/idea_inbox.md` (IN-047); `apps/dashboard/src/integration-settings
 Acceptance: each provider has an accessible persisted enable toggle; disabled providers expose no configuration form or operational delivery; enabled entries sort first; existing configured providers remain enabled after migration; Google cannot be disabled when that would remove the installation's only usable sign-in method.
 Verification: `npm run verify:migrations`, `npm run verify:api`, and `npm run verify:dashboard`; focused enable/disable, migration, provider-gating, Google lockout-prevention, sorting, and responsive accessibility coverage.
 Release: v0.14.1 dashboard navigation and integration refinement.
+
+### WU-040 — Theme toggle control
+
+Status: ready
+
+Goal: make light and dark appearance selection compact and immediately understandable.
+Dependencies: none
+Scope: replace the existing Light mode/Dark mode text button with an accessible toggle while preserving the saved theme choice, keyboard operation, and readable state communication. Exclude branding-color changes and new appearance modes.
+Sources: `docs/idea_inbox.md` (IN-049); `apps/dashboard/src/main.tsx`; `apps/dashboard/src/styles.css`; `docs/DASHBOARD.md`.
+Acceptance: the theme control presents and announces its current state as a toggle, works by keyboard and pointer, and preserves the existing saved light/dark outcome across reloads.
+Verification: `npm run verify:dashboard`; focused keyboard and browser coverage for both theme states and persistence.
+Release: v0.14.1 dashboard navigation and integration refinement.
+
+### WU-041 — Reports selector clarity and spacing
+
+Status: ready
+
+Goal: keep Reports selectors legible and explain the operational reporting-period choice.
+Dependencies: none
+Scope: fix the clipped Attendance-leaderboard sort value; add sufficient right-side space around select arrows on the affected Reports controls; retain the operational-baseline versus preserved-history behavior and clearly explain when no baseline is configured. Exclude reporting calculations, baseline storage, and unrelated global form restyling.
+Sources: `docs/idea_inbox.md` (IN-050, IN-051, IN-057); WU-002; WU-026; `apps/dashboard/src/reports-page.tsx`; `apps/dashboard/src/styles.css`; `tests-browser/dashboard-smoke.spec.ts`; `docs/DASHBOARD.md`.
+Acceptance: every affected selector shows its selected value and arrow without clipping at supported widths; Reports explains that the operational-baseline option is available only when configured and otherwise clearly identifies preserved history as the active scope; existing report results remain unchanged.
+Verification: `npm run verify:dashboard`; focused responsive browser geometry and reporting-period state coverage.
+Release: v0.14.1 dashboard navigation and integration refinement.
+
+### WU-042 — Roster table alignment and action placement
+
+Status: ready
+
+Goal: make roster rows scan cleanly and keep member actions in their intended column.
+Dependencies: none
+Scope: vertically center roster table headers and row values; place member actions in the right-side Actions column at supported desktop widths with a usable responsive fallback. Preserve member links, permissions, and action behavior.
+Sources: `docs/idea_inbox.md` (IN-052, IN-053, IN-054); WU-028; `apps/dashboard/src/roster-page.tsx`; `apps/dashboard/src/styles.css`; `docs/DASHBOARD.md`.
+Acceptance: roster headings and values align vertically, desktop actions appear on the right rather than beneath the identity block, and narrow layouts remain readable and operable.
+Verification: `npm run verify:dashboard`; focused desktop and mobile roster browser coverage.
+Release: v0.14.1 dashboard navigation and integration refinement.
+
+### WU-043 — Kiosk information-card action consolidation
+
+Status: ready
+
+Goal: place kiosk replacement where operators inspect the device being replaced.
+Dependencies: none
+Scope: move the Admin-only Add kiosk/Replace kiosk action from the page heading into the Physical kiosk information card. Preserve replacement confirmation, pairing, role restrictions, device state, and responsive behavior.
+Sources: `docs/idea_inbox.md` (IN-056); WU-009; WU-038; `apps/dashboard/src/kiosks-page.tsx`; `apps/dashboard/src/styles.css`; `docs/KIOSK.md`.
+Acceptance: authorized Admins find Add or Replace beside the physical kiosk information, Operators cannot access it, and the existing pairing/replacement workflow and warnings remain intact.
+Verification: `npm run verify:dashboard`; focused Kiosks-page role, pairing-dialog, and responsive browser coverage.
+Release: v0.14.1 dashboard navigation and integration refinement.
+
+### WU-044 — Canonical meeting-detail workspace
+
+Status: ready
+
+Goal: give every meeting one durable detail route containing its operational context and attendance workflow.
+Dependencies: none
+Scope: add `/meetings/[ID]` with Back to Dashboard and meeting-switcher controls; show meeting timing, lifecycle state, Required/Optional status, recurrence, notes, and attendance closing time; move the existing attendance roster, corrections, excuses, manual status changes, clear actions, and member-local feedback into this page; add manual refresh and refresh attendance every 30 seconds only while its attendance window is open; redirect `/attendance?meetingId=[ID]` to the matching detail route and bare `/attendance` to Dashboard. Preserve authorization, attendance semantics, audit behavior, and unknown-meeting handling. Exclude meeting editing, Discord actions, contests, and the Dashboard browser redesign.
+Sources: `docs/idea_inbox.md` (IN-059, IN-062); WU-014; WU-035; WU-037; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/router.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`; `docs/ARCHITECTURE.md`.
+Acceptance: direct and in-app `/meetings/[ID]` navigation renders the requested meeting summary and complete attendance workflow; legacy Attendance bookmarks land at the correct replacement; manual refresh works; automatic refresh runs only while attendance is open; Back/Forward, permissions, and member-local outcomes remain correct.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused browser coverage for direct routes, redirects, meeting switching, lifecycle states, attendance actions, refresh timing, and responsive accessibility.
+Release: v0.15.0 Dashboard and meeting-workspace redesign.
+
+### WU-045 — Dashboard meeting browser and navigation
+
+Status: ready
+
+Goal: make Dashboard the single place to browse and select meetings.
+Dependencies: WU-044
+Scope: rename Home to Dashboard while retaining `/dashboard`; remove Meetings and Attendance from primary navigation; present the existing five-week calendar by default with forward/backward navigation; add a remembered Calendar/Table view toggle; keep the meeting dropdown and Add meeting action available in both views; make calendar events, table rows, and dropdown choices open `/meetings/[ID]`; redirect `/meetings` to Dashboard table view. Preserve browser history, role access, meeting search, and supported responsive layouts. Exclude the create dialog, meeting management dialogs, Discord actions, contests, and displaced-utility cleanup.
+Sources: `docs/idea_inbox.md` (IN-058, IN-059, IN-060); WU-035; WU-044; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/app-shell.tsx`; `apps/dashboard/src/router.tsx`; `apps/dashboard/src/styles.css`; `docs/DASHBOARD.md`; `docs/ARCHITECTURE.md`.
+Acceptance: Dashboard offers remembered Calendar and Table meeting browsers with consistent selector and Add meeting access; calendar navigation changes the visible date range; every meeting selection opens its canonical detail route; primary navigation and legacy `/meetings` behavior match the approved design.
+Verification: `npm run verify:dashboard`; focused desktop/mobile browser coverage for view persistence, calendar navigation, table search, selection routes, redirects, and Back/Forward behavior.
+Release: v0.15.0 Dashboard and meeting-workspace redesign.
+
+### WU-046 — Dashboard meeting-creation dialog
+
+Status: ready
+
+Goal: create meetings without leaving the active Dashboard meeting browser.
+Dependencies: WU-045
+Scope: move the existing creation fields into an accessible dialog opened from the Dashboard meeting-browser header; preserve one-time and recurring creation, validation, duplication support, and best-effort Discord calendar sync; after success close the dialog, refresh both active browser view and meeting selector, and announce the created count without navigation. Exclude edit/delete management and changes to recurrence or Discord policy.
+Sources: `docs/idea_inbox.md` (IN-061); WU-008; WU-020; WU-045; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/modal-focus.ts`; `apps/dashboard/src/styles.css`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`.
+Acceptance: keyboard and pointer users can open, complete, cancel, and recover validation errors in the dialog; successful one-time or recurring creation closes it, announces the correct count, and updates the currently selected Dashboard view and selector without changing routes.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused browser coverage for dialog focus, validation, duplication, recurrence, Discord-sync outcomes, refresh, and responsive layout.
+Release: v0.15.0 Dashboard and meeting-workspace redesign.
+
+### WU-047 — Meeting-detail Discord and contest operations
+
+Status: ready
+
+Goal: keep meeting-specific Discord and contest actions on the meeting they affect.
+Dependencies: WU-034, WU-039, and WU-044
+Scope: place eligible Discord calendar sync, absence notification, and contest review on `/meetings/[ID]`; hide Discord actions unless Discord is enabled and verified; allow calendar sync through scheduled meeting end and mute it afterward; mute absence notification before scheduled start and allow it from start onward; retain the top-right notifier for all open contests. Preserve signed-provider boundaries, review reasons, contest outcomes, and audit history. Exclude global Discord configuration and non-meeting utility relocation.
+Sources: `docs/idea_inbox.md` (IN-063); WU-022; WU-030; WU-034; WU-039; WU-044; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/contest-indicator.tsx`; `apps/api/src/index.ts`; `docs/INTEGRATIONS.md`; `docs/DASHBOARD.md`; `docs/SECURITY.md`.
+Acceptance: verified enabled Discord exposes only time-eligible meeting actions; disabled or unverified Discord exposes none; meeting contests are reviewable with existing validation and audit behavior; the global notifier still reaches all pending contests and refreshes after resolution.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused authorization, provider-state, timing-boundary, contest-resolution, notifier, and browser coverage.
+Release: v0.15.0 Dashboard and meeting-workspace redesign.
+
+### WU-048 — Split meeting management by scope
+
+Status: ready
+
+Goal: put single-meeting management on meeting detail while retaining bulk operations in Dashboard Table view.
+Dependencies: WU-044 and WU-045
+Scope: move Edit, Duplicate, and Delete to `/meetings/[ID]` in focused accessible dialogs; preserve occurrence-versus-future-series behavior; after deletion return to Dashboard with existing Undo capability; retain search, selection checkboxes, bulk delete, and Sync all to Discord in Dashboard Table view; prevent row navigation from toggling or disrupting checkbox selection. Exclude meeting creation and Discord policy changes.
+Sources: `docs/idea_inbox.md` (IN-064); WU-008; WU-021; WU-044; WU-045; `apps/dashboard/src/meetings-page.tsx`; `apps/dashboard/src/modal-focus.ts`; `apps/dashboard/src/styles.css`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`.
+Acceptance: detail-page dialogs correctly manage an occurrence or its future series; successful deletion returns to Dashboard and can be undone; table bulk selection and row navigation remain independent; search, bulk delete, and Sync all retain their outcomes.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused recurrence-scope, deletion/Undo, dialog accessibility, checkbox isolation, bulk action, and browser coverage.
+Release: v0.15.0 Dashboard and meeting-workspace redesign.
+
+### WU-049 — Consolidate displaced meeting utilities
+
+Status: ready
+
+Goal: give utilities displaced by the Dashboard redesign one clear, non-duplicated home.
+Dependencies: WU-044, WU-045, and WU-047
+Scope: retain attendance CSV export in Reports; move persistent Discord kiosk-status sync beside physical health information on Kiosks and gate it on enabled-and-verified Discord; rely on each meeting detail for its live roster; remove the duplicate Dashboard contest list only after meeting-detail review and the refreshed global notifier are available. Preserve authorization, provider verification, kiosk health behavior, exports, and contest access. Exclude new Discord capabilities and report redesign.
+Sources: `docs/idea_inbox.md` (IN-065); WU-030; WU-039; WU-044; WU-045; WU-047; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/reports-page.tsx`; `apps/dashboard/src/kiosks-page.tsx`; `apps/api/src/index.ts`; `docs/DASHBOARD.md`; `docs/KIOSK.md`; `docs/INTEGRATIONS.md`.
+Acceptance: CSV export remains in Reports; authorized kiosk-status sync appears on Kiosks only when Discord is enabled and verified; Dashboard no longer duplicates live-roster or contest content; meeting detail and the global notifier remain complete replacement paths.
+Verification: `npm run verify:api` and `npm run verify:dashboard`; focused Reports export, Kiosks integration gating, contest-access, navigation, and combined browser coverage.
+Release: v0.15.0 Dashboard and meeting-workspace redesign.
 
 ## Release bundling
 

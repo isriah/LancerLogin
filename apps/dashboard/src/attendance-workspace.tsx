@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./dashboard-api";
+import { ContestReviewList, type Contest } from "./contest-review-list";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
 import { usePath } from "./router";
 
@@ -39,6 +40,10 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [meeting, setMeeting] = useState<Meeting>();
   const [rows, setRows] = useState<AttendanceRow[]>([]);
+  const [contests, setContests] = useState<Contest[]>([]);
+  const [discordConfigured, setDiscordConfigured] = useState(false);
+  const [discordNotice, setDiscordNotice] = useState("");
+  const [discordBusy, setDiscordBusy] = useState<"calendar" | "absence">();
   const [notice, setNotice] = useState("Loading meeting…");
   const [memberNotices, setMemberNotices] = useState<Record<string, string>>({});
   const [clock, setClock] = useState(() => Date.now());
@@ -50,16 +55,26 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
 
   async function load(): Promise<boolean> {
     const sequence = ++loadSequence.current;
-    const result = await api<{ meetings: Meeting[] }>("/meetings");
+    const [result, capabilities] = await Promise.all([
+      api<{ meetings: Meeting[] }>("/meetings"),
+      api<{ integrations: { discord: { configured: boolean } } }>("/integrations/capabilities").catch(() => ({ integrations: { discord: { configured: false } } })),
+    ]);
     if (sequence !== loadSequence.current) return false;
+    const discordAvailable = capabilities.integrations.discord.configured;
     const ordered = [...result.meetings].sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt));
     setMeetings(ordered);
     setMemberNotices({});
     const requested = (await api<{ meeting: Meeting }>(`/meetings/${encodeURIComponent(meetingId)}`)).meeting;
-    const attendance = await attendanceFor(requested.id);
+    const [attendance, contestResult] = await Promise.all([
+      attendanceFor(requested.id),
+      discordAvailable ? api<{ contests: Contest[] }>(`/discord/contests?meetingId=${encodeURIComponent(requested.id)}`) : Promise.resolve({ contests: [] }),
+    ]);
     if (sequence !== loadSequence.current) return false;
     setMeeting(requested);
     setRows(attendance.attendance);
+    setContests(contestResult.contests.filter((contest) => contest.status === "open"));
+    setDiscordConfigured(discordAvailable);
+    setDiscordNotice("");
     setClock(Date.now());
     setNotice("");
     return true;
@@ -69,6 +84,8 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
     setNotice("Loading meeting…");
     setMeeting(undefined);
     setRows([]);
+    setContests([]);
+    setDiscordNotice("");
     void load().catch((error: Error) => setNotice(error.message));
     return () => { loadSequence.current += 1; };
   }, [meetingId]);
@@ -81,8 +98,9 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
         void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message));
         setClock(Date.now());
       }, 30_000);
+      const endsTimer = window.setTimeout(() => setClock(Date.now()), Math.max(0, Date.parse(meeting.endsAt) - Date.now() + 1));
       const closesTimer = window.setTimeout(() => setClock(Date.now()), Math.max(0, Date.parse(meeting.attendanceClosesAt) - Date.now() + 1));
-      return () => { window.clearInterval(timer); window.clearTimeout(closesTimer); };
+      return () => { window.clearInterval(timer); window.clearTimeout(endsTimer); window.clearTimeout(closesTimer); };
     }
     if (lifecycle === "upcoming") {
       const opensTimer = window.setTimeout(() => setClock(Date.now()), Math.min(2_147_000_000, Math.max(0, Date.parse(meeting.startsAt) - Date.now() + 1)));
@@ -118,10 +136,28 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
     try { if (await load()) setNotice("Attendance refreshed."); }
     catch (error) { setNotice((error as Error).message); }
   }
+  async function syncDiscordCalendar() {
+    if (!meeting) return;
+    setDiscordBusy("calendar"); setDiscordNotice("Syncing this meeting to the Discord calendar…");
+    try { await api("/discord/calendar", { method: "POST", body: JSON.stringify({ meetingId: meeting.id }) }); setDiscordNotice("Discord calendar updated for this meeting."); }
+    catch (error) { setDiscordNotice((error as Error).message); }
+    finally { setDiscordBusy(undefined); }
+  }
+  async function notifyDiscordAbsences() {
+    if (!meeting) return;
+    setDiscordBusy("absence"); setDiscordNotice("Sending the Discord absence notice…");
+    try {
+      const result = await api<{ posted: boolean; linkedMissingCount: number }>("/discord/missing", { method: "POST", body: JSON.stringify({ meetingId: meeting.id }) });
+      setDiscordNotice(result.posted ? `Discord absence notice sent to ${result.linkedMissingCount} linked member${result.linkedMissingCount === 1 ? "" : "s"}.` : "No linked absent members need a Discord notice.");
+    } catch (error) { setDiscordNotice((error as Error).message); }
+    finally { setDiscordBusy(undefined); }
+  }
 
   const recurrence = meeting?.recurrenceFrequency
     ? `${frequencyLabel(meeting.recurrenceFrequency)}${meeting.recurrenceSequence ? ` · Occurrence ${meeting.recurrenceSequence}` : ""}${meeting.recurrenceUntil ? ` · Through ${new Date(meeting.recurrenceUntil).toLocaleDateString()}` : ""}`
     : "One time";
+  const calendarEligible = Boolean(meeting && clock <= Date.parse(meeting.endsAt));
+  const absenceEligible = Boolean(meeting && clock >= Date.parse(meeting.startsAt));
 
   return <section className="attendance-workspace meeting-detail-workspace" aria-labelledby="meeting-detail-title">
     <div className="meeting-detail-navigation">
@@ -138,6 +174,13 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
         <div><dt>Attendance closes</dt><dd>{new Date(meeting.attendanceClosesAt).toLocaleString()}</dd></div>
         <div className="meeting-summary-notes"><dt>Notes</dt><dd>{meeting.notes || "No notes"}</dd></div>
       </dl>
+      {discordConfigured && <div className="meeting-discord-layout">
+        <section className="task-card meeting-discord-operations" aria-labelledby="meeting-discord-title"><div className="panel-heading"><div><h2 id="meeting-discord-title">Discord operations</h2><p>Actions apply only to this meeting.</p></div></div><div className="meeting-operation-list">
+          <article><div><h3>Calendar event</h3><p>{calendarEligible ? `Available through the scheduled end at ${new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : "Unavailable because the scheduled meeting end has passed."}</p></div><button type="button" disabled={!calendarEligible || Boolean(discordBusy)} onClick={() => void syncDiscordCalendar()}>{discordBusy === "calendar" ? "Syncing…" : "Sync Discord calendar"}</button></article>
+          <article><div><h3>Absence notice</h3><p>{absenceEligible ? "Notify linked members currently marked absent." : `Available when the meeting starts at ${new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`}</p></div><button type="button" disabled={!absenceEligible || Boolean(discordBusy)} onClick={() => void notifyDiscordAbsences()}>{discordBusy === "absence" ? "Sending…" : "Send Discord absence notice"}</button></article>
+        </div>{discordNotice && <p className="meeting-discord-notice" role="status" aria-live="polite">{discordNotice}</p>}</section>
+        <section className="task-card meeting-contests" aria-labelledby="meeting-contests-title"><div className="panel-heading"><div><h2 id="meeting-contests-title">Attendance contests</h2><p>Review requests submitted for this meeting.</p></div><span className="progress-count">{contests.length} open</span></div>{contests.length ? <ContestReviewList contests={contests} onResolved={(resolution, contest) => { setContests((current) => current.filter((item) => item.meetingId !== contest.meetingId || item.memberId !== contest.memberId)); setDiscordNotice(`Contest ${resolution}.`); if (resolution === "approved") void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message)); }} /> : <p className="empty-state">No attendance contests need review for this meeting.</p>}</section>
+      </div>}
       <div className="attendance-utilities"><span role="status" aria-live="polite">{notice}</span><span className="progress-count">{rows.filter((row) => row.disposition === "present").length} present</span></div>
       <section className="attendance-card" aria-labelledby="meeting-attendance-title"><div className="panel-heading"><h2 id="meeting-attendance-title">Attendance</h2></div>{rows.length ? <div className="attendance-table" role="table" aria-label="Meeting attendance"><div className="attendance-row header" role="row"><span>Member</span><span>Status</span><span>Actions</span></div>{rows.map((row) => <div className="attendance-row" role="row" key={row.memberId}><span><strong>{row.firstName} {row.lastName}</strong><small>{row.externalId}</small>{memberNotices[row.memberId] && <small className="member-action-notice" role="status">{memberNotices[row.memberId]}</small>}</span><span className={`attendance-state ${row.disposition}`}>{row.disposition === "not_required" ? "Not required" : row.disposition}</span><span className="correction-actions"><button type="button" disabled={row.disposition === "present"} onClick={() => void correct(row, "present")}>Present</button><button type="button" disabled={row.disposition === "excused"} onClick={() => void correct(row, "excused")}>Excuse</button><button type="button" disabled={row.disposition === "absent"} onClick={() => void correct(row, "absent")}>Absent</button>{role === "admin" && <button type="button" disabled={row.disposition === "not_required"} onClick={() => void clear(row)}>Clear</button>}</span></div>)}</div> : <p className="empty-state">No active roster records are available.</p>}</section>
     </> : <section className="empty-page"><h1 id="meeting-detail-title">Meeting unavailable</h1><p role="status">{notice}</p><p>The meeting may have been removed, or the link may be incorrect. Choose another meeting or return to Dashboard.</p></section>}

@@ -641,6 +641,10 @@ async function requireIntegrationEnabled(env: Env, provider: IntegrationProvider
 async function integrationRecord(env: Env, provider: IntegrationProvider): Promise<IntegrationRecord | null> {
   return requireDatabase(env).prepare(`SELECT i.id, i.ciphertext, i.iv, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, x.${integrationFlagSqlColumns[provider]} AS enabled FROM encrypted_integrations i JOIN installations x ON x.id = i.installation_id WHERE i.installation_id = 'primary' AND i.provider = ?`).bind(provider).first();
 }
+async function requireIntegrationConfigured(env: Env, provider: IntegrationProvider): Promise<void> {
+  const record = await integrationRecord(env, provider);
+  if (!record?.enabled || !record.verifiedAt) throw new HttpError(409, `${provider === "google" ? "Google OAuth" : provider === "resend" ? "Resend" : "Discord"} must be enabled and verified`);
+}
 async function integrationsStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
   const [result, flags] = await Promise.all([requireDatabase(env).prepare("SELECT i.provider, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, EXISTS(SELECT 1 FROM integration_verification_challenges c WHERE c.installation_id = i.installation_id AND c.provider = i.provider AND c.expires_at > ?) AS verificationPending FROM encrypted_integrations i WHERE i.installation_id = 'primary' ORDER BY i.provider").bind(new Date().toISOString()).all<{ provider: IntegrationProvider; updatedAt: string; verifiedAt?: string | null; verificationPending: number }>(), integrationFlags(env)]);
@@ -918,12 +922,12 @@ async function discordMissing(request: Request, env: Env): Promise<Response> {
   return response(await sendDiscordAttendanceNotification(env, meeting, { force: true, actor: principal }), 202);
 }
 async function discordContests(request: Request, env: Env): Promise<Response> {
-  await requireRole(request, env, ["admin", "operator"]); await requireIntegrationEnabled(env, "discord"); const meetingId = new URL(request.url).searchParams.get("meetingId"); const where = meetingId ? "AND c.meeting_id = ?" : "";
+  await requireRole(request, env, ["admin", "operator"]); await requireIntegrationConfigured(env, "discord"); const meetingId = new URL(request.url).searchParams.get("meetingId"); const where = meetingId ? "AND c.meeting_id = ?" : "";
   const statement = requireDatabase(env).prepare(`SELECT c.meeting_id AS meetingId, mt.title AS meetingTitle, mt.starts_at AS meetingStartsAt, c.member_id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, c.status, c.created_at AS createdAt, c.resolved_at AS resolvedAt, c.review_note AS reviewNote FROM discord_attendance_contests c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id JOIN meetings mt ON mt.id = c.meeting_id AND mt.installation_id = c.installation_id WHERE c.installation_id = 'primary' ${where} ORDER BY CASE WHEN c.status = 'open' THEN 0 ELSE 1 END, c.created_at DESC`); const result = meetingId ? await statement.bind(meetingId).all() : await statement.all();
   return response({ contests: result.results ?? [] });
 }
 async function resolveDiscordContest(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); await requireIntegrationEnabled(env, "discord"); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; memberId?: string; resolution?: "approved" | "rejected" | "reviewed"; reviewNote?: string }>(request);
+  const principal = await requireRole(request, env, ["admin", "operator"]); await requireIntegrationConfigured(env, "discord"); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; memberId?: string; resolution?: "approved" | "rejected" | "reviewed"; reviewNote?: string }>(request);
   if (!input.meetingId || !input.memberId || !input.resolution || !["approved", "rejected", "reviewed"].includes(input.resolution)) throw new HttpError(400, "Meeting, member, and a valid resolution are required");
   if (typeof input.reviewNote !== "string" || !input.reviewNote.trim()) throw new HttpError(400, "A review reason is required before resolving this contest");
   if (input.reviewNote.length > 500) throw new HttpError(400, "Review reasons must be 500 characters or fewer");
@@ -998,7 +1002,7 @@ async function syncDiscordCalendarMeetings(db: D1Database, env: Env, principal: 
   for (const id of ids) {
     const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, notes FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(id).first<{ id: string; title: string; startsAt: string; endsAt?: string; notes?: string }>();
     if (!meeting) { skipped += 1; outcomes.push({ meetingId: id, title: "Meeting", status: "skipped", reason: "Meeting is no longer active" }); continue; }
-    if (Date.parse(meeting.endsAt ?? meeting.startsAt) <= Date.now()) { skipped += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "skipped", reason: "Meeting has already ended" }); continue; }
+    if (Date.parse(meeting.endsAt ?? meeting.startsAt) < Date.now()) { skipped += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "skipped", reason: "Meeting has already ended" }); continue; }
     if (meeting.title.length > 100) { failed += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason: "Discord event names are limited to 100 characters" }); continue; }
     if ((meeting.notes?.length ?? 0) > 1_000) { failed += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason: "Discord event descriptions are limited to 1,000 characters" }); continue; }
     try { await syncDiscordCalendarMeeting(db, env, principal, meeting); synced += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "synced" }); }
@@ -1025,6 +1029,7 @@ async function discordCalendar(request: Request, env: Env): Promise<Response> {
   }
   if (!input.meetingId) throw new HttpError(400, "Meeting is required");
   const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, notes FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string; startsAt: string; endsAt?: string; notes?: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
+  if (Date.parse(meeting.endsAt ?? meeting.startsAt) < Date.now()) throw new HttpError(409, "Discord calendar sync is unavailable after the scheduled meeting end");
   const eventId = await syncDiscordCalendarMeeting(db, env, principal, meeting);
   return response({ synced: true, eventId });
 }

@@ -52,6 +52,8 @@ test("meeting detail presents lifecycle and operational context", async ({ page 
   for (const [id, label] of [["upcoming", "Upcoming"], ["progress", "In progress"], ["late", "Late scan window"], ["past", "Past"]] as const) {
     await page.goto(`/meetings/${id}`);
     await expect(page.locator(".meeting-lifecycle")).toHaveText(label);
+    await expect(page.getByRole("button", { name: "Sync Discord calendar" })).toBeEnabled({ enabled: id === "upcoming" || id === "progress" });
+    await expect(page.getByRole("button", { name: "Send Discord absence notice" })).toBeEnabled({ enabled: id !== "upcoming" });
   }
   await page.goto("/meetings/progress");
   const summary = page.locator('[aria-label="Meeting summary"]');
@@ -59,6 +61,62 @@ test("meeting detail presents lifecycle and operational context", async ({ page 
   await expect(summary).toContainText("Every two weeks · Occurrence 3");
   await expect(summary).toContainText("Use the east entrance.");
   await expect(summary).toContainText("Attendance closes");
+});
+
+test("meeting-local Discord actions and contest review retain their scoped outcomes", async ({ page }) => {
+  const calendarBodies: unknown[] = [];
+  const absenceBodies: unknown[] = [];
+  const resolutionBodies: unknown[] = [];
+  let contestLoads = 0;
+  await page.route("**/discord/calendar", async (route) => { calendarBodies.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ synced: true, eventId: "event-1" }) }); });
+  await page.route("**/discord/missing", async (route) => { absenceBodies.push(route.request().postDataJSON()); await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ posted: true, linkedMissingCount: 1, messageId: "message-1" }) }); });
+  await page.route("**/discord/contests/resolve", async (route) => { resolutionBodies.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ resolved: true, attendanceChanged: true }) }); });
+  await page.route(/\/discord\/contests(?:\?.*)?$/, async (route) => { contestLoads += 1; await route.continue(); });
+
+  await page.goto("/meetings/active-meeting");
+  await expect(page.getByRole("heading", { name: "Discord operations" })).toBeVisible();
+  await page.getByRole("button", { name: "Sync Discord calendar" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Discord calendar updated for this meeting." })).toBeVisible();
+  await page.getByRole("button", { name: "Send Discord absence notice" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Discord absence notice sent to 1 linked member." })).toBeVisible();
+  expect(calendarBodies).toEqual([{ meetingId: "active-meeting" }]);
+  expect(absenceBodies).toEqual([{ meetingId: "active-meeting" }]);
+
+  const contest = page.locator(".meeting-contests .contest-review-list article").filter({ hasText: "Jordan Lee" });
+  await contest.getByRole("button", { name: "Approve and mark present" }).click();
+  await expect(contest.getByRole("alert")).toHaveText("A review reason is required before resolving this contest.");
+  await contest.getByLabel("Review reason").fill("Kiosk error confirmed with the member.");
+  const loadsBeforeResolution = contestLoads;
+  await contest.getByRole("button", { name: "Approve and mark present" }).click();
+  await expect(page.locator(".meeting-contests")).toContainText("No attendance contests need review for this meeting.");
+  await expect.poll(() => contestLoads).toBeGreaterThan(loadsBeforeResolution);
+  expect(resolutionBodies).toEqual([{ meetingId: "active-meeting", memberId: "member-3", resolution: "approved", reviewNote: "Kiosk error confirmed with the member." }]);
+});
+
+test("unverified Discord exposes no meeting actions or global contest notifier", async ({ page }) => {
+  await page.route("**/integrations/capabilities", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: false } } }) }));
+  await page.goto("/meetings/active-meeting");
+  await expect(page.getByRole("heading", { name: "Discord operations" })).toHaveCount(0);
+  await expect(page.locator(".meeting-contests")).toHaveCount(0);
+  await expect(page.locator(".contest-indicator")).toHaveCount(0);
+});
+
+test("meeting operations preserve the custom brand in light and dark desktop layouts", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/meetings/active-meeting");
+  const app = page.locator(".app");
+  const theme = page.getByRole("switch", { name: "Dark mode" });
+  await expect(theme).toHaveAttribute("aria-checked", "true");
+  const tokens = await app.evaluate((element) => { const style = getComputedStyle(element); return { primary: style.getPropertyValue("--primary").trim(), secondary: style.getPropertyValue("--secondary").trim() }; });
+  expect(tokens).toEqual({ primary: "#8b2f72", secondary: "#e9b949" });
+  const operations = await page.locator(".meeting-discord-operations").boundingBox();
+  const contests = await page.locator(".meeting-contests").boundingBox();
+  expect(operations && contests && operations.x < contests.x).toBe(true);
+  await theme.click();
+  await expect(theme).toHaveAttribute("aria-checked", "false");
+  await expect(app).toHaveAttribute("data-theme", "light");
+  const dimensions = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
+  expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
 });
 
 test("attendance refreshes manually and every 30 seconds only while its window is open", async ({ page }) => {

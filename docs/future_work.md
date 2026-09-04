@@ -644,7 +644,7 @@ Release: v0.14.1 dashboard navigation and integration refinement.
 
 ### WU-043 — Kiosk information-card action consolidation
 
-Status: in progress
+Status: merged (`4aad3ce`)
 
 Owner: Codex coordinator
 Branch: `codex/wu-043-kiosk-card-action`

@@ -885,7 +885,13 @@ Release: planned v0.19.0 dashboard design conformance.
 
 ### WU-055 — Authentication and guided-setup conformance
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-055-authentication-guided-setup` (requested; provisioning Worktree)
+Base: `a7a98cc`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\9257\\LancerLogin Workspace` (detached)
+Task: provisioning client `client-new-thread:10d233b8-8832-4a75-875a-8c8def93dab3`
 
 Goal: make every dashboard-rendered authentication and guided-setup state follow the shared visual and interaction contract.
 Dependencies: WU-054

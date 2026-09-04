@@ -111,6 +111,32 @@ test("meeting actions move below meeting data on a narrow screen", async ({ page
   for (const button of await actions.getByRole("button").all()) expect((await button.boundingBox())!.width).toBeGreaterThan(80);
 });
 
+test("roster actions remain available below member data on a narrow screen", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route("**/admin/members", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      discordConfigured: true,
+      members: [{ id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", email: "avery@example.org", discordUserId: "123456789012", active: 1 }],
+    }),
+  }));
+  await page.goto("/roster");
+
+  const header = page.locator(".roster-row.header");
+  const row = page.locator(".roster-row:not(.header)").first();
+  const identity = row.locator(".roster-identity");
+  const actions = row.locator(".roster-action-cell");
+  await expect(header).toBeHidden();
+  await expect(row.locator(".roster-discord-id")).toBeVisible();
+  await expect(actions.getByRole("button")).toHaveCount(3);
+  await expect(row.locator(".roster-member-id")).toHaveCSS("text-align", "right");
+  expect(await row.locator(".roster-discord-id").evaluate((element) => getComputedStyle(element, "::before").content)).toBe('"Discord ID"');
+  const [identityBounds, actionsBounds] = await Promise.all([identity.boundingBox(), actions.boundingBox()]);
+  expect(actionsBounds!.y).toBeGreaterThan(identityBounds!.y + identityBounds!.height);
+  for (const button of await actions.getByRole("button").all()) expect((await button.boundingBox())!.width).toBeGreaterThan(80);
+});
+
 test("data deletion requires an exact typed confirmation", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/settings/data");

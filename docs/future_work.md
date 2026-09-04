@@ -816,11 +816,12 @@ Release: v0.17.0 kiosk status and scan-feedback release.
 
 ### WU-053 — Dashboard visual-language standard
 
-Status: in progress
+Status: merged (`f6788c9`)
 
 Owner: Codex task
 Branch: `codex/wu-053-dashboard-ui-standard`
 Base: `2a5d0c3`
+Integration: candidate `a35f097` was merged as `f6788c9`; on the merged tree, `npm run verify:dashboard` and the 44-test full browser suite passed.
 
 Goal: give dashboard development one durable visual-language contract that reduces recurring spacing, typography, alignment, and native-control inconsistencies.
 Dependencies: none

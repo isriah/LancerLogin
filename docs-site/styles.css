@@ -78,7 +78,7 @@ a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
   text-decoration: none;
   transform: translateY(calc(-100% - 2rem));
 }
-.skip:focus { transform: translateY(0); }
+.skip:focus, .skip:focus-visible { transform: none; }
 
 .site-header {
   position: relative;

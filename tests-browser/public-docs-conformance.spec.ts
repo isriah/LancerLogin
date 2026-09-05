@@ -75,6 +75,7 @@ for (const viewport of viewports) {
 
           await page.keyboard.press("Tab");
           await expect(page.locator(".skip")).toBeFocused();
+          await expect(page.locator(".skip")).toHaveCSS("transform", "none");
           const skipStyle = await page.locator(".skip").evaluate((element) => {
             const styles = getComputedStyle(element);
             return { outline: parseFloat(styles.outlineWidth), top: element.getBoundingClientRect().top };

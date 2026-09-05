@@ -304,6 +304,7 @@ test("Reports selectors keep selected values and inset arrows visible at support
   for (const width of [390, 800, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/reports");
+    await expect(page.getByRole("heading", { level: 1, name: "Reports" })).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
 
     const geometries = await page.locator(".reports-page select").evaluateAll((selectors) => selectors.map((selector) => {

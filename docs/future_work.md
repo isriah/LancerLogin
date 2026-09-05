@@ -1169,15 +1169,15 @@ Release: next attendance workspace bundle.
 
 ### WU-069 — Configurable attendance-anomaly metric
 
-Status: blocked
+Status: ready
 
 Goal: define configurable late-arrival and early-departure thresholds and expose each member's mean anomalous time on member detail.
-Dependencies: ADR-010 selects all preserved eligible history from the member's participation start date, keeps Reports filters local to Reports, and averages qualifying late check-ins and early check-outs as separate values; product decision still required on the displayed unit/rounding rule
+Dependencies: ADR-010 selects all preserved eligible history from the member's participation start date, keeps Reports filters local to Reports, averages qualifying late check-ins and early check-outs as separate values, and displays the mean as minutes rounded to the nearest whole minute
 Scope: after the aggregation contract is approved, add Admin-only organization settings for the late-arrival and early-departure thresholds; derive anomalies from raw check-in relative to scheduled start and raw check-out relative to scheduled end; calculate the per-member mean according to the approved population; and show the labeled statistic and empty state on member detail. Preserve the organization-wide late-scan allowance as a separate attendance-closing rule, participation start dates, corrections, excuses, optional-meeting semantics, raw events, roles, and existing reporting calculations. Exclude Discord anomaly delivery, automatic attendance corrections, kiosk feedback, and meeting weighting.
 Sources: `docs/idea_inbox.md` (IN-081 and IN-082); `docs/DECISIONS.md`; `docs/DASHBOARD.md`; `docs/UI-STANDARDS.md`; `apps/api/migrations/`; `apps/api/src/index.ts`; `apps/api/src/attendance-lifecycle.ts`; `apps/dashboard/src/organization-settings.tsx`; `apps/dashboard/src/member-detail-page.tsx`; attendance lifecycle, member-history, Settings, and roster/reporting tests.
 Acceptance: after the named policy decision is recorded, Admins can save bounded nonnegative thresholds with validation and audit history; Operators cannot change them; anomaly calculations use scheduled meeting boundaries and authoritative raw scans without conflating the late-scan allowance; member detail shows the approved mean and a clear no-anomalies state; participation and reporting-period rules match the approved aggregation contract; upgrades receive documented defaults without changing existing attendance outcomes.
 Verification: `npm run verify:migrations`; `npm run verify:api`; `npm run verify:dashboard`; focused calculation coverage for exact thresholds, late/early/both/partial scans, participation dates, corrections, empty history, and approved aggregation semantics; focused Admin/Operator Settings and member-detail browser checks at required themes/viewports; unfiltered browser suite after integration.
-Release: later attendance-insights bundle after the aggregation decision is resolved.
+Release: include in `v0.20.0`.
 
 ### WU-070 — Scheduled Discord anomaly reports
 

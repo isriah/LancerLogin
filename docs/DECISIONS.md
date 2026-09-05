@@ -43,3 +43,5 @@ When Discord channel-manager mode is enabled, “status message at the top” me
 The per-member mean anomalous-time statistic uses all preserved eligible meeting history from the member's participation start date. Reports-page date ranges and the operational reporting baseline apply only to the Reports screen at the time they are selected; they do not change statistics on member detail or other pages.
 
 Each qualifying late check-in and early check-out is one separate value in the mean. For example, arriving 10 minutes late and leaving 20 minutes early contributes the values 10 and 20, not one combined 30-minute meeting value.
+
+The dashboard displays the resulting mean in minutes rounded to the nearest whole minute.

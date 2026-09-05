@@ -1356,9 +1356,12 @@ Release: `v0.22.0`.
 
 ### WU-079 — Managed Discord application commands
 
-Status: ready
+Status: in progress
 
-Owner: unassigned
+Owner: Codex task
+Base: `63c70ee131a3c7e97017cf818405456cc2e263b7`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7035\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:b67c9237-bc01-46c8-a55f-de54e3968b60`
 
 Goal: make `/pair` and `/attendance-report` available in the configured Discord server without requiring an adopter to send command-registration payloads manually.
 Dependencies: WU-032 and WU-072 (both merged); coordinate serially with WU-078 because both change Discord configuration/provider behavior and Integrations presentation

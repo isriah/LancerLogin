@@ -1199,7 +1199,10 @@ Release: include in `v0.20.0`; validate delivery to a supported private Discord 
 
 ### WU-071 — Configurable meeting weights
 
-Status: in progress
+Status: merged (`1192192`)
+
+Owner: Codex task
+Integration: implemented directly on the authorized serial `main` checkout as `1192192198e0d838bfd951ff2112a34bbb6b56fb`. `npm run verify:migrations` passed all 25 migrations; `npm run verify:api` passed 107 tests plus API/shared typechecks; `npm run verify:dashboard` passed 39 tests plus dashboard typecheck; `npm run verify:docs` passed 7 tests; the foundation suite passed 25 tests; and the complete post-integration browser suite passed all 135 tests. Focused coverage verifies Admin-only category lifecycle and ordering, Operator-readable active choices, validation, first-match automatic selection, manual override and default weight, occurrence/future-series assignment, immutable historical snapshots, weighted dashboard and Discord percentages, weighted CSV contributions, backup compatibility, responsive controls, and preservation of a saved snapshot during unrelated edits.
 
 Goal: let organizations define reusable meeting-weight categories, optional duration-based automatic criteria, and manual per-meeting assignments.
 Dependencies: ADR-012 selects weighted attendance percentages and CSV reporting, first-match priority from the Admin-controlled category order, explicit assignment snapshots, and the existing occurrence-or-future recurring edit scope

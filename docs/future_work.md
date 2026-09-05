@@ -1089,7 +1089,7 @@ Release: next Discord reliability bundle; suitable for a narrow patch if the fai
 Status: in progress
 
 Owner: Codex task
-Branch: `codex/wu-065-discord-channel-manager` (requested; provisioning Worktree is currently detached)
+Branch: `codex/wu-065-discord-channel-manager`
 Base: `46ff837abd9f3bb9aa23c6e2efeb9047b9eaa522`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\6485\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:90d2eba5-14f0-4fed-b957-3d2f650b9084`

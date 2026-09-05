@@ -1135,13 +1135,14 @@ Release: next attendance-review and Discord operations bundle.
 
 ### WU-068 — Meeting attendance scan-time visibility
 
-Status: in progress
+Status: merged (`582a6ab`)
 
 Owner: Codex task
 Branch: `codex/wu-068-attendance-scan-times`
 Base: `c816e0b`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\0f69\\LancerLogin Workspace`
 Task: `01a06ede-fca3-78c0-aaa9-92003f7713bb` (provisioned from client `client-new-thread:96bfd272-cdb8-45c5-b8ae-8ac74c63549b`)
+Integration: candidate `e6c178d68d013bd2ba1b74f9f59013ad51acef7d` was merged as `582a6abb06e766fd474632e80722bebfd2aa1985`. `npm run verify:dashboard` and the complete 121-test browser suite passed on the integrated tree. The first full-suite run had one unrelated transient loading-overlay timing failure; that existing reduced-motion test passed alone and the unchanged full suite passed on rerun. Focused coverage proves locally formatted authoritative check-in/check-out values for complete, partial, missing, and corrected rows at desktop/mobile, light/dark, representative branding, keyboard, and overflow conditions. The API contract was unchanged, so no API gate was required.
 
 Goal: show each member's recorded check-in and check-out times directly in the canonical meeting attendance workspace.
 Dependencies: WU-063 (both units touch the meeting-browser/detail dashboard presentation and shared styling; integrate selector conformance first)

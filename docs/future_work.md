@@ -1138,9 +1138,9 @@ Release: next attendance-review and Discord operations bundle.
 Status: in progress
 
 Owner: Codex task
-Branch: `codex/wu-068-attendance-scan-times` (requested; provisioning Worktree)
-Base: `77d7a47`
-Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\0f69\\LancerLogin Workspace` (detached while provisioning)
+Branch: `codex/wu-068-attendance-scan-times`
+Base: `c816e0b`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\0f69\\LancerLogin Workspace`
 Task: `01a06ede-fca3-78c0-aaa9-92003f7713bb` (provisioned from client `client-new-thread:96bfd272-cdb8-45c5-b8ae-8ac74c63549b`)
 
 Goal: show each member's recorded check-in and check-out times directly in the canonical meeting attendance workspace.
@@ -1192,9 +1192,9 @@ Release: later weighted-attendance feature bundle after the product decisions ar
 Status: in progress
 
 Owner: Codex task
-Branch: `codex/wu-072-discord-attendance-report` (requested; provisioning Worktree)
-Base: `77d7a47`
-Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\a1d5\\LancerLogin Workspace` (detached while provisioning)
+Branch: `codex/wu-072-discord-attendance-report`
+Base: `c816e0b`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\a1d5\\LancerLogin Workspace`
 Task: `01a06edf-0dad-7160-aae9-37b0b5bcb6e5` (provisioned from client `client-new-thread:2d644f08-aaef-46f5-a8e6-8a04938bbeb2`)
 
 Goal: let a Discord-linked roster member privately request their own current attendance report.

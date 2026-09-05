@@ -1094,7 +1094,7 @@ Base: `46ff837abd9f3bb9aa23c6e2efeb9047b9eaa522`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\6485\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:90d2eba5-14f0-4fed-b957-3d2f650b9084`
 Recovery: the provisioning client never exposed an addressable task, and the branch Worktree remained clean at the recorded base with no candidate commit. A replacement task may be launched from current `main`; do not reuse or duplicate the stale provisioning attempt.
-Replacement branch: `codex/wu-065-discord-channel-manager-v2` (requested; provisioning Worktree is currently detached)
+Replacement branch: `codex/wu-065-discord-channel-manager-v2`
 Replacement base: `cb654f01535606c5891848a7c422938875a41c85`
 Replacement Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\3232\\LancerLogin Workspace`
 Replacement task: provisioning client `client-new-thread:30666912-e8d5-4ccd-95fc-add5258d9d66`

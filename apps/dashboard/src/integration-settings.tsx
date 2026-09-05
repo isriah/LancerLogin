@@ -15,6 +15,7 @@ const publicApiBase = apiBaseUrl.startsWith("http") ? apiBaseUrl : `${window.loc
 const googleCallback = `${publicApiBase}/auth/google/callback`;
 const googleVerifyUrl = `${publicApiBase}/auth/google/start?verify=1`;
 const googleOAuthGuideUrl = "https://isriah.github.io/LancerLogin/setup.html#google-oauth";
+const discordCommandsGuideUrl = "https://isriah.github.io/LancerLogin/operations.html#discord-commands";
 const discordCallback = `${window.location.origin}/api/discord/interactions`;
 
 function CopyValue({ label, value }: { label: string; value: string }) {
@@ -42,6 +43,7 @@ function ProviderGuide({ provider, values, onChange }: { provider: Provider; val
     <Step>Open <strong>General Information</strong>, copy the Public Key, then paste it here.<SetupField provider={provider} field="publicKey" label="Application public key" value={field("publicKey")} onChange={onChange} /></Step>
     <Step>Select Copy below. Immediately return to <strong>General Information</strong>, paste it into <strong>Interactions Endpoint URL</strong>, and choose <strong>Save Changes</strong>.<CopyValue label="Interactions Endpoint URL" value={discordCallback} /></Step>
     <Step>Open <strong>Installation</strong>. Enable <strong>Guild Install</strong>, select the <strong>bot</strong> scope, and grant View Channels, Send Messages, Read Message History, and Manage Events. Use the install link immediately to choose your server and authorize the bot.</Step>
+    <Step>Register the guild-scoped <code>/pair</code> and <code>/attendance-report</code> application commands using the <a href={discordCommandsGuideUrl} target="_blank" rel="noreferrer">Discord command-registration guide<span aria-hidden="true"> ↗</span></a>. Guild scope keeps both commands out of direct messages and other servers.</Step>
     <Step>In Discord, enable Developer Mode under User Settings → Advanced. Right-click your server, select <strong>Copy Server ID</strong>, then paste it here.<SetupField provider={provider} field="guildId" label="Server ID" value={field("guildId")} onChange={onChange} /></Step>
     <Step>Right-click the attendance channel, select <strong>Copy Channel ID</strong>, then paste it here.<SetupField provider={provider} field="channelId" label="Attendance channel ID" value={field("channelId")} onChange={onChange} /></Step>
   </ol><p className="guide-note">Grant access only to the attendance channel. Server or channel overrides can prevent messages or calendar events.</p></div>;

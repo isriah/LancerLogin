@@ -1184,7 +1184,10 @@ Release: include in `v0.20.0`.
 
 ### WU-070 — Scheduled Discord anomaly reports
 
-Status: in progress
+Status: merged (`b7fed60`)
+
+Owner: Codex task
+Integration: implemented directly on the authorized serial `main` checkout as `b7fed604d5aff79d786f8a5f22d9192f586f8b4b`. `npm run verify:migrations` passed all 24 migrations; `npm run verify:api` passed 104 tests plus API/shared typechecks; `npm run verify:dashboard` passed 39 tests plus dashboard typecheck; `npm run verify:docs` passed 7 tests; and the complete serial browser suite passed all 132 tests. Focused provider-fake coverage verifies Admin-only channel configuration, verified-server and member-facing-channel isolation, post-cutoff timing, no retroactive delivery before enablement, separate late/early values, controlled mentions, deterministic enforced retry nonces, bounded messages, failure isolation, disabled integration behavior, and no-message empty meetings. Supported-server manual delivery validation remains a release gate.
 
 Goal: deliver a controlled Discord report of anomalous arrivals and departures after the relevant attendance windows close.
 Dependencies: WU-069 and WU-065 (both merged); ADR-011 selects a separate Admin-configured private channel, one report after each meeting's late-scan window closes, no message for a meeting without anomalies, and no retroactive delivery before enablement or after a channel change

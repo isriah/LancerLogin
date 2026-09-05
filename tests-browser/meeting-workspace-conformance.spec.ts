@@ -59,6 +59,8 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.locator("main h1")).toHaveCount(1);
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
       await expect(page.getByRole("region", { name: "Meeting calendar" })).toBeVisible();
+      await expect(page.locator(".dashboard-meeting-status")).toHaveCount(0);
+      await expect(page.getByText("Dashboard data is current.")).toHaveCount(0);
       await expectContained(page);
 
       const tableChoice = page.getByRole("radio", { name: "Table" });
@@ -96,6 +98,8 @@ test("meeting browser empty, loading, error, success, and partial Discord outcom
   await expect(overlay).toBeVisible();
   await expect(overlay.locator(".dashboard-loading-indicator")).toHaveCSS("animation-name", "none");
   await expect(page.getByText("No meetings are scheduled in this five-week range.")).toBeVisible();
+  await expect(page.locator(".dashboard-meeting-status")).toHaveCount(0);
+  await expect(page.getByText("Dashboard data is current.")).toHaveCount(0);
   await page.getByRole("radio", { name: "Table" }).check();
   await expect(page.getByText("No meetings are available yet.")).toBeVisible();
 
@@ -128,6 +132,7 @@ for (const context of dashboardConformanceReferences.viewports.flatMap((viewport
     await page.goto("/meetings/active-meeting");
     await expect(page.locator("main h1")).toHaveCount(1);
     await expect(page.getByRole("heading", { level: 1, name: "Build session" })).toBeVisible();
+    await expect(page.locator('[aria-label="Meeting summary"]')).not.toContainText("Attendance closes");
     await expect(page.getByRole("table", { name: "Meeting attendance" })).toBeVisible();
     await expect(page.locator('[role="columnheader"]')).toHaveCount(4);
     const scanHeader = page.locator('[role="columnheader"]').filter({ hasText: "Scan times" });

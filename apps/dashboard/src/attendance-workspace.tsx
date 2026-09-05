@@ -165,7 +165,6 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
         <div><dt>Attendance</dt><dd>{meeting.required ? "Required" : "Optional"}</dd></div>
         <div><dt>Weight</dt><dd>{meeting.weightCategoryName ? `${meeting.weightCategoryName} · ` : ""}{meeting.attendanceWeight ?? 1}×</dd></div>
         <div><dt>Recurrence</dt><dd>{recurrence}</dd></div>
-        <div><dt>Attendance closes</dt><dd>{new Date(meeting.attendanceClosesAt).toLocaleString()}</dd></div>
         <div className="meeting-summary-notes"><dt>Notes</dt><dd>{meeting.notes || "No notes"}</dd></div>
       </dl>
       {discordConfigured && <div className="meeting-discord-layout">

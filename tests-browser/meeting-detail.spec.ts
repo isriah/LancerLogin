@@ -60,7 +60,7 @@ test("meeting detail presents lifecycle and operational context", async ({ page 
   await expect(summary).toContainText("Required");
   await expect(summary).toContainText("Every two weeks · Occurrence 3");
   await expect(summary).toContainText("Use the east entrance.");
-  await expect(summary).toContainText("Attendance closes");
+  await expect(summary).not.toContainText("Attendance closes");
   await expect(summary).toContainText("Extended · 2×");
 });
 

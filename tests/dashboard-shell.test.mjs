@@ -109,7 +109,8 @@ test("meeting detail keeps meeting-specific attendance, Discord, and contest ope
   assert.match(source, /Back to Dashboard/);
   assert.match(source, /Switch meeting/);
   assert.match(source, /Refresh attendance/);
-  assert.match(source, /Attendance closes/);
+  assert.doesNotMatch(source, /Attendance closes/);
+  assert.match(source, /Date\.parse\(meeting\.attendanceClosesAt\)/);
   assert.match(source, /const formatScanTime = .*toLocaleString/);
   assert.match(source, /<span role="columnheader">Scan times<\/span>/);
   assert.match(source, /<dt>Check-in<\/dt>/);
@@ -440,7 +441,8 @@ test("Dashboard and meeting workspace apply the shared conformance contract", as
   const management = await readFile("apps/dashboard/src/meeting-management.tsx", "utf8");
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
-  assert.match(home, /dashboard-meeting-status[^>]+data-tone=\{noticeTone\}/);
+  assert.match(home, /\(creationNotice \|\| notice\) && <p className="setup-status ui-status dashboard-meeting-status"[^>]+data-tone=\{noticeTone\}/);
+  assert.doesNotMatch(home, /Dashboard data is current\./);
   assert.match(home, /No meetings are scheduled in this five-week range\./);
   assert.match(meetings, /meeting-directory-heading/);
   assert.match(meetings, /className="ui-table"/);

@@ -552,7 +552,9 @@ Release: v0.15.0 meeting detail, integration controls, and dashboard refinement.
 
 ### WU-037 — Attendance calendar selection repair
 
-Status: blocked
+Status: merged (superseded by WU-044 and WU-045)
+
+Resolution: the approved canonical meeting-detail and Dashboard meeting-browser redesign replaced the standalone Attendance-page repair. WU-044 preserves legacy Attendance links through canonical detail redirects, and WU-045 makes calendar events, table rows, and selector choices open the same meeting detail with browser-history coverage.
 
 Goal: make an Attendance calendar click select and display the intended current or past meeting.
 Dependencies: WU-044 and WU-045 (the approved canonical meeting-detail and Dashboard-browser redesign supersedes this standalone Attendance-page repair; reassess only if that redesign is abandoned)

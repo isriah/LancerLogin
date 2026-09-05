@@ -86,7 +86,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES/);
@@ -103,6 +103,14 @@ test("Google Calendar migration and worker keep delivery minimal and retryable",
   assert.match(migration, /google_calendar_authorizations/);
   assert.match(migration, /google_calendar_event_mappings/);
   assert.match(migration, /google_calendar_operations/);
+  const discordCalendarMigration = await readFile("apps/api/migrations/0028_discord_calendar_delivery.sql", "utf8");
+  assert.match(discordCalendarMigration, /discord_calendar_event_mappings/);
+  assert.match(discordCalendarMigration, /discord_calendar_operations/);
+  assert.match(discordCalendarMigration, /CHECK \(action IN \('upsert', 'delete'\)\)/);
+  assert.match(discordCalendarMigration, /status IN \('pending', 'processing', 'delivered', 'failed'\)/);
+  assert.match(discordCalendarMigration, /lease_token TEXT/);
+  assert.match(discordCalendarMigration, /lease_expires_at TEXT/);
+  assert.match(discordCalendarMigration, /revision INTEGER NOT NULL DEFAULT 1/);
   assert.match(migration, /action IN \('upsert', 'delete'\)/);
   assert.match(source, /summary: "LancerLogin meeting"/);
   assert.match(source, /Google Calendar delivery retries safely on the next scheduled pass/);

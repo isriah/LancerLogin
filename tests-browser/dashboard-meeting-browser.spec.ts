@@ -121,11 +121,11 @@ test("legacy Meetings opens the searchable Dashboard table and rows navigate ind
   await expect(page).toHaveURL(/\/meetings\/next-week$/);
 });
 
-test("Table search, checkbox selection, bulk delete, and Sync all stay independent from row navigation", async ({ page }) => {
+test("Table search, checkbox selection, and bulk delete stay independent from row navigation", async ({ page }) => {
   const requests: { path: string; body: Record<string, unknown> }[] = [];
-  await page.route(/\/(meetings\/bulk-delete|discord\/calendar)$/, async (route) => {
+  await page.route(/\/meetings\/bulk-delete$/, async (route) => {
     requests.push({ path: new URL(route.request().url()).pathname, body: route.request().postDataJSON() });
-    const body = new URL(route.request().url()).pathname === "/meetings/bulk-delete" ? { deleted: 1 } : { synced: 1, skipped: 0, failed: 0, outcomes: [] };
+    const body = { deleted: 1 };
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
   });
   await page.goto("/dashboard");
@@ -141,11 +141,8 @@ test("Table search, checkbox selection, bulk delete, and Sync all stay independe
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete selected (1)" }).click();
   await expect(page.getByRole("status").filter({ hasText: "1 selected meetings deleted." })).toBeVisible();
-  await page.getByRole("button", { name: "Sync all to Discord" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Discord calendar: 1 updated" })).toBeVisible();
   expect(requests).toEqual([
     { path: "/meetings/bulk-delete", body: { meetingIds: ["active-meeting"], confirmation: "DELETE SELECTED MEETINGS" } },
-    { path: "/discord/calendar", body: { all: true } },
   ]);
 });
 
@@ -233,14 +230,14 @@ test("Add meeting opens a keyboard-contained dialog and restores focus when dism
   }
 });
 
-test("creation recovers API validation and preserves duplication, recurrence, and Discord best-effort messaging", async ({ page }) => {
+test("creation recovers API validation and preserves duplication, recurrence, and provider delivery messaging", async ({ page }) => {
   const submitted: Record<string, unknown>[] = [];
   await page.route("**/meetings", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     submitted.push(route.request().postDataJSON());
     if (submitted.length === 1) return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "Meeting attendance windows cannot overlap." }) });
     const body = route.request().postDataJSON() as Record<string, unknown>;
-    return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ meetings: Array.from({ length: 4 }, (_, index) => ({ id: `copy-${index + 1}`, ...body })) }) });
+    return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ meetings: Array.from({ length: 4 }, (_, index) => ({ id: `copy-${index + 1}`, ...body })), calendarDelivery: { google_calendar: { synced: 0, queued: 0, failed: 0 }, discord: { synced: 0, queued: 4, skipped: 0, failed: 0, outcomes: [] } } }) });
   });
 
   await page.goto("/dashboard");
@@ -257,7 +254,7 @@ test("creation recovers API validation and preserves duplication, recurrence, an
   await dialog.getByLabel("Title", { exact: true }).fill("Build session copy");
   await dialog.getByRole("button", { name: "Create recurring series" }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole("status").filter({ hasText: "4 meetings created. Discord calendar sync was requested." })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "4 meetings created. Calendar delivery: Discord is queued." })).toBeVisible();
   expect(submitted[1]).toMatchObject({ title: "Build session copy", notes: "Bring safety glasses.", recurrence: { frequency: "weekly" } });
   await expect(page).toHaveURL(/\/dashboard$/);
 });

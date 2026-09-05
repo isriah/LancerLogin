@@ -120,11 +120,11 @@ test("meeting detail keeps meeting-specific attendance, Discord, and contest ope
   assert.ok(source.includes('role === "admin" && <button type="button" disabled={row.disposition === "not_required"}'));
   assert.doesNotMatch(source, /\/admin\/kiosks|AttendanceCalendar|Export CSV/);
   assert.doesNotMatch(source, /\/discord\/link|Email missed|Email report/);
-  assert.match(source, /\/discord\/calendar/);
+  assert.match(source, /\/calendars\/sync/);
   assert.match(source, /\/discord\/missing/);
   assert.match(source, /\/discord\/contests\?meetingId=/);
   assert.match(source, /ContestReviewList contests=\{contests\}/);
-  assert.match(source, /clock <= Date\.parse\(meeting\.endsAt\)/);
+  assert.match(source, /Sync configured calendars/);
   assert.match(source, /clock >= Date\.parse\(meeting\.startsAt\)/);
   assert.match(source, /MeetingEditDialog/);
   assert.match(source, /MeetingDuplicateDialog/);
@@ -135,9 +135,9 @@ test("meeting detail keeps meeting-specific attendance, Discord, and contest ope
   assert.match(management, /Delete this and future meetings/);
   assert.match(management, /useModalFocus/);
   assert.match(meetings, /<th>Date<\/th><th>Start<\/th><th>End<\/th>/);
-  assert.match(meetings, /Sync all to Discord/);
+  assert.doesNotMatch(meetings, /Sync all to Discord/);
   assert.doesNotMatch(meetings, />Sync Discord<|calendarByMeeting/);
-  assert.match(meetings, /calendarOutcomes/);
+  assert.match(source, /calendarProviders/);
   assert.match(management, /addMinutes\(value\.date, startTime, 150\)/);
   assert.doesNotMatch(source, /Kiosk meeting ID/);
   assert.doesNotMatch(source, /Copy ID/);
@@ -273,7 +273,7 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(meetings, /useEffect\(\(\) => \{ if \(error\) errorAlert\.current\?\.focus\(\); \}, \[error\]\)/);
   assert.match(meetings, /ref=\{errorAlert\} id="meeting-create-error"/);
   assert.doesNotMatch(meetings, /requestAnimationFrame\(\(\) => document\.getElementById\("meeting-create-error"\)/);
-  assert.match(meetings, /onCreated\(result\.meetings\.length, result\.calendarSync\)/);
+  assert.match(meetings, /onCreated\(result\.meetings\.length, result\.calendarSync, result\.calendarDelivery\)/);
   assert.match(meetings, /Duplicate an existing meeting/);
   assert.match(home, /previousMonth/);
   assert.match(home, /previous-month/);
@@ -446,7 +446,7 @@ test("Dashboard and meeting workspace apply the shared conformance contract", as
   assert.match(home, /No meetings are scheduled in this five-week range\./);
   assert.match(meetings, /meeting-directory-heading/);
   assert.match(meetings, /className="ui-table"/);
-  assert.match(meetings, /data-tone=\{calendarAllTone\}/);
+  assert.match(attendance, /data-tone=\{calendarNoticeTone\}/);
   assert.match(management, /aria-describedby=\{descriptionId\}/);
   assert.match(attendance, /role="columnheader"/);
   assert.match(attendance, /data-tone=\{discordNoticeTone\}/);
@@ -578,7 +578,9 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /Google Calendar is ready\. New meetings will be copied automatically\./);
   assert.match(source, /Authorize Google Calendar/);
   assert.match(source, /Load writable calendars/);
-  assert.match(source, /Retry now/);
+  assert.match(source, /Retry failed delivery/);
+  assert.match(source, /syncAllCalendars\("google_calendar"\)/);
+  assert.match(source, /syncAllCalendars\("discord"\)/);
   assert.match(source, /It does not send meeting titles, notes, roster data, or attendance/);
   assert.match(source, /provider !== "google_calendar"/);
   assert.match(source, /setup\.html#google-oauth/);
@@ -593,10 +595,10 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(shell, /HomePage[^>]+discordEnabled=\{integrations\.discord\.configured\}/);
   assert.match(shell, /ReportsPage discordEnabled=\{integrations\.discord\.configured\}/);
   assert.match(shell, /KiosksPage role=\{role\} discordConfigured=\{integrations\.discord\.configured\}/);
-  assert.match(meetings, /discordEnabled && <button.*Sync all to Discord/);
+  assert.doesNotMatch(meetings, /Sync all to Discord/);
   assert.match(attendance, /capabilities\.integrations\.discord\.configured/);
   assert.match(attendance, /Send Discord absence notice/);
-  assert.match(attendance, /Sync Discord calendar/);
+  assert.match(attendance, /Sync configured calendars/);
   assert.doesNotMatch(source, /Previous credentials were replaced|\/test"/);
 });
 

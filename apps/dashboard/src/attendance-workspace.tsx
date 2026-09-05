@@ -18,6 +18,7 @@ type AttendanceRow = {
   reason?: string;
 };
 type Lifecycle = "upcoming" | "in_progress" | "late_scan_window" | "past";
+type CalendarProviderResult = { provider: "google_calendar" | "discord"; synced: number; queued: number; skipped?: number; failed: number };
 
 const frequencyLabel = (value?: Frequency | null) => value === "biweekly" ? "Every two weeks" : value ? `${value[0].toUpperCase()}${value.slice(1)}` : "One time";
 const lifecycleFor = (meeting: Meeting, now = Date.now()): Lifecycle => now < Date.parse(meeting.startsAt) ? "upcoming" : now <= Date.parse(meeting.endsAt) ? "in_progress" : now <= Date.parse(meeting.attendanceClosesAt) ? "late_scan_window" : "past";
@@ -31,6 +32,10 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const [rows, setRows] = useState<AttendanceRow[]>([]);
   const [contests, setContests] = useState<Contest[]>([]);
   const [discordConfigured, setDiscordConfigured] = useState(false);
+  const [calendarProviders, setCalendarProviders] = useState<Array<"google_calendar" | "discord">>([]);
+  const [calendarNotice, setCalendarNotice] = useState("");
+  const [calendarNoticeTone, setCalendarNoticeTone] = useState<"neutral" | "success" | "error">("neutral");
+  const [calendarBusy, setCalendarBusy] = useState(false);
   const [discordNotice, setDiscordNotice] = useState("");
   const [discordNoticeTone, setDiscordNoticeTone] = useState<"neutral" | "success" | "error">("neutral");
   const [discordBusy, setDiscordBusy] = useState<"calendar" | "absence">();
@@ -48,7 +53,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
     const sequence = ++loadSequence.current;
     const [result, capabilities] = await Promise.all([
       api<{ meetings: Meeting[] }>("/meetings"),
-      api<{ integrations: { discord: { configured: boolean } } }>("/integrations/capabilities").catch(() => ({ integrations: { discord: { configured: false } } })),
+      api<{ integrations: { discord: { configured: boolean }; google_calendar: { configured: boolean } } }>("/integrations/capabilities").catch(() => ({ integrations: { discord: { configured: false }, google_calendar: { configured: false } } })),
     ]);
     if (sequence !== loadSequence.current) return false;
     const discordAvailable = capabilities.integrations.discord.configured;
@@ -65,6 +70,8 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
     setRows(attendance.attendance);
     setContests(contestResult.contests.filter((contest) => contest.status === "open"));
     setDiscordConfigured(discordAvailable);
+    setCalendarProviders([...(capabilities.integrations.google_calendar?.configured ? ["google_calendar" as const] : []), ...(discordAvailable ? ["discord" as const] : [])]);
+    setCalendarNotice("");
     setDiscordNotice("");
     setClock(Date.now());
     setNotice("");
@@ -127,12 +134,15 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
     try { if (await load()) setNotice("Attendance refreshed."); }
     catch (error) { setNotice((error as Error).message); }
   }
-  async function syncDiscordCalendar() {
+  async function syncCalendars() {
     if (!meeting) return;
-    setDiscordBusy("calendar"); setDiscordNotice("Syncing this meeting to the Discord calendar…"); setDiscordNoticeTone("neutral");
-    try { await api("/discord/calendar", { method: "POST", body: JSON.stringify({ meetingId: meeting.id }) }); setDiscordNotice("Discord calendar updated for this meeting."); setDiscordNoticeTone("success"); }
-    catch (error) { setDiscordNotice((error as Error).message); setDiscordNoticeTone("error"); }
-    finally { setDiscordBusy(undefined); }
+    setCalendarBusy(true); setCalendarNotice("Syncing this meeting to configured calendars…"); setCalendarNoticeTone("neutral");
+    try {
+      const result = await api<{ providers: CalendarProviderResult[] }>("/calendars/sync", { method: "POST", body: JSON.stringify({ meetingId: meeting.id }) });
+      const labels = result.providers.map((provider) => `${provider.provider === "google_calendar" ? "Google Calendar" : "Discord"}: ${provider.synced} updated${provider.queued ? `, ${provider.queued} queued` : ""}${provider.skipped ? `, ${provider.skipped} skipped` : ""}${provider.failed ? `, ${provider.failed} need attention` : ""}`);
+      setCalendarNotice(labels.join(" · ")); setCalendarNoticeTone(result.providers.some((provider) => provider.failed) ? "error" : "success");
+    } catch (error) { setCalendarNotice((error as Error).message); setCalendarNoticeTone("error"); }
+    finally { setCalendarBusy(false); }
   }
   async function notifyDiscordAbsences() {
     if (!meeting) return;
@@ -149,7 +159,6 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const recurrence = meeting?.recurrenceFrequency
     ? `${frequencyLabel(meeting.recurrenceFrequency)}${meeting.recurrenceSequence ? ` · Occurrence ${meeting.recurrenceSequence}` : ""}${meeting.recurrenceUntil ? ` · Through ${new Date(meeting.recurrenceUntil).toLocaleDateString()}` : ""}`
     : "One time";
-  const calendarEligible = Boolean(meeting && clock <= Date.parse(meeting.endsAt));
   const absenceEligible = Boolean(meeting && clock >= Date.parse(meeting.startsAt));
 
   return <section className="attendance-workspace meeting-detail-workspace" aria-labelledby="meeting-detail-title">
@@ -167,9 +176,9 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
         <div><dt>Recurrence</dt><dd>{recurrence}</dd></div>
         <div className="meeting-summary-notes"><dt>Notes</dt><dd>{meeting.notes || "No notes"}</dd></div>
       </dl>
+      {calendarProviders.length > 0 && <section className="task-card meeting-calendar-delivery ui-card" aria-labelledby="meeting-calendar-title"><div className="panel-heading"><div><h2 id="meeting-calendar-title">Calendar delivery</h2><p>Sync this meeting to every configured calendar provider. Each provider reports its own result.</p></div><span className="progress-count">{calendarProviders.length} configured</span></div><button className="primary-button" type="button" disabled={calendarBusy} onClick={() => void syncCalendars()}>{calendarBusy ? "Syncing…" : "Sync configured calendars"}</button>{calendarNotice && <p className="meeting-discord-notice ui-status" data-tone={calendarNoticeTone} role="status" aria-live="polite">{calendarNotice}</p>}</section>}
       {discordConfigured && <div className="meeting-discord-layout">
         <section className="task-card meeting-discord-operations ui-card" aria-labelledby="meeting-discord-title"><div className="panel-heading"><div><h2 id="meeting-discord-title">Discord operations</h2><p>Actions apply only to this meeting.</p></div></div><div className="meeting-operation-list">
-          <article><div><h3>Calendar event</h3><p>{calendarEligible ? `Available through the scheduled end at ${new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : "Unavailable because the scheduled meeting end has passed."}</p></div><button type="button" disabled={!calendarEligible || Boolean(discordBusy)} onClick={() => void syncDiscordCalendar()}>{discordBusy === "calendar" ? "Syncing…" : "Sync Discord calendar"}</button></article>
           <article><div><h3>Absence notice</h3><p>{absenceEligible ? "Notify linked members currently marked absent." : `Available when the meeting starts at ${new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`}</p></div><button type="button" disabled={!absenceEligible || Boolean(discordBusy)} onClick={() => void notifyDiscordAbsences()}>{discordBusy === "absence" ? "Sending…" : "Send Discord absence notice"}</button></article>
         </div>{discordNotice && <p className="meeting-discord-notice ui-status" data-tone={discordNoticeTone} role="status" aria-live="polite">{discordNotice}</p>}</section>
         <section className="task-card meeting-contests ui-card" aria-labelledby="meeting-contests-title"><div className="panel-heading"><div><h2 id="meeting-contests-title">Attendance contests</h2><p>Review requests submitted for this meeting.</p></div><span className="progress-count">{contests.length} open</span></div>{contests.length ? <ContestReviewList contests={contests} onResolved={(resolution, contest) => { setContests((current) => current.filter((item) => item.meetingId !== contest.meetingId || item.memberId !== contest.memberId)); setDiscordNotice(`Contest ${resolution}.`); setDiscordNoticeTone("success"); if (resolution === "approved") void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message)); }} /> : <p className="empty-state">No attendance contests need review for this meeting.</p>}</section>

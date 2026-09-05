@@ -111,16 +111,9 @@ test("meeting browser empty, loading, error, success, and partial Discord outcom
   await expect(error).toHaveAttribute("data-tone", "error");
 
   await page.unroute(/\/meetings$/);
-  await page.route("**/discord/calendar", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({ synced: 1, skipped: 1, failed: 1, outcomes: [{ meetingId: "next-week", title: "Studio night", status: "failed", reason: "Missing permissions" }] }),
-  }));
   await page.reload();
   await page.getByRole("radio", { name: "Table" }).check();
-  await page.getByRole("button", { name: "Sync all to Discord" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "1 need attention" })).toHaveAttribute("data-tone", "error");
-  await expect(page.getByRole("list", { name: "Discord calendar results" })).toContainText("Missing permissions");
+  await expect(page.getByRole("button", { name: "Sync all to Discord" })).toHaveCount(0);
   await expectContained(page);
 });
 
@@ -168,14 +161,14 @@ test("meeting detail distinguishes timing gates, unavailable configuration, empt
     ? route.continue()
     : route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ meeting: upcoming }) }));
   await page.route(/\/attendance\?meetingId=upcoming$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ attendance: [] }) }));
-  await page.route("**/discord/calendar", (route) => route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "Discord calendar permission is missing." }) }));
+  await page.route("**/calendars/sync", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ providers: [{ provider: "discord", synced: 0, queued: 0, skipped: 0, failed: 1 }] }) }));
   await page.goto("/meetings/upcoming");
   await expect(page.locator(".meeting-lifecycle")).toHaveText("Upcoming");
-  await expect(page.getByRole("button", { name: "Sync Discord calendar" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Sync configured calendars" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Send Discord absence notice" })).toBeDisabled();
   await expect(page.getByText("No active roster records are available.")).toBeVisible();
-  await page.getByRole("button", { name: "Sync Discord calendar" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Discord calendar permission is missing." })).toHaveAttribute("data-tone", "error");
+  await page.getByRole("button", { name: "Sync configured calendars" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Discord: 0 updated, 1 need attention" })).toHaveAttribute("data-tone", "error");
 
   await page.goto("/meetings/missing-meeting");
   await expect(page.getByRole("heading", { level: 1, name: "Meeting unavailable" })).toBeVisible();

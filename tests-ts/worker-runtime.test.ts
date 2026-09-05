@@ -33,7 +33,7 @@ class FakeDatabase {
     if (sql.includes("FROM users")) return this.user;
     return undefined;
   }
-  allResult(sql: string, _values: unknown[]) { for (const [fragment, value] of this.lists) if (sql.includes(fragment)) return value; return undefined; }
+  allResult(sql: string, values: unknown[]) { for (const [fragment, value] of this.lists) if (sql.includes(fragment)) return typeof value === "function" ? (value as (sql: string, values: unknown[]) => unknown[])(sql, values) : value; return undefined; }
 }
 
 const setupCode = "private setup code 1234";
@@ -711,11 +711,14 @@ test("Operator can update only an occurrence or this and future series occurrenc
 test("Operator can hide one meeting or this and future series occurrences", async () => {
   const single = new FakeDatabase();
   single.rows.set("series_id AS seriesId", { id: "meeting-1", seriesId: null, startsAt: "2026-09-01T20:00:00.000Z" });
+  single.rows.set("SELECT event_id AS eventId", { eventId: "ll0123456789abcdef0123456789abcdef0123456789abcdef" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: single } as unknown as Env;
   const occurrence = await worker.fetch(request("/meetings/meeting-1", { scope: "occurrence" }, { method: "DELETE", cookie: await sessionCookie("operator") }), env);
   assert.equal(occurrence.status, 200);
   assert.ok(single.calls.some((call) => call.sql.includes("UPDATE meetings SET deleted_at") && call.values.includes("meeting-1")));
   assert.ok(single.calls.some((call) => call.values.includes("meeting.deleted")));
+  assert.deepEqual((await occurrence.json() as { calendarSync: unknown }).calendarSync, { synced: 0, queued: 1, failed: 0 });
+  assert.ok(single.batches.some((batch) => batch.some((call) => call.sql.includes("google_calendar_operations") && call.sql.includes("'delete'"))));
 
   const future = new FakeDatabase();
   future.rows.set("series_id AS seriesId", { id: "meeting-3", seriesId: "series-1", startsAt: "2026-09-15T20:00:00.000Z" });
@@ -728,11 +731,14 @@ test("Operator can hide one meeting or this and future series occurrences", asyn
 test("Operator can immediately restore a soft-deleted meeting or future series occurrences", async () => {
   const single = new FakeDatabase();
   single.rows.set("deleted_at IS NOT NULL", { id: "meeting-1", seriesId: null, startsAt: "2026-09-01T20:00:00.000Z" });
+  single.rows.set("SELECT m.generation", { generation: 1, startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: single } as unknown as Env;
   const occurrence = await worker.fetch(request("/meetings/meeting-1/restore", { scope: "occurrence" }, { method: "POST", cookie: await sessionCookie("operator") }), env);
   assert.equal(occurrence.status, 200);
   assert.ok(single.calls.some((call) => call.sql.includes("SET deleted_at = NULL") && call.values.includes("meeting-1")));
   assert.ok(single.calls.some((call) => call.values.includes("meeting.restored")));
+  assert.deepEqual((await occurrence.json() as { calendarSync: unknown }).calendarSync, { synced: 0, queued: 1, failed: 0 });
+  assert.ok(single.batches.some((batch) => batch.some((call) => call.sql.includes("google_calendar_operations") && call.sql.includes("'upsert'"))));
 
   const future = new FakeDatabase();
   future.rows.set("deleted_at IS NOT NULL", { id: "meeting-3", seriesId: "series-1", startsAt: "2026-09-15T20:00:00.000Z" });
@@ -808,6 +814,7 @@ test("integration status exposes enablement without credentials and capabilities
     { provider: "google", enabled: true, configured: true, state: "configured" },
     { provider: "resend", enabled: false, configured: false, state: "disabled" },
     { provider: "discord", enabled: true, configured: false, state: "not_configured" },
+    { provider: "google_calendar", enabled: false, configured: false, state: "disabled" },
   ]);
   assert.equal((await worker.fetch(request("/integrations/capabilities"), env)).status, 401);
   const capabilities = await worker.fetch(request("/integrations/capabilities", undefined, { cookie: await sessionCookie("operator") }), env);
@@ -1172,6 +1179,67 @@ test("Discord channel manager settings are Admin-only and audited", async () => 
   assert.ok(database.calls.some((call) => call.sql.includes("SET discord_channel_manager_enabled = ?") && call.values[0] === 0 && call.values[1] === 48));
   assert.ok(database.calls.some((call) => call.values.includes("discord.channel_manager_updated")));
   assert.equal((await worker.fetch(request("/admin/integrations/discord/channel-manager", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
+});
+
+test("Google Calendar stays separate from sign-in and requests only Calendar access", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("google_calendar_enabled AS enabled", { enabled: 1 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const saved = await worker.fetch(request("/admin/integrations/google-calendar", { clientId: "calendar-client", clientSecret: "calendar-secret" }, { method: "PUT", cookie: await sessionCookie("admin") }), env);
+  assert.equal(saved.status, 200);
+  assert.equal((await saved.text()).includes("calendar-secret"), false);
+  assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO google_calendar_authorizations")));
+  assert.equal(database.calls.some((call) => call.sql.includes("encrypted_integrations") && call.values.includes("google")), false);
+
+  const encrypted = await encryptIntegration({ clientId: "calendar-client", clientSecret: "calendar-secret" }, sessionSecret);
+  database.rows.set("google_calendar_enabled AS enabled", { ...encrypted, enabled: 1 });
+  const authorize = await worker.fetch(request("/admin/integrations/google-calendar/authorize", undefined, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(authorize.status, 302);
+  const location = new URL(authorize.headers.get("location")!);
+  assert.equal(location.origin, "https://accounts.google.com");
+  assert.match(location.searchParams.get("scope") ?? "", /calendar\.calendarlist\.readonly/);
+  assert.match(location.searchParams.get("scope") ?? "", /calendar\.events/);
+  assert.doesNotMatch(location.searchParams.get("scope") ?? "", /openid|profile/);
+  assert.equal(location.searchParams.get("access_type"), "offline");
+  assert.equal(location.searchParams.get("redirect_uri"), "https://dashboard.example.test/api/admin/integrations/google-calendar/callback");
+});
+
+test("Google Calendar enablement is independently audited", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const enabled = await worker.fetch(request("/admin/integrations/google-calendar", { enabled: true }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
+  assert.equal(enabled.status, 200);
+  assert.deepEqual(await enabled.json(), { provider: "google_calendar", enabled: true });
+  assert.ok(database.calls.some((call) => call.sql.includes("google_calendar_enabled = ?") && call.values[0] === 1));
+  assert.ok(database.calls.some((call) => call.values.includes("google_calendar.enabled")));
+});
+
+test("meeting creation sends only stable generic Google Calendar event data", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ clientId: "calendar-client", clientSecret: "calendar-secret", refreshToken: "calendar-refresh", calendarId: "calendar@example.test", calendarLabel: "Operations" }, sessionSecret);
+  database.rows.set("google_calendar_enabled AS enabled", { ...encrypted, enabled: 1, authorizedAt: "2026-09-05T00:00:00.000Z", verifiedAt: "2026-09-05T00:00:00.000Z" });
+  database.rows.set("SELECT id, starts_at AS startsAt", (_sql, values) => ({ id: String(values[0]), startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z" }));
+  database.lists.set("FROM google_calendar_operations o", ((_sql: string, values: unknown[]) => [{ meetingId: String(database.batches[0].find((call) => call.sql.includes("INSERT INTO meetings"))?.values[0]), eventId: String(values[0]), action: "upsert", startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z", status: "pending", attempts: 0, generation: 1 }]) as unknown as unknown[]);
+  const providerCalls: Array<{ url: string; body?: Record<string, unknown> }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input); providerCalls.push({ url, body: init?.body && url.startsWith("https://www.googleapis.com/calendar/") ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined });
+    if (url === "https://oauth2.googleapis.com/token") return new Response(JSON.stringify({ access_token: "short-access-token" }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ id: "created" }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const result = await worker.fetch(request("/meetings", { title: "Private planning title", notes: "Sensitive roster details", startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z", required: true }, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(result.status, 201);
+    assert.deepEqual((await result.json() as { calendarSync: unknown }).calendarSync, { synced: 1, queued: 0, failed: 0 });
+    const calendarCall = providerCalls.find((call) => call.url.startsWith("https://www.googleapis.com/calendar/v3/calendars/"));
+    assert.ok(calendarCall);
+    assert.deepEqual(Object.keys(calendarCall.body ?? {}).sort(), ["end", "id", "start", "summary"]);
+    assert.equal(calendarCall.body?.summary, "LancerLogin meeting");
+    assert.match(String(calendarCall.body?.id), /^ll[0-9a-f]{48}$/);
+    assert.equal(JSON.stringify(calendarCall.body).includes("Private planning title"), false);
+    assert.equal(JSON.stringify(calendarCall.body).includes("Sensitive roster details"), false);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("Discord anomaly reports require an Admin-selected separate text channel in the verified server", async () => {

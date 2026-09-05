@@ -17,6 +17,7 @@ type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?
 type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number; discordContestWindowHours?: number; attendanceReportingStartsOn?: string | null; anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number };
 type DiscordChannelManagerInput = { enabled?: boolean; contestWindowHours?: number };
 type DiscordAnomalyReportsInput = { enabled?: boolean; channelId?: string | null };
+type GoogleCalendarSecret = { clientId: string; clientSecret: string; refreshToken?: string; calendarId?: string; calendarLabel?: string };
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null; attendanceRequiredFrom?: string | null };
 type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; weightCategoryId?: string | null; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
@@ -61,6 +62,12 @@ class DiscordResponseError extends HttpError {
   readonly discordCode?: number;
   constructor(status: number, message: string, code?: number) { super(502, `Discord rejected the request (${status})${message ? `: ${message}` : ""}`); this.discordStatus = status; this.discordCode = code; }
 }
+class GoogleCalendarProviderError extends Error {
+  readonly providerStatus: number;
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
+  constructor(providerStatus: number, message: string, retryable: boolean, retryAfterMs?: number) { super(message); this.providerStatus = providerStatus; this.retryable = retryable; this.retryAfterMs = retryAfterMs; }
+}
 async function parseJson<T>(request: Request, maxBytes = 262_144): Promise<T> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new HttpError(415, "Content-Type must be application/json");
   if (Number(request.headers.get("content-length") ?? 0) > maxBytes) throw new HttpError(413, "Request body is too large");
@@ -87,6 +94,10 @@ async function requireRole(request: Request, env: Env, roles: Role[]): Promise<P
 async function sha256(value: string): Promise<string> {
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
   return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 function constantTimeEqual(left: string, right: string): boolean {
   if (left.length !== right.length) return false;
@@ -479,7 +490,8 @@ async function meetings(request: Request, env: Env): Promise<Response> {
   await db.batch(statements);
   const discord = await integrationRecord(env, "discord"); if (discord && discord.enabled !== 0) { try { await syncDiscordCalendarMeetings(db, env, principal, ids); } catch { /* Calendar sync is best-effort so meeting creation remains available without Discord. */ } }
   const created = occurrences.map((occurrence, index) => ({ id: ids[index], title: input.title!.trim(), ...occurrence, required: input.required !== false, notes: input.notes?.trim() || null, seriesId, recurrenceFrequency: input.recurrence?.frequency ?? null, recurrenceUntil: input.recurrence?.until ?? null, recurrenceSequence: occurrence.sequence, weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }));
-  return response({ meeting: created[0], meetings: created, seriesId }, 201);
+  const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarCreate(db, env, ids));
+  return response({ meeting: created[0], meetings: created, seriesId, calendarSync }, 201);
 }
 async function meetingDetail(request: Request, env: Env, meetingId: string): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
@@ -506,7 +518,8 @@ async function updateMeeting(request: Request, env: Env, meetingId: string): Pro
     : await db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = 0, weight_category_id = ?, weight_category_name = ?, attendance_weight = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1, meetingId).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
   await writeAudit(db, principal, "meeting.updated", "meeting", meetingId, assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 });
-  return response({ meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }) } });
+  const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarUpdate(db, env, [meetingId]));
+  return response({ meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }) }, calendarSync });
 }
 async function updateMeetingSeries(request: Request, env: Env, seriesId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<MeetingInput & { meetingId?: string }>(request); validateMeetingInput(input);
@@ -523,7 +536,7 @@ async function updateMeetingSeries(request: Request, env: Env, seriesId: string)
     : db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = 0, weight_category_id = ?, weight_category_name = ?, attendance_weight = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title!.trim(), meeting.startsAt, meeting.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1, meeting.id));
   if (!statements.length) throw new HttpError(404, "No future series occurrences were found");
   const updatedCount = statements.length; statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.series_updated', 'meeting_series', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, seriesId, JSON.stringify({ fromMeetingId: input.meetingId, updated: updatedCount, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 }) }), new Date().toISOString()));
-  await db.batch(statements); return response({ seriesId, updated: updatedCount });
+  await db.batch(statements); const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarUpdate(db, env, proposed.map((meeting) => meeting.id))); return response({ seriesId, updated: updatedCount, calendarSync });
 }
 async function deleteMeetings(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "occurrence" | "future" }>(request);
@@ -531,15 +544,18 @@ async function deleteMeetings(request: Request, env: Env, meetingId: string): Pr
   if (!meeting) throw new HttpError(404, "Meeting not found");
   const now = new Date().toISOString();
   if (input.scope === "future" && meeting.seriesId) {
+    const affected = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL").bind(meeting.seriesId, meeting.startsAt).all<{ id: string }>();
     const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL").bind(now, meeting.seriesId, meeting.startsAt).run();
     const count = updated.meta?.changes ?? 0; if (count < 1) throw new HttpError(404, "No future series occurrences were found");
     await writeAudit(db, principal, "meeting.series_deleted", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, deleted: count });
-    return response({ deleted: count, scope: "future" });
+    const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarDelete(db, env, (affected.results ?? []).map((item) => item.id)));
+    return response({ deleted: count, scope: "future", calendarSync });
   }
   const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, meeting.id).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
   await writeAudit(db, principal, "meeting.deleted", "meeting", meeting.id);
-  return response({ deleted: 1, scope: "occurrence" });
+  const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarDelete(db, env, [meeting.id]));
+  return response({ deleted: 1, scope: "occurrence", calendarSync });
 }
 async function bulkDeleteMeetings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingIds?: string[]; confirmation?: string }>(request);
@@ -547,7 +563,7 @@ async function bulkDeleteMeetings(request: Request, env: Env): Promise<Response>
   if (!ids.length || ids.length > 100) throw new HttpError(400, "Select between 1 and 100 meetings");
   if (input.confirmation !== "DELETE SELECTED MEETINGS") throw new HttpError(400, "Type DELETE SELECTED MEETINGS exactly to continue");
   const now = new Date().toISOString(); const statements = ids.map((id) => db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, id)); const results = await db.batch(statements); const deleted = results.reduce((total, item) => total + (item.meta?.changes ?? 0), 0);
-  await writeAudit(db, principal, "meetings.bulk_deleted", "meeting", null, { selected: ids.length, deleted }); return response({ deleted });
+  await writeAudit(db, principal, "meetings.bulk_deleted", "meeting", null, { selected: ids.length, deleted }); const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarDelete(db, env, ids)); return response({ deleted, calendarSync });
 }
 async function rosterHistory(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]); const result = await requireDatabase(env).prepare("SELECT created_at AS createdAt, metadata_json AS metadata FROM audit_log WHERE installation_id = 'primary' AND action = 'roster.imported' ORDER BY created_at DESC LIMIT 20").all<{ createdAt: string; metadata: string }>();
@@ -558,15 +574,18 @@ async function restoreMeetings(request: Request, env: Env, meetingId: string): P
   const meeting = await db.prepare("SELECT id, series_id AS seriesId, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NOT NULL").bind(meetingId).first<{ id: string; seriesId?: string | null; startsAt: string }>();
   if (!meeting) throw new HttpError(404, "Deleted meeting not found");
   if (input.scope === "future" && meeting.seriesId) {
+    const affected = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NOT NULL").bind(meeting.seriesId, meeting.startsAt).all<{ id: string }>();
     const updated = await db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NOT NULL").bind(meeting.seriesId, meeting.startsAt).run();
     const count = updated.meta?.changes ?? 0; if (count < 1) throw new HttpError(404, "No deleted future series occurrences were found");
     await writeAudit(db, principal, "meeting.series_restored", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, restored: count });
-    return response({ restored: count, scope: "future" });
+    const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarRestore(db, env, (affected.results ?? []).map((item) => item.id)));
+    return response({ restored: count, scope: "future", calendarSync });
   }
   const updated = await db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NOT NULL").bind(meeting.id).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Deleted meeting not found");
   await writeAudit(db, principal, "meeting.restored", "meeting", meeting.id);
-  return response({ restored: 1, scope: "occurrence" });
+  const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarRestore(db, env, [meeting.id]));
+  return response({ restored: 1, scope: "occurrence", calendarSync });
 }
 async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual" | "simulator", actorId?: string): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required");
@@ -725,11 +744,25 @@ async function requireIntegrationConfigured(env: Env, provider: IntegrationProvi
   const record = await integrationRecord(env, provider);
   if (!record?.enabled || !record.verifiedAt) throw new HttpError(409, `${provider === "google" ? "Google OAuth" : provider === "resend" ? "Resend" : "Discord"} must be enabled and verified`);
 }
+type GoogleCalendarAuthorizationRecord = { ciphertext?: string | null; iv?: string | null; keyVersion?: number; authorizedAt?: string | null; verifiedAt?: string | null; updatedAt?: string | null; enabled?: number };
+async function googleCalendarAuthorizationRecord(env: Env): Promise<GoogleCalendarAuthorizationRecord | null> {
+  return requireDatabase(env).prepare("SELECT a.ciphertext, a.iv, a.key_version AS keyVersion, a.authorized_at AS authorizedAt, a.verified_at AS verifiedAt, a.updated_at AS updatedAt, x.google_calendar_enabled AS enabled FROM installations x LEFT JOIN google_calendar_authorizations a ON a.installation_id = x.id WHERE x.id = 'primary'").first<GoogleCalendarAuthorizationRecord>();
+}
+async function googleCalendarIntegrationStatus(env: Env) {
+  const db = requireDatabase(env); const [record, queue] = await Promise.all([
+    googleCalendarAuthorizationRecord(env),
+    db.prepare("SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, MAX(CASE WHEN status = 'failed' THEN last_error ELSE NULL END) AS lastError FROM google_calendar_operations WHERE installation_id = 'primary'").first<{ pending?: number; failed?: number; lastError?: string | null }>(),
+  ]);
+  let calendarName: string | undefined;
+  if (record?.ciphertext && record.iv && env.INTEGRATION_KEY) try { calendarName = (await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY) as GoogleCalendarSecret).calendarLabel; } catch { /* Status must not expose or depend on secret values. */ }
+  const enabled = Boolean(record?.enabled); const saved = Boolean(record?.ciphertext); const configured = enabled && Boolean(record?.verifiedAt);
+  return { provider: "google_calendar" as const, enabled, saved, authorized: Boolean(record?.authorizedAt), configured, state: !enabled ? "disabled" as const : !saved ? "not_configured" as const : configured ? "configured" as const : "verification_required" as const, updatedAt: record?.updatedAt ?? undefined, verifiedAt: record?.verifiedAt ?? undefined, calendarName, pendingOperations: Number(queue?.pending ?? 0), failedOperations: Number(queue?.failed ?? 0), lastError: queue?.lastError ?? undefined };
+}
 async function integrationsStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
-  const [result, flags] = await Promise.all([requireDatabase(env).prepare("SELECT i.provider, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, EXISTS(SELECT 1 FROM integration_verification_challenges c WHERE c.installation_id = i.installation_id AND c.provider = i.provider AND c.expires_at > ?) AS verificationPending FROM encrypted_integrations i WHERE i.installation_id = 'primary' ORDER BY i.provider").bind(new Date().toISOString()).all<{ provider: IntegrationProvider; updatedAt: string; verifiedAt?: string | null; verificationPending: number }>(), integrationFlags(env)]);
+  const [result, flags, calendar] = await Promise.all([requireDatabase(env).prepare("SELECT i.provider, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, EXISTS(SELECT 1 FROM integration_verification_challenges c WHERE c.installation_id = i.installation_id AND c.provider = i.provider AND c.expires_at > ?) AS verificationPending FROM encrypted_integrations i WHERE i.installation_id = 'primary' ORDER BY i.provider").bind(new Date().toISOString()).all<{ provider: IntegrationProvider; updatedAt: string; verifiedAt?: string | null; verificationPending: number }>(), integrationFlags(env), googleCalendarIntegrationStatus(env)]);
   const saved = new Map((result.results ?? []).map((item) => [item.provider, item]));
-  return response({ integrations: [...integrationProviders].map((provider) => { const item = saved.get(provider); const enabled = Boolean(flags[integrationFlagColumns[provider]]); return { provider, enabled, saved: Boolean(item), configured: enabled && Boolean(item?.verifiedAt), state: !enabled ? "disabled" : !item ? "not_configured" : item.verifiedAt ? "configured" : "verification_required", updatedAt: item?.updatedAt, verifiedAt: item?.verifiedAt ?? undefined, verificationPending: enabled && Boolean(item?.verificationPending) }; }) });
+  return response({ integrations: [...[...integrationProviders].map((provider) => { const item = saved.get(provider); const enabled = Boolean(flags[integrationFlagColumns[provider]]); return { provider, enabled, saved: Boolean(item), configured: enabled && Boolean(item?.verifiedAt), state: !enabled ? "disabled" : !item ? "not_configured" : item.verifiedAt ? "configured" : "verification_required", updatedAt: item?.updatedAt, verifiedAt: item?.verifiedAt ?? undefined, verificationPending: enabled && Boolean(item?.verificationPending) }; }), calendar] });
 }
 async function discordChannelManagerSettings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -874,6 +907,235 @@ async function googleCallback(request: Request, env: Env): Promise<Response> {
   headers.append("set-cookie", "lancerlogin_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
   headers.append("set-cookie", "lancerlogin_oauth_verify=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
   return new Response(null, { status: 302, headers });
+}
+
+function googleCalendarRedirectUri(env: Env): string {
+  const origin = new URL(env.ALLOWED_ORIGIN);
+  if (origin.protocol !== "https:" || origin.origin !== env.ALLOWED_ORIGIN) throw new HttpError(503, "Public dashboard origin is invalid");
+  return `${origin.origin}/api/admin/integrations/google-calendar/callback`;
+}
+async function googleCalendarSecret(env: Env, requireVerified = false): Promise<{ record: GoogleCalendarAuthorizationRecord; secret: GoogleCalendarSecret }> {
+  if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
+  const record = await googleCalendarAuthorizationRecord(env);
+  if (!record?.enabled) throw new HttpError(409, "Google Calendar is disabled");
+  if (!record.ciphertext || !record.iv) throw new HttpError(409, "Save Google Calendar OAuth credentials first");
+  if (requireVerified && !record.verifiedAt) throw new HttpError(409, "Google Calendar must be authorized and a writable calendar selected");
+  return { record, secret: await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY) as GoogleCalendarSecret };
+}
+function googleCalendarRetryAfter(response: Response): number | undefined {
+  const seconds = Number(response.headers.get("retry-after"));
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds * 1_000, 3_600_000) : undefined;
+}
+async function googleCalendarProviderRequest(accessToken: string, path: string, init: RequestInit = {}): Promise<{ response: Response; body: Record<string, unknown> }> {
+  const result = await fetch(`https://www.googleapis.com/calendar/v3${path}`, { ...init, headers: { authorization: `Bearer ${accessToken}`, accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
+  const body = await result.json().catch(() => ({})) as Record<string, unknown>;
+  if (result.ok) return { response: result, body };
+  if (result.status === 401) throw new GoogleCalendarProviderError(401, "Google Calendar authorization needs to be renewed.", false);
+  if (result.status === 403 || result.status === 429) throw new GoogleCalendarProviderError(result.status, "Google Calendar is rate limiting or denying this request. Check the selected calendar and try again.", true, googleCalendarRetryAfter(result));
+  if (result.status >= 500) throw new GoogleCalendarProviderError(result.status, "Google Calendar is temporarily unavailable. LancerLogin will retry automatically.", true, googleCalendarRetryAfter(result));
+  throw new GoogleCalendarProviderError(result.status, `Google Calendar rejected the request (${result.status}). Check the Calendar connection.`, false);
+}
+async function googleCalendarAccessToken(env: Env, requireVerified = false): Promise<{ accessToken: string; secret: GoogleCalendarSecret }> {
+  const { secret } = await googleCalendarSecret(env, requireVerified);
+  if (!secret.refreshToken) throw new HttpError(409, "Authorize Google Calendar before selecting a calendar");
+  const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: secret.clientId, client_secret: secret.clientSecret, refresh_token: secret.refreshToken, grant_type: "refresh_token" }) });
+  const body = await result.json().catch(() => ({})) as { access_token?: string };
+  if (!result.ok || !body.access_token) {
+    if (result.status >= 500 || result.status === 429) throw new GoogleCalendarProviderError(result.status, "Google authorization is temporarily unavailable. LancerLogin will retry automatically.", true, googleCalendarRetryAfter(result));
+    throw new GoogleCalendarProviderError(result.status, "Google Calendar authorization needs to be renewed.", false);
+  }
+  return { accessToken: body.access_token, secret };
+}
+async function googleCalendarConfiguration(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (request.method === "PATCH") {
+    const input = await parseJson<{ enabled?: boolean }>(request);
+    if (typeof input.enabled !== "boolean") throw new HttpError(400, "enabled must be true or false");
+    await db.prepare("UPDATE installations SET google_calendar_enabled = ? WHERE id = 'primary'").bind(input.enabled ? 1 : 0).run();
+    await writeAudit(db, principal, input.enabled ? "google_calendar.enabled" : "google_calendar.disabled", "integration", "google_calendar");
+    return response({ provider: "google_calendar", enabled: input.enabled });
+  }
+  if (request.method === "DELETE") {
+    await db.batch([
+      db.prepare("DELETE FROM google_calendar_operations WHERE installation_id = 'primary'"),
+      db.prepare("DELETE FROM google_calendar_event_mappings WHERE installation_id = 'primary'"),
+      db.prepare("DELETE FROM google_calendar_authorizations WHERE installation_id = 'primary'"),
+      db.prepare("UPDATE installations SET google_calendar_enabled = 0 WHERE id = 'primary'"),
+    ]);
+    await writeAudit(db, principal, "google_calendar.removed", "integration", "google_calendar");
+    return response({ provider: "google_calendar", configured: false, enabled: false });
+  }
+  if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
+  const input = await parseJson<{ clientId?: string; clientSecret?: string }>(request);
+  if (!input.clientId?.trim() || !input.clientSecret?.trim() || input.clientId.length > 500 || input.clientSecret.length > 500) throw new HttpError(400, "Google Calendar requires an OAuth client ID and client secret");
+  const existing = await googleCalendarAuthorizationRecord(env); let prior: GoogleCalendarSecret | undefined;
+  if (existing?.ciphertext && existing.iv) try { prior = await decryptIntegration(existing.ciphertext, existing.iv, env.INTEGRATION_KEY) as GoogleCalendarSecret; } catch { /* Replacing unreadable credentials is allowed. */ }
+  const encrypted = await encryptIntegration({ clientId: input.clientId.trim(), clientSecret: input.clientSecret.trim(), ...(prior?.calendarId ? { calendarId: prior.calendarId, calendarLabel: prior.calendarLabel } : {}) }, env.INTEGRATION_KEY); const now = new Date().toISOString();
+  await db.prepare("INSERT INTO google_calendar_authorizations (installation_id, ciphertext, iv, key_version, authorized_at, verified_at, updated_at) VALUES ('primary', ?, ?, 1, NULL, NULL, ?) ON CONFLICT(installation_id) DO UPDATE SET ciphertext = excluded.ciphertext, iv = excluded.iv, key_version = google_calendar_authorizations.key_version + 1, authorized_at = NULL, verified_at = NULL, updated_at = excluded.updated_at").bind(encrypted.ciphertext, encrypted.iv, now).run();
+  await writeAudit(db, principal, existing?.ciphertext ? "google_calendar.rotated" : "google_calendar.saved", "integration", "google_calendar");
+  return response({ provider: "google_calendar", saved: true, configured: false, created: !existing?.ciphertext, state: "verification_required", updatedAt: now });
+}
+async function googleCalendarStart(request: Request, env: Env): Promise<Response> {
+  if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
+  const principal = await requireRole(request, env, ["admin"]); const { secret } = await googleCalendarSecret(env); const state = await createSessionCodec(env.SESSION_KEY).issue(principal, 10 * 60_000); const target = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  target.search = new URLSearchParams({ client_id: secret.clientId, redirect_uri: googleCalendarRedirectUri(env), response_type: "code", scope: "https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events", access_type: "offline", include_granted_scopes: "true", prompt: "consent select_account", state }).toString();
+  const headers = new Headers({ location: target.toString(), "cache-control": "no-store" }); headers.append("set-cookie", `lancerlogin_calendar_oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`);
+  return new Response(null, { status: 302, headers });
+}
+const writableCalendarRole = (value: unknown) => value === "writer" || value === "owner";
+async function googleCalendarCallback(request: Request, env: Env): Promise<Response> {
+  if (!env.SESSION_KEY || !env.INTEGRATION_KEY) throw new HttpError(503, "Google Calendar authorization is not configured");
+  const url = new URL(request.url); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_calendar_oauth_state"); const signed = state ? await createSessionCodec(env.SESSION_KEY).verify(state) : undefined;
+  if (!code || !state || state !== savedState || !signed) throw new HttpError(400, "Google Calendar authorization state is invalid or expired");
+  const principal = await requireDatabase(env).prepare("SELECT id AS userId, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND role = 'admin'").bind(signed.userId).first<{ userId: string; role: Role }>();
+  if (!principal) throw new HttpError(403, "Only an active Admin can authorize Google Calendar");
+  const { secret } = await googleCalendarSecret(env); const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: secret.clientId, client_secret: secret.clientSecret, redirect_uri: googleCalendarRedirectUri(env), grant_type: "authorization_code" }) });
+  const tokens = await result.json().catch(() => ({})) as { access_token?: string; refresh_token?: string };
+  if (!result.ok || !tokens.access_token || !(tokens.refresh_token || secret.refreshToken)) throw new HttpError(401, "Google did not return durable Calendar access. Try authorizing again and approve Calendar access.");
+  const next: GoogleCalendarSecret = { ...secret, refreshToken: tokens.refresh_token ?? secret.refreshToken }; let verifiedAt: string | null = null;
+  if (next.calendarId) try { const { body } = await googleCalendarProviderRequest(tokens.access_token, `/users/me/calendarList/${encodeURIComponent(next.calendarId)}`); if (writableCalendarRole(body.accessRole)) { next.calendarLabel = String(body.summary ?? next.calendarLabel ?? "Selected calendar").slice(0, 200); verifiedAt = new Date().toISOString(); } } catch { /* The Admin can choose another writable calendar after return. */ }
+  const encrypted = await encryptIntegration(next, env.INTEGRATION_KEY); const now = new Date().toISOString(); const db = requireDatabase(env);
+  await db.batch([
+    db.prepare("UPDATE google_calendar_authorizations SET ciphertext = ?, iv = ?, authorized_at = ?, verified_at = ?, updated_at = ? WHERE installation_id = 'primary'").bind(encrypted.ciphertext, encrypted.iv, now, verifiedAt, now),
+    ...(verifiedAt ? [db.prepare("UPDATE google_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now)] : []),
+  ]);
+  await writeAudit(db, { ...signed, role: "admin" }, "google_calendar.authorized", "integration", "google_calendar", { calendarReverified: Boolean(verifiedAt) });
+  const headers = new Headers({ location: `${env.ALLOWED_ORIGIN}/settings/integrations?${verifiedAt ? "verified" : "authorized"}=google-calendar`, "cache-control": "no-store" }); headers.append("set-cookie", "lancerlogin_calendar_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
+  return new Response(null, { status: 302, headers });
+}
+async function listGoogleCalendars(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin"]); const { accessToken } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, "/users/me/calendarList?minAccessRole=writer&showHidden=false&maxResults=250");
+  const items = Array.isArray(body.items) ? body.items as Array<Record<string, unknown>> : [];
+  return response({ calendars: items.filter((item) => writableCalendarRole(item.accessRole) && typeof item.id === "string").map((item) => ({ id: String(item.id), name: String(item.summary ?? "Writable calendar").slice(0, 200), primary: Boolean(item.primary), accessRole: item.accessRole })) });
+}
+async function selectGoogleCalendar(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ calendarId?: string }>(request); const calendarId = input.calendarId?.trim();
+  if (!calendarId || calendarId.length > 1_024) throw new HttpError(400, "Choose one writable Google Calendar");
+  const { accessToken, secret } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, `/users/me/calendarList/${encodeURIComponent(calendarId)}`);
+  if (!writableCalendarRole(body.accessRole)) throw new HttpError(400, "Choose a Google Calendar where this account can edit events");
+  const changed = Boolean(secret.calendarId && secret.calendarId !== calendarId); const next = { ...secret, calendarId, calendarLabel: String(body.summary ?? "Selected calendar").slice(0, 200) }; const encrypted = await encryptIntegration(next, env.INTEGRATION_KEY!); const now = new Date().toISOString(); const db = requireDatabase(env);
+  await db.batch([
+    ...(changed ? [db.prepare("DELETE FROM google_calendar_operations WHERE installation_id = 'primary'"), db.prepare("DELETE FROM google_calendar_event_mappings WHERE installation_id = 'primary'")] : []),
+    db.prepare("UPDATE google_calendar_authorizations SET ciphertext = ?, iv = ?, verified_at = ?, updated_at = ? WHERE installation_id = 'primary'").bind(encrypted.ciphertext, encrypted.iv, now, now),
+    db.prepare("UPDATE google_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now),
+  ]);
+  await writeAudit(db, principal, "google_calendar.selected", "integration", "google_calendar", { calendarChanged: changed });
+  return response({ provider: "google_calendar", configured: true, calendarName: next.calendarLabel, verifiedAt: now });
+}
+type GoogleCalendarSyncSummary = { synced: number; queued: number; failed: number };
+type GoogleCalendarOperation = { meetingId: string; eventId: string; action: "upsert" | "delete"; startsAt?: string | null; endsAt?: string | null; status: "pending" | "delivered" | "failed"; attempts: number; syncedAt?: string | null; generation?: number | null };
+async function googleCalendarEventId(meetingId: string, generation: number): Promise<string> { return `ll${(await sha256Hex(`google-calendar:primary:${meetingId}:${generation}`)).slice(0, 48)}`; }
+async function googleCalendarIsReady(env: Env): Promise<boolean> { const record = await googleCalendarAuthorizationRecord(env); return Boolean(record?.enabled && record.verifiedAt); }
+const googleCalendarEmptySummary = (): GoogleCalendarSyncSummary => ({ synced: 0, queued: 0, failed: 0 });
+async function bestEffortGoogleCalendar(action: () => Promise<GoogleCalendarSyncSummary>): Promise<GoogleCalendarSyncSummary> {
+  try { return await action(); } catch { return { synced: 0, queued: 0, failed: 1 }; }
+}
+async function enqueueGoogleCalendarCreate(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
+  if (!meetingIds.length || !await googleCalendarIsReady(env)) return googleCalendarEmptySummary();
+  const now = new Date().toISOString(); const eventIds: string[] = [];
+  for (const meetingId of meetingIds) {
+    const meeting = await db.prepare("SELECT id, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(meetingId).first<{ id: string; startsAt: string; endsAt: string }>();
+    if (!meeting) continue;
+    const eventId = await googleCalendarEventId(meeting.id, 1); eventIds.push(eventId);
+    await db.batch([
+      db.prepare("INSERT OR IGNORE INTO google_calendar_event_mappings (installation_id, meeting_id, event_id, generation, active, updated_at) VALUES ('primary', ?, ?, 1, 1, ?)").bind(meeting.id, eventId, now),
+      db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?) ON CONFLICT(installation_id, event_id) DO UPDATE SET action = 'upsert', starts_at = excluded.starts_at, ends_at = excluded.ends_at, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(meeting.id, eventId, meeting.startsAt, meeting.endsAt, now, now),
+    ]);
+  }
+  return processGoogleCalendarOperations(env, eventIds);
+}
+async function enqueueGoogleCalendarUpdate(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
+  const now = new Date().toISOString(); const eventIds: string[] = [];
+  for (const meetingId of meetingIds) {
+    const mapped = await db.prepare("SELECT m.event_id AS eventId, mt.starts_at AS startsAt, mt.ends_at AS endsAt FROM google_calendar_event_mappings m JOIN meetings mt ON mt.installation_id = m.installation_id AND mt.id = m.meeting_id WHERE m.installation_id = 'primary' AND m.meeting_id = ? AND m.active = 1 AND mt.deleted_at IS NULL").bind(meetingId).first<{ eventId: string; startsAt: string; endsAt: string }>();
+    if (!mapped) continue; eventIds.push(mapped.eventId);
+    await db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?) ON CONFLICT(installation_id, event_id) DO UPDATE SET action = 'upsert', starts_at = excluded.starts_at, ends_at = excluded.ends_at, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(meetingId, mapped.eventId, mapped.startsAt, mapped.endsAt, now, now).run();
+  }
+  return await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
+}
+async function enqueueGoogleCalendarDelete(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
+  const now = new Date().toISOString(); const eventIds: string[] = [];
+  for (const meetingId of meetingIds) {
+    const mapped = await db.prepare("SELECT event_id AS eventId FROM google_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(meetingId).first<{ eventId: string }>();
+    if (!mapped) continue; eventIds.push(mapped.eventId);
+    await db.batch([
+      db.prepare("UPDATE google_calendar_event_mappings SET active = 0, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, meetingId),
+      db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'delete', NULL, NULL, 'pending', 0, ?, ?) ON CONFLICT(installation_id, event_id) DO UPDATE SET action = 'delete', starts_at = NULL, ends_at = NULL, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(meetingId, mapped.eventId, now, now),
+    ]);
+  }
+  return await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
+}
+async function enqueueGoogleCalendarRestore(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
+  const now = new Date().toISOString(); const eventIds: string[] = [];
+  for (const meetingId of meetingIds) {
+    const mapped = await db.prepare("SELECT m.generation, mt.starts_at AS startsAt, mt.ends_at AS endsAt FROM google_calendar_event_mappings m JOIN meetings mt ON mt.installation_id = m.installation_id AND mt.id = m.meeting_id WHERE m.installation_id = 'primary' AND m.meeting_id = ? AND mt.deleted_at IS NULL").bind(meetingId).first<{ generation: number; startsAt: string; endsAt: string }>();
+    if (!mapped) continue; const generation = Number(mapped.generation) + 1; const eventId = await googleCalendarEventId(meetingId, generation); eventIds.push(eventId);
+    await db.batch([
+      db.prepare("UPDATE google_calendar_event_mappings SET event_id = ?, generation = ?, active = 1, synced_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(eventId, generation, now, meetingId),
+      db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?)").bind(meetingId, eventId, mapped.startsAt, mapped.endsAt, now, now),
+    ]);
+  }
+  return await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
+}
+function googleCalendarOperationPath(calendarId: string, eventId?: string): string { return `/calendars/${encodeURIComponent(calendarId)}/events${eventId ? `/${encodeURIComponent(eventId)}` : ""}`; }
+function googleCalendarRetryAt(attempts: number, error: GoogleCalendarProviderError): string | null {
+  if (!error.retryable) return null;
+  const backoff = Math.min(3_600_000, Math.max(60_000, 2 ** Math.min(attempts, 12) * 1_000, error.retryAfterMs ?? 0));
+  return new Date(Date.now() + backoff).toISOString();
+}
+async function markGoogleCalendarOperationFailure(db: D1Database, operation: GoogleCalendarOperation, error: unknown): Promise<void> {
+  const providerError = error instanceof GoogleCalendarProviderError ? error : new GoogleCalendarProviderError(503, "Google Calendar is temporarily unavailable. LancerLogin will retry automatically.", true); const now = new Date().toISOString(); const attempts = Number(operation.attempts ?? 0) + 1; const nextAttemptAt = googleCalendarRetryAt(attempts, providerError);
+  await db.batch([
+    db.prepare("UPDATE google_calendar_operations SET status = 'failed', attempts = ?, next_attempt_at = ?, last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND event_id = ?").bind(attempts, nextAttemptAt, providerError.message.slice(0, 300), now, operation.eventId),
+    db.prepare("UPDATE google_calendar_event_mappings SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND event_id = ?").bind(providerError.message.slice(0, 300), now, operation.meetingId, operation.eventId),
+  ]);
+}
+async function replaceMissingGoogleCalendarEvent(db: D1Database, operation: GoogleCalendarOperation): Promise<string> {
+  const generation = Number(operation.generation ?? 1) + 1; const eventId = await googleCalendarEventId(operation.meetingId, generation); const now = new Date().toISOString();
+  await db.batch([
+    db.prepare("UPDATE google_calendar_operations SET status = 'delivered', next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND event_id = ?").bind(now, operation.eventId),
+    db.prepare("UPDATE google_calendar_event_mappings SET event_id = ?, generation = ?, synced_at = NULL, last_error = NULL, active = 1, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND event_id = ?").bind(eventId, generation, now, operation.meetingId, operation.eventId),
+    db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?)").bind(operation.meetingId, eventId, operation.startsAt, operation.endsAt, now, now),
+  ]);
+  return eventId;
+}
+async function processGoogleCalendarOperations(env: Env, eventIds?: string[]): Promise<GoogleCalendarSyncSummary> {
+  if (!await googleCalendarIsReady(env)) return googleCalendarEmptySummary();
+  const db = requireDatabase(env); const now = new Date().toISOString(); const filter = eventIds?.length ? `AND o.event_id IN (${eventIds.map(() => "?").join(",")})` : "AND (o.status = 'pending' OR (o.status = 'failed' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ?))"; const values = eventIds?.length ? eventIds : [now];
+  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.event_id AS eventId, o.action, o.starts_at AS startsAt, o.ends_at AS endsAt, o.status, o.attempts, m.synced_at AS syncedAt, m.generation FROM google_calendar_operations o LEFT JOIN google_calendar_event_mappings m ON m.installation_id = o.installation_id AND m.meeting_id = o.meeting_id AND m.event_id = o.event_id WHERE o.installation_id = 'primary' ${filter} ORDER BY o.updated_at LIMIT 50`).bind(...values).all<GoogleCalendarOperation>();
+  const operations = result.results ?? []; if (!operations.length) return googleCalendarEmptySummary();
+  let accessToken: string; let secret: GoogleCalendarSecret;
+  try { ({ accessToken, secret } = await googleCalendarAccessToken(env, true)); }
+  catch (error) { for (const operation of operations) await markGoogleCalendarOperationFailure(db, operation, error); return { synced: 0, queued: 0, failed: operations.length }; }
+  if (!secret.calendarId) return { synced: 0, queued: operations.length, failed: 0 };
+  let synced = 0; let queued = 0; let failed = 0;
+  for (const operation of operations) {
+    try {
+      if (operation.action === "delete") {
+        try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "DELETE" }); }
+        catch (error) { if (!(error instanceof GoogleCalendarProviderError) || ![404, 410].includes(error.providerStatus)) throw error; }
+      } else {
+        const timing = { start: { dateTime: operation.startsAt }, end: { dateTime: operation.endsAt } };
+        if (operation.syncedAt) {
+          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }); }
+          catch (error) { if (error instanceof GoogleCalendarProviderError && [404, 410].includes(error.providerStatus)) { await replaceMissingGoogleCalendarEvent(db, operation); queued += 1; continue; } throw error; }
+        } else {
+          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId), { method: "POST", body: JSON.stringify({ id: operation.eventId, summary: "LancerLogin meeting", ...timing }) }); }
+          catch (error) { if (error instanceof GoogleCalendarProviderError && error.providerStatus === 409) await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }); else throw error; }
+        }
+      }
+      const completedAt = new Date().toISOString(); await db.batch([
+        db.prepare("UPDATE google_calendar_operations SET status = 'delivered', attempts = attempts + 1, next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND event_id = ?").bind(completedAt, operation.eventId),
+        db.prepare("UPDATE google_calendar_event_mappings SET synced_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND event_id = ?").bind(completedAt, completedAt, operation.meetingId, operation.eventId),
+      ]); synced += 1;
+    } catch (error) { await markGoogleCalendarOperationFailure(db, operation, error); failed += 1; }
+  }
+  return { synced, queued, failed };
+}
+async function retryGoogleCalendarOperations(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); await googleCalendarSecret(env, true); const db = requireDatabase(env); const now = new Date().toISOString();
+  await db.prepare("UPDATE google_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now).run();
+  const result = await processGoogleCalendarOperations(env); await writeAudit(db, principal, "google_calendar.retry_requested", "integration", "google_calendar", result); return response(result);
 }
 async function users(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -1418,7 +1680,7 @@ async function privacySettings(request: Request, env: Env): Promise<Response> {
 
 type BackupScope = "meetings" | "roster" | "installation";
 const tableColumns = {
-  installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id", "google_enabled", "resend_enabled", "discord_enabled"],
+  installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id", "google_enabled", "resend_enabled", "discord_enabled", "google_calendar_enabled"],
   organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at"],
@@ -1432,6 +1694,9 @@ const tableColumns = {
   kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version", "pending_events", "last_sync_at", "error_category"],
   simulated_kiosk_sessions: ["installation_id", "pairing_code_id", "name", "active", "online", "last_seen_at", "created_by", "created_at"],
   encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at", "verified_at"],
+  google_calendar_authorizations: ["installation_id", "ciphertext", "iv", "key_version", "authorized_at", "verified_at", "updated_at"],
+  google_calendar_event_mappings: ["installation_id", "meeting_id", "event_id", "generation", "active", "synced_at", "last_error", "updated_at"],
+  google_calendar_operations: ["installation_id", "meeting_id", "event_id", "action", "starts_at", "ends_at", "status", "attempts", "next_attempt_at", "last_error", "updated_at"],
   integration_deliveries: ["id", "installation_id", "provider", "delivery_key", "status", "external_id", "created_at", "updated_at"],
   integration_state: ["installation_id", "provider", "state_key", "external_id", "content_hash", "updated_at"],
   discord_attendance_notifications: ["installation_id", "meeting_id", "status", "message_id", "attempts", "last_error", "processed_at", "updated_at", "channel_id", "expires_at", "deleted_at"],
@@ -1446,8 +1711,9 @@ type BackupTable = keyof typeof tableColumns;
 const installationTables: BackupTable[] = [
   "installations", "organization_settings", "members", "users", "meeting_weight_categories", "meetings", "meeting_templates",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
-  "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "integration_deliveries",
+  "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
+  "google_calendar_event_mappings", "google_calendar_operations",
 ];
 const meetingTables: BackupTable[] = ["meeting_weight_categories", "meetings", "meeting_templates", "attendance_events", "attendance_corrections", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports"];
 const rosterTables: BackupTable[] = ["members"];
@@ -1461,30 +1727,30 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 11, scope, exportedAt, tables: Object.fromEntries(entries) };
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 11 });
+  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 12, scope, exportedAt, tables: Object.fromEntries(entries) };
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 12 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
   organization_settings: tableColumns.organization_settings.slice(0, -9),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
   discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -2),
 };
-const legacyInstallationTables = installationTables.filter((table) => table !== "meeting_weight_categories" && table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients" && table !== "discord_anomaly_reports");
+const legacyInstallationTables = installationTables.filter((table) => table !== "meeting_weight_categories" && table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients" && table !== "discord_anomaly_reports" && table !== "google_calendar_authorizations" && table !== "google_calendar_event_mappings" && table !== "google_calendar_operations");
 const legacyMeetingTables = meetingTables.filter((table) => table !== "meeting_weight_categories" && table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients" && table !== "discord_anomaly_reports");
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
-  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
   const sourceTables = value.tables;
-  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories"));
+  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)));
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -3) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -8) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -8) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -3) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -3) : tableColumns[table];
+    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -8) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -8) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -3) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -3) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
@@ -1495,6 +1761,7 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
   if (schemaVersion < 7 && tables.installations) { const providers = new Set(tables.encrypted_integrations.map((row) => row.provider)); tables.installations = tables.installations.map((row) => ({ ...row, google_enabled: providers.has("google") ? 1 : 0, resend_enabled: providers.has("resend") ? 1 : 0, discord_enabled: providers.has("discord") ? 1 : 0 })); }
+  if (schemaVersion < 12 && tables.installations) tables.installations = tables.installations.map((row) => ({ google_calendar_enabled: 0, ...row }));
   if (tables.meetings) tables.meetings = tables.meetings.map((row) => {
     const normalized: Record<string, unknown> = { series_id: null, recurrence_frequency: null, recurrence_until: null, recurrence_sequence: null, deleted_at: null, weight_category_id: null, weight_category_name: null, attendance_weight: 1, ...row };
     if (normalized.ends_at !== null) return normalized;
@@ -1606,6 +1873,12 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/attendance/cleanup" && request.method === "POST") result = await cleanupAttendance(request, env);
     else if (url.pathname === "/exports/attendance.csv" && request.method === "GET") result = await attendanceExport(request, env);
     else if (url.pathname === "/admin/integrations" && request.method === "GET") result = await integrationsStatus(request, env);
+    else if (url.pathname === "/admin/integrations/google-calendar" && ["PUT", "PATCH", "DELETE"].includes(request.method)) result = await googleCalendarConfiguration(request, env);
+    else if (url.pathname === "/admin/integrations/google-calendar/authorize" && request.method === "GET") result = await googleCalendarStart(request, env);
+    else if (url.pathname === "/admin/integrations/google-calendar/callback" && request.method === "GET") result = await googleCalendarCallback(request, env);
+    else if (url.pathname === "/admin/integrations/google-calendar/calendars" && request.method === "GET") result = await listGoogleCalendars(request, env);
+    else if (url.pathname === "/admin/integrations/google-calendar/select" && ["PUT", "PATCH"].includes(request.method)) result = await selectGoogleCalendar(request, env);
+    else if (url.pathname === "/admin/integrations/google-calendar/retry" && request.method === "POST") result = await retryGoogleCalendarOperations(request, env);
     else if (url.pathname === "/admin/integrations/discord/channel-manager" && ["GET", "PATCH"].includes(request.method)) result = await discordChannelManagerSettings(request, env);
     else if (url.pathname === "/admin/integrations/discord/anomaly-reports" && ["GET", "PATCH"].includes(request.method)) result = await discordAnomalyReportSettings(request, env);
     else if (url.pathname === "/integrations/capabilities" && request.method === "GET") result = await integrationCapabilities(request, env);
@@ -1647,6 +1920,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
 }, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
   if (controller.cron === "0 3 * * *") { try { await transmitTelemetry(env); } catch { /* Telemetry is best-effort and cannot affect attendance. */ } }
   if (controller.cron === "*/5 * * * *") {
+    try { await processGoogleCalendarOperations(env); } catch { /* Google Calendar delivery retries safely on the next scheduled pass. */ }
     try { await syncDiscordManagedSurface(env); } catch { /* Discord channel management is best-effort and retries on the next scheduled pass. */ }
     try { await processDiscordAttendanceNotifications(env); } catch { /* Discord attendance delivery retries safely on the next scheduled pass. */ }
     try { await processDiscordAnomalyReports(env); } catch { /* Discord anomaly reports retry safely on the next scheduled pass. */ }

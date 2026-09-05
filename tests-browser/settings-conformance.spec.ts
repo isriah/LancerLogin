@@ -35,7 +35,7 @@ async function useSettingsContext(page: Page, role: "admin" | "operator" = "admi
   await page.route("**/admin/branding", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ settings }) }));
   await page.route("**/admin/members", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ members: [{ id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", email: "avery@example.org", active: 1 }] }) }));
   await page.route("**/admin/users", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ users: [{ id: "user-1", localUsername: "admin", role: "admin", active: 1, memberId: "member-1", memberExternalId: "A-101", memberFirstName: "Avery", memberLastName: "Stone", createdAt: new Date().toISOString() }] }) }));
-  await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: true, saved: true, configured: true, state: "configured" }, { provider: "resend", enabled: true, saved: true, configured: false, state: "verification_required" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] }) }));
+  await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: true, saved: true, configured: true, state: "configured" }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled", pendingOperations: 0, failedOperations: 0 }, { provider: "resend", enabled: true, saved: true, configured: false, state: "verification_required" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] }) }));
   await page.route("**/admin/integrations/discord/channel-manager", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ enabled: false, contestWindowHours: 24 }) }));
   await page.route("**/admin/integrations/discord/anomaly-reports", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ enabled: false, channelId: "" }) }));
   await page.route("**/admin/privacy", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ telemetryAccepted: false, notice: "Anonymous usage reporting is off. No report will be sent.", installationReference: "installation-reference-without-personal-data" }) }));
@@ -52,7 +52,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
     await page.addInitScript(() => localStorage.setItem("lancerlogin-theme", "dark"));
     await useSettingsContext(page);
-    await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: true, state: "configured" }] }) }));
+    await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: true, state: "configured" }] }) }));
     await page.route("**/admin/integrations/discord/channel-manager", async (route) => route.fulfill({ status: 200, contentType: "application/json", body: route.request().method() === "PATCH" ? route.request().postData() ?? "{}" : JSON.stringify({ enabled: true, contestWindowHours: 36 }) }));
     let anomalySettings: Record<string, unknown> | undefined;
     await page.route("**/admin/integrations/discord/anomaly-reports", async (route) => {
@@ -179,6 +179,28 @@ for (const viewport of dashboardConformanceReferences.viewports) {
   }
 }
 
+for (const viewport of dashboardConformanceReferences.viewports) {
+  test(`Google Calendar delivery status stays usable at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
+    await useSettingsContext(page);
+    await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: true, saved: true, authorized: true, configured: true, state: "configured", calendarName: "Operations calendar", pendingOperations: 2, failedOperations: 1, lastError: "Google Calendar is temporarily unavailable." }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] }) }));
+    await page.route("**/admin/integrations/google-calendar/retry", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ synced: 3, queued: 0, failed: 0 }) }));
+    await page.goto("/settings/integrations");
+    const card = page.locator(".integration-card").filter({ hasText: "Google Calendar" });
+    await card.getByText("Manage configuration", { exact: true }).click();
+    await expect(card.getByText("Selected calendar:")).toBeVisible();
+    await expect(card.getByText("Operations calendar", { exact: true })).toBeVisible();
+    await expect(card.getByText("2 waiting · 1 need another attempt", { exact: true })).toBeVisible();
+    const retry = card.getByRole("button", { name: "Retry now" });
+    await retry.focus();
+    await expect(retry).toBeFocused();
+    await retry.click();
+    await expect(card.getByText("3 Calendar events sent.")).toBeVisible();
+    await expectResponsiveFit(page);
+  });
+}
+
 test("Settings validation, integration states, telemetry, and data dialogs remain explicit and keyboard focused", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
@@ -195,7 +217,7 @@ test("Settings validation, integration states, telemetry, and data dialogs remai
   await page.goto("/settings/integrations");
   await expect(page.getByText("Configured", { exact: true })).toHaveAttribute("data-tone", "success");
   await expect(page.getByText("Verification required", { exact: true })).toHaveAttribute("data-tone", "warning");
-  await expect(page.getByText("Disabled", { exact: true })).toHaveAttribute("data-tone", "neutral");
+  await expect(page.getByText("Disabled", { exact: true }).first()).toHaveAttribute("data-tone", "neutral");
   await expect(page.getByRole("group").filter({ hasText: "Set up Resend email" })).toBeVisible();
 
   await page.goto("/settings/privacy");

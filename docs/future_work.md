@@ -1363,6 +1363,7 @@ Branch: `codex/wu-079-managed-discord-commands`
 Base: `63c70ee131a3c7e97017cf818405456cc2e263b7`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7035\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:b67c9237-bc01-46c8-a55f-de54e3968b60`
+Handoff: branch is clean at candidate `796f53fcd4a6264a1ab1b94924e3635115c031b3` with subject `WU-079: manage Discord application commands`; the candidate implements guild-scoped command reconciliation, safe Admin feedback, provider-fake/runtime coverage, responsive Integrations coverage, and updated public setup guidance without live Discord traffic.
 
 Goal: make `/pair` and `/attendance-report` available in the configured Discord server without requiring an adopter to send command-registration payloads manually.
 Dependencies: WU-032 and WU-072 (both merged); coordinate serially with WU-078 because both change Discord configuration/provider behavior and Integrations presentation

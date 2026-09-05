@@ -45,3 +45,5 @@ The per-member mean anomalous-time statistic uses all preserved eligible meeting
 Each qualifying late check-in and early check-out is one separate value in the mean. For example, arriving 10 minutes late and leaving 20 minutes early contributes the values 10 and 20, not one combined 30-minute meeting value.
 
 The dashboard displays the resulting mean in minutes rounded to the nearest whole minute.
+
+Late-arrival and early-departure thresholds both default to 10 minutes. Admins may configure each threshold independently.

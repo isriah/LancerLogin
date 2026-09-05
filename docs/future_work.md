@@ -1029,13 +1029,14 @@ Release: next documentation and setup-guidance bundle.
 
 ### WU-062 — Public documentation visual conformance
 
-Status: in progress
+Status: merged (`fb497cc`)
 
 Owner: Codex task
 Branch: `codex/wu-062-public-docs-conformance`
 Base: `77d7a47`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\8527\\LancerLogin Workspace`
 Task: `01a06ede-ee19-7cc3-af9d-549dfa0ebb1a` (provisioned from client `client-new-thread:36a3b24d-7866-4ff1-b9a0-ee8aef2a5c96`)
+Integration: candidate `f43acc676475be08686fd9bfa4c29197990c2a15` was merged as `fb497cc0b721629c300389352301ab48f2197874`. `npm run verify:docs` and the complete 125-test browser suite passed on the integrated tree. The public-docs matrix covered all seven pages at 1280x900 and 390x844 in light/dark device modes, including fixed red/gold brand tokens, keyboard focus, 44px targets, contrast, reduced motion, loaded images, contained tables/screenshots, and page-overflow checks. Chromium is the repository's configured browser; Firefox and WebKit were not separately run.
 
 Goal: make the complete public documentation site feel like LancerLogin while remaining readable, responsive, and accessible in light and dark environments.
 Dependencies: WU-061 (both units change the public setup guide, shared documentation styles, and documentation coverage; settle OAuth content before the site-wide presentation pass)

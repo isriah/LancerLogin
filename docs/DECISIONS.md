@@ -47,3 +47,9 @@ Each qualifying late check-in and early check-out is one separate value in the m
 The dashboard displays the resulting mean in minutes rounded to the nearest whole minute.
 
 Late-arrival and early-departure thresholds both default to 10 minutes. Admins may configure each threshold independently.
+
+## ADR-011: Discord anomaly-report delivery
+
+Attendance anomaly reports use a separate, Admin-configured private Discord channel rather than the member-facing attendance channel. LancerLogin requires that channel to belong to the already verified Discord server and refuses to use the configured attendance channel for this purpose. Adopters remain responsible for limiting channel access to the appropriate attendance staff.
+
+The five-minute scheduler sends one report after each eligible meeting's late-scan window closes. A report contains that meeting's qualifying late-arrival and early-departure values under ADR-010, uses no mentions, and is tracked by meeting for retry safety. Meetings with no qualifying anomalies produce no Discord message. Enabling or changing the report channel starts a new delivery window at that time, so the feature does not backfill older meetings or deliver reports accumulated while it was disabled.

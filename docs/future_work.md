@@ -1184,15 +1184,15 @@ Release: include in `v0.20.0`.
 
 ### WU-070 — Scheduled Discord anomaly reports
 
-Status: blocked
+Status: in progress
 
 Goal: deliver a controlled Discord report of anomalous arrivals and departures after the relevant attendance windows close.
-Dependencies: WU-069 and WU-065; product decision required on whether reports reuse WU-065's designated attendance channel or use a separate privileged channel, and whether delivery is one report per closed meeting or one organization-local daily digest with an explicit time zone and send time
+Dependencies: WU-069 and WU-065 (both merged); ADR-011 selects a separate Admin-configured private channel, one report after each meeting's late-scan window closes, no message for a meeting without anomalies, and no retroactive delivery before enablement or after a channel change
 Scope: after the channel and schedule contract is approved, add the Admin-only Discord configuration required by that contract; send idempotent reports containing only members and anomaly values eligible under WU-069 after their meetings can no longer accept scans; persist delivery state for retry safety; and keep messages confined to the approved configured channel. Preserve provider verification, encrypted credentials, controlled mentions, role restrictions, retry behavior, existing absence/contest/status workflows, and unrelated channel content. Exclude changing anomaly calculations, attendance outcomes, general moderation, direct messages, and managing messages outside LancerLogin's tracked report records.
 Sources: `docs/idea_inbox.md` (IN-083); WU-065; WU-069; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `apps/api/migrations/`; `apps/api/src/index.ts`; `apps/dashboard/src/integration-settings.tsx`; Discord scheduler/provider tests; `tests-browser/settings-conformance.spec.ts`.
 Acceptance: after the named decisions and dependencies clear, only Admins can configure report delivery; each eligible reporting period produces at most one tracked message in the approved channel after all included meetings close; retries cannot duplicate delivery; empty periods follow the approved contract; unverified/disabled integrations do not send; content uses controlled mentions and never exposes secrets or modifies unrelated messages.
 Verification: `npm run verify:migrations`; `npm run verify:api`; `npm run verify:dashboard`; focused provider-fake coverage for timing, time-zone boundaries if applicable, idempotence, retry, empty periods, channel isolation, controlled mentions, disabled/unverified states, and dependency semantics; focused Admin/Operator responsive Settings coverage; supported-server manual validation before release.
-Release: later Discord attendance-insights bundle after WU-065, WU-069, and the scheduling decision are complete.
+Release: include in `v0.20.0`; validate delivery to a supported private Discord channel before release.
 
 ### WU-071 — Configurable meeting weights
 

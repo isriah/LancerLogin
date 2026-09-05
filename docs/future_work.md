@@ -1191,13 +1191,14 @@ Release: later weighted-attendance feature bundle after the product decisions ar
 
 ### WU-072 — Discord member attendance-report command
 
-Status: in progress
+Status: merged (`71984a5`)
 
 Owner: Codex task
 Branch: `codex/wu-072-discord-attendance-report`
 Base: `c816e0b`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\a1d5\\LancerLogin Workspace`
 Task: `01a06edf-0dad-7160-aae9-37b0b5bcb6e5` (provisioned from client `client-new-thread:2d644f08-aaef-46f5-a8e6-8a04938bbeb2`)
+Integration: candidate `3cdd2dbf34b4bca24e52f29fe056f8544e52ae73` was updated onto the combined tree and merged as `71984a51d09f6da283257f4781bdcecacbbd9277`. `npm run verify:api`, `npm run verify:docs`, `npm run verify:dashboard`, and the complete 125-test browser suite passed on the integrated tree. Focused signed-interaction coverage verifies the ephemeral self-report, canonical reporting-period and participation-start semantics, corrections/excuses and optional/deleted-history handling, provider-length truncation with omitted counts, active linked-member binding, configured-server enforcement, and private non-disclosing failures for invalid or unavailable requests. No live Discord traffic was used.
 
 Goal: let a Discord-linked roster member privately request their own current attendance report.
 Dependencies: WU-064 (both units change the Discord interaction handler and provider-fake coverage; integrate the reliability repair first)

@@ -149,6 +149,66 @@ test("Table search, checkbox selection, bulk delete, and Sync all stay independe
   ]);
 });
 
+for (const viewport of dashboardConformanceReferences.viewports) {
+  for (const theme of dashboardConformanceReferences.themes) {
+    test(`Table rows progress oldest to newest at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+      const startsAt = "2026-09-05T18:00:00.000Z";
+      const meetings = [
+        { id: "future", title: "Future meeting", startsAt: "2026-09-12T18:00:00.000Z", endsAt: "2026-09-12T19:00:00.000Z", required: 1 },
+        { id: "same-start-first", title: "Same start first", startsAt, endsAt: "2026-09-05T19:00:00.000Z", required: 1 },
+        { id: "oldest", title: "Oldest meeting", startsAt: "2026-08-29T18:00:00.000Z", endsAt: "2026-08-29T19:00:00.000Z", required: 0 },
+        { id: "same-start-second", title: "Same start second", startsAt, endsAt: "2026-09-05T20:00:00.000Z", required: 0 },
+      ];
+      await page.setViewportSize(viewport);
+      await page.addInitScript(({ savedTheme, savedView }) => {
+        localStorage.setItem("lancerlogin-theme", savedTheme);
+        localStorage.setItem("lancerlogin-dashboard-meeting-view", savedView);
+      }, { savedTheme: theme, savedView: "table" });
+      await page.route("**/setup/status", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          configured: true,
+          installation: { authMode: "local" },
+          settings: {
+            organizationName: "Reference Arts Collective",
+            subtitle: "Shared operations",
+            logoData: "",
+            primaryColor: dashboardConformanceReferences.brand.primary,
+            secondaryColor: dashboardConformanceReferences.brand.secondary,
+            appearance: theme,
+            logoBackdrop: "auto",
+            lateScanMinutes: 30,
+            discordContestWindowHours: 24,
+          },
+        }),
+      }));
+      await page.route("**/meetings", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ meetings }) }));
+
+      await page.goto("/dashboard");
+      await expect(page.getByRole("radio", { name: "Table" })).toBeChecked();
+      const rows = page.locator(".meeting-browser-row");
+      await expect(rows).toHaveCount(4);
+      await expect(rows.locator(".meeting-title-cell > strong")).toHaveText([
+        "Oldest meeting",
+        "Same start first",
+        "Same start second",
+        "Future meeting",
+      ]);
+      await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+      await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
+      const pageOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(pageOverflow).toBeLessThanOrEqual(0);
+
+      const oldestRow = rows.first();
+      await oldestRow.focus();
+      await expect(oldestRow).toBeFocused();
+      await oldestRow.press("Enter");
+      await expect(page).toHaveURL(/\/meetings\/oldest$/);
+    });
+  }
+}
+
 test("Add meeting opens a keyboard-contained dialog and restores focus when dismissed", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/dashboard");

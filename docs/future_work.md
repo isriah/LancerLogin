@@ -1341,6 +1341,8 @@ Base: `aa52749cab6931327bc8e070f5df87f5a1961c46`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\ef58\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:2db62e70-b534-478c-875b-eeec13b4a0f3`
 Handoff: branch is clean at candidate `8685be1732206c0dda19ce9bd1a934c2f6092a02` with subject `WU-078: add calendar delivery parity`; the candidate includes the durable Discord delivery migration, provider lifecycle behavior, Dashboard recovery controls, documentation, and focused API, foundation, Dashboard, and browser coverage.
+Integration review: candidate `8685be1732206c0dda19ce9bd1a934c2f6092a02` was rejected before merge because an ambiguous successful Discord create or concurrent processors could retry without a persisted provider event ID and create a duplicate. No integration commit was created.
+Repair task: provisioning client `client-new-thread:2b4f08ad-8193-464b-b791-756e345282dd`, detached Worktree `C:\\Users\\Izz\\.codex\\worktrees\\bb56\\LancerLogin Workspace`, starting from the rejected candidate to add durable create reconciliation or safe claiming plus focused ambiguous-success and concurrency coverage.
 
 Goal: give Discord and Google Calendar the same dependable meeting-lifecycle sync model and clear manual recovery controls.
 Dependencies: WU-022 and WU-074 (both merged); ADR-013 continues to govern Google data minimization, separate authorization, delete/recreate restoration behavior, and durable non-blocking delivery

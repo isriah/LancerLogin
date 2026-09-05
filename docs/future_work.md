@@ -1222,7 +1222,7 @@ Release: next Discord self-service feature bundle after WU-064 is integrated.
 
 ### WU-073 — Persistent-message attendance-report button
 
-Status: in progress
+Status: merged (`b899ea4`)
 
 Owner: Codex task
 Branch: detached candidate `1e643e5dbb809d19ac25005457a573feacdbdf30`
@@ -1230,6 +1230,7 @@ Base: `31ff01c2427e3e1c4d914a930f7b1f62c2708113`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\f493\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:0a362151-0a80-4936-b688-ad5a42f0ff77`
 Handoff: the provisioning client never exposed an addressable task or branch, but completed the recorded detached Worktree as candidate `1e643e5dbb809d19ac25005457a573feacdbdf30`. The candidate is clean, its subject begins with WU-073, and `npm run verify:api` passes 98 tests plus API/shared typechecks.
+Integration: candidate `1e643e5dbb809d19ac25005457a573feacdbdf30` was updated onto current `main` as detached commit `6207b63c0c5c4db19d6f253fa518d8752e47749f` and merged as `b899ea44ebcc8eeea75d934f745f0374db76ea10`. `npm run verify:api` passed 98 tests plus API/shared typechecks both after the update and on the merged tree. Focused provider fakes verify exactly-one-button creation, existing-message upgrade and reuse, deleted-message recreation, slash/button response parity, configured guild/channel/current-message binding, linked/inactive/unlinked behavior, disabled and unverified integrations, and unsigned or tampered interaction rejection. Supported-server manual validation remains required; no live Discord traffic was used.
 
 Goal: let a Discord-linked member request the same private attendance report from the persistent attendance-channel message without typing the slash command.
 Dependencies: WU-065 and WU-072 (the managed persistent message and canonical attendance-report interaction must exist first)
@@ -1237,7 +1238,7 @@ Scope: add one attendance-report button to the LancerLogin-owned persistent atte
 Sources: `docs/idea_inbox.md` (IN-086); WU-065; WU-072; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `apps/api/src/index.ts`; Discord provider and interaction tests.
 Acceptance: the one current managed persistent message contains a clearly labeled attendance-report button; a correctly signed click from the configured server returns the same ephemeral content and edge-case behavior as WU-072 for the clicking linked member; unlinked, inactive, wrong-server, disabled, unverified, unsigned, and malformed interactions disclose no attendance; persistent-message refresh or recreation does not duplicate or drop the button; the slash command remains unchanged.
 Verification: `npm run verify:api`; focused provider-fake coverage for message create/update/recreation, one-button idempotence, slash/button response parity, linked/unlinked/inactive users, configured-server enforcement, disabled/unverified integrations, and tampered interactions; supported-server manual validation after both dependencies are integrated.
-Release: later Discord self-service and designated-channel bundle with WU-065 and WU-072.
+Release: include in `v0.20.0` with WU-065 and WU-072; manually validate the managed button against a supported Discord server before release.
 
 ### WU-074 — One-way Google Calendar meeting sync
 

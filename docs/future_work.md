@@ -1225,10 +1225,11 @@ Release: next Discord self-service feature bundle after WU-064 is integrated.
 Status: in progress
 
 Owner: Codex task
-Branch: detached provisioning candidate
+Branch: detached candidate `1e643e5dbb809d19ac25005457a573feacdbdf30`
 Base: `31ff01c2427e3e1c4d914a930f7b1f62c2708113`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\f493\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:0a362151-0a80-4936-b688-ad5a42f0ff77`
+Handoff: the provisioning client never exposed an addressable task or branch, but completed the recorded detached Worktree as candidate `1e643e5dbb809d19ac25005457a573feacdbdf30`. The candidate is clean, its subject begins with WU-073, and `npm run verify:api` passes 98 tests plus API/shared typechecks.
 
 Goal: let a Discord-linked member request the same private attendance report from the persistent attendance-channel message without typing the slash command.
 Dependencies: WU-065 and WU-072 (the managed persistent message and canonical attendance-report interaction must exist first)

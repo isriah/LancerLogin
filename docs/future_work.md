@@ -1359,6 +1359,7 @@ Release: `v0.22.0`.
 Status: in progress
 
 Owner: Codex task
+Branch: `codex/wu-079-managed-discord-commands`
 Base: `63c70ee131a3c7e97017cf818405456cc2e263b7`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7035\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:b67c9237-bc01-46c8-a55f-de54e3968b60`

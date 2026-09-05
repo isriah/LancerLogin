@@ -1272,9 +1272,13 @@ Release: `v0.21.0`.
 
 ### WU-075 — Kiosk update completion reporting
 
-Status: ready
+Status: in progress
 
-Owner: unassigned
+Owner: Codex task
+Branch: detached provisioning worktree
+Base: `522b7181b8e4aaa5343cd8c2c10dd0fbe7ac7a3e`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7e77\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:7a4a0058-b40e-4583-9b98-6e1a236c2454`
 
 Goal: make the dashboard report a kiosk update's final installed version or an actionable terminal failure instead of leaving a successful installer handoff in an indefinite waiting state.
 Dependencies: none

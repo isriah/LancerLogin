@@ -1640,6 +1640,9 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
 type DiscordCalendarOutcome = { meetingId: string; title: string; status: "synced" | "queued" | "skipped" | "failed"; reason?: string };
 type DiscordCalendarSyncSummary = { synced: number; queued: number; skipped: number; failed: number; outcomes: DiscordCalendarOutcome[] };
 type DiscordCalendarOperation = { meetingId: string; generation: number; action: "upsert" | "delete"; eventId?: string | null; status: "pending" | "processing" | "delivered" | "failed"; attempts: number; revision: number; actorUserId?: string | null; leaseToken?: string };
+type DiscordCalendarSyncCursor = { startsAt: string; id: string };
+const DISCORD_CALENDAR_OPERATION_BATCH_LIMIT = 10;
+const DISCORD_CALENDAR_SYNC_ALL_LIMIT = 100;
 const discordCalendarEmptySummary = (): DiscordCalendarSyncSummary => ({ synced: 0, queued: 0, skipped: 0, failed: 0, outcomes: [] });
 async function discordCalendarIsReady(env: Env): Promise<boolean> { const record = await integrationRecord(env, "discord"); return Boolean(record?.enabled && record.verifiedAt); }
 function discordCalendarRetryAt(attempts: number, error: unknown): string | null {
@@ -1720,7 +1723,7 @@ async function reconcileDiscordCalendarEvent(config: Record<string, string>, cor
 async function processDiscordCalendarOperations(env: Env, meetingIds?: string[]): Promise<DiscordCalendarSyncSummary> {
   if (!await discordCalendarIsReady(env)) return discordCalendarEmptySummary();
   const db = requireDatabase(env); const now = new Date().toISOString(); const filter = meetingIds?.length ? `AND o.meeting_id IN (${meetingIds.map(() => "?").join(",")}) AND (o.status IN ('pending', 'failed') OR (o.status = 'processing' AND o.lease_expires_at <= ?))` : "AND (o.status = 'pending' OR (o.status = 'failed' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ?) OR (o.status = 'processing' AND o.lease_expires_at <= ?))"; const values = meetingIds?.length ? [...meetingIds, now] : [now, now];
-  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.generation, o.action, o.event_id AS eventId, o.status, o.attempts, o.revision, o.actor_user_id AS actorUserId FROM discord_calendar_operations o WHERE o.installation_id = 'primary' ${filter} ORDER BY o.generation, CASE o.action WHEN 'delete' THEN 0 ELSE 1 END, o.updated_at LIMIT 50`).bind(...values).all<DiscordCalendarOperation>();
+  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.generation, o.action, o.event_id AS eventId, o.status, o.attempts, o.revision, o.actor_user_id AS actorUserId FROM discord_calendar_operations o WHERE o.installation_id = 'primary' ${filter} ORDER BY o.generation, CASE o.action WHEN 'delete' THEN 0 ELSE 1 END, o.updated_at LIMIT ${DISCORD_CALENDAR_OPERATION_BATCH_LIMIT}`).bind(...values).all<DiscordCalendarOperation>();
   const operations = result.results ?? []; if (!operations.length) return discordCalendarEmptySummary();
   let config: Record<string, string>; try { config = await discordConfiguration(env); } catch { return { ...discordCalendarEmptySummary(), queued: operations.length }; }
   const summary = discordCalendarEmptySummary();
@@ -1766,16 +1769,30 @@ async function processDiscordCalendarOperations(env: Env, meetingIds?: string[])
       summary.synced += 1; summary.outcomes.push({ meetingId: operation.meetingId, title, status: "synced" });
     } catch (error) { const reason = await markDiscordCalendarFailure(db, operation, error); summary.failed += 1; summary.outcomes.push({ meetingId: operation.meetingId, title, status: "failed", reason }); if (error instanceof DiscordPermissionError || error instanceof DiscordRateLimitError) break; }
   }
-  summary.queued = Math.max(0, operations.length - summary.synced - summary.skipped - summary.failed);
+  const processedMeetings = new Set(summary.outcomes.map((outcome) => outcome.meetingId));
+  summary.queued = meetingIds?.length
+    ? Math.max(0, new Set(meetingIds).size - processedMeetings.size)
+    : Math.max(0, operations.length - summary.synced - summary.skipped - summary.failed);
   return summary;
 }
+function encodeDiscordCalendarSyncCursor(cursor: DiscordCalendarSyncCursor): string { return btoa(JSON.stringify([cursor.startsAt, cursor.id])); }
+function decodeDiscordCalendarSyncCursor(value: string | null): DiscordCalendarSyncCursor | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(atob(value));
+    if (!Array.isArray(parsed) || parsed.length !== 2 || typeof parsed[0] !== "string" || typeof parsed[1] !== "string" || !parsed[0] || !parsed[1]) throw new Error("invalid");
+    return { startsAt: parsed[0], id: parsed[1] };
+  } catch { throw new HttpError(400, "Discord calendar sync cursor is invalid"); }
+}
 async function syncAllDiscordCalendarMeetings(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); await requireIntegrationConfigured(env, "discord"); const db = requireDatabase(env); const now = new Date().toISOString();
-  await db.prepare("UPDATE discord_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now).run();
-  const meetings = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at ASC LIMIT 100").all<{ id: string }>();
-  const requested = await enqueueDiscordCalendarUpsert(db, env, principal, (meetings.results ?? []).map((meeting) => meeting.id)); const retries = await processDiscordCalendarOperations(env);
-  const result = addDiscordCalendarSummaries(requested, retries); await writeAudit(db, principal, "discord.calendar_sync_all_requested", "integration", "discord", { selected: meetings.results?.length ?? 0, ...result });
-  return response({ ...result, selected: meetings.results?.length ?? 0, limit: 100 });
+  const principal = await requireRole(request, env, ["admin"]); await requireIntegrationConfigured(env, "discord"); const db = requireDatabase(env);
+  const cursor = decodeDiscordCalendarSyncCursor(new URL(request.url).searchParams.get("after"));
+  const page = await db.prepare("SELECT id, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND (? IS NULL OR starts_at > ? OR (starts_at = ? AND id > ?)) ORDER BY starts_at ASC, id ASC LIMIT ?").bind(cursor?.startsAt ?? null, cursor?.startsAt ?? null, cursor?.startsAt ?? null, cursor?.id ?? null, DISCORD_CALENDAR_OPERATION_BATCH_LIMIT + 1).all<DiscordCalendarSyncCursor>();
+  const available = page.results ?? []; const meetings = available.slice(0, DISCORD_CALENDAR_OPERATION_BATCH_LIMIT);
+  const result = await enqueueDiscordCalendarUpsert(db, env, principal, meetings.map((meeting) => meeting.id));
+  const nextCursor = available.length > DISCORD_CALENDAR_OPERATION_BATCH_LIMIT && meetings.length ? encodeDiscordCalendarSyncCursor(meetings.at(-1)!) : null;
+  await writeAudit(db, principal, "discord.calendar_sync_all_requested", "integration", "discord", { selected: meetings.length, continued: Boolean(cursor), hasMore: Boolean(nextCursor), ...result });
+  return response({ ...result, selected: meetings.length, nextCursor, limit: DISCORD_CALENDAR_SYNC_ALL_LIMIT, batchLimit: DISCORD_CALENDAR_OPERATION_BATCH_LIMIT });
 }
 async function discordCalendar(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; all?: boolean }>(request);

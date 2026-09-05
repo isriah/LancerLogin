@@ -1356,7 +1356,7 @@ Release: `v0.22.0`.
 
 ### WU-079 — Managed Discord application commands
 
-Status: in progress
+Status: merged (`1e41af8`)
 
 Owner: Codex task
 Branch: `codex/wu-079-managed-discord-commands`
@@ -1364,6 +1364,7 @@ Base: `63c70ee131a3c7e97017cf818405456cc2e263b7`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7035\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:b67c9237-bc01-46c8-a55f-de54e3968b60`
 Handoff: branch is clean at candidate `796f53fcd4a6264a1ab1b94924e3635115c031b3` with subject `WU-079: manage Discord application commands`; the candidate implements guild-scoped command reconciliation, safe Admin feedback, provider-fake/runtime coverage, responsive Integrations coverage, and updated public setup guidance without live Discord traffic.
+Integration: candidate `796f53fcd4a6264a1ab1b94924e3635115c031b3` was merged into current `main` as `52a2a9d206fc4cb09b3560b81139f4526ff978c0`, then the integrated tree received narrow provider-response normalization in `1e41af8c3411786880a51a2ad90afde489618740` so Discord-added optional option metadata cannot reject otherwise exact managed schemas. Review confirmed Admin-only encrypted configuration, application/server/channel binding, guild-only bulk reconciliation of exactly `/pair` and `/attendance-report`, repeat and credential-rotation safety, signed and ephemeral existing interaction behavior, actionable credential/permission/rate-limit/validation/partial-failure mapping, WU-078 compatibility, least-privilege guidance, and provider-fake-only automated traffic. On the merged tree, focused Discord runtime coverage passed 4/4; `npm run verify:api` passed 145 API/runtime tests plus API/shared typechecks; `npm run verify:dashboard` passed 40 dashboard tests plus dashboard typecheck; `npm run verify:docs` passed 7 documentation tests; focused responsive keyboard/focus Integrations coverage passed 4/4 across 1280x900 and 390x844 in light and dark adopter-branded modes; and the complete browser suite passed 146/146. Release impact remains `v0.22.0`; supported-server manual validation remains a release gate, and no live Discord traffic, push, release, deployment, cloud mutation, provider mutation, or Pi update occurred.
 
 Goal: make `/pair` and `/attendance-report` available in the configured Discord server without requiring an adopter to send command-registration payloads manually.
 Dependencies: WU-032 and WU-072 (both merged); coordinate serially with WU-078 because both change Discord configuration/provider behavior and Integrations presentation

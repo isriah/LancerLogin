@@ -2,6 +2,7 @@
 
 Every Git tag must have a matching `vX.Y.Z.md` file in this directory. The release workflow fails if the file is missing and publishes it as the GitHub Release body. Notes must describe user-visible changes, data migrations, configuration changes, known limits, and manual verification steps.
 
+- [v0.22.0](v0.22.0.md) - Reliable updates and calendar delivery
 - [v0.21.0](v0.21.0.md) - One-way Google Calendar meeting sync
 - [v0.20.0](v0.20.0.md) - Attendance insights, Discord operations, and setup guidance
 - [v0.19.0](v0.19.0.md) - Dashboard design conformance

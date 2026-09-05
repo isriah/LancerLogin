@@ -86,7 +86,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /recurrence_frequency: null/);
@@ -105,6 +105,16 @@ test("Discord contest notices have a bounded organization-wide expiry", async ()
   const source = await readFile("apps/api/src/index.ts", "utf8");
   assert.match(migration, /DEFAULT 24 CHECK \(discord_contest_window_hours BETWEEN 1 AND 168\)/);
   assert.match(source, /Date\.parse\(recipient\.deliveredAt\).+discordContestWindowHours/);
+});
+
+test("Discord channel manager migration tracks only owned messages and expiry state", async () => {
+  const migration = await readFile("apps/api/migrations/0022_discord_channel_manager.sql", "utf8");
+  assert.match(migration, /discord_channel_manager_enabled INTEGER NOT NULL DEFAULT 0/);
+  assert.match(migration, /ADD COLUMN channel_id TEXT/);
+  assert.match(migration, /ADD COLUMN expires_at TEXT/);
+  assert.match(migration, /ADD COLUMN deleted_at TEXT/);
+  assert.match(migration, /idx_discord_attendance_notifications_expiry/);
+  assert.doesNotMatch(migration, /fingerprint|biometric/i);
 });
 
 test("recurring meeting migration stores series metadata without biometric data", async () => {

@@ -15,6 +15,7 @@ type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "confirm-attendance";
 type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
 type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number; discordContestWindowHours?: number; attendanceReportingStartsOn?: string | null };
+type DiscordChannelManagerInput = { enabled?: boolean; contestWindowHours?: number };
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null; attendanceRequiredFrom?: string | null };
 type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
@@ -46,7 +47,7 @@ class HttpError extends Error {
   constructor(status: number, message: string, details?: string[]) { super(message); this.status = status; this.details = details; }
 }
 class DiscordPermissionError extends HttpError {
-  constructor(calendar = false) { super(502, calendar ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
+  constructor(kind: "calendar" | "pin" | "channel" = "channel") { super(502, kind === "calendar" ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." : kind === "pin" ? "Discord denied this request because the bot is missing Pin Messages permission in the configured attendance channel." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
 }
 class DiscordRateLimitError extends HttpError {
   readonly retryAfterMs: number;
@@ -656,6 +657,20 @@ async function integrationsStatus(request: Request, env: Env): Promise<Response>
   const saved = new Map((result.results ?? []).map((item) => [item.provider, item]));
   return response({ integrations: [...integrationProviders].map((provider) => { const item = saved.get(provider); const enabled = Boolean(flags[integrationFlagColumns[provider]]); return { provider, enabled, saved: Boolean(item), configured: enabled && Boolean(item?.verifiedAt), state: !enabled ? "disabled" : !item ? "not_configured" : item.verifiedAt ? "configured" : "verification_required", updatedAt: item?.updatedAt, verifiedAt: item?.verifiedAt ?? undefined, verificationPending: enabled && Boolean(item?.verificationPending) }; }) });
 }
+async function discordChannelManagerSettings(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (request.method === "GET") {
+    const settings = await db.prepare("SELECT discord_channel_manager_enabled AS enabled, discord_contest_window_hours AS contestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number; contestWindowHours?: number }>();
+    return response({ enabled: Boolean(settings?.enabled), contestWindowHours: settings?.contestWindowHours ?? 24 });
+  }
+  const input = await parseJson<DiscordChannelManagerInput>(request); const errors: string[] = [];
+  if (typeof input.enabled !== "boolean") errors.push("Channel manager enabled must be true or false");
+  if (!Number.isInteger(input.contestWindowHours) || input.contestWindowHours! < 1 || input.contestWindowHours! > 168) errors.push("Discord contest window must be from 1 to 168 hours");
+  if (errors.length) throw new HttpError(400, "Invalid Discord channel manager settings", errors);
+  await db.prepare("UPDATE organization_settings SET discord_channel_manager_enabled = ?, discord_contest_window_hours = ? WHERE installation_id = 'primary'").bind(input.enabled ? 1 : 0, input.contestWindowHours).run();
+  await writeAudit(db, principal, "discord.channel_manager_updated", "integration", "discord", { enabled: input.enabled, contestWindowHours: input.contestWindowHours });
+  return response({ enabled: input.enabled, contestWindowHours: input.contestWindowHours });
+}
 async function integrationCapabilities(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const flags = await integrationFlags(env);
   const records = await requireDatabase(env).prepare("SELECT provider, verified_at AS verifiedAt FROM encrypted_integrations WHERE installation_id = 'primary'").all<{ provider: IntegrationProvider; verifiedAt?: string | null }>();
@@ -855,7 +870,7 @@ async function discordRequest(config: Record<string, string>, path: string, init
     const result = await fetch(`https://discord.com/api/v10${path}`, { ...init, headers: { authorization: `Bot ${config.botToken}`, "content-type": "application/json", ...init.headers } });
     const body = await result.json().catch(() => ({})) as Record<string, unknown>;
     if (result.ok) return { response: result, body };
-    if (result.status === 403) throw new DiscordPermissionError(path.includes("/scheduled-events"));
+    if (result.status === 403) throw new DiscordPermissionError(path.includes("/scheduled-events") ? "calendar" : path.includes("/messages/pins/") ? "pin" : "channel");
     if (result.status === 429) {
       const retryAfterMs = discordRetryDelay(result, body);
       if (attempt === 2) throw new DiscordRateLimitError(retryAfterMs);
@@ -867,6 +882,33 @@ async function discordRequest(config: Record<string, string>, path: string, init
     throw new DiscordResponseError(result.status, message, Number.isFinite(code) ? code : undefined);
   }
   throw new HttpError(502, "Discord request did not complete");
+}
+const discordMessageMissing = (error: unknown): error is DiscordResponseError => error instanceof DiscordResponseError && error.discordStatus === 404 && error.discordCode === 10_008;
+async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string, string>, stateKey: string, content: string, pin = false): Promise<{ changed: boolean; messageId: string }> {
+  const contentHash = await sha256(content); const messagesPath = `/channels/${encodeURIComponent(config.channelId)}/messages`;
+  const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?").bind(stateKey).first<{ externalId?: string; contentHash?: string }>();
+  let messageId = existing?.externalId ?? ""; let changed = false;
+  if (messageId) {
+    try {
+      if (existing?.contentHash === contentHash) await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "GET" });
+      else {
+        const { body } = await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "PATCH", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) });
+        messageId = String(body.id ?? messageId); changed = true;
+      }
+    } catch (error) {
+      if (!discordMessageMissing(error)) throw error;
+      messageId = "";
+    }
+  }
+  if (!messageId) {
+    const { body } = await discordRequest(config, messagesPath, { method: "POST", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) });
+    messageId = String(body.id ?? ""); changed = true;
+    if (!messageId) throw new HttpError(502, "Discord did not return a managed message identifier");
+  }
+  const now = new Date().toISOString();
+  await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', ?, ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(stateKey, messageId, contentHash, now).run();
+  if (pin) await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/pins/${encodeURIComponent(messageId)}`, { method: "PUT" });
+  return { changed, messageId };
 }
 async function startDiscordVerification(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env, true);
@@ -907,9 +949,11 @@ async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string
     const payload = { content: `Attendance has closed for **${meeting.title}**. The following members are marked absent: ${mentions}\nIf you attended, use the button below to request a private review. Your attendance will not change until an Operator or Admin approves it.`, allowed_mentions: { parse: [], users: userIds }, components: [{ type: 1, components: [{ type: 2, style: 2, label: "Contest absence", custom_id: `lancerlogin-attendance:${meeting.id}` }] }] };
     const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }); const messageId = String(body.id ?? "");
     if (!messageId) throw new HttpError(502, "Discord did not return a message identifier");
+    const contestWindow = await db.prepare("SELECT discord_contest_window_hours AS contestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ contestWindowHours?: number }>();
+    const expiresAt = new Date(Date.parse(now) + (contestWindow?.contestWindowHours ?? 24) * 3_600_000).toISOString();
     await db.batch([
       ...members.map((member) => db.prepare("INSERT OR IGNORE INTO discord_attendance_recipients (installation_id, meeting_id, member_id, discord_user_id, message_id, delivered_at) VALUES ('primary', ?, ?, ?, ?, ?)").bind(meeting.id, member.id, member.discordUserId, messageId, now)),
-      db.prepare("UPDATE discord_attendance_notifications SET status = 'delivered', message_id = ?, processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(messageId, now, now, meeting.id),
+      db.prepare("UPDATE discord_attendance_notifications SET status = 'delivered', message_id = ?, channel_id = ?, expires_at = ?, deleted_at = NULL, processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(messageId, config.channelId, expiresAt, now, now, meeting.id),
     ]);
     if (options.actor) await writeAudit(db, options.actor, "discord.missing_notified", "meeting", meeting.id, { linkedMissingCount: members.length, messageId, manual: true });
     return { posted: true, linkedMissingCount: members.length, messageId };
@@ -918,12 +962,31 @@ async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string
     throw error;
   }
 }
+async function expireDiscordAttendanceNotifications(env: Env, config: Record<string, string>, contestWindowHours: number, now: number): Promise<void> {
+  const db = requireDatabase(env);
+  const delivered = await db.prepare("SELECT meeting_id AS meetingId, message_id AS messageId, channel_id AS channelId, processed_at AS processedAt, expires_at AS expiresAt FROM discord_attendance_notifications WHERE installation_id = 'primary' AND status = 'delivered' AND message_id IS NOT NULL AND deleted_at IS NULL").all<{ meetingId: string; messageId: string; channelId?: string; processedAt?: string; expiresAt?: string }>();
+  for (const notice of delivered.results ?? []) {
+    const expiry = notice.expiresAt ? Date.parse(notice.expiresAt) : Date.parse(notice.processedAt ?? "") + contestWindowHours * 3_600_000;
+    if (!Number.isFinite(expiry) || expiry > now || notice.channelId && notice.channelId !== config.channelId) continue;
+    try {
+      await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/${encodeURIComponent(notice.messageId)}`, { method: "DELETE" });
+    } catch (error) {
+      if (!discordMessageMissing(error)) {
+        await db.prepare("UPDATE discord_attendance_notifications SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(error instanceof Error ? error.message.slice(0, 300) : "Discord deletion failed", new Date().toISOString(), notice.meetingId).run();
+        continue;
+      }
+    }
+    const deletedAt = new Date(now).toISOString();
+    await db.prepare("UPDATE discord_attendance_notifications SET deleted_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(deletedAt, deletedAt, notice.meetingId, notice.messageId).run();
+  }
+}
 async function processDiscordAttendanceNotifications(env: Env, now = Date.now()): Promise<void> {
-  const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0) return;
-  const db = requireDatabase(env); const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>();
+  const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0 || !discord.verifiedAt) return;
+  const db = requireDatabase(env); const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, discord_contest_window_hours AS contestWindowHours, discord_channel_manager_enabled AS channelManagerEnabled FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number; contestWindowHours?: number; channelManagerEnabled?: number }>();
+  if (settings?.channelManagerEnabled) await expireDiscordAttendanceNotifications(env, await discordConfiguration(env), settings.contestWindowHours ?? 24, now);
   const meetings = await db.prepare("SELECT m.id, m.title, m.ends_at AS endsAt, n.status AS notificationStatus, n.updated_at AS notificationUpdatedAt FROM meetings m LEFT JOIN discord_attendance_notifications n ON n.installation_id = m.installation_id AND n.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.required = 1 AND m.is_test = 0 AND m.ends_at IS NOT NULL ORDER BY m.ends_at DESC LIMIT 100").all<{ id: string; title: string; endsAt: string; notificationStatus?: string; notificationUpdatedAt?: string }>();
   for (const meeting of meetings.results ?? []) {
-    const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30)); const newlyEligible = cutoff <= now && cutoff >= now - 15 * 60_000; const retry = meeting.notificationStatus === "failed";
+    const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30)); const newlyEligible = cutoff <= now; const retry = meeting.notificationStatus === "failed";
     if ((!meeting.notificationStatus && newlyEligible) || retry) await sendDiscordAttendanceNotification(env, meeting);
   }
 }
@@ -1098,13 +1161,21 @@ async function discordCalendar(request: Request, env: Env): Promise<Response> {
   const eventId = await syncDiscordCalendarMeeting(db, env, principal, meeting);
   return response({ synced: true, eventId });
 }
-async function syncDiscordKioskStatus(env: Env): Promise<{ changed: boolean; messageId?: string; online?: boolean; kioskId?: string }> {
+async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ changed: boolean; messageId?: string; online?: boolean; kioskId?: string }> {
   const db = requireDatabase(env); const config = await discordConfiguration(env);
+  if (pin === undefined) {
+    const settings = await db.prepare("SELECT discord_channel_manager_enabled AS enabled FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number }>();
+    pin = Boolean(settings?.enabled);
+  }
   const kiosk = await db.prepare("SELECT id, name, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion FROM kiosks WHERE installation_id = 'primary' AND active = 1 ORDER BY created_at DESC LIMIT 1").first<{ id: string; name: string; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string }>();
   const online = Boolean(kiosk?.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < 2 * 60_000);
   const content = kiosk
     ? `**${kiosk.name}** · ${online ? "online" : "offline"} · reader ${kiosk.readerOnline ? "online" : "offline"} · release ${kiosk.releaseVersion ?? "unknown"}${online ? "" : ` · last seen ${kiosk.lastSeenAt ?? "never"}`}`
     : "No kiosk is paired.";
+  if (pin) {
+    const tracked = await upsertTrackedDiscordMessage(db, config, "kiosk-status", content, true);
+    return { changed: tracked.changed, messageId: tracked.messageId, online, kioskId: kiosk?.id };
+  }
   const contentHash = await sha256(content);
   const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'kiosk-status'").first<{ externalId?: string; contentHash?: string }>();
   if (existing?.externalId && existing.contentHash === contentHash) return { changed: false, messageId: existing.externalId, online, kioskId: kiosk?.id };
@@ -1123,6 +1194,15 @@ async function syncDiscordKioskStatus(env: Env): Promise<{ changed: boolean; mes
   const now = new Date().toISOString();
   await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', 'kiosk-status', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(messageId, contentHash, now).run();
   return { changed: true, messageId, online, kioskId: kiosk?.id };
+}
+async function syncDiscordManagedSurface(env: Env): Promise<void> {
+  const db = requireDatabase(env);
+  const settings = await db.prepare("SELECT discord_channel_manager_enabled AS enabled FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number }>();
+  if (!settings?.enabled) { await syncDiscordKioskStatus(env); return; }
+  const config = await discordConfiguration(env);
+  await syncDiscordKioskStatus(env, true);
+  const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. After an absence notice appears, only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
+  await upsertTrackedDiscordMessage(db, config, "channel-manager-howto", guidance);
 }
 async function discordKioskStatus(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]);
@@ -1166,7 +1246,7 @@ async function privacySettings(request: Request, env: Env): Promise<Response> {
 type BackupScope = "meetings" | "roster" | "installation";
 const tableColumns = {
   installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id", "google_enabled", "resend_enabled", "discord_enabled"],
-  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours"],
+  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at"],
   meetings: ["id", "installation_id", "title", "starts_at", "ends_at", "required", "notes", "created_by", "created_at", "is_test", "series_id", "recurrence_frequency", "recurrence_until", "recurrence_sequence", "deleted_at"],
@@ -1180,7 +1260,7 @@ const tableColumns = {
   encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at", "verified_at"],
   integration_deliveries: ["id", "installation_id", "provider", "delivery_key", "status", "external_id", "created_at", "updated_at"],
   integration_state: ["installation_id", "provider", "state_key", "external_id", "content_hash", "updated_at"],
-  discord_attendance_notifications: ["installation_id", "meeting_id", "status", "message_id", "attempts", "last_error", "processed_at", "updated_at"],
+  discord_attendance_notifications: ["installation_id", "meeting_id", "status", "message_id", "attempts", "last_error", "processed_at", "updated_at", "channel_id", "expires_at", "deleted_at"],
   discord_attendance_recipients: ["installation_id", "meeting_id", "member_id", "discord_user_id", "message_id", "delivered_at"],
   discord_attendance_contests: ["installation_id", "meeting_id", "member_id", "message_id", "status", "resolved_by", "resolved_at", "created_at", "submitted_by_discord_user_id", "review_note"],
   audit_log: ["id", "installation_id", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "created_at"],
@@ -1206,14 +1286,14 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 7, scope, exportedAt, tables: Object.fromEntries(entries) };
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 7 });
+  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 8, scope, exportedAt, tables: Object.fromEntries(entries) };
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 8 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
-  organization_settings: tableColumns.organization_settings.slice(0, -2),
+  organization_settings: tableColumns.organization_settings.slice(0, -3),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
   discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -2),
 };
@@ -1222,21 +1302,22 @@ const legacyMeetingTables = meetingTables.filter((table) => table !== "meeting_t
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
-  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   const sourceTables = value.tables;
   const requiredTables = schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope);
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -3) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -5) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : tableColumns[table];
+    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -3) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -5) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -3) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
 
   const tables = Object.fromEntries((Object.keys(tableColumns) as BackupTable[]).map((table) => [table, [] as Record<string, unknown>[]])) as Record<BackupTable, Record<string, unknown>[]>;
   for (const table of requiredTables) tables[table] = (sourceTables[table] as Record<string, unknown>[]).map((row) => ({ ...row }));
-  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, ...row }));
+  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_channel_manager_enabled: 0, ...row }));
+  if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
   if (schemaVersion < 7 && tables.installations) { const providers = new Set(tables.encrypted_integrations.map((row) => row.provider)); tables.installations = tables.installations.map((row) => ({ ...row, google_enabled: providers.has("google") ? 1 : 0, resend_enabled: providers.has("resend") ? 1 : 0, discord_enabled: providers.has("discord") ? 1 : 0 })); }
   if (tables.meetings) tables.meetings = tables.meetings.map((row) => {
@@ -1345,6 +1426,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/attendance/cleanup" && request.method === "POST") result = await cleanupAttendance(request, env);
     else if (url.pathname === "/exports/attendance.csv" && request.method === "GET") result = await attendanceExport(request, env);
     else if (url.pathname === "/admin/integrations" && request.method === "GET") result = await integrationsStatus(request, env);
+    else if (url.pathname === "/admin/integrations/discord/channel-manager" && ["GET", "PATCH"].includes(request.method)) result = await discordChannelManagerSettings(request, env);
     else if (url.pathname === "/integrations/capabilities" && request.method === "GET") result = await integrationCapabilities(request, env);
     else if (/^\/admin\/integrations\/(google|resend|discord)$/.test(url.pathname) && ["PUT", "PATCH", "DELETE"].includes(request.method)) result = await integrationConfiguration(request, env, providerFrom(url.pathname));
     else if (url.pathname === "/admin/integrations/resend/verify/start" && request.method === "POST") result = await startResendVerification(request, env);
@@ -1383,7 +1465,9 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   return withCors(result, request, env);
 }, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
   if (controller.cron === "0 3 * * *") { try { await transmitTelemetry(env); } catch { /* Telemetry is best-effort and cannot affect attendance. */ } }
-  if (controller.cron === "*/5 * * * *") { try { await processDiscordAttendanceNotifications(env); } catch { /* Discord attendance delivery retries safely on the next scheduled pass. */ } }
-  try { await syncDiscordKioskStatus(env); } catch { /* Discord status is best-effort and cannot affect kiosk operation. */ }
+  if (controller.cron === "*/5 * * * *") {
+    try { await syncDiscordManagedSurface(env); } catch { /* Discord channel management is best-effort and retries on the next scheduled pass. */ }
+    try { await processDiscordAttendanceNotifications(env); } catch { /* Discord attendance delivery retries safely on the next scheduled pass. */ }
+  } else try { await syncDiscordManagedSurface(env); } catch { /* Discord status is best-effort and cannot affect kiosk operation. */ }
 } };
 export default worker;

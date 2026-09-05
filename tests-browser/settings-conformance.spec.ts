@@ -34,11 +34,32 @@ async function useSettingsContext(page: Page, role: "admin" | "operator" = "admi
   await page.route("**/admin/members", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ members: [{ id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", email: "avery@example.org", active: 1 }] }) }));
   await page.route("**/admin/users", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ users: [{ id: "user-1", localUsername: "admin", role: "admin", active: 1, memberId: "member-1", memberExternalId: "A-101", memberFirstName: "Avery", memberLastName: "Stone", createdAt: new Date().toISOString() }] }) }));
   await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: true, saved: true, configured: true, state: "configured" }, { provider: "resend", enabled: true, saved: true, configured: false, state: "verification_required" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] }) }));
+  await page.route("**/admin/integrations/discord/channel-manager", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ enabled: false, contestWindowHours: 24 }) }));
   await page.route("**/admin/privacy", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ telemetryAccepted: false, notice: "Anonymous usage reporting is off. No report will be sent.", installationReference: "installation-reference-without-personal-data" }) }));
   await page.route("**/admin/update-info", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ releaseVersion: "0.18.0", workflowUrl: "https://github.example.test/actions/workflows/deploy.yml" }) }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [{ id: "kiosk-1", name: "North entrance attendance station", active: 1, lastSeenAt: new Date().toISOString(), releaseVersion: "0.18.0" }] }) }));
   await page.route("**/admin/kiosks/kiosk-1/commands", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ commands: [] }) }));
   await page.route("https://api.github.com/repos/isriah/LancerLogin/releases/latest", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ tag_name: "v0.19.0", html_url: "https://example.test/releases/v0.19.0" }) }));
+}
+
+for (const viewport of dashboardConformanceReferences.viewports) {
+  test(`Discord channel manager stays usable at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
+    await page.addInitScript(() => localStorage.setItem("lancerlogin-theme", "dark"));
+    await useSettingsContext(page);
+    await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: true, state: "configured" }] }) }));
+    await page.route("**/admin/integrations/discord/channel-manager", async (route) => route.fulfill({ status: 200, contentType: "application/json", body: route.request().method() === "PATCH" ? route.request().postData() ?? "{}" : JSON.stringify({ enabled: true, contestWindowHours: 36 }) }));
+    await page.goto("/settings/integrations");
+    const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+    await card.getByText("Manage configuration", { exact: true }).click();
+    const manager = card.locator(".discord-channel-manager");
+    await expect(manager.getByRole("switch", { name: "Manage the configured attendance channel" })).toBeChecked();
+    await expect(manager.getByLabel("Contest window (hours)")).toHaveValue("36");
+    await manager.getByRole("button", { name: "Save channel manager" }).click();
+    await expect(card.getByText("Discord channel manager settings saved.")).toBeVisible();
+    await expectResponsiveFit(page);
+  });
 }
 
 async function expectResponsiveFit(page: Page) {

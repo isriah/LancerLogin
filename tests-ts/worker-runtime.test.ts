@@ -25,7 +25,7 @@ class FakeDatabase {
   prepare(sql: string) { return new FakeStatement(sql, this); }
   async batch(statements: FakeStatement[]) { this.batches.push(statements); return statements.map(() => ({ success: true })); }
   firstResult(sql: string, values: unknown[]) {
-    for (const [fragment, value] of this.rows) if (sql.includes(fragment)) return value;
+    for (const [fragment, value] of this.rows) if (sql.includes(fragment)) return typeof value === "function" ? (value as (sql: string, values: unknown[]) => unknown)(sql, values) : value;
     if (sql.includes("SELECT id, role FROM users") && sql.includes("active = 1")) {
       const id = String(values[0]);
       return { id, role: id.startsWith("operator") ? "operator" : "admin" };
@@ -1058,6 +1058,148 @@ test("Discord absence notices remain unavailable before the scheduled meeting st
   assert.equal(result.status, 409);
   assert.deepEqual(await result.json(), { error: "Attendance has not started for this meeting" });
   assert.equal(database.calls.some((call) => call.sql.includes("discord_attendance_notifications")), false);
+});
+
+test("Discord channel manager settings are Admin-only and audited", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 1, contestWindowHours: 36 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const adminCookie = await sessionCookie("admin");
+  const read = await worker.fetch(request("/admin/integrations/discord/channel-manager", undefined, { cookie: adminCookie }), env);
+  assert.deepEqual(await read.json(), { enabled: true, contestWindowHours: 36 });
+  const saved = await worker.fetch(request("/admin/integrations/discord/channel-manager", { enabled: false, contestWindowHours: 48 }, { method: "PATCH", cookie: adminCookie }), env);
+  assert.deepEqual(await saved.json(), { enabled: false, contestWindowHours: 48 });
+  assert.ok(database.calls.some((call) => call.sql.includes("SET discord_channel_manager_enabled = ?") && call.values[0] === 0 && call.values[1] === 48));
+  assert.ok(database.calls.some((call) => call.values.includes("discord.channel_manager_updated")));
+  assert.equal((await worker.fetch(request("/admin/integrations/discord/channel-manager", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
+});
+
+test("enabled Discord channel manager creates status before guidance and pins only the tracked status", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 1 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 1 });
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: new Date().toISOString(), readerOnline: 1, releaseVersion: "0.19.0" });
+  database.lists.set("FROM meetings m LEFT JOIN", []);
+  database.lists.set("FROM discord_attendance_notifications WHERE", []);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const outbound: Array<{ url: string; method: string; payload?: Record<string, unknown> }> = []; let created = 0;
+  globalThis.fetch = async (input, init) => {
+    const payload = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined; outbound.push({ url: String(input), method: String(init?.method), payload });
+    if (init?.method === "POST") created += 1;
+    return new Response(JSON.stringify({ id: `managed-${created}` }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    const posts = outbound.filter((call) => call.method === "POST");
+    assert.equal(posts.length, 2);
+    assert.match(String(posts[0].payload?.content), /Front desk/);
+    assert.match(String(posts[1].payload?.content), /\/pair/);
+    assert.deepEqual(posts.map((call) => call.payload?.allowed_mentions), [{ parse: [] }, { parse: [] }]);
+    assert.deepEqual(outbound.filter((call) => call.method === "PUT").map((call) => call.url), ["https://discord.com/api/v10/channels/223456789012345678/messages/pins/managed-1"]);
+    assert.ok(database.calls.some((call) => call.values[0] === "kiosk-status" && call.values[1] === "managed-1"));
+    assert.ok(database.calls.some((call) => call.values[0] === "channel-manager-howto" && call.values[1] === "managed-2"));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("channel manager reuses its two tracked messages and stays inactive until Discord is verified", async () => {
+  const kioskContent = "**Front desk** · online · reader online · release 0.19.0";
+  const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. After an absence notice appears, only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
+  const verified = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  verified.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  verified.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 1 });
+  verified.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 1 });
+  verified.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: new Date().toISOString(), readerOnline: 1, releaseVersion: "0.19.0" });
+  verified.rows.set("FROM integration_state", (_sql: string, values: unknown[]) => values[0] === "kiosk-status" ? { externalId: "status-1", contentHash: createHash("sha256").update(kioskContent).digest("base64url") } : { externalId: "howto-1", contentHash: createHash("sha256").update(guidance).digest("base64url") });
+  verified.lists.set("FROM meetings m LEFT JOIN", []); verified.lists.set("FROM discord_attendance_notifications WHERE", []);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: verified } as unknown as Env;
+  const originalFetch = globalThis.fetch; const methods: string[] = [];
+  globalThis.fetch = async (_input, init) => { methods.push(String(init?.method)); return new Response(JSON.stringify({ id: "existing" }), { headers: { "content-type": "application/json" } }); };
+  try {
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    assert.equal(methods.filter((method) => method === "POST" || method === "PATCH" || method === "DELETE").length, 0);
+    assert.deepEqual(methods, ["GET", "PUT", "GET"]);
+  } finally { globalThis.fetch = originalFetch; }
+
+  for (const record of [{ ...encrypted, verifiedAt: null, enabled: 1 }, { ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 0 }]) {
+    const unavailable = new FakeDatabase(); unavailable.rows.set("FROM encrypted_integrations", { id: "discord-1", updatedAt: "2026-08-30T00:00:00Z", ...record }); unavailable.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 1 });
+    let called = false; globalThis.fetch = async () => { called = true; return new Response(); };
+    try { await worker.scheduled({ cron: "*/5 * * * *" }, { ...env, DB: unavailable } as unknown as Env); assert.equal(called, false); } finally { globalThis.fetch = originalFetch; }
+  }
+});
+
+test("channel manager recreates deleted tracked messages without touching unrelated content", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 1 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 1 });
+  database.rows.set("FROM integration_state", { externalId: "deleted-managed", contentHash: "stale" });
+  database.lists.set("FROM meetings m LEFT JOIN", []);
+  database.lists.set("FROM discord_attendance_notifications WHERE", []);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const outbound: Array<{ url: string; method: string }> = []; let created = 0;
+  globalThis.fetch = async (input, init) => {
+    outbound.push({ url: String(input), method: String(init?.method) });
+    if (init?.method === "PATCH") return new Response(JSON.stringify({ code: 10_008, message: "Unknown Message" }), { status: 404, headers: { "content-type": "application/json" } });
+    if (init?.method === "POST") created += 1;
+    return new Response(JSON.stringify({ id: `replacement-${created}` }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    assert.equal(outbound.filter((call) => call.method === "PATCH" && call.url.endsWith("/messages/deleted-managed")).length, 2);
+    assert.equal(outbound.filter((call) => call.method === "POST").length, 2);
+    assert.deepEqual(outbound.filter((call) => call.method === "PUT").map((call) => call.url), ["https://discord.com/api/v10/channels/223456789012345678/messages/pins/replacement-1"]);
+    assert.equal(outbound.some((call) => call.method === "DELETE" || call.url.includes("unrelated")), false);
+    assert.ok(database.calls.some((call) => call.values[0] === "kiosk-status" && call.values[1] === "replacement-1"));
+    assert.ok(database.calls.some((call) => call.values[0] === "channel-manager-howto" && call.values[1] === "replacement-2"));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("scheduled Discord absence delivery waits for the late-scan cutoff and retries failed delivery", async () => {
+  async function run(endsAt: string, notificationStatus?: string) {
+    const database = new FakeDatabase();
+    const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+    database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+    database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 0 });
+    database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 0 });
+    database.rows.set("FROM discord_attendance_notifications WHERE installation_id", notificationStatus ? { status: notificationStatus, attempts: 1 } : undefined);
+    database.lists.set("FROM meetings m LEFT JOIN", [{ id: "meeting-1", title: "Studio", endsAt, notificationStatus }]);
+    database.lists.set("FROM members m WHERE", [{ id: "member-1", discordUserId: "323456789012345678" }]);
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const originalFetch = globalThis.fetch; const payloads: Record<string, unknown>[] = []; let created = 0;
+    globalThis.fetch = async (_input, init) => { if (init?.method === "POST") { created += 1; payloads.push(JSON.parse(String(init.body))); } return new Response(JSON.stringify({ id: `message-${created}` }), { headers: { "content-type": "application/json" } }); };
+    try { await worker.scheduled({ cron: "*/5 * * * *" }, env); } finally { globalThis.fetch = originalFetch; }
+    return { database, payloads };
+  }
+  const beforeCutoff = await run(new Date(Date.now() - 20 * 60_000).toISOString());
+  assert.equal(beforeCutoff.payloads.some((payload) => String(payload.content).includes("Attendance has closed")), false);
+  const afterCutoff = await run(new Date(Date.now() - 31 * 60_000).toISOString());
+  assert.equal(afterCutoff.payloads.filter((payload) => String(payload.content).includes("Attendance has closed")).length, 1);
+  const retry = await run(new Date(Date.now() - 20 * 60_000).toISOString(), "failed");
+  assert.equal(retry.payloads.filter((payload) => String(payload.content).includes("Attendance has closed")).length, 1);
+  assert.ok(retry.database.calls.some((call) => call.sql.includes("attempts = attempts + 1")));
+});
+
+test("channel manager deletes only an expired tracked absence message and records completion", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 1 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 1 });
+  database.lists.set("FROM meetings m LEFT JOIN", []);
+  database.lists.set("FROM discord_attendance_notifications WHERE", [{ meetingId: "meeting-1", messageId: "absence-1", channelId: "223456789012345678", processedAt: new Date(Date.now() - 25 * 3_600_000).toISOString(), expiresAt: new Date(Date.now() - 3_600_000).toISOString() }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const deletes: string[] = []; let created = 0;
+  globalThis.fetch = async (input, init) => { if (init?.method === "DELETE") deletes.push(String(input)); if (init?.method === "POST") created += 1; return new Response(init?.method === "DELETE" ? null : JSON.stringify({ id: `managed-${created}` }), { status: init?.method === "DELETE" ? 204 : 200, headers: init?.method === "DELETE" ? undefined : { "content-type": "application/json" } }); };
+  try {
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    assert.deepEqual(deletes, ["https://discord.com/api/v10/channels/223456789012345678/messages/absence-1"]);
+    assert.ok(database.calls.some((call) => call.sql.includes("SET deleted_at = ?") && call.values.includes("meeting-1") && call.values.includes("absence-1")));
+    assert.equal(deletes.some((url) => url.includes("unrelated")), false);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("Discord calendar sync explains missing scheduled-event permission without exposing credentials", async () => {

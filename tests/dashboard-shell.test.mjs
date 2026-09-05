@@ -219,13 +219,16 @@ test("Settings separates operational configuration, access, and kiosk update com
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const organization = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
   const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
+  const integrations = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
   const updates = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
   assert.match(shell, /\["\/settings\/configuration", "Configuration"\]/);
   assert.match(shell, /\["\/settings\/access", "Access"\]/);
   assert.match(shell, /\["\/settings\/updates", "Updates"\]/);
   assert.match(shell, /role === "admin" && path === "\/settings\/access"/);
   assert.match(configuration, /Late scan allowance \(minutes\)/);
-  assert.match(configuration, /Discord contest window \(hours\)/);
+  assert.doesNotMatch(configuration, /Discord contest window \(hours\)/);
+  assert.match(integrations, /Contest window \(hours\)/);
+  assert.match(integrations, /Manage the configured attendance channel/);
   assert.doesNotMatch(organization, /Late scan allowance|Discord contest window/);
   assert.match(updates, /<h2>Physical kiosk<\/h2>/);
   assert.match(updates, /<span>Installed<\/span>/);
@@ -494,7 +497,7 @@ test("numeric organization settings can be cleared before they are normalized on
   assert.match(source, /useState\(String\(initialBranding\.lateScanMinutes\)\)/);
   assert.match(source, /lateScanMinutes\.trim\(\) === "" \? 0/);
   assert.match(source, /placeholder="0"/);
-  assert.match(source, /discordContestWindowHours\.trim\(\) === "" \? 24/);
+  assert.doesNotMatch(source, /discordContestWindowHours/);
   assert.match(source, /Attendance reporting baseline/);
   assert.match(source, /attendanceReportingStartsOn: attendanceReportingStartsOn \|\| null/);
   assert.match(colors, /type="number"[^>]+placeholder="0"/);

@@ -907,6 +907,52 @@ test("Discord attendance reports handle empty and provider-bounded histories", a
   assert.ok(long.length <= 2_000); assert.match(long, /additional absent meetings omitted to fit Discord's response limit/); assert.ok((long.match(/^• /gm) ?? []).length < 80);
 });
 
+test("managed attendance-report button uses the canonical private slash-command response", async () => {
+  const database = new FakeDatabase(); const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-09-04T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 1 });
+  database.rows.set("state_key = 'channel-manager-howto'", { externalId: "attendance-help-1" });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, attendance_reporting_starts_on", { lateScanMinutes: 30, attendanceReportingStartsOn: "2026-09-01" });
+  database.lists.set("discord_user_id = ?", [{ id: "member-1", active: 1, rosterAddedAt: "2026-08-01T00:00:00Z" }]);
+  database.lists.set("SELECT mt.title", [{ title: "Missed rehearsal", startsAt: "2026-09-03T20:00:00Z", endsAt: "2026-09-03T21:00:00Z" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const slash = await worker.fetch(signedDiscordInteraction({ type: 2, guild_id: "123456789012345678", data: { name: "attendance-report" }, member: { user: { id: "323456789012345678" } } }, privateKey), env);
+  const button = await worker.fetch(signedDiscordInteraction({ type: 3, guild_id: "123456789012345678", channel_id: "223456789012345678", data: { custom_id: "lancerlogin-attendance-report" }, member: { user: { id: "323456789012345678" } }, message: { id: "attendance-help-1" } }, privateKey), env);
+  assert.deepEqual(await button.json(), await slash.json());
+});
+
+test("managed attendance-report button rejects unavailable, unlinked, stale, and tampered requests privately", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519"); const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
+  const base = { type: 3, guild_id: "123456789012345678", channel_id: "223456789012345678", data: { custom_id: "lancerlogin-attendance-report" }, member: { user: { id: "323456789012345678" } }, message: { id: "attendance-help-1" } };
+  const run = async (record: Record<string, unknown>, members: unknown[], payload: unknown, managerEnabled = 1, trackedMessageId = "attendance-help-1") => {
+    const database = new FakeDatabase();
+    database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, ...record });
+    database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: managerEnabled });
+    database.rows.set("state_key = 'channel-manager-howto'", trackedMessageId ? { externalId: trackedMessageId } : undefined);
+    database.lists.set("discord_user_id = ?", members);
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const result = await worker.fetch(signedDiscordInteraction(payload, privateKey), env); const body = await result.json() as { data?: { content?: string; flags?: number; allowed_mentions?: { parse: string[] } } };
+    assert.equal(body.data?.flags, 64); assert.deepEqual(body.data?.allowed_mentions, { parse: [] }); assert.doesNotMatch(body.data?.content ?? "", /Attendance:|Absent meetings|%/);
+    return { content: body.data?.content ?? "", database, env };
+  };
+  assert.match((await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [], base)).content, /not linked to exactly one active/);
+  assert.match((await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [{ id: "member-1", active: 0 }], base)).content, /active LancerLogin roster member/);
+  const wrongServer = await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [{ id: "member-1", active: 1 }], { ...base, guild_id: "999999999999999999" }); assert.match(wrongServer.content, /server configured/); assert.equal(wrongServer.database.calls.some((call) => call.sql.includes("discord_user_id = ?")), false);
+  assert.match((await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [], { ...base, channel_id: "999999999999999999" })).content, /invalid or expired/);
+  assert.match((await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [], { ...base, message: { id: "stale-help" } })).content, /invalid or expired/);
+  assert.match((await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [], base, 0)).content, /invalid or expired/);
+  assert.match((await run({ enabled: 0, verifiedAt: "2026-09-04T00:01:00Z" }, [], base)).content, /disabled/);
+  assert.match((await run({ enabled: 1, verifiedAt: null }, [], base)).content, /not been verified/);
+  assert.match((await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [], { ...base, member: undefined })).content, /invalid or expired/);
+
+  const valid = await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [], base);
+  const unsigned = await worker.fetch(new Request("https://api.example.test/discord/interactions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(base) }), valid.env); assert.equal(unsigned.status, 401);
+  const signed = signedDiscordInteraction(base, privateKey); const tampered = new Request(signed.url, { method: "POST", headers: signed.headers, body: JSON.stringify({ ...base, message: { id: "tampered" } }) }); const rejected = await worker.fetch(tampered, valid.env); assert.equal(rejected.status, 401); assert.doesNotMatch(await rejected.text(), /Attendance:|Absent meetings|%/);
+});
+
 test("Discord attendance-report failures stay private, actionable, and non-disclosing", async () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519"); const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
@@ -1097,6 +1143,9 @@ test("enabled Discord channel manager creates status before guidance and pins on
     assert.match(String(posts[0].payload?.content), /Front desk/);
     assert.match(String(posts[1].payload?.content), /\/pair/);
     assert.deepEqual(posts.map((call) => call.payload?.allowed_mentions), [{ parse: [] }, { parse: [] }]);
+    assert.equal(posts[0].payload?.components, undefined);
+    assert.deepEqual(posts[1].payload?.components, [{ type: 1, components: [{ type: 2, style: 1, label: "View my attendance report", custom_id: "lancerlogin-attendance-report" }] }]);
+    assert.equal(JSON.stringify(posts[1].payload).match(/lancerlogin-attendance-report/g)?.length, 1);
     assert.deepEqual(outbound.filter((call) => call.method === "PUT").map((call) => call.url), ["https://discord.com/api/v10/channels/223456789012345678/messages/pins/managed-1"]);
     assert.ok(database.calls.some((call) => call.values[0] === "kiosk-status" && call.values[1] === "managed-1"));
     assert.ok(database.calls.some((call) => call.values[0] === "channel-manager-howto" && call.values[1] === "managed-2"));
@@ -1105,14 +1154,15 @@ test("enabled Discord channel manager creates status before guidance and pins on
 
 test("channel manager reuses its two tracked messages and stays inactive until Discord is verified", async () => {
   const kioskContent = "**Front desk** · online · reader online · release 0.19.0";
-  const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. After an absence notice appears, only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
+  const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. Use **View my attendance report** below or `/attendance-report` to receive your private report. After an absence notice appears, only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
+  const reportComponents = [{ type: 1, components: [{ type: 2, style: 1, label: "View my attendance report", custom_id: "lancerlogin-attendance-report" }] }];
   const verified = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
   verified.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
   verified.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 1 });
   verified.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 1 });
   verified.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: new Date().toISOString(), readerOnline: 1, releaseVersion: "0.19.0" });
-  verified.rows.set("FROM integration_state", (_sql: string, values: unknown[]) => values[0] === "kiosk-status" ? { externalId: "status-1", contentHash: createHash("sha256").update(kioskContent).digest("base64url") } : { externalId: "howto-1", contentHash: createHash("sha256").update(guidance).digest("base64url") });
+  verified.rows.set("FROM integration_state", (_sql: string, values: unknown[]) => values[0] === "kiosk-status" ? { externalId: "status-1", contentHash: createHash("sha256").update(kioskContent).digest("base64url") } : { externalId: "howto-1", contentHash: createHash("sha256").update(JSON.stringify({ content: guidance, components: reportComponents })).digest("base64url") });
   verified.lists.set("FROM meetings m LEFT JOIN", []); verified.lists.set("FROM discord_attendance_notifications WHERE", []);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: verified } as unknown as Env;
   const originalFetch = globalThis.fetch; const methods: string[] = [];
@@ -1130,7 +1180,33 @@ test("channel manager reuses its two tracked messages and stays inactive until D
   }
 });
 
-test("channel manager recreates deleted tracked messages without touching unrelated content", async () => {
+test("channel manager upgrades an existing attendance-help message with one report button and then reuses it", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  const kioskContent = "**Front desk** · online · reader online · release 0.19.0";
+  let guideHash = createHash("sha256").update("legacy attendance guide without controls").digest("base64url");
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 1 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 1 });
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: new Date().toISOString(), readerOnline: 1, releaseVersion: "0.19.0" });
+  database.rows.set("FROM integration_state", (_sql: string, values: unknown[]) => values[0] === "kiosk-status" ? { externalId: "status-1", contentHash: createHash("sha256").update(kioskContent).digest("base64url") } : { externalId: "howto-1", contentHash: guideHash });
+  database.lists.set("FROM meetings m LEFT JOIN", []); database.lists.set("FROM discord_attendance_notifications WHERE", []);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const outbound: Array<{ method: string; payload?: Record<string, unknown> }> = [];
+  globalThis.fetch = async (_input, init) => { outbound.push({ method: String(init?.method), payload: init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined }); return new Response(JSON.stringify({ id: "howto-1" }), { headers: { "content-type": "application/json" } }); };
+  try {
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    const update = outbound.find((call) => call.method === "PATCH");
+    assert.deepEqual(update?.payload?.components, [{ type: 1, components: [{ type: 2, style: 1, label: "View my attendance report", custom_id: "lancerlogin-attendance-report" }] }]);
+    assert.equal(JSON.stringify(update?.payload).match(/lancerlogin-attendance-report/g)?.length, 1);
+    const stateWrite = database.calls.filter((call) => call.sql.includes("INSERT INTO integration_state") && call.values[0] === "channel-manager-howto").at(-1);
+    assert.ok(stateWrite); guideHash = String(stateWrite.values[2]); outbound.length = 0;
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    assert.equal(outbound.some((call) => call.method === "POST" || call.method === "PATCH" || call.method === "DELETE"), false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("channel manager recreates deleted tracked messages with exactly one report button without touching unrelated content", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
@@ -1140,9 +1216,9 @@ test("channel manager recreates deleted tracked messages without touching unrela
   database.lists.set("FROM meetings m LEFT JOIN", []);
   database.lists.set("FROM discord_attendance_notifications WHERE", []);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const originalFetch = globalThis.fetch; const outbound: Array<{ url: string; method: string }> = []; let created = 0;
+  const originalFetch = globalThis.fetch; const outbound: Array<{ url: string; method: string; payload?: Record<string, unknown> }> = []; let created = 0;
   globalThis.fetch = async (input, init) => {
-    outbound.push({ url: String(input), method: String(init?.method) });
+    outbound.push({ url: String(input), method: String(init?.method), payload: init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined });
     if (init?.method === "PATCH") return new Response(JSON.stringify({ code: 10_008, message: "Unknown Message" }), { status: 404, headers: { "content-type": "application/json" } });
     if (init?.method === "POST") created += 1;
     return new Response(JSON.stringify({ id: `replacement-${created}` }), { headers: { "content-type": "application/json" } });
@@ -1151,6 +1227,9 @@ test("channel manager recreates deleted tracked messages without touching unrela
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
     assert.equal(outbound.filter((call) => call.method === "PATCH" && call.url.endsWith("/messages/deleted-managed")).length, 2);
     assert.equal(outbound.filter((call) => call.method === "POST").length, 2);
+    const recreatedGuide = outbound.filter((call) => call.method === "POST")[1].payload;
+    assert.deepEqual(recreatedGuide?.components, [{ type: 1, components: [{ type: 2, style: 1, label: "View my attendance report", custom_id: "lancerlogin-attendance-report" }] }]);
+    assert.equal(JSON.stringify(recreatedGuide).match(/lancerlogin-attendance-report/g)?.length, 1);
     assert.deepEqual(outbound.filter((call) => call.method === "PUT").map((call) => call.url), ["https://discord.com/api/v10/channels/223456789012345678/messages/pins/replacement-1"]);
     assert.equal(outbound.some((call) => call.method === "DELETE" || call.url.includes("unrelated")), false);
     assert.ok(database.calls.some((call) => call.values[0] === "kiosk-status" && call.values[1] === "replacement-1"));

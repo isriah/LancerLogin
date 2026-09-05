@@ -1086,7 +1086,13 @@ Release: next Discord reliability bundle; suitable for a narrow patch if the fai
 
 ### WU-065 — Discord designated-channel manager mode
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-065-discord-channel-manager` (requested; provisioning Worktree is currently detached)
+Base: `46ff837abd9f3bb9aa23c6e2efeb9047b9eaa522`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\6485\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:90d2eba5-14f0-4fed-b957-3d2f650b9084`
 
 Goal: offer an opt-in Discord mode that maintains a dedicated attendance channel's LancerLogin-owned status, guidance, and expiring absence messages as one coherent operational surface.
 Dependencies: WU-061 and WU-064 (both merged); ADR-009 selects one pinned, tracked LancerLogin-owned status message as the approved top-of-channel mechanism

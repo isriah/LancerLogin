@@ -1333,7 +1333,7 @@ Release: `v0.22.0`.
 
 ### WU-078 — Calendar integration delivery parity
 
-Status: in progress
+Status: merged (`f27521e`)
 
 Owner: Codex task
 Branch: `codex/wu-078-calendar-delivery-parity`
@@ -1344,6 +1344,7 @@ Handoff: branch is clean at candidate `8685be1732206c0dda19ce9bd1a934c2f6092a02`
 Integration review: candidate `8685be1732206c0dda19ce9bd1a934c2f6092a02` was rejected before merge because an ambiguous successful Discord create or concurrent processors could retry without a persisted provider event ID and create a duplicate. No integration commit was created.
 Repair task: provisioning client `client-new-thread:2b4f08ad-8193-464b-b791-756e345282dd`, detached Worktree `C:\\Users\\Izz\\.codex\\worktrees\\bb56\\LancerLogin Workspace`, starting from the rejected candidate to add durable create reconciliation or safe claiming plus focused ambiguous-success and concurrency coverage.
 Repair handoff: detached Worktree is clean at candidate `d04fe5b28b902507c7531b840755c9d31efed481` with subject `WU-078: make Discord calendar creates idempotent`; this commit follows rejected candidate `8685be1732206c0dda19ce9bd1a934c2f6092a02` and adds the required durable create safety and regression coverage.
+Integration: complete candidate `d04fe5b28b902507c7531b840755c9d31efed481`, containing original implementation `8685be1732206c0dda19ce9bd1a934c2f6092a02` plus the repair, was merged into `main` as `f27521edca57fad923ce47092c235cf2b8cbc38e`. Review confirmed deterministic Discord create correlation, revision-guarded leases, expired-lease recovery, retry reconciliation before create, tracked delete work, restore generations, Google data minimization, provider-specific authorization and verification gates, partial-provider outcomes, bounded sync-all actions, and accessible responsive recovery controls. On the candidate and merged tree, the focused ambiguous-success/concurrency suite passed 9/9; on the merged tree, `npm run verify:migrations` applied all 28 D1 migrations, `npm run verify:api` passed 116 API/runtime tests plus API/shared typechecks, `npm run verify:dashboard` passed 40 dashboard tests plus dashboard typecheck, `npm run verify:docs` passed 7 documentation tests, and focused migration/backup foundation coverage passed 2/2. The affected meeting-detail and Integrations browser files passed 54/54 before the complete 142-test browser suite passed. Automated coverage used provider fakes and sent no live provider traffic. Release impact remains `v0.22.0`; supported-provider manual validation remains a release gate, and no release, push, deployment, cloud mutation, provider mutation, or Pi update occurred.
 
 Goal: give Discord and Google Calendar the same dependable meeting-lifecycle sync model and clear manual recovery controls.
 Dependencies: WU-022 and WU-074 (both merged); ADR-013 continues to govern Google data minimization, separate authorization, delete/recreate restoration behavior, and durable non-blocking delivery

@@ -1272,7 +1272,7 @@ Release: `v0.21.0`.
 
 ### WU-075 — Kiosk update completion reporting
 
-Status: in progress
+Status: merged (`b512fec`)
 
 Owner: Codex task
 Branch: `codex/wu-075-kiosk-update-completion`
@@ -1280,7 +1280,8 @@ Base: `522b7181b8e4aaa5343cd8c2c10dd0fbe7ac7a3e`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7e77\\LancerLogin Workspace`
 Task: delayed provisioning client `client-new-thread:7a4a0058-b40e-4583-9b98-6e1a236c2454`
 Coordination: the original client became active after three clean/absent checks and after replacement client `client-new-thread:9cb856b2-0a81-472a-a190-a33cda54cb55` had been started in `C:\\Users\\Izz\\.codex\\worktrees\\5641\\LancerLogin Workspace`. The original is the selected implementation because it independently resolves the official compatible release and covers kiosk-executor failure reporting. The overlapping replacement must be stopped and its branch `codex/wu-075-kiosk-update-completion-replacement` must not be integrated.
-Handoff: selected branch is clean at candidate `e7df5c683feef179220509802942b4c178500b60` with subject `WU-075: report kiosk update completion`; the quarantined replacement remains uncommitted and is excluded from integration.
+Handoff: selected branch was clean at candidate `e7df5c6a008a0569700a77b1b6696be79aa5449a` with subject `WU-075: report kiosk update completion`; the earlier recorded full SHA was a transcription error from the verified short prefix. The quarantined replacement remained uncommitted and was excluded from integration.
+Integration: candidate `e7df5c6a008a0569700a77b1b6696be79aa5449a` was updated onto current `main` and merged as `b512fecb2a2d8790ce8c7f65662433108298938c`. On the merged tree, `npm run verify:migrations` verified all 27 D1 migrations; `npm run verify:api` passed 111 API/runtime tests plus API/shared typechecks; `npm run verify:dashboard` passed 40 structural/runtime tests plus dashboard typecheck; `npm run verify:kiosk` passed 34 kiosk tests plus kiosk typecheck; and the complete 138-test browser suite passed. Focused coverage verifies fixed-command authorization and input rejection, official compatible-release resolution, authoritative heartbeat success/unchanged/mismatch reconciliation, offline/stale/unknown and explicit installer failure states, terminal-result stability, and responsive light/dark adopter-branded Updates presentation. The quarantined `codex/wu-075-kiosk-update-completion-replacement` branch was not integrated. Release impact remains `v0.22.0`; no release, deployment, cloud mutation, or Pi update occurred. Physical systemd updater and restart behavior still require release-stage validation on supported Raspberry Pi hardware.
 
 Goal: make the dashboard report a kiosk update's final installed version or an actionable terminal failure instead of leaving a successful installer handoff in an indefinite waiting state.
 Dependencies: none

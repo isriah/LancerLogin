@@ -1313,9 +1313,13 @@ Release: `v0.22.0`.
 
 ### WU-077 — Dashboard steady-state status cleanup
 
-Status: ready
+Status: in progress
 
-Owner: unassigned
+Owner: Codex task
+Branch: detached provisioning worktree
+Base: `b5fd990c2d829d2f91a72d597d9071ac0d2cf29a`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\36e3\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:f05538e4-0101-472a-8eaf-fad02e1b6111`
 
 Goal: remove redundant steady-state information from the Dashboard and canonical meeting summary while preserving useful loading, mutation, and error feedback.
 Dependencies: none; coordinate after WU-076 if its decision selects `apps/dashboard/src/home-page.tsx`

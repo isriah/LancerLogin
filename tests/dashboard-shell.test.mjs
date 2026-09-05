@@ -272,7 +272,7 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(meetings, /useEffect\(\(\) => \{ if \(error\) errorAlert\.current\?\.focus\(\); \}, \[error\]\)/);
   assert.match(meetings, /ref=\{errorAlert\} id="meeting-create-error"/);
   assert.doesNotMatch(meetings, /requestAnimationFrame\(\(\) => document\.getElementById\("meeting-create-error"\)/);
-  assert.match(meetings, /onCreated\(result\.meetings\.length\)/);
+  assert.match(meetings, /onCreated\(result\.meetings\.length, result\.calendarSync\)/);
   assert.match(meetings, /Duplicate an existing meeting/);
   assert.match(home, /previousMonth/);
   assert.match(home, /previous-month/);
@@ -570,6 +570,12 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /operations\.html#discord-commands/);
   assert.match(source, /<code>\/attendance-report<\/code>/);
   assert.match(source, /Verify with Google/);
+  assert.match(source, /Google Calendar is ready\. New meetings will be copied automatically\./);
+  assert.match(source, /Authorize Google Calendar/);
+  assert.match(source, /Load writable calendars/);
+  assert.match(source, /Retry now/);
+  assert.match(source, /It does not send meeting titles, notes, roster data, or attendance/);
+  assert.match(source, /provider !== "google_calendar"/);
   assert.match(source, /setup\.html#google-oauth/);
   assert.match(source, /Authorized redirect URI/);
   assert.match(source, /<code>openid<\/code>, <code>email<\/code>, and <code>profile<\/code>/);

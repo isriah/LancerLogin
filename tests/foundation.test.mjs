@@ -86,7 +86,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES/);
@@ -94,6 +94,21 @@ test("dashboard restore accepts and normalizes earlier backup schemas", async ()
   assert.match(source, /deleted_at: null/);
   assert.match(source, /weight_category_id: null, weight_category_name: null, attendance_weight: 1/);
   assert.match(source, /google_enabled: providers\.has\("google"\) \? 1 : 0/);
+  assert.match(source, /google_calendar_enabled: 0/);
+});
+
+test("Google Calendar migration and worker keep delivery minimal and retryable", async () => {
+  const migration = await readFile("apps/api/migrations/0026_google_calendar_sync.sql", "utf8");
+  const source = await readFile("apps/api/src/index.ts", "utf8");
+  assert.match(migration, /google_calendar_authorizations/);
+  assert.match(migration, /google_calendar_event_mappings/);
+  assert.match(migration, /google_calendar_operations/);
+  assert.match(migration, /action IN \('upsert', 'delete'\)/);
+  assert.match(source, /summary: "LancerLogin meeting"/);
+  assert.match(source, /Google Calendar delivery retries safely on the next scheduled pass/);
+  assert.match(source, /enqueueGoogleCalendarDelete/);
+  assert.match(source, /enqueueGoogleCalendarRestore/);
+  assert.doesNotMatch(source, /summary: operation\.(title|notes)/);
 });
 
 test("Discord absence recipient history preserves every sent notice", async () => {

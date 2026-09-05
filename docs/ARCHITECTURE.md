@@ -6,14 +6,14 @@
 Admin browser ── Pages dashboard + /api proxy ── Worker API ── D1
                                                     │   │
                                                     │   └─ encrypted integration credentials
-                                                    └──── Resend / Discord / Google OAuth
+                                                    └──── Resend / Discord / Google OAuth / Google Calendar
 
 Raspberry Pi kiosk ── local service ── R503 fingerprint sensor
        │                       │
        └── pairing code / HTTPS┴── Worker API
 ```
 
-The dashboard is a static Pages application with an advanced-mode `_worker.js` proxy for `/api/*`. Browser sessions therefore remain first-party on the adopter's Pages origin while API work is forwarded to the separate Worker. The Worker owns authorization, onboarding state, non-overlapping meeting-window validation, scan-time meeting resolution, data validation, encrypted secret handling, exports, and integration calls. D1 contains all organization-level data but no fingerprint templates. The Pi service owns sensor I/O, owner-only local pairing material, local slot-to-member mappings, offline scan queue, kiosk display state, and PIN-protected local network/fingerprint tools.
+The dashboard is a static Pages application with an advanced-mode `_worker.js` proxy for `/api/*`. Browser sessions therefore remain first-party on the adopter's Pages origin while API work is forwarded to the separate Worker. The Worker owns authorization, onboarding state, non-overlapping meeting-window validation, scan-time meeting resolution, data validation, encrypted secret handling, exports, and integration calls. Its optional Google Calendar path keeps separate encrypted authorization, one meeting-to-event mapping, and a durable retry operation in D1; LancerLogin remains authoritative and Google changes are never imported. D1 contains all organization-level data but no fingerprint templates. The Pi service owns sensor I/O, owner-only local pairing material, local slot-to-member mappings, offline scan queue, kiosk display state, and PIN-protected local network/fingerprint tools.
 
 An optional community telemetry collector is a separate maintainer service and never shares adopter resources. The adopter Worker sends only the consent-gated allowlist to its public ingestion route. The collector HMAC-hashes the opaque install ID, stores one bounded daily row, and exposes only authenticated aggregates; it never receives roster, attendance, biometric, organization, credential, or raw-IP fields.
 

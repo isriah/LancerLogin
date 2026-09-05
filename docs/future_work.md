@@ -1086,7 +1086,7 @@ Release: next Discord reliability bundle; suitable for a narrow patch if the fai
 
 ### WU-065 — Discord designated-channel manager mode
 
-Status: in progress
+Status: merged (`cf48dd5`)
 
 Owner: Codex task
 Branch: `codex/wu-065-discord-channel-manager`
@@ -1098,6 +1098,7 @@ Replacement branch: `codex/wu-065-discord-channel-manager-v2`
 Replacement base: `cb654f01535606c5891848a7c422938875a41c85`
 Replacement Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\3232\\LancerLogin Workspace`
 Replacement task: provisioning client `client-new-thread:30666912-e8d5-4ccd-95fc-add5258d9d66`
+Integration: replacement candidate `172481bbba22d3a71f50edaaa16fd03eb78a9e00` was updated onto the combined tree and merged as `cf48dd5155df14b4cba4f671449c6f3998d21b25`. The late candidate on the superseded original branch was preserved and not integrated. `npm run verify:migrations` applied all 22 migrations; `npm run verify:api` passed 95 tests plus API/shared typechecks; `npm run verify:dashboard` passed 39 tests plus the dashboard typecheck; `npm run verify:docs` passed 7 tests; and the complete 127-test browser suite passed on the integrated tree with the repository's CI worker count and no retries. Focused provider fakes cover Admin-only settings, verified/disabled behavior, ordered tracked-message creation and reuse, deleted-message self-healing, late-cutoff delivery, retry safety, controlled mentions, tracked expiry deletion, and unrelated-message isolation. Focused Settings coverage passed for Admin/Operator access at desktop and mobile widths. Follow-up `a63a453` stabilized the merged browser gate and focused public-documentation skip-link state. Supported-server manual validation remains required before release; no live Discord traffic was used.
 
 Goal: offer an opt-in Discord mode that maintains a dedicated attendance channel's LancerLogin-owned status, guidance, and expiring absence messages as one coherent operational surface.
 Dependencies: WU-061 and WU-064 (both merged); ADR-009 selects one pinned, tracked LancerLogin-owned status message as the approved top-of-channel mechanism
@@ -1105,7 +1106,7 @@ Scope: add an Admin-only Discord configuration toggle; when enabled, maintain a 
 Sources: `docs/idea_inbox.md` (IN-077); `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `apps/dashboard/src/integration-settings.tsx`; `apps/dashboard/src/configuration-settings.tsx`; `apps/api/src/index.ts`; `apps/api/migrations/`; Discord integration and scheduler tests; `tests-browser/settings-conformance.spec.ts`.
 Acceptance: the toggle and contest-window setting are available only to Admins in the Discord integration surface; enabled mode maintains exactly one current status message and one current how-to message according to the approved ordering mechanism, sends each eligible absence ping only after the late-scan cutoff, deletes only its tracked absence message after contest expiry, survives deleted managed messages, and leaves unrelated channel content untouched; disabled mode preserves current Discord behavior.
 Verification: `npm run verify:migrations`, `npm run verify:api`, and `npm run verify:dashboard`; focused provider-fake coverage for enable/disable, message ordering and self-healing, cutoff scheduling, retries, expiry deletion, contest validity, controlled mentions, and unrelated-message safety; focused Admin/Operator and responsive Settings browser coverage; supported-server manual validation before release.
-Release: later Discord channel-management feature bundle after its dependencies and product decision are resolved.
+Release: include in `v0.20.0`; validate the managed messages and Pin Messages permission against a supported Discord server before release.
 
 ### WU-066 — Wide-desktop dashboard utilization
 

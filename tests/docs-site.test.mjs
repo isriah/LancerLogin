@@ -4,6 +4,25 @@ import { readFile, stat } from "node:fs/promises";
 
 const pages = ["index.html", "setup.html", "kiosk.html", "operations.html", "privacy.html", "releases.html", "technical.html"];
 
+test("public docs share the fixed brand, device palettes, focus, and motion contract", async () => {
+  const styles = await readFile("docs-site/styles.css", "utf8");
+  assert.match(styles, /--brand-primary:\s*#B80100;/);
+  assert.match(styles, /--brand-secondary:\s*#EEB822;/);
+  assert.match(styles, /color-scheme:\s*light dark;/);
+  assert.match(styles, /@media \(prefers-color-scheme:\s*dark\)/);
+  assert.match(styles, /@media \(prefers-reduced-motion:\s*reduce\)/);
+  assert.match(styles, /:focus-visible/);
+  assert.match(styles, /--control-min-block-size:\s*2\.75rem;/);
+  assert.match(styles, /\.credential-table[\s\S]*overflow-x:\s*auto;/);
+
+  for (const page of pages) {
+    const html = await readFile(`docs-site/${page}`, "utf8");
+    assert.match(html, /<meta name="color-scheme" content="light dark">/, `${page} should set its first-paint palette`);
+    assert.match(html, /<link rel="stylesheet" href="styles\.css">/, `${page} should use the shared presentation`);
+    assert.equal(html.match(/<h1(?:\s|>)/g)?.length, 1, `${page} should keep one page heading`);
+  }
+});
+
 test("public docs are task-first, keyboard-navigable, and consistently linked", async () => {
   for (const page of pages) {
     const html = await readFile(`docs-site/${page}`, "utf8");

@@ -1356,7 +1356,7 @@ Release: `v0.22.0`.
 
 ### WU-079 — Managed Discord application commands
 
-Status: in progress
+Status: merged (`424602a`)
 
 Owner: Codex task
 Branch: `codex/wu-079-managed-discord-commands`
@@ -1368,6 +1368,7 @@ Integration: candidate `796f53fcd4a6264a1ab1b94924e3635115c031b3` was merged int
 Release verification: the v0.22.0 focused browser matrix passed 59/60 and the subsequent full suite passed 145/146 because the Discord verification error alert intermittently failed to receive focus at the 390x844 mobile viewport under 12-worker load; each exact case passed alone. This concurrency-sensitive accessibility race blocks release and reopens the unit for a robust state/commit-tied focus correction rather than a timeout or retry waiver.
 Repair task: provisioning client `client-new-thread:5280fb8d-2fab-470a-8ebe-a802b7ef96b3`, branch `codex/wu-079-discord-alert-focus-race`, Worktree `C:\\Users\\Izz\\.codex\\worktrees\\6a67\\LancerLogin Workspace`, base `68a807795a0ab1971ccea9b5c1f6c5060723735a`.
 Repair handoff: branch is clean at candidate `32572ed1493ddc1c15777394fa8d801c1b1ba2e0` with subject `WU-079: focus committed integration errors`; the candidate ties error-alert focus to committed React state and DOM availability instead of a single pre-commit animation frame.
+Repair integration: candidate `32572ed1493ddc1c15777394fa8d801c1b1ba2e0` was merged into current `main` as `424602adc46d6fd0a4e7c00e4dc4ed464977b288`. Review confirmed the change is limited to rendering provider notices through a committed-state component whose error-focus effect runs only after the alert exists in the DOM. On the merged tree, `npm run verify:dashboard` passed 40 tests plus dashboard typecheck; the managed Discord keyboard-focus browser case passed 32/32 across eight repetitions and four supported viewport/theme combinations under 12-worker load; the separately observed Kiosks capability case passed 8/8 under concurrent repetition; and the complete browser suite passed 146/146 at six workers after two 12-worker attempts each encountered a different host-load symptom (one stale mocked capability observation and one Windows `ERR_NO_BUFFER_SPACE`) while the WU-079 focus case passed in both. Supported-server manual validation remains a release gate, and no live Discord traffic occurred during automated verification.
 
 Goal: make `/pair` and `/attendance-report` available in the configured Discord server without requiring an adopter to send command-registration payloads manually.
 Dependencies: WU-032 and WU-072 (both merged); coordinate serially with WU-078 because both change Discord configuration/provider behavior and Integrations presentation

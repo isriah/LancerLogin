@@ -1272,9 +1272,15 @@ Release: `v0.21.0`.
 
 ### WU-075 — Kiosk update completion reporting
 
-Status: ready
+Status: in progress
 
-Owner: unassigned
+Owner: Codex task
+Branch: `codex/wu-075-kiosk-update-completion`
+Base: `522b7181b8e4aaa5343cd8c2c10dd0fbe7ac7a3e`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7e77\\LancerLogin Workspace`
+Task: delayed provisioning client `client-new-thread:7a4a0058-b40e-4583-9b98-6e1a236c2454`
+Coordination: the original client became active after three clean/absent checks and after replacement client `client-new-thread:9cb856b2-0a81-472a-a190-a33cda54cb55` had been started in `C:\\Users\\Izz\\.codex\\worktrees\\5641\\LancerLogin Workspace`. The original is the selected implementation because it independently resolves the official compatible release and covers kiosk-executor failure reporting. The overlapping replacement must be stopped and its branch `codex/wu-075-kiosk-update-completion-replacement` must not be integrated.
+Handoff: selected branch is clean at candidate `e7df5c683feef179220509802942b4c178500b60` with subject `WU-075: report kiosk update completion`; the quarantined replacement remains uncommitted and is excluded from integration.
 
 Goal: make the dashboard report a kiosk update's final installed version or an actionable terminal failure instead of leaving a successful installer handoff in an indefinite waiting state.
 Dependencies: none
@@ -1284,17 +1290,17 @@ Acceptance: a successful update that restarts into the requested compatible rele
 Verification: `npm run verify:api`; `npm run verify:dashboard`; focused kiosk command/heartbeat coverage for success, version mismatch, offline/stale heartbeat, explicit failure, and release-feed changes; focused Updates browser coverage at required desktop/mobile light/dark adopter-brand combinations; `npm run verify:kiosk` if kiosk execution changes; unfiltered browser suite after integration.
 Release: `v0.22.0`.
 
-### WU-076 — Chronological meeting chooser ordering
+### WU-076 — Chronological meeting table ordering
 
-Status: blocked
+Status: ready
 
 Owner: unassigned
 
-Goal: make downward movement through the intended meeting-selection surface consistently move from older meetings toward future meetings.
-Dependencies: product decision required: identify whether IN-089 targets the Dashboard meeting dropdown, Attendance meeting dropdown, Table view, or a change to the five-week calendar navigation; the rendered calendar grid and meetings within each day are already oldest-to-newest
-Scope: after the target surface is confirmed, apply stable ascending start-time ordering to that surface and preserve canonical meeting-detail navigation, current/past/future routing, saved view choice, calendar range controls, and recurrence identity. Exclude changing meeting dates, attendance semantics, API default ordering beyond what the selected surface requires, or redesigning the calendar.
-Sources: `docs/idea_inbox.md` (IN-089); `docs/DASHBOARD.md`; `docs/UI-STANDARDS.md`; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/attendance-calendar.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/meetings-page.tsx`; meeting-browser and attendance-navigation browser tests.
-Acceptance: the confirmed surface presents meetings in deterministic ascending start-time order, with ties stable and scrolling or keyboard movement downward progressing toward the future; selection still opens the same canonical meeting route; desktop/mobile, light/dark, adopter-brand, keyboard, and overflow behavior meet the dashboard standard. No standards exception is expected.
+Goal: make downward movement through the Dashboard's meeting Table view consistently move from older meetings toward future meetings.
+Dependencies: none; the user confirmed IN-089 targets the meetings displayed as Table view rows, not either meeting dropdown or the five-week visual calendar
+Scope: apply stable ascending start-time ordering to the Dashboard Table view rows and preserve search, selection, bulk actions, canonical meeting-detail navigation, saved view choice, calendar range controls, and recurrence identity. Exclude changing either meeting dropdown, the five-week visual calendar, meeting dates, attendance semantics, API default ordering beyond what the Table view requires, or redesigning the table.
+Sources: `docs/idea_inbox.md` (IN-089); `docs/DASHBOARD.md`; `docs/UI-STANDARDS.md`; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/meetings-page.tsx`; meeting-browser browser tests.
+Acceptance: the Dashboard Table view presents meetings in deterministic ascending start-time order, with ties stable and scrolling or keyboard movement downward progressing toward the future; search, row selection, bulk actions, and row navigation retain their behavior; desktop/mobile, light/dark, adopter-brand, keyboard, and overflow behavior meet the dashboard standard. No standards exception is expected.
 Verification: `npm run verify:dashboard`; focused browser coverage proving oldest-to-newest order, ties, route selection, keyboard operation, and required responsive/theme combinations; unfiltered browser suite after integration.
 Release: `v0.22.0`.
 

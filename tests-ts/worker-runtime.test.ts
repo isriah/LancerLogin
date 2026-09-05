@@ -993,6 +993,60 @@ test("Discord command setup is repeat-safe across reruns and credential rotation
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("configured Discord integrations reconcile commands without resetting legacy or operational state", async () => {
+  const applicationId = "103456789012345678"; const guildId = "123456789012345678"; const channelId = "223456789012345678";
+  const run = async (savedApplicationId?: string) => {
+    const database = new FakeDatabase(); const config = { botToken: "discord-secret", guildId, channelId, publicKey: "a".repeat(64), ...(savedApplicationId ? { applicationId: savedApplicationId } : {}) };
+    database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration(config, sessionSecret), verifiedAt: "2026-09-04T00:01:00Z", enabled: 1 });
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const originalFetch = globalThis.fetch; const outbound: Array<{ input: string; init?: RequestInit }> = [];
+    globalThis.fetch = async (input, init) => {
+      const url = String(input); outbound.push({ input: url, init });
+      if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: applicationId });
+      if (url.endsWith(`/guilds/${guildId}`)) return Response.json({ id: guildId });
+      if (url.endsWith(`/channels/${channelId}`)) return Response.json({ guild_id: guildId, type: 0 });
+      if (url.endsWith("/commands")) { const commands = JSON.parse(String(init?.body)) as Record<string, unknown>[]; return Response.json(commands.map((command, index) => ({ ...command, id: `command-${index}`, application_id: applicationId, guild_id: guildId }))); }
+      throw new Error(`Unexpected live request: ${url}`);
+    };
+    try {
+      assert.equal((await worker.fetch(request("/admin/integrations/discord/commands/reconcile", {}, { method: "POST", cookie: await sessionCookie("operator") }), env)).status, 403);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const result = await worker.fetch(request("/admin/integrations/discord/commands/reconcile", {}, { method: "POST", cookie: await sessionCookie("admin") }), env);
+        assert.equal(result.status, 200); assert.deepEqual(await result.json(), { provider: "discord", reconciled: true, commands: ["pair", "attendance-report"] });
+      }
+      assert.equal(outbound.filter(({ input }) => input.endsWith("/commands")).length, 2);
+      assert.ok(outbound.filter(({ input }) => input.endsWith("/commands")).every(({ input }) => input.endsWith(`/applications/${applicationId}/guilds/${guildId}/commands`)));
+      assert.equal(database.batches.length, 0);
+      assert.equal(database.calls.some((call) => /UPDATE encrypted_integrations|integration_verification_challenges|discord_calendar_|UPDATE organization_settings|DELETE FROM integration_state/.test(call.sql)), false);
+      assert.equal(database.calls.filter((call) => call.values.includes("discord.commands_reconciled")).length, 2);
+    } finally { globalThis.fetch = originalFetch; }
+  };
+  await run();
+  await run(applicationId);
+});
+
+test("Discord command repair preserves configured state on identity and verification failures", async () => {
+  const config = { botToken: "discord-secret", applicationId: "103456789012345678", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) };
+  const run = async (verifiedAt: string | null, returnedApplicationId = "999999999999999999") => {
+    const database = new FakeDatabase(); database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration(config, sessionSecret), verifiedAt, enabled: 1 });
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const originalFetch = globalThis.fetch; const outbound: string[] = [];
+    globalThis.fetch = async (input) => { outbound.push(String(input)); return Response.json({ id: returnedApplicationId }); };
+    try {
+      const result = await worker.fetch(request("/admin/integrations/discord/commands/reconcile", {}, { method: "POST", cookie: await sessionCookie("admin") }), env);
+      const malformedIdentity = returnedApplicationId === "not-an-application-id";
+      assert.equal(result.status, verifiedAt ? malformedIdentity ? 502 : 400 : 503); assert.match(JSON.stringify(await result.json()), !verifiedAt ? /verification is required/ : malformedIdentity ? /did not return the bot application's identity/ : /does not belong to this bot token/);
+      assert.equal(outbound.some((url) => url.endsWith("/commands")), false);
+      assert.equal(database.batches.length, 0);
+      assert.equal(database.calls.some((call) => /UPDATE encrypted_integrations|integration_verification_challenges|discord_calendar_|UPDATE organization_settings|DELETE FROM integration_state/.test(call.sql)), false);
+      assert.equal(database.calls.some((call) => call.values.includes("discord.commands_reconciled")), false);
+    } finally { globalThis.fetch = originalFetch; }
+  };
+  await run("2026-09-04T00:01:00Z");
+  await run("2026-09-04T00:01:00Z", "not-an-application-id");
+  await run(null);
+});
+
 test("Discord command setup reports identity, credential, permission, rate-limit, validation, and partial failures safely", async () => {
   const base = { botToken: "discord-secret", applicationId: "103456789012345678", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) };
   const run = async (failure: "application" | "guild" | "channel" | "credential" | "permission" | "rate" | "validation" | "partial" | "message") => {

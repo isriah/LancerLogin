@@ -64,7 +64,7 @@ class HttpError extends Error {
   constructor(status: number, message: string, details?: string[]) { super(message); this.status = status; this.details = details; }
 }
 class DiscordPermissionError extends HttpError {
-  constructor(kind: "calendar" | "pin" | "commands" | "channel" = "channel") { super(502, kind === "calendar" ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." : kind === "pin" ? "Discord denied this request because the bot is missing Pin Messages permission in the configured attendance channel." : kind === "commands" ? "Discord denied command management. Confirm the saved application ID belongs to this bot and install the bot in the selected server before trying verification again." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
+  constructor(kind: "calendar" | "pin" | "commands" | "channel" = "channel") { super(502, kind === "calendar" ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." : kind === "pin" ? "Discord denied this request because the bot is missing Pin Messages permission in the configured attendance channel." : kind === "commands" ? "Discord denied command management. Confirm the saved application ID belongs to this bot and install the bot in the selected server before trying command setup again." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
 }
 class DiscordRateLimitError extends HttpError {
   readonly retryAfterMs: number;
@@ -1315,18 +1315,22 @@ function discordCommandMatches(actual: DiscordApplicationCommand, expected: Disc
   const optionShape = (option: NonNullable<DiscordApplicationCommand["options"]>[number]) => ({ name: option.name, description: option.description, type: option.type, required: Boolean(option.required) });
   return actual.application_id === config.applicationId && actual.guild_id === config.guildId && actual.name === expected.name && actual.type === expected.type && actual.description === expected.description && JSON.stringify((actual.options ?? []).map(optionShape)) === JSON.stringify((expected.options ?? []).map(optionShape));
 }
-async function reconcileDiscordApplicationCommands(config: Record<string, string>): Promise<void> {
+async function reconcileDiscordApplicationCommands(config: Record<string, string>): Promise<{ applicationId: string; commands: string[] }> {
   const application = await discordRequest<{ id?: string }>(config, "/oauth2/applications/@me", { method: "GET" });
-  if (String(application.body.id ?? "") !== config.applicationId) throw new HttpError(400, "The saved Application ID does not belong to this bot token. Copy the Application ID from the same Discord application and replace the saved credentials.");
+  const applicationId = String(application.body.id ?? "");
+  if (!/^\d{10,24}$/.test(applicationId)) throw new HttpError(502, "Discord did not return the bot application's identity. Confirm the saved bot token and try command reconciliation again.");
+  if (config.applicationId && applicationId !== config.applicationId) throw new HttpError(400, "The saved Application ID does not belong to this bot token. Copy the Application ID from the same Discord application and replace the saved credentials.");
+  const resolvedConfig = { ...config, applicationId };
   const guild = await discordRequest<{ id?: string }>(config, `/guilds/${encodeURIComponent(config.guildId)}`, { method: "GET" });
   if (String(guild.body.id ?? "") !== config.guildId) throw new HttpError(400, "Discord returned a different server than the saved Server ID. Copy the intended server ID and replace the saved credentials.");
   const channel = await discordRequest<{ guild_id?: string; type?: number }>(config, `/channels/${encodeURIComponent(config.channelId)}`, { method: "GET" });
   if (String(channel.body.guild_id ?? "") !== config.guildId || Number(channel.body.type) !== 0) throw new HttpError(400, "The attendance channel must be a text channel in the saved Discord server. Copy the intended channel and server IDs, then replace the saved credentials.");
-  const path = `/applications/${encodeURIComponent(config.applicationId)}/guilds/${encodeURIComponent(config.guildId)}/commands`;
+  const path = `/applications/${encodeURIComponent(applicationId)}/guilds/${encodeURIComponent(config.guildId)}/commands`;
   const result = await discordRequest<DiscordApplicationCommand[]>(config, path, { method: "PUT", body: JSON.stringify(discordManagedCommands) });
-  if (!Array.isArray(result.body) || result.body.length !== discordManagedCommands.length || discordManagedCommands.some((expected) => !result.body.some((actual) => discordCommandMatches(actual, expected, config)))) {
-    throw new HttpError(502, "Discord did not confirm both managed commands. No verification was started; wait briefly and try again.");
+  if (!Array.isArray(result.body) || result.body.length !== discordManagedCommands.length || discordManagedCommands.some((expected) => !result.body.some((actual) => discordCommandMatches(actual, expected, resolvedConfig)))) {
+    throw new HttpError(502, "Discord did not confirm both managed commands. Wait briefly and try command setup again.");
   }
+  return { applicationId, commands: discordManagedCommands.map((command) => String(command.name)) };
 }
 const discordMessageMissing = (error: unknown): error is DiscordResponseError => error instanceof DiscordResponseError && error.discordStatus === 404 && error.discordCode === 10_008;
 type DiscordMessageComponents = { type: number; components: { type: number; style: number; label: string; custom_id: string }[] }[];
@@ -1370,6 +1374,12 @@ async function startDiscordVerification(request: Request, env: Env): Promise<Res
   await db.prepare("INSERT INTO integration_verification_challenges (installation_id, provider, challenge_hash, target, external_id, expires_at, created_by, created_at) VALUES ('primary', 'discord', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET challenge_hash = excluded.challenge_hash, target = excluded.target, external_id = excluded.external_id, expires_at = excluded.expires_at, created_by = excluded.created_by, created_at = excluded.created_at").bind(await sha256(challenge), config.guildId, messageId, expiresAt, principal.userId, now.toISOString()).run();
   await writeAudit(db, principal, "integration.verification_started", "integration", "discord", { guildId: config.guildId, channelId: config.channelId, messageId });
   return response({ provider: "discord", verificationPending: true, expiresAt, messageId }, 202);
+}
+async function reconcileDiscordCommands(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env);
+  const reconciled = await reconcileDiscordApplicationCommands(config);
+  await writeAudit(db, principal, "discord.commands_reconciled", "integration", "discord", { applicationId: reconciled.applicationId, guildId: config.guildId, commands: reconciled.commands });
+  return response({ provider: "discord", reconciled: true, commands: reconciled.commands });
 }
 async function linkDiscordMember(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); await requireIntegrationEnabled(env, "discord"); const db = requireDatabase(env); const input = await parseJson<{ memberId?: string; discordUserId?: string | null }>(request);
@@ -2118,6 +2128,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/integrations/resend/verify/start" && request.method === "POST") result = await startResendVerification(request, env);
     else if (url.pathname === "/admin/integrations/resend/verify/complete" && request.method === "POST") result = await completeResendVerification(request, env);
     else if (url.pathname === "/admin/integrations/discord/verify/start" && request.method === "POST") result = await startDiscordVerification(request, env);
+    else if (url.pathname === "/admin/integrations/discord/commands/reconcile" && request.method === "POST") result = await reconcileDiscordCommands(request, env);
     else if (url.pathname === "/admin/users" && ["GET", "POST"].includes(request.method)) result = await users(request, env);
     else if (/^\/admin\/users\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateUser(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/communications/email" && request.method === "POST") result = await sendAttendanceEmail(request, env);

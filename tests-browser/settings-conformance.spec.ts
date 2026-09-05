@@ -340,6 +340,43 @@ for (const viewport of dashboardConformanceReferences.viewports) {
   }
 }
 
+for (const viewport of dashboardConformanceReferences.viewports) {
+  for (const theme of dashboardConformanceReferences.themes) {
+    test(`configured Discord command repair is accessible at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+      await useSettingsContext(page);
+      await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: true, state: "configured", pendingOperations: 0, failedOperations: 0 }] }) }));
+      let attempts = 0;
+      await page.route("**/admin/integrations/discord/commands/reconcile", (route) => {
+        attempts += 1;
+        return attempts === 1
+          ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ provider: "discord", reconciled: true, commands: ["pair", "attendance-report"] }) })
+          : route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: "Discord denied command management. Confirm the bot permissions and try command reconciliation again." }) });
+      });
+      await page.goto("/settings/integrations");
+
+      const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+      await card.getByText("Manage configuration", { exact: true }).click();
+      await expect(card.getByRole("heading", { level: 3, name: "Discord commands" })).toBeVisible();
+      await expect(card.getByText(/without changing verification or saved credentials/)).toBeVisible();
+      const reconcile = card.getByRole("button", { name: "Reconcile Discord commands" });
+      await reconcile.focus(); await expect(reconcile).toBeFocused(); expect((await reconcile.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await page.keyboard.press("Enter");
+      await expect(card.getByRole("status")).toContainText("/pair and /attendance-report are ready");
+      await expect(reconcile).toBeEnabled();
+      await reconcile.click();
+      const failure = card.getByRole("alert"); await expect(failure).toContainText("Discord denied command management"); await expect(failure).toBeFocused();
+      expect(attempts).toBe(2);
+      await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+      await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
+      await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
+      await expectResponsiveFit(page);
+    });
+  }
+}
+
 test("Operator role cannot open any Settings route", async ({ page }) => {
   await useSettingsContext(page, "operator");
   for (const [path] of routes) {

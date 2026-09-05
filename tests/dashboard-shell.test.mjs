@@ -294,6 +294,7 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
 test("update assistant backs up before opening GitHub and cannot deploy automatically", async () => {
   const source = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
   const indicator = await readFile("apps/dashboard/src/update-indicator.tsx", "utf8");
+  const kioskStatus = await readFile("apps/dashboard/src/kiosk-update-status.ts", "utf8");
   assert.match(source, /\/admin\/data\/backup\?scope=installation/);
   assert.match(source, /\/admin\/update-info/);
   assert.match(indicator, /formatVersion/);
@@ -304,7 +305,9 @@ test("update assistant backs up before opening GitHub and cannot deploy automati
   assert.match(source, /Opens the guarded workflow in your private deployment repository in a new tab/);
   assert.match(source, /Update to latest stable/);
   assert.match(source, /command: "install_latest"/);
-  assert.match(source, /Waiting for the kiosk to receive the request/);
+  assert.match(kioskStatus, /Waiting for the kiosk to receive the request/);
+  assert.match(kioskStatus, /Installed successfully\. This kiosk now reports/);
+  assert.match(kioskStatus, /has not returned online/);
   assert.match(source, /\/commands`\); setCommands/);
   assert.doesNotMatch(source, /about:blank|window\.location\.href/);
   assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);

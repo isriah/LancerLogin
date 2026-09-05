@@ -24,6 +24,19 @@ type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; end
 type MeetingWeightCategory = { id: string; name: string; weight: number; minimumDurationMinutes?: number | null; position: number; active: number | boolean };
 type MeetingWeightCategoryInput = { name?: string; weight?: number; minimumDurationMinutes?: number | null; active?: boolean };
 type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
+const latestKioskReleaseUrl = "https://api.github.com/repos/isriah/LancerLogin/releases/latest";
+const compatibleKioskRelease = /^v0\.\d+\.\d+$/;
+async function latestCompatibleKioskRelease(): Promise<string> {
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 4_000);
+  try {
+    const result = await fetch(latestKioskReleaseUrl, { headers: { accept: "application/vnd.github+json" }, signal: controller.signal });
+    const release = result.ok ? await result.json().catch(() => ({})) as { tag_name?: string } : {};
+    if (!result.ok || !release.tag_name || !compatibleKioskRelease.test(release.tag_name)) throw new Error("No compatible release");
+    return release.tag_name;
+  } catch {
+    throw new HttpError(503, "No compatible official kiosk release is currently available. Try again after checking the release feed.");
+  } finally { clearTimeout(timer); }
+}
 
 const baseHeaders = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
 const setupSteps = new Set<SetupStep>(["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"]);
@@ -377,9 +390,19 @@ async function kioskFor(request: Request, env: Env): Promise<{ id: string; name:
 async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; releaseVersion?: string; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string | null; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null }>(request);
   const pendingEvents = input.pendingEvents ?? 0;
-  if (typeof input.readerOnline !== "boolean" || !input.releaseVersion || input.releaseVersion.length > 40 || input.uptimeSeconds !== undefined && (!Number.isInteger(input.uptimeSeconds) || input.uptimeSeconds < 0 || input.uptimeSeconds > 2_147_483_647) || input.networkType !== undefined && !["wifi", "ethernet", "offline"].includes(input.networkType) || input.networkSignal !== undefined && input.networkSignal !== null && (!Number.isInteger(input.networkSignal) || input.networkSignal < 0 || input.networkSignal > 100) || input.lastWifiScanAt && !validTimestamp(input.lastWifiScanAt) || !Number.isInteger(pendingEvents) || pendingEvents < 0 || pendingEvents > 100_000 || input.lastSyncAt && !validTimestamp(input.lastSyncAt) || input.errorCategory && !["cloud_sync", "reader", "offline_queue"].includes(input.errorCategory)) throw new HttpError(400, "Reader status and approved operational diagnostics are required");
+  if (typeof input.readerOnline !== "boolean" || !input.releaseVersion?.trim() || input.releaseVersion.length > 40 || input.uptimeSeconds !== undefined && (!Number.isInteger(input.uptimeSeconds) || input.uptimeSeconds < 0 || input.uptimeSeconds > 2_147_483_647) || input.networkType !== undefined && !["wifi", "ethernet", "offline"].includes(input.networkType) || input.networkSignal !== undefined && input.networkSignal !== null && (!Number.isInteger(input.networkSignal) || input.networkSignal < 0 || input.networkSignal > 100) || input.lastWifiScanAt && !validTimestamp(input.lastWifiScanAt) || !Number.isInteger(pendingEvents) || pendingEvents < 0 || pendingEvents > 100_000 || input.lastSyncAt && !validTimestamp(input.lastSyncAt) || input.errorCategory && !["cloud_sync", "reader", "offline_queue"].includes(input.errorCategory)) throw new HttpError(400, "Reader status and approved operational diagnostics are required");
   const now = new Date().toISOString();
-  await requireDatabase(env).prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.releaseVersion.trim(), input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, input.errorCategory || null, kiosk.id).run();
+  const db = requireDatabase(env); const reportedRelease = input.releaseVersion.trim();
+  await db.prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, reportedRelease, input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, input.errorCategory || null, kiosk.id).run();
+  const update = await db.prepare("SELECT id, completed_at AS completedAt, requested_release_version AS requestedReleaseVersion, release_version_before AS releaseVersionBefore FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? AND command_type = 'install_latest' AND completed_at IS NOT NULL AND success = 1 AND resolution_status IS NULL ORDER BY created_at DESC LIMIT 1").bind(kiosk.id).first<{ id: string; completedAt: string; requestedReleaseVersion?: string; releaseVersionBefore?: string }>();
+  if (update?.requestedReleaseVersion) {
+    const normalizedReported = reportedRelease.replace(/^v/, ""); const normalizedRequested = update.requestedReleaseVersion.replace(/^v/, ""); const normalizedBefore = update.releaseVersionBefore?.replace(/^v/, "");
+    const elapsed = Date.now() - Date.parse(update.completedAt); let resolution: "succeeded" | "unchanged" | "mismatch" | undefined;
+    if (normalizedReported === normalizedRequested) resolution = "succeeded";
+    else if (normalizedBefore && normalizedReported !== normalizedBefore) resolution = "mismatch";
+    else if (elapsed >= 5 * 60_000) resolution = normalizedBefore === normalizedReported ? "unchanged" : "mismatch";
+    if (resolution) await db.prepare("UPDATE kiosk_commands SET resolution_status = ?, resolved_release_version = ?, resolved_at = ? WHERE installation_id = 'primary' AND kiosk_id = ? AND id = ? AND resolution_status IS NULL").bind(resolution, reportedRelease, now, kiosk.id, update.id).run();
+  }
   const statusUpdate = syncDiscordKioskStatus(env).catch(() => undefined);
   if (context) context.waitUntil(statusUpdate); else await statusUpdate;
   return response({ ok: true, kioskId: kiosk.id, receivedAt: now });
@@ -418,20 +441,22 @@ async function queueKioskCommand(request: Request, env: Env, kioskId: string): P
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ command?: KioskCommandType }>(request);
   const supported: KioskCommandType[] = ["reload_display", "restart_service", "reboot", "reset_network_pin", "install_latest"];
   if (!input.command || !supported.includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command");
-  const kiosk = await db.prepare("SELECT id, name FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string }>();
+  const kiosk = await db.prepare("SELECT id, name, release_version AS releaseVersion FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string; releaseVersion?: string }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
+  let requestedReleaseVersion: string | null = null;
+  if (input.command === "install_latest") requestedReleaseVersion = await latestCompatibleKioskRelease();
   const id = crypto.randomUUID(); const now = new Date().toISOString();
   await db.batch([
-    db.prepare("INSERT INTO kiosk_commands (id, installation_id, kiosk_id, command_type, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?)").bind(id, kioskId, input.command, principal.userId, now),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'kiosk.command_queued', 'kiosk', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, kioskId, JSON.stringify({ commandId: id, command: input.command }), now),
+    db.prepare("INSERT INTO kiosk_commands (id, installation_id, kiosk_id, command_type, created_by, created_at, requested_release_version, release_version_before) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, kioskId, input.command, principal.userId, now, requestedReleaseVersion, input.command === "install_latest" ? kiosk.releaseVersion ?? null : null),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'kiosk.command_queued', 'kiosk', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, kioskId, JSON.stringify({ commandId: id, command: input.command, requestedReleaseVersion }), now),
   ]);
-  return response({ command: { id, type: input.command, kioskId, queuedAt: now } }, 202);
+  return response({ command: { id, type: input.command, kioskId, queuedAt: now, ...(requestedReleaseVersion ? { requestedReleaseVersion } : {}) } }, 202);
 }
 async function kioskCommandStatus(request: Request, env: Env, kioskId: string): Promise<Response> {
   await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   const kiosk = await db.prepare("SELECT id FROM kiosks WHERE installation_id = 'primary' AND id = ?").bind(kioskId).first<{ id: string }>();
   if (!kiosk) throw new HttpError(404, "Kiosk not found");
-  const commands = await db.prepare("SELECT id, command_type AS type, created_at AS createdAt, completed_at AS completedAt, success, result_message AS resultMessage FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? ORDER BY created_at DESC LIMIT 12").bind(kioskId).all<{ id: string; type: KioskCommandType; createdAt: string; completedAt?: string; success?: number; resultMessage?: string }>();
+  const commands = await db.prepare("SELECT id, command_type AS type, created_at AS createdAt, completed_at AS completedAt, success, result_message AS resultMessage, requested_release_version AS requestedReleaseVersion, release_version_before AS releaseVersionBefore, resolution_status AS resolutionStatus, resolved_release_version AS resolvedReleaseVersion, resolved_at AS resolvedAt FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? ORDER BY created_at DESC LIMIT 12").bind(kioskId).all();
   return response({ commands: commands.results ?? [] });
 }
 async function pendingKioskCommand(request: Request, env: Env): Promise<Response> {
@@ -440,7 +465,7 @@ async function pendingKioskCommand(request: Request, env: Env): Promise<Response
 }
 async function completeKioskCommand(request: Request, env: Env, commandId: string): Promise<Response> {
   const kiosk = await kioskFor(request, env); const input = await parseJson<{ success?: boolean; message?: string }>(request); if (typeof input.success !== "boolean" || (input.message?.length ?? 0) > 200) throw new HttpError(400, "Command result needs a success flag and optional short message");
-  const result = await requireDatabase(env).prepare("UPDATE kiosk_commands SET completed_at = ?, success = ?, result_message = ? WHERE installation_id = 'primary' AND kiosk_id = ? AND id = ? AND completed_at IS NULL").bind(new Date().toISOString(), input.success ? 1 : 0, input.message?.trim() || null, kiosk.id, commandId).run();
+  const result = await requireDatabase(env).prepare("UPDATE kiosk_commands SET completed_at = ?, success = ?, result_message = ? WHERE installation_id = 'primary' AND kiosk_id = ? AND id = ? AND (completed_at IS NULL OR (command_type = 'install_latest' AND success = 1 AND resolution_status IS NULL AND ? = 0))").bind(new Date().toISOString(), input.success ? 1 : 0, input.message?.trim() || null, kiosk.id, commandId, input.success ? 1 : 0).run();
   if ((result.meta?.changes ?? 1) < 1) throw new HttpError(404, "Pending kiosk command not found");
   return response({ completed: true, commandId });
 }

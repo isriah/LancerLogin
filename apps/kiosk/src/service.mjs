@@ -14,6 +14,7 @@ import { createNetworkPinStore } from "./network-pin.mjs";
 import { networkApp, networkStyles } from "./network-ui.mjs";
 import { maintenanceApp, maintenanceHtml, maintenanceLayoutStyles, maintenanceStyles } from "./maintenance-ui.mjs";
 import { recoveryApp } from "./recovery-ui.mjs";
+import { startVerifiedKioskUpdate } from "./update-command.mjs";
 import { kioskApp, kioskHtml, kioskStatusStyles, kioskStyles } from "./ui.mjs";
 
 export function localReleaseVersion(value) {
@@ -44,12 +45,12 @@ async function flushAttendance(config) { const pending = await queue.pending(); 
 async function useSensor(operation) { const current = sensorOperation.then(operation, operation); sensorOperation = current.then(() => undefined, () => undefined); return current; }
 async function testSensor() { if (!sensor) { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } try { const status = await useSensor(() => sensor.status()); state.readerOnline = status.connected; return { readerOnline: status.connected, templateCount: status.templateCount }; } catch { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } }
 async function heartbeat() { const config = await loadPairing(); if (!config) return; await testSensor(); let networkDiagnostics = { type: "offline", signal: null }; try { networkDiagnostics = await network.diagnostics(); state.networkType = networkDiagnostics.type; } catch { state.networkType = undefined; } try { await flushAttendance(config); state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; const remote = await fetchKioskConfiguration(config); if (remote.settings) await saveBranding(remote.settings); if (remote.kiosk?.name) state.kioskName = remote.kiosk.name; await sendHeartbeat(config, { readerOnline: state.readerOnline, releaseVersion, uptimeSeconds: Math.floor((Date.now() - serviceStartedAt) / 1_000), networkType: networkDiagnostics.type, networkSignal: networkDiagnostics.signal, lastWifiScanAt: state.lastWifiScanAt ?? null, pendingEvents: (await queue.pending()).length, lastSyncAt: state.lastSyncAt, errorCategory: null }); state.cloudOnline = true; } catch { state.cloudOnline = false; state.errorCategory = "cloud_sync"; } }
-async function runKioskCommand(command) {
+async function runKioskCommand(command, config) {
   if (command.type === "reload_display") { displayReloadToken += 1; return { message: "Display reload requested" }; }
   if (command.type === "reset_network_pin") { await networkPin.reset(); return { message: "Local settings PIN reset" }; }
   if (command.type === "restart_service") return { message: "Service restart requested", afterComplete: () => setTimeout(() => process.exit(1), 250).unref() };
   if (command.type === "reboot") return { message: "Device reboot requested", afterComplete: () => setTimeout(() => { const child = spawn("/usr/bin/systemctl", ["reboot"], { detached: true, stdio: "ignore" }); child.unref(); }, 250).unref() };
-  if (command.type === "install_latest") return { message: "Latest stable kiosk update started", afterComplete: () => setTimeout(() => { const child = spawn("/usr/bin/systemctl", ["start", "--no-block", "lancerlogin-update.service"], { detached: true, stdio: "ignore" }); child.unref(); }, 250).unref() };
+  if (command.type === "install_latest") return { message: "Latest stable kiosk update started", afterComplete: () => setTimeout(() => startVerifiedKioskUpdate({ onFailure: (message) => completeKioskCommand(config, command.id, { success: false, message }) }), 250).unref() };
   throw new Error("Unsupported kiosk command");
 }
 async function pollCommands() {
@@ -57,7 +58,7 @@ async function pollCommands() {
   try {
     const config = await loadPairing(); if (!config) return;
     const { command } = await fetchKioskCommand(config); if (!command) return;
-    try { const result = await runKioskCommand(command); await completeKioskCommand(config, command.id, { success: true, message: result.message }); result.afterComplete?.(); }
+    try { const result = await runKioskCommand(command, config); await completeKioskCommand(config, command.id, { success: true, message: result.message }); result.afterComplete?.(); }
     catch (error) { await completeKioskCommand(config, command.id, { success: false, message: error instanceof Error ? error.message : "Command failed" }); }
   } catch { /* The heartbeat reports cloud connectivity separately. */ }
   finally { commandPolling = false; }

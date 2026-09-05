@@ -19,6 +19,8 @@ import { prepareLegacyFingerprintImport } from "../apps/kiosk/scripts/prepare-le
 import { networkApp, networkStyles } from "../apps/kiosk/src/network-ui.mjs";
 import { maintenanceApp, maintenanceHtml, maintenanceLayoutStyles, maintenanceStyles } from "../apps/kiosk/src/maintenance-ui.mjs";
 import { recoveryApp } from "../apps/kiosk/src/recovery-ui.mjs";
+import { startVerifiedKioskUpdate } from "../apps/kiosk/src/update-command.mjs";
+import { EventEmitter } from "node:events";
 
 test("pairing code is hashed, single-use, and expires", () => {
   const issued = issuePairingCode({ now: () => 0, random: () => Buffer.from("123456") });
@@ -92,6 +94,19 @@ test("kiosk update unit permits only a checksum-verified latest stable release",
   assert.match(unit, /ExecStart=\/usr\/local\/sbin\/lancerlogin-install-release/);
   assert.match(policy, /subject\.user === "lancerlogin"/);
   assert.match(policy, /action\.lookup\("unit"\) === "lancerlogin-update\.service"/);
+});
+
+test("kiosk update handoff reports a failed verified systemd unit without changing its fixed target", async () => {
+  const child = new EventEmitter(); child.unref = () => undefined;
+  let invocation; let failure;
+  startVerifiedKioskUpdate({
+    spawnImpl: (...args) => { invocation = args; return child; },
+    onFailure: (message) => { failure = message; },
+  });
+  assert.deepEqual(invocation, ["/usr/bin/systemctl", ["start", "lancerlogin-update.service"], { stdio: "ignore" }]);
+  child.emit("exit", 1);
+  await Promise.resolve();
+  assert.equal(failure, "The verified kiosk update service failed with status 1");
 });
 
 test("one-time pairing key carries self-hosted routing without central discovery", () => {

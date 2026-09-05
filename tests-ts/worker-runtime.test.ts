@@ -377,7 +377,7 @@ test("Admin can rename and retire a kiosk without returning to onboarding", asyn
 
 test("Admin queues only fixed recovery and latest-stable update commands", async () => {
   const database = new FakeDatabase();
-  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1 });
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1, releaseVersion: "0.21.0", lastSeenAt: "2026-09-05T12:00:00.000Z" });
   database.rows.set("FROM kiosk_commands", { id: "command-1", type: "reload_display", createdAt: "2026-09-01T20:00:00.000Z" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const operator = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "reboot" }, { cookie: await sessionCookie("operator") }), env);
@@ -388,9 +388,21 @@ test("Admin queues only fixed recovery and latest-stable update commands", async
   assert.equal(queued.status, 202);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO kiosk_commands") && call.values.includes("reload_display")));
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("'kiosk.command_queued'")));
-  const update = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie: await sessionCookie("admin") }), env);
-  assert.equal(update.status, 202);
-  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO kiosk_commands") && call.values.includes("install_latest")));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    assert.equal(String(input), "https://api.github.com/repos/isriah/LancerLogin/releases/latest");
+    return new Response(JSON.stringify({ tag_name: "v0.22.0" }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    const update = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest", targetVersion: "v9.9.9", shell: "must-not-store" }, { cookie: await sessionCookie("admin") }), env);
+    assert.equal(update.status, 202);
+    const insert = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO kiosk_commands"));
+    assert.ok(insert?.values.includes("install_latest"));
+    assert.ok(insert?.values.includes("v0.22.0"));
+    assert.ok(insert?.values.includes("0.21.0"));
+    assert.equal(insert?.values.includes("v9.9.9"), false);
+    assert.equal(insert?.values.includes("must-not-store"), false);
+  } finally { globalThis.fetch = originalFetch; }
 
   const headers = { authorization: "Bearer paired-secret" };
   const pending = await worker.fetch(new Request("https://api.example.test/kiosk/commands", { headers }), env);
@@ -398,6 +410,25 @@ test("Admin queues only fixed recovery and latest-stable update commands", async
   const completed = await worker.fetch(new Request("https://api.example.test/kiosk/commands/command-1/result", { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ success: true, message: "Display reload requested" }) }), env);
   assert.equal(completed.status, 200);
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosk_commands SET completed_at") && call.values.includes("kiosk-1") && call.values.includes("command-1")));
+});
+
+test("kiosk heartbeats durably reconcile requested update releases", async () => {
+  const cases = [
+    { reported: "0.22.0", before: "0.21.0", requested: "v0.22.0", completedAt: new Date().toISOString(), expected: "succeeded" },
+    { reported: "0.23.0", before: "0.21.0", requested: "v0.22.0", completedAt: new Date().toISOString(), expected: "mismatch" },
+    { reported: "0.21.0", before: "0.21.0", requested: "v0.22.0", completedAt: new Date(Date.now() - 6 * 60_000).toISOString(), expected: "unchanged" },
+  ];
+  for (const item of cases) {
+    const database = new FakeDatabase();
+    database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk" });
+    database.rows.set("command_type = 'install_latest'", { id: `update-${item.expected}`, completedAt: item.completedAt, requestedReleaseVersion: item.requested, releaseVersionBefore: item.before });
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const heartbeat = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: item.reported, pendingEvents: 0, errorCategory: null }) });
+    assert.equal((await worker.fetch(heartbeat, env)).status, 200);
+    const resolution = database.calls.find((call) => call.sql.includes("SET resolution_status"));
+    assert.equal(resolution?.values[0], item.expected);
+    assert.equal(resolution?.values[1], item.reported);
+  }
 });
 
 test("replace roster deactivates omitted members without changing dashboard users", async () => {

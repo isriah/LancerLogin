@@ -1222,7 +1222,13 @@ Release: next Discord self-service feature bundle after WU-064 is integrated.
 
 ### WU-073 — Persistent-message attendance-report button
 
-Status: ready
+Status: in progress
+
+Owner: Codex task
+Branch: detached provisioning candidate
+Base: `31ff01c2427e3e1c4d914a930f7b1f62c2708113`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\f493\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:0a362151-0a80-4936-b688-ad5a42f0ff77`
 
 Goal: let a Discord-linked member request the same private attendance report from the persistent attendance-channel message without typing the slash command.
 Dependencies: WU-065 and WU-072 (the managed persistent message and canonical attendance-report interaction must exist first)

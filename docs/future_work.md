@@ -58,7 +58,7 @@ For approved independent units, create one Codex Worktree and one `codex/wu-<id>
 
 Implementation commits use the `WU-###:` prefix. If Codex produces a detached Worktree, retain it and record an explicit candidate commit/path; `$ll-integrate preview all` can propose it for review, and `$ll-integrate all` can include it in an authorized batch. Do not start a duplicate task for a WU with recorded branch, task, or candidate evidence.
 
-Use `docs/WORKFLOW.md` for the operating procedure and recovery guidance. Do not use a persistent coordinator or scheduled heartbeat to provision, poll, or recover a backlog. Planning, diagnosis, and review may run in parallel when they do not write shared state.
+Use `docs/WORKFLOW.md` for the operating procedure and recovery guidance. Do not use a persistent coordinator or scheduled heartbeat to process an unselected backlog. A user-authorized multi-WU goal may use an orchestration-only coordinator for its fixed WU snapshot; it delegates every implementation, integration, and release phase to separate tasks. Planning, diagnosis, and review may run in parallel when they do not write shared state.
 
 ## Seeded work units
 

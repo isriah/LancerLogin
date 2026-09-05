@@ -40,7 +40,21 @@ Use Plan mode before implementation when the change is ambiguous, spans multiple
 
 For a substantial initiative, save a durable plan in `docs/PLANS/<initiative>.md`. Do not create a plan file for a focused defect or polish unit.
 
-### 4. Implement one work unit
+### 4. Orchestrate a multi-WU goal
+
+A request or durable goal that selects multiple WUs, `all` current WUs, or WU work plus integration or release packaging uses a coordinator task as its control plane. The selected WU IDs and authorized phases form a fixed goal snapshot; later inbox entries or WUs are excluded unless the user expands the goal. An explicit multi-WU goal authorizes creation of the supporting Codex tasks needed for those selected phases, but it does not imply deployment, cloud mutation, or Pi access.
+
+The goal-owning task remains orchestration-only for the life of the goal. It may assess dependencies and overlap, launch and monitor tasks, ask product questions, and evaluate concise handoffs. It does not rename itself after a WU, implement or test a WU, integrate a candidate, or package the release.
+
+For each WU, create a dedicated Worktree task and `codex/wu-<id>-<short-name>` branch. Independent WUs may form a bounded parallel cohort. Dependent or overlapping WUs still receive their own tasks, but launch only after the prerequisite or overlapping unit is integrated. Once a candidate or bounded cohort is ready, create a separate integration task for exactly those WU IDs. If release packaging is part of the goal, create a separate release task only after the goal's required WUs are merged and the release authorization and repository boundary are clear.
+
+Use bounded task-status and wait summaries for routine monitoring. Read a task's detailed history or output only to resolve missing, stale, or conflicting handoff evidence. The coordinator asks user decisions itself, records an approved decision when required, and then launches the affected WU in a fresh implementation task.
+
+Provisioning ambiguity is not permission for coordinator takeover. If a task returns only a client ID or detached Worktree, retain and monitor that exact evidence. Resume it when it becomes addressable. If it is conclusively inactive, preserve any candidate state, update the ledger to `ready` or `blocked`, and then launch a recorded replacement; never implement the WU in the coordinator or create a duplicate while the original may still be active.
+
+Observable workflow checks for this mode are: every WU has a distinct task and branch; serial dependencies produce sequential tasks rather than coordinator edits; a decision-blocked WU launches only after approval; stalled provisioning does not cause inline implementation; integration and release occur in dedicated tasks; and the coordinator changes no WU production files or tests.
+
+### 5. Implement one work unit
 
 Use `$ll-wu-develop WU-###`. The implementation task reads the named sources, makes only in-scope changes, runs focused verification, reviews its diff, and commits the result. It reports a commit SHA, changed files, verification, and risks.
 
@@ -48,23 +62,23 @@ For ordinary serial work, the same task can update the WU status after its commi
 
 Branch-local verification is candidate evidence, not the final integration result. The integration task reruns the combined affected checks after each merge and records `merged` only after those checks pass.
 
-### 5. Use parallel work deliberately
+### 6. Use parallel work deliberately
 
 Parallelism is useful only for independently mergeable work. Before creating Worktree tasks, inspect the WUs' scopes and sources. Do not run units in parallel when they may overlap in a feature surface, shared component, API/data contract, migration/schema, authorization rule, deployment configuration, or shared documentation file.
 
-Create a separate Worktree and `codex/wu-<id>-<short-name>` branch for each approved independent WU. Start them manually from their committed base. Do not use a persistent coordinator to repeatedly poll or provision an entire backlog.
+Create a separate Worktree and `codex/wu-<id>-<short-name>` branch for each approved independent WU. Start them manually from their committed base. Outside an explicitly authorized multi-WU goal, do not use a persistent coordinator to repeatedly poll or provision an entire backlog. Inside such a goal, the coordinator is limited to the fixed goal snapshot and the orchestration-only rules above.
 
 Assess overlap at the contract and edited-region level, not just by broad files such as `index.ts` or a centralized test file. Record branch, base, and Worktree before implementation starts. `npm run test:browser` assigns a worktree-specific cache and port range, so independent browser checks can run concurrently without attaching to another task's fixture server.
 
 To assess the whole ready ledger, use `$ll-coordinator assess all`. To approve its immediately preceding recommended first batch without retyping IDs, reply `$ll-coordinator launch suggested`. The coordinator rechecks that suggestion against the current ledger before creating any tasks; if it has become stale, it shows a fresh assessment instead of launching.
 
-When a branch is ready, invoke `$ll-integrate WU-###`. Integration is serial: inspect the handoff, update the branch against current `main`, run affected verification, merge, and record the result. Archive the implementation task only after its final evidence is recorded.
+When a branch is ready, invoke `$ll-integrate WU-###`. A dedicated integration task may name a bounded cohort, for example `$ll-integrate WU-061 WU-066`; it integrates only those candidates serially. Integration inspects each handoff, updates the branch against current `main`, runs affected verification, merges, and records the result. Archive the implementation task only after its final evidence is recorded.
 
 To inspect several completed branches without making changes, use `$ll-integrate preview all`; it reports the safe serial merge order and includes explicitly recorded detached candidates. Use `$ll-integrate all` to authorize immediate integration of every eligible candidate. It reports the order and exclusions, revalidates each candidate before merging it, and stops at the first stale record, missing evidence, conflict, or failed verification.
 
 When `$ll-start` completes a selected phase, its final report includes a short **Valid next commands** section based on the resulting state. It distinguishes commands that can be issued immediately from conditional follow-ups. For example, while a newly created implementation task is provisioning or running, checking that task or invoking `$ll-start` to refresh the overall state is valid immediately; `$ll-integrate preview all` is listed only as a later command after the implementation produces an eligible candidate. Context-dependent shortcuts such as `$ll-coordinator launch suggested` must not be presented unless their required preceding assessment occurred in the same task.
 
-### 6. Release deliberately
+### 7. Release deliberately
 
 Merged WUs accumulate until the user asks for a release. Invoke `$ll-release preview-unreleased` to review the eligible bundle, then `$ll-release package-unreleased` after explicitly authorizing publication. A release does not authorize private deployment or a Pi update.
 
@@ -83,7 +97,7 @@ Scheduled tasks are for stable, periodic work such as a daily CI review, a relea
 
 ## Recovery
 
-- **Task stalled:** inspect its branch, worktree, status, and most recent verification. Resume that same task if it has an identifiable branch and scope; otherwise mark the WU `ready` or `blocked` with evidence before starting anything new.
+- **Task stalled:** inspect its branch, worktree, status, and most recent verification. Resume that same task if it has an identifiable branch and scope; otherwise prove it is inactive, preserve any candidate state, and mark the WU `ready` or `blocked` with evidence before starting a recorded replacement. A multi-WU goal coordinator never completes the implementation itself.
 - **Parallel conflict:** stop integration, preserve both branches, and use Plan mode to decide the merge order or split the work.
 - **Browser smoke failed:** distinguish an assertion failure from startup/cache/port failure. Keep the failing trace, verify the target server belongs to the current worktree, and rerun only after correcting isolation or the product defect. Do not silently reuse an existing fixture server.
 - **Dependency audit timed out:** rerun the failed GitHub job once. If the same bounded lockfile audit times out again, treat it as a deterministic gate problem and repair the audit path without omitting dependency classes or lowering severity.

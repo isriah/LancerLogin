@@ -23,10 +23,19 @@ For a list-only request, read `docs/idea_inbox.md`, report the `untriaged` IDs a
 
 - A work unit is one independently reviewable outcome. Do not begin one just because it is listed; the user must select or authorize it.
 - Record material dependencies explicitly with `Dependencies:`; a blocked unit names the exact dependency or decision that must clear it.
-- One implementation task normally owns one work unit and one branch. Use a Worktree only when work runs in parallel or must be isolated from the local checkout.
+- One implementation task owns one work unit and one branch. Use a Worktree when work runs in parallel, must be isolated from the local checkout, or belongs to a multi-WU goal.
 - Before parallel work, compare code areas, shared contracts, migrations, authorization, deployment configuration, and shared documentation. Run overlapping units serially.
 - Implementation tasks do not edit the shared ledger, merge to `main`, release, deploy, mutate cloud resources, or update the Pi. The task that performs integration records the merge in the ledger.
 - Parallel implementation commits must start with their WU ID, for example `WU-019: clarify contest resolution failures`. If task provisioning creates a detached Worktree or lacks an addressable task ID, record it as a candidate for review; do not create a duplicate implementation task.
+
+## Multi-WU goal orchestration
+
+- A user request or durable goal that explicitly selects at least two WUs, `all` WUs, or WU implementation plus integration or release packaging is a multi-WU goal. It authorizes supporting Codex tasks for only that selected scope; release, deployment, cloud mutation, and Pi work still require the explicit authorization stated elsewhere in this file.
+- The task that owns a multi-WU goal is orchestration-only. It preserves its coordinator identity and context: do not rename it to a WU, invoke `$ll-wu-develop` in it, edit WU production code or tests, run WU implementation suites, integrate candidates, or package a release there.
+- Create one dedicated Worktree task per WU. Independent WUs may run in parallel; overlapping or dependent WUs still use separate tasks but start serially after their prerequisites are integrated.
+- Run authorized integration in a separate integration task and authorized release packaging in a separate release task. The goal task selects and monitors those tasks, handles user decisions, and marks the goal complete only after their handoffs satisfy the stated goal.
+- Keep orchestration context compact: use task status and bounded wait summaries, read full task history or command output only when a handoff is incomplete or contradictory, and archive a WU task only after integration records its final evidence.
+- A stalled or detached implementation never falls back to inline work in the goal task. Resume the recorded task when addressable; otherwise prove it is no longer active, preserve or record its candidate state, return the WU to `ready` or `blocked` as appropriate, and only then launch a clearly identified replacement. Never duplicate an active WU.
 
 ## Definition of done
 

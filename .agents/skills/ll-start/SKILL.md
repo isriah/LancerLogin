@@ -9,6 +9,16 @@ Use this skill as the front door for a new or resumed LancerLogin task. Its outc
 
 Read `AGENTS.md`, `docs/WORKFLOW.md`, `docs/idea_inbox.md`, and `docs/future_work.md`. Read only additional project documentation needed to understand an item being proposed.
 
+## Route multi-WU goals
+
+Before offering the normal phase menu, check whether the current request or active durable goal explicitly selects at least two WUs, `all` WUs, or WU implementation plus integration or release packaging. That is a multi-WU goal and its explicit scope authorizes creation of supporting Codex tasks for the selected phases.
+
+Keep the goal-owning task as an orchestration-only coordinator. Snapshot the selected WU IDs and phases, assess their dependencies and overlap, and launch one dedicated Worktree task per WU. Parallel-safe units may launch together; dependent or overlapping units launch serially in new tasks. Do not rename this task to a WU, invoke `$ll-wu-develop` here, edit WU code or tests, integrate candidates, or package a release here—even when only one WU remains.
+
+Monitor with bounded status or wait summaries. Ask material decisions in this task; after approval, launch the affected WU in its own task. Send eligible named candidates to a separate integration task, and send an explicitly authorized release bundle to a separate release task. If provisioning is ambiguous or stalled, follow the recovery rule in `docs/WORKFLOW.md`; never take over the implementation or duplicate a possibly active task.
+
+Continue through the fixed goal snapshot without asking the user to reauthorize each supporting task. Do not add later inbox entries or WUs, and do not infer deployment, cloud-resource, or Pi authorization from the goal.
+
 ## Build the current-state view
 
 1. Read the durable inbox. List each `Status: untriaged` entry by ID and one-line request. Do not investigate, group, or draft work units until the user selects triage.
@@ -40,7 +50,7 @@ Offer the decision that fits the current state. The action names must make clear
 
 For example, show `1. Start the recommended ready batch (recommended)` rather than asking the user to type a skill invocation. Use up to three choices when possible. A custom alternative can be included as the final numbered choice only when it is genuinely useful; if chosen, ask the minimum follow-up needed before acting.
 
-After the user chooses, perform the selected procedure in this same task rather than only explaining the next command. The selected choice is the explicit authorization for its stated promotion, task-launch, or integration action. Re-read the ledger immediately before mutation and stop if its state has changed, a conflict is found, or required evidence is absent.
+After the user chooses, perform the selected procedure in this same task rather than only explaining the next command. The selected choice is the explicit authorization for its stated promotion, task-launch, or integration action. Re-read the ledger immediately before mutation and stop if its state has changed, a conflict is found, or required evidence is absent. This same-task rule does not override multi-WU goal isolation: a goal-owning coordinator creates the dedicated task for implementation, integration, or release instead of performing that phase itself.
 
 End the completed phase with a compact **Valid next commands** section. Derive it from the state after the phase finishes, not from the menu shown before execution. Include the exact natural-language request or skill invocation the user can issue next and explain its result in one line. Separate commands that are valid immediately from commands that become valid only after a named condition, such as an implementation candidate completing. Do not suggest stale shortcuts: `$ll-coordinator launch suggested` is valid only after an immediately preceding assessment in the same task, integration commands require an eligible candidate, and release packaging requires a preview plus explicit publication authorization. When a created implementation task is still provisioning or running, include a status-check request and the command for refreshing the overall workflow state; identify the integration preview as conditional on completion rather than implying that it can run now.
 

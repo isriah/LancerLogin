@@ -5,15 +5,16 @@ description: "Review and serially merge completed LancerLogin work-unit branches
 
 # LancerLogin Work-Unit Integration
 
-Read `AGENTS.md`, `docs/WORKFLOW.md`, and `docs/future_work.md` before acting. Inspect the implementation handoff, its branch or recorded candidate commit, changed files, and verification. Read the relevant product documentation when the WU changes a high-risk surface.
+Read `AGENTS.md`, `docs/WORKFLOW.md`, and `docs/future_work.md` before acting. If this task owns a multi-WU goal, do not integrate inline; create a dedicated integration task for the named candidate or bounded cohort. In the dedicated integration task, inspect each implementation handoff, branch or recorded candidate commit, changed files, and verification. Read the relevant product documentation when a WU changes a high-risk surface.
 
 ## Invocation modes
 
 - **preview all**: Read-only. Inspect every `in progress` WU. A candidate is eligible when either its recorded branch has a commit beyond its base, or its ledger entry explicitly records a detached candidate commit and Worktree. For current/future detached Worktrees, only associate a commit automatically when its subject starts with that WU ID. Report the safe serial merge order, focused verification, and excluded units; do not change files.
 - **all**: Treat the invocation as explicit authorization to integrate every currently eligible candidate. Re-read the ledger, inspect every `in progress` WU using the `preview all` eligibility rules, and report the safe serial order, focused verification, and exclusions before starting. Then revalidate and integrate one eligible WU at a time using the procedure below. Stop at the first stale record, missing evidence, conflict, or failed verification; preserve the remaining candidates and report the exact next action. If no candidate is eligible, make no changes.
+- **one or more named WU IDs**: Treat the invocation as authorization to integrate exactly those eligible candidates, serially in the stated order after checking dependencies and overlap. Exclude every unnamed candidate. Stop at the first invalid ID, stale record, missing evidence, conflict, or failed verification and preserve the remainder.
 - **suggested**: Unsupported. Explain that `preview all` is the read-only assessment and `all` authorizes immediate batch integration; do not integrate anything for this invocation.
 
-For a named WU, confirm that its scope, branch or recorded detached candidate, and commit match the ledger and that no other active WU owns the same branch or candidate.
+For each named WU, confirm that its scope, branch or recorded detached candidate, and commit match the ledger and that no other active WU owns the same branch or candidate.
 
 1. Inspect the branch or candidate-commit diff against its recorded base and current `main`.
 2. Confirm the branch's focused verification. If updating/rebasing against the integration branch is safe and needed, do so, then repeat affected verification.

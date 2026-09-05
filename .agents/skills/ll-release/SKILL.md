@@ -5,7 +5,7 @@ description: "Package merged, unreleased LancerLogin work units into one verifie
 
 # LancerLogin Release
 
-Read `AGENTS.md`, `docs/future_work.md`, `docs/RELEASE-CHECKLIST.md`, `docs/DEVELOPMENT.md`, and `docs/releases/README.md` before acting. Read the affected product documentation where the release bundle includes a high-risk surface.
+Read `AGENTS.md`, `docs/future_work.md`, `docs/RELEASE-CHECKLIST.md`, `docs/DEVELOPMENT.md`, and `docs/releases/README.md` before acting. If this task owns a multi-WU goal, do not package or publish inline; create a dedicated release task carrying the user's explicit bundle/version/publication authorization. In the dedicated release task, read the affected product documentation where the release bundle includes a high-risk surface.
 
 Before any mutation, resolve the explicitly authorized Git remote and GitHub repository. Verify fetch and push URLs and repository visibility, and state the boundary. Never assume `origin` or the production repository is authorized. Pass the resolved repository explicitly to GitHub CLI commands. A sandbox rehearsal uses only its sandbox remote/repository and a new never-reused prerelease version.
 

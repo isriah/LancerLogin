@@ -1280,6 +1280,7 @@ Base: `522b7181b8e4aaa5343cd8c2c10dd0fbe7ac7a3e`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7e77\\LancerLogin Workspace`
 Task: delayed provisioning client `client-new-thread:7a4a0058-b40e-4583-9b98-6e1a236c2454`
 Coordination: the original client became active after three clean/absent checks and after replacement client `client-new-thread:9cb856b2-0a81-472a-a190-a33cda54cb55` had been started in `C:\\Users\\Izz\\.codex\\worktrees\\5641\\LancerLogin Workspace`. The original is the selected implementation because it independently resolves the official compatible release and covers kiosk-executor failure reporting. The overlapping replacement must be stopped and its branch `codex/wu-075-kiosk-update-completion-replacement` must not be integrated.
+Handoff: selected branch is clean at candidate `e7df5c683feef179220509802942b4c178500b60` with subject `WU-075: report kiosk update completion`; the quarantined replacement remains uncommitted and is excluded from integration.
 
 Goal: make the dashboard report a kiosk update's final installed version or an actionable terminal failure instead of leaving a successful installer handoff in an indefinite waiting state.
 Dependencies: none

@@ -1293,9 +1293,13 @@ Release: `v0.22.0`.
 
 ### WU-076 — Chronological meeting table ordering
 
-Status: ready
+Status: in progress
 
-Owner: unassigned
+Owner: Codex task
+Branch: detached provisioning worktree
+Base: `9ff534d19c6989967451e6cc2b58e70e02c8f8b5`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\00a6\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:f630f680-e145-4198-84a3-082a32fc7b1f`
 
 Goal: make downward movement through the Dashboard's meeting Table view consistently move from older meetings toward future meetings.
 Dependencies: none; the user confirmed IN-089 targets the meetings displayed as Table view rows, not either meeting dropdown or the five-week visual calendar

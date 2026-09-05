@@ -1275,7 +1275,7 @@ Release: `v0.21.0`.
 Status: in progress
 
 Owner: Codex task
-Branch: detached provisioning worktree
+Branch: `codex/wu-075-kiosk-update-completion`
 Base: `522b7181b8e4aaa5343cd8c2c10dd0fbe7ac7a3e`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7e77\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:7a4a0058-b40e-4583-9b98-6e1a236c2454`

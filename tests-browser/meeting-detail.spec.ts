@@ -52,7 +52,7 @@ test("meeting detail presents lifecycle and operational context", async ({ page 
   for (const [id, label] of [["upcoming", "Upcoming"], ["progress", "In progress"], ["late", "Late scan window"], ["past", "Past"]] as const) {
     await page.goto(`/meetings/${id}`);
     await expect(page.locator(".meeting-lifecycle")).toHaveText(label);
-    await expect(page.getByRole("button", { name: "Sync Discord calendar" })).toBeEnabled({ enabled: id === "upcoming" || id === "progress" });
+    await expect(page.getByRole("button", { name: "Sync configured calendars" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "Send Discord absence notice" })).toBeEnabled({ enabled: id !== "upcoming" });
   }
   await page.goto("/meetings/progress");
@@ -137,20 +137,20 @@ test("editing meeting details without changing weight preserves the saved snapsh
   expect(submitted).not.toHaveProperty("weightCategoryId");
 });
 
-test("meeting-local Discord actions and contest review retain their scoped outcomes", async ({ page }) => {
+test("meeting-local calendar and Discord actions retain their scoped outcomes", async ({ page }) => {
   const calendarBodies: unknown[] = [];
   const absenceBodies: unknown[] = [];
   const resolutionBodies: unknown[] = [];
   let contestLoads = 0;
-  await page.route("**/discord/calendar", async (route) => { calendarBodies.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ synced: true, eventId: "event-1" }) }); });
+  await page.route("**/calendars/sync", async (route) => { calendarBodies.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ providers: [{ provider: "google_calendar", synced: 1, queued: 0, failed: 0 }, { provider: "discord", synced: 0, queued: 1, skipped: 0, failed: 0 }] }) }); });
   await page.route("**/discord/missing", async (route) => { absenceBodies.push(route.request().postDataJSON()); await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ posted: true, linkedMissingCount: 1, messageId: "message-1" }) }); });
   await page.route("**/discord/contests/resolve", async (route) => { resolutionBodies.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ resolved: true, attendanceChanged: true }) }); });
   await page.route(/\/discord\/contests(?:\?.*)?$/, async (route) => { contestLoads += 1; await route.continue(); });
 
   await page.goto("/meetings/active-meeting");
   await expect(page.getByRole("heading", { name: "Discord operations" })).toBeVisible();
-  await page.getByRole("button", { name: "Sync Discord calendar" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Discord calendar updated for this meeting." })).toBeVisible();
+  await page.getByRole("button", { name: "Sync configured calendars" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Google Calendar: 1 updated · Discord: 0 updated, 1 queued" })).toBeVisible();
   await page.getByRole("button", { name: "Send Discord absence notice" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Discord absence notice sent to 1 linked member." })).toBeVisible();
   expect(calendarBodies).toEqual([{ meetingId: "active-meeting" }]);

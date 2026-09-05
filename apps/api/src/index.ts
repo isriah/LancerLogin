@@ -513,10 +513,9 @@ async function meetings(request: Request, env: Env): Promise<Response> {
   const statements = occurrences.map((occurrence, index) => db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at, is_test, series_id, recurrence_frequency, recurrence_until, recurrence_sequence, weight_category_id, weight_category_name, attendance_weight) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)").bind(ids[index], input.title.trim(), occurrence.startsAt, occurrence.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now, seriesId, input.recurrence?.frequency ?? null, input.recurrence?.until ?? null, occurrence.sequence, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1));
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.created', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, ids[0], JSON.stringify({ seriesId, occurrences: occurrences.length, frequency: input.recurrence?.frequency ?? null, weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 }), now));
   await db.batch(statements);
-  const discord = await integrationRecord(env, "discord"); if (discord && discord.enabled !== 0) { try { await syncDiscordCalendarMeetings(db, env, principal, ids); } catch { /* Calendar sync is best-effort so meeting creation remains available without Discord. */ } }
   const created = occurrences.map((occurrence, index) => ({ id: ids[index], title: input.title!.trim(), ...occurrence, required: input.required !== false, notes: input.notes?.trim() || null, seriesId, recurrenceFrequency: input.recurrence?.frequency ?? null, recurrenceUntil: input.recurrence?.until ?? null, recurrenceSequence: occurrence.sequence, weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }));
-  const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarCreate(db, env, ids));
-  return response({ meeting: created[0], meetings: created, seriesId, calendarSync }, 201);
+  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", ids);
+  return response({ meeting: created[0], meetings: created, seriesId, calendarSync: calendarDelivery.google_calendar, calendarDelivery }, 201);
 }
 async function meetingDetail(request: Request, env: Env, meetingId: string): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
@@ -543,8 +542,8 @@ async function updateMeeting(request: Request, env: Env, meetingId: string): Pro
     : await db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = 0, weight_category_id = ?, weight_category_name = ?, attendance_weight = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1, meetingId).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
   await writeAudit(db, principal, "meeting.updated", "meeting", meetingId, assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 });
-  const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarUpdate(db, env, [meetingId]));
-  return response({ meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }) }, calendarSync });
+  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", [meetingId]);
+  return response({ meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }) }, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function updateMeetingSeries(request: Request, env: Env, seriesId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<MeetingInput & { meetingId?: string }>(request); validateMeetingInput(input);
@@ -561,7 +560,7 @@ async function updateMeetingSeries(request: Request, env: Env, seriesId: string)
     : db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, is_test = 0, weight_category_id = ?, weight_category_name = ?, attendance_weight = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title!.trim(), meeting.startsAt, meeting.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1, meeting.id));
   if (!statements.length) throw new HttpError(404, "No future series occurrences were found");
   const updatedCount = statements.length; statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.series_updated', 'meeting_series', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, seriesId, JSON.stringify({ fromMeetingId: input.meetingId, updated: updatedCount, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 }) }), new Date().toISOString()));
-  await db.batch(statements); const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarUpdate(db, env, proposed.map((meeting) => meeting.id))); return response({ seriesId, updated: updatedCount, calendarSync });
+  await db.batch(statements); const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", proposed.map((meeting) => meeting.id)); return response({ seriesId, updated: updatedCount, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function deleteMeetings(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "occurrence" | "future" }>(request);
@@ -573,22 +572,22 @@ async function deleteMeetings(request: Request, env: Env, meetingId: string): Pr
     const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL").bind(now, meeting.seriesId, meeting.startsAt).run();
     const count = updated.meta?.changes ?? 0; if (count < 1) throw new HttpError(404, "No future series occurrences were found");
     await writeAudit(db, principal, "meeting.series_deleted", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, deleted: count });
-    const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarDelete(db, env, (affected.results ?? []).map((item) => item.id)));
-    return response({ deleted: count, scope: "future", calendarSync });
+    const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", (affected.results ?? []).map((item) => item.id));
+    return response({ deleted: count, scope: "future", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
   }
   const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, meeting.id).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
   await writeAudit(db, principal, "meeting.deleted", "meeting", meeting.id);
-  const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarDelete(db, env, [meeting.id]));
-  return response({ deleted: 1, scope: "occurrence", calendarSync });
+  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", [meeting.id]);
+  return response({ deleted: 1, scope: "occurrence", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function bulkDeleteMeetings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingIds?: string[]; confirmation?: string }>(request);
   const ids = [...new Set((input.meetingIds ?? []).filter((id): id is string => typeof id === "string" && id.length > 0))];
   if (!ids.length || ids.length > 100) throw new HttpError(400, "Select between 1 and 100 meetings");
   if (input.confirmation !== "DELETE SELECTED MEETINGS") throw new HttpError(400, "Type DELETE SELECTED MEETINGS exactly to continue");
-  const now = new Date().toISOString(); const statements = ids.map((id) => db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, id)); const results = await db.batch(statements); const deleted = results.reduce((total, item) => total + (item.meta?.changes ?? 0), 0);
-  await writeAudit(db, principal, "meetings.bulk_deleted", "meeting", null, { selected: ids.length, deleted }); const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarDelete(db, env, ids)); return response({ deleted, calendarSync });
+  const now = new Date().toISOString(); const statements = ids.map((id) => db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, id)); const results = await db.batch(statements); const deletedIds = ids.filter((_id, index) => (results[index]?.meta?.changes ?? 0) > 0); const deleted = deletedIds.length;
+  await writeAudit(db, principal, "meetings.bulk_deleted", "meeting", null, { selected: ids.length, deleted }); const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", deletedIds); return response({ deleted, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function rosterHistory(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]); const result = await requireDatabase(env).prepare("SELECT created_at AS createdAt, metadata_json AS metadata FROM audit_log WHERE installation_id = 'primary' AND action = 'roster.imported' ORDER BY created_at DESC LIMIT 20").all<{ createdAt: string; metadata: string }>();
@@ -603,14 +602,14 @@ async function restoreMeetings(request: Request, env: Env, meetingId: string): P
     const updated = await db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NOT NULL").bind(meeting.seriesId, meeting.startsAt).run();
     const count = updated.meta?.changes ?? 0; if (count < 1) throw new HttpError(404, "No deleted future series occurrences were found");
     await writeAudit(db, principal, "meeting.series_restored", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, restored: count });
-    const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarRestore(db, env, (affected.results ?? []).map((item) => item.id)));
-    return response({ restored: count, scope: "future", calendarSync });
+    const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "restore", (affected.results ?? []).map((item) => item.id));
+    return response({ restored: count, scope: "future", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
   }
   const updated = await db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NOT NULL").bind(meeting.id).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Deleted meeting not found");
   await writeAudit(db, principal, "meeting.restored", "meeting", meeting.id);
-  const calendarSync = await bestEffortGoogleCalendar(() => enqueueGoogleCalendarRestore(db, env, [meeting.id]));
-  return response({ restored: 1, scope: "occurrence", calendarSync });
+  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "restore", [meeting.id]);
+  return response({ restored: 1, scope: "occurrence", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual" | "simulator", actorId?: string): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required");
@@ -783,11 +782,15 @@ async function googleCalendarIntegrationStatus(env: Env) {
   const enabled = Boolean(record?.enabled); const saved = Boolean(record?.ciphertext); const configured = enabled && Boolean(record?.verifiedAt);
   return { provider: "google_calendar" as const, enabled, saved, authorized: Boolean(record?.authorizedAt), configured, state: !enabled ? "disabled" as const : !saved ? "not_configured" as const : configured ? "configured" as const : "verification_required" as const, updatedAt: record?.updatedAt ?? undefined, verifiedAt: record?.verifiedAt ?? undefined, calendarName, pendingOperations: Number(queue?.pending ?? 0), failedOperations: Number(queue?.failed ?? 0), lastError: queue?.lastError ?? undefined };
 }
+async function discordCalendarQueueStatus(env: Env) {
+  const queue = await requireDatabase(env).prepare("SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, MAX(CASE WHEN status = 'failed' THEN last_error ELSE NULL END) AS lastError FROM discord_calendar_operations WHERE installation_id = 'primary'").first<{ pending?: number; failed?: number; lastError?: string | null }>();
+  return { pendingOperations: Number(queue?.pending ?? 0), failedOperations: Number(queue?.failed ?? 0), lastError: queue?.lastError ?? undefined };
+}
 async function integrationsStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
-  const [result, flags, calendar] = await Promise.all([requireDatabase(env).prepare("SELECT i.provider, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, EXISTS(SELECT 1 FROM integration_verification_challenges c WHERE c.installation_id = i.installation_id AND c.provider = i.provider AND c.expires_at > ?) AS verificationPending FROM encrypted_integrations i WHERE i.installation_id = 'primary' ORDER BY i.provider").bind(new Date().toISOString()).all<{ provider: IntegrationProvider; updatedAt: string; verifiedAt?: string | null; verificationPending: number }>(), integrationFlags(env), googleCalendarIntegrationStatus(env)]);
+  const [result, flags, calendar, discordCalendar] = await Promise.all([requireDatabase(env).prepare("SELECT i.provider, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, EXISTS(SELECT 1 FROM integration_verification_challenges c WHERE c.installation_id = i.installation_id AND c.provider = i.provider AND c.expires_at > ?) AS verificationPending FROM encrypted_integrations i WHERE i.installation_id = 'primary' ORDER BY i.provider").bind(new Date().toISOString()).all<{ provider: IntegrationProvider; updatedAt: string; verifiedAt?: string | null; verificationPending: number }>(), integrationFlags(env), googleCalendarIntegrationStatus(env), discordCalendarQueueStatus(env)]);
   const saved = new Map((result.results ?? []).map((item) => [item.provider, item]));
-  return response({ integrations: [...[...integrationProviders].map((provider) => { const item = saved.get(provider); const enabled = Boolean(flags[integrationFlagColumns[provider]]); return { provider, enabled, saved: Boolean(item), configured: enabled && Boolean(item?.verifiedAt), state: !enabled ? "disabled" : !item ? "not_configured" : item.verifiedAt ? "configured" : "verification_required", updatedAt: item?.updatedAt, verifiedAt: item?.verifiedAt ?? undefined, verificationPending: enabled && Boolean(item?.verificationPending) }; }), calendar] });
+  return response({ integrations: [...[...integrationProviders].map((provider) => { const item = saved.get(provider); const enabled = Boolean(flags[integrationFlagColumns[provider]]); return { provider, enabled, saved: Boolean(item), configured: enabled && Boolean(item?.verifiedAt), state: !enabled ? "disabled" : !item ? "not_configured" : item.verifiedAt ? "configured" : "verification_required", updatedAt: item?.updatedAt, verifiedAt: item?.verifiedAt ?? undefined, verificationPending: enabled && Boolean(item?.verificationPending), ...(provider === "discord" ? discordCalendar : {}) }; }), calendar] });
 }
 async function discordChannelManagerSettings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -830,7 +833,8 @@ async function integrationCapabilities(request: Request, env: Env): Promise<Resp
   await requireRole(request, env, ["admin", "operator"]); const flags = await integrationFlags(env);
   const records = await requireDatabase(env).prepare("SELECT provider, verified_at AS verifiedAt FROM encrypted_integrations WHERE installation_id = 'primary'").all<{ provider: IntegrationProvider; verifiedAt?: string | null }>();
   const verified = new Map((records.results ?? []).map((item) => [item.provider, Boolean(item.verifiedAt)]));
-  return response({ integrations: Object.fromEntries([...integrationProviders].map((provider) => [provider, { enabled: Boolean(flags[integrationFlagColumns[provider]]), configured: Boolean(flags[integrationFlagColumns[provider]]) && Boolean(verified.get(provider)) }])) });
+  const calendar = await googleCalendarAuthorizationRecord(env); const googleCalendarEnabled = Boolean(calendar?.enabled);
+  return response({ integrations: { ...Object.fromEntries([...integrationProviders].map((provider) => [provider, { enabled: Boolean(flags[integrationFlagColumns[provider]]), configured: Boolean(flags[integrationFlagColumns[provider]]) && Boolean(verified.get(provider)) }])), google_calendar: { enabled: googleCalendarEnabled, configured: googleCalendarEnabled && Boolean(calendar?.verifiedAt) } } });
 }
 async function requireLocalAdminSignIn(db: D1Database): Promise<void> {
   const localAdmin = await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND role = 'admin' AND active = 1 AND password_hash IS NOT NULL LIMIT 1").first();
@@ -850,7 +854,7 @@ async function integrationConfiguration(request: Request, env: Env, provider: In
   }
   if (request.method === "DELETE") {
     if (provider === "google") await requireLocalAdminSignIn(db);
-    await db.batch([db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare("DELETE FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare(`UPDATE installations SET ${integrationFlagSqlColumns[provider]} = 0 WHERE id = 'primary'`), ...(provider === "google" ? [db.prepare("UPDATE installations SET auth_mode = 'local' WHERE id = 'primary'")] : []), ...(provider === "discord" ? [db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 0, discord_anomaly_reports_enabled_at = NULL WHERE installation_id = 'primary'")] : [])]);
+    await db.batch([db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare("DELETE FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare(`UPDATE installations SET ${integrationFlagSqlColumns[provider]} = 0 WHERE id = 'primary'`), ...(provider === "google" ? [db.prepare("UPDATE installations SET auth_mode = 'local' WHERE id = 'primary'")] : []), ...(provider === "discord" ? [db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 0, discord_anomaly_reports_enabled_at = NULL WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_calendar_operations WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_calendar_event_mappings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key LIKE 'calendar:%'")] : [])]);
     await writeAudit(db, principal, "integration.removed", "integration", provider); return response({ configured: false, provider });
   }
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
@@ -858,7 +862,7 @@ async function integrationConfiguration(request: Request, env: Env, provider: In
   await db.batch([
     db.prepare("INSERT INTO encrypted_integrations (id, installation_id, provider, ciphertext, iv, verified_at, updated_at) VALUES (?, 'primary', ?, ?, ?, NULL, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET ciphertext = excluded.ciphertext, iv = excluded.iv, verified_at = NULL, key_version = key_version + 1, updated_at = excluded.updated_at").bind(crypto.randomUUID(), provider, encrypted.ciphertext, encrypted.iv, now),
     db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider),
-    ...(provider === "discord" ? [db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 0, discord_anomaly_reports_enabled_at = NULL WHERE installation_id = 'primary'")] : []),
+    ...(provider === "discord" ? [db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 0, discord_anomaly_reports_enabled_at = NULL WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_calendar_operations WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_calendar_event_mappings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key LIKE 'calendar:%'")] : []),
   ]);
   if (provider === "google" && await integrationIsEnabled(env, "google")) await db.prepare("UPDATE installations SET auth_mode = CASE WHEN auth_mode = 'local' THEN 'both' ELSE auth_mode END WHERE id = 'primary'").run();
   await writeAudit(db, principal, existing ? "integration.rotated" : "integration.saved", "integration", provider); return response({ saved: true, configured: false, created: !existing, provider, state: "verification_required", updatedAt: now });
@@ -867,6 +871,7 @@ async function markIntegrationVerified(db: D1Database, provider: IntegrationProv
   const now = new Date().toISOString(); await db.batch([
     db.prepare("UPDATE encrypted_integrations SET verified_at = ? WHERE installation_id = 'primary' AND provider = ?").bind(now, provider),
     db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider),
+    ...(provider === "discord" ? [db.prepare("UPDATE discord_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now)] : []),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'integration.verified', 'integration', ?, ?, ?)").bind(crypto.randomUUID(), actorUserId, provider, JSON.stringify(metadata), now),
   ]); return now;
 }
@@ -1067,7 +1072,7 @@ async function enqueueGoogleCalendarCreate(db: D1Database, env: Env, meetingIds:
       db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?) ON CONFLICT(installation_id, event_id) DO UPDATE SET action = 'upsert', starts_at = excluded.starts_at, ends_at = excluded.ends_at, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(meeting.id, eventId, meeting.startsAt, meeting.endsAt, now, now),
     ]);
   }
-  return processGoogleCalendarOperations(env, eventIds);
+  return eventIds.length ? processGoogleCalendarOperations(env, eventIds) : googleCalendarEmptySummary();
 }
 async function enqueueGoogleCalendarUpdate(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
   const now = new Date().toISOString(); const eventIds: string[] = [];
@@ -1076,7 +1081,7 @@ async function enqueueGoogleCalendarUpdate(db: D1Database, env: Env, meetingIds:
     if (!mapped) continue; eventIds.push(mapped.eventId);
     await db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?) ON CONFLICT(installation_id, event_id) DO UPDATE SET action = 'upsert', starts_at = excluded.starts_at, ends_at = excluded.ends_at, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(meetingId, mapped.eventId, mapped.startsAt, mapped.endsAt, now, now).run();
   }
-  return await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
+  return eventIds.length && await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
 }
 async function enqueueGoogleCalendarDelete(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
   const now = new Date().toISOString(); const eventIds: string[] = [];
@@ -1088,7 +1093,7 @@ async function enqueueGoogleCalendarDelete(db: D1Database, env: Env, meetingIds:
       db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'delete', NULL, NULL, 'pending', 0, ?, ?) ON CONFLICT(installation_id, event_id) DO UPDATE SET action = 'delete', starts_at = NULL, ends_at = NULL, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(meetingId, mapped.eventId, now, now),
     ]);
   }
-  return await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
+  return eventIds.length && await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
 }
 async function enqueueGoogleCalendarRestore(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
   const now = new Date().toISOString(); const eventIds: string[] = [];
@@ -1100,7 +1105,7 @@ async function enqueueGoogleCalendarRestore(db: D1Database, env: Env, meetingIds
       db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?)").bind(meetingId, eventId, mapped.startsAt, mapped.endsAt, now, now),
     ]);
   }
-  return await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
+  return eventIds.length && await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
 }
 function googleCalendarOperationPath(calendarId: string, eventId?: string): string { return `/calendars/${encodeURIComponent(calendarId)}/events${eventId ? `/${encodeURIComponent(eventId)}` : ""}`; }
 function googleCalendarRetryAt(attempts: number, error: GoogleCalendarProviderError): string | null {
@@ -1161,6 +1166,30 @@ async function retryGoogleCalendarOperations(request: Request, env: Env): Promis
   const principal = await requireRole(request, env, ["admin"]); await googleCalendarSecret(env, true); const db = requireDatabase(env); const now = new Date().toISOString();
   await db.prepare("UPDATE google_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now).run();
   const result = await processGoogleCalendarOperations(env); await writeAudit(db, principal, "google_calendar.retry_requested", "integration", "google_calendar", result); return response(result);
+}
+const addCalendarSummaries = (...summaries: GoogleCalendarSyncSummary[]): GoogleCalendarSyncSummary => summaries.reduce((total, item) => ({ synced: total.synced + item.synced, queued: total.queued + item.queued, failed: total.failed + item.failed }), googleCalendarEmptySummary());
+async function syncGoogleCalendarMeetings(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
+  const updates: string[] = []; const creates: string[] = []; const ready = await googleCalendarIsReady(env);
+  for (const meetingId of meetingIds) {
+    const mapping = await db.prepare("SELECT active FROM google_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(meetingId).first<{ active?: number }>();
+    if (mapping?.active) updates.push(meetingId); else if (!mapping && ready) creates.push(meetingId);
+  }
+  const updateSummary = await enqueueGoogleCalendarUpdate(db, env, updates);
+  const createSummary = await enqueueGoogleCalendarCreate(db, env, creates);
+  return addCalendarSummaries(updateSummary, createSummary);
+}
+async function restoreGoogleCalendarMeetings(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
+  const restored = await enqueueGoogleCalendarRestore(db, env, meetingIds); if (!await googleCalendarIsReady(env)) return restored;
+  const unmapped: string[] = [];
+  for (const meetingId of meetingIds) if (!await db.prepare("SELECT generation FROM google_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(meetingId).first()) unmapped.push(meetingId);
+  return addCalendarSummaries(restored, await enqueueGoogleCalendarCreate(db, env, unmapped));
+}
+async function syncAllGoogleCalendarMeetings(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); await googleCalendarSecret(env, true); const db = requireDatabase(env);
+  const meetings = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at ASC LIMIT 100").all<{ id: string }>();
+  const result = await syncGoogleCalendarMeetings(db, env, (meetings.results ?? []).map((meeting) => meeting.id));
+  await writeAudit(db, principal, "google_calendar.sync_all_requested", "integration", "google_calendar", { selected: meetings.results?.length ?? 0, ...result });
+  return response({ ...result, selected: meetings.results?.length ?? 0, limit: 100 });
 }
 async function users(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -1577,49 +1606,159 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
   const contest = await db.prepare("SELECT status FROM discord_attendance_contests WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ?").bind(meetingId, recipient.memberId).first<{ status: string }>();
   return contest?.status === "open" ? discordEphemeral("Your attendance contest was recorded for review. Your attendance has not been changed.") : discordEphemeral(`Your attendance contest was already reviewed with status ${contest?.status ?? "unknown"}.`);
 }
-async function syncDiscordCalendarMeeting(db: D1Database, env: Env, principal: Principal, meeting: { id: string; title: string; startsAt: string; endsAt?: string; notes?: string | null }): Promise<string> {
-  const config = await discordConfiguration(env);
-  const stateKey = `calendar:${meeting.id}`; const existing = await db.prepare("SELECT external_id AS externalId FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?").bind(stateKey).first<{ externalId?: string }>();
-  const payload = { name: meeting.title, description: meeting.notes || "LancerLogin meeting", privacy_level: 2, entity_type: 3, scheduled_start_time: meeting.startsAt, scheduled_end_time: meeting.endsAt || new Date(Date.parse(meeting.startsAt) + 3_600_000).toISOString(), entity_metadata: { location: "LancerLogin" } };
-  const path = existing?.externalId ? `/guilds/${config.guildId}/scheduled-events/${existing.externalId}` : `/guilds/${config.guildId}/scheduled-events`; const { body } = await discordRequest(config, path, { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify(payload) }); const eventId = String(body.id ?? existing?.externalId ?? ""); const now = new Date().toISOString();
-  await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, updated_at) VALUES ('primary', 'discord', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, updated_at = excluded.updated_at").bind(stateKey, eventId, now).run();
-  await writeAudit(db, principal, "discord.calendar_synced", "meeting", meeting.id, { eventId }); return eventId;
+type DiscordCalendarOutcome = { meetingId: string; title: string; status: "synced" | "queued" | "skipped" | "failed"; reason?: string };
+type DiscordCalendarSyncSummary = { synced: number; queued: number; skipped: number; failed: number; outcomes: DiscordCalendarOutcome[] };
+type DiscordCalendarOperation = { meetingId: string; generation: number; action: "upsert" | "delete"; eventId?: string | null; status: "pending" | "delivered" | "failed"; attempts: number; actorUserId?: string | null };
+const discordCalendarEmptySummary = (): DiscordCalendarSyncSummary => ({ synced: 0, queued: 0, skipped: 0, failed: 0, outcomes: [] });
+async function discordCalendarIsReady(env: Env): Promise<boolean> { const record = await integrationRecord(env, "discord"); return Boolean(record?.enabled && record.verifiedAt); }
+function discordCalendarRetryAt(attempts: number, error: unknown): string | null {
+  if (error instanceof DiscordPermissionError) return null;
+  if (error instanceof DiscordResponseError && error.discordStatus < 500) return null;
+  const requested = error instanceof DiscordRateLimitError ? error.retryAfterMs : 0;
+  return new Date(Date.now() + Math.min(3_600_000, Math.max(60_000, 2 ** Math.min(attempts, 12) * 1_000, requested))).toISOString();
 }
-async function syncDiscordCalendarMeetings(db: D1Database, env: Env, principal: Principal, ids: string[]): Promise<{ synced: number; skipped: number; failed: number; outcomes: Array<{ meetingId: string; title: string; status: "synced" | "skipped" | "failed"; reason?: string }> }> {
-  let synced = 0; let skipped = 0; let failed = 0; const outcomes: Array<{ meetingId: string; title: string; status: "synced" | "skipped" | "failed"; reason?: string }> = [];
+async function markDiscordCalendarFailure(db: D1Database, operation: DiscordCalendarOperation, error: unknown): Promise<string> {
+  const message = (error instanceof Error ? error.message : "Discord calendar delivery failed. LancerLogin will retry automatically.").slice(0, 300); const attempts = Number(operation.attempts ?? 0) + 1; const now = new Date().toISOString();
+  await db.batch([
+    db.prepare("UPDATE discord_calendar_operations SET status = 'failed', attempts = ?, next_attempt_at = ?, last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = ?").bind(attempts, discordCalendarRetryAt(attempts, error), message, now, operation.meetingId, operation.generation, operation.action),
+    db.prepare("UPDATE discord_calendar_event_mappings SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ?").bind(message, now, operation.meetingId, operation.generation),
+  ]);
+  return message;
+}
+async function enqueueDiscordCalendarUpsert(db: D1Database, env: Env, principal: Principal | null, ids: string[]): Promise<DiscordCalendarSyncSummary> {
+  const ready = await discordCalendarIsReady(env); const now = new Date().toISOString(); const queuedIds: string[] = [];
   for (const id of ids) {
-    const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, notes FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(id).first<{ id: string; title: string; startsAt: string; endsAt?: string; notes?: string }>();
-    if (!meeting) { skipped += 1; outcomes.push({ meetingId: id, title: "Meeting", status: "skipped", reason: "Meeting is no longer active" }); continue; }
-    if (Date.parse(meeting.endsAt ?? meeting.startsAt) < Date.now()) { skipped += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "skipped", reason: "Meeting has already ended" }); continue; }
-    if (meeting.title.length > 100) { failed += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason: "Discord event names are limited to 100 characters" }); continue; }
-    if ((meeting.notes?.length ?? 0) > 1_000) { failed += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason: "Discord event descriptions are limited to 1,000 characters" }); continue; }
-    try { await syncDiscordCalendarMeeting(db, env, principal, meeting); synced += 1; outcomes.push({ meetingId: id, title: meeting.title, status: "synced" }); }
-    catch (error) {
-      failed += 1;
-      const reason = error instanceof Error ? error.message : "Discord request failed";
-      outcomes.push({ meetingId: id, title: meeting.title, status: "failed", reason });
-      if (error instanceof DiscordPermissionError || error instanceof DiscordRateLimitError) {
-        const remaining = ids.slice(ids.indexOf(id) + 1);
-        skipped += remaining.length;
-        outcomes.push(...remaining.map((meetingId) => ({ meetingId, title: "Meeting", status: "skipped" as const, reason: error instanceof DiscordPermissionError ? "Calendar sync stopped until the Discord permission is corrected" : "Calendar sync paused after Discord rate limiting; retry later" })));
-        break;
-      }
+    const meeting = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(id).first<{ id: string }>();
+    if (!meeting) continue;
+    let mapping = await db.prepare("SELECT generation, active FROM discord_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(id).first<{ generation: number; active: number }>();
+    if ((!mapping || !mapping.active) && !ready) continue;
+    if (!mapping) {
+      await db.prepare("INSERT INTO discord_calendar_event_mappings (installation_id, meeting_id, event_id, generation, active, updated_at) VALUES ('primary', ?, NULL, 1, 1, ?)").bind(id, now).run();
+      mapping = { generation: 1, active: 1 };
+    } else if (!mapping.active) {
+      const generation = Number(mapping.generation) + 1;
+      await db.prepare("UPDATE discord_calendar_event_mappings SET event_id = NULL, generation = ?, active = 1, synced_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(generation, now, id).run();
+      mapping = { generation, active: 1 };
     }
+    await db.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, next_attempt_at, actor_user_id, updated_at) VALUES ('primary', ?, ?, 'upsert', NULL, 'pending', 0, ?, ?, ?) ON CONFLICT(installation_id, meeting_id, generation, action) DO UPDATE SET status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, actor_user_id = COALESCE(excluded.actor_user_id, discord_calendar_operations.actor_user_id), updated_at = excluded.updated_at").bind(id, mapping.generation, now, principal?.userId ?? null, now).run();
+    queuedIds.push(id);
   }
-  return { synced, skipped, failed, outcomes };
+  return ready && queuedIds.length ? processDiscordCalendarOperations(env, queuedIds) : { ...discordCalendarEmptySummary(), queued: queuedIds.length, outcomes: queuedIds.map((meetingId) => ({ meetingId, title: "Meeting", status: "queued", reason: "Discord delivery is paused until the integration is enabled and verified" })) };
+}
+async function enqueueDiscordCalendarDelete(db: D1Database, env: Env, principal: Principal | null, ids: string[]): Promise<DiscordCalendarSyncSummary> {
+  const now = new Date().toISOString(); const queuedIds: string[] = [];
+  for (const id of ids) {
+    const mapping = await db.prepare("SELECT event_id AS eventId, generation FROM discord_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(id).first<{ eventId?: string | null; generation: number }>();
+    if (!mapping) continue;
+    await db.prepare("UPDATE discord_calendar_operations SET status = 'delivered', next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert' AND status != 'delivered'").bind(now, id, mapping.generation).run();
+    await db.prepare("UPDATE discord_calendar_event_mappings SET active = 0, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, id).run();
+    if (!mapping.eventId) continue;
+    await db.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, next_attempt_at, actor_user_id, updated_at) VALUES ('primary', ?, ?, 'delete', ?, 'pending', 0, ?, ?, ?) ON CONFLICT(installation_id, meeting_id, generation, action) DO UPDATE SET event_id = excluded.event_id, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, actor_user_id = COALESCE(excluded.actor_user_id, discord_calendar_operations.actor_user_id), updated_at = excluded.updated_at").bind(id, mapping.generation, mapping.eventId, now, principal?.userId ?? null, now).run();
+    queuedIds.push(id);
+  }
+  return queuedIds.length && await discordCalendarIsReady(env) ? processDiscordCalendarOperations(env, queuedIds) : { ...discordCalendarEmptySummary(), queued: queuedIds.length };
+}
+async function enqueueDiscordCalendarRestore(db: D1Database, env: Env, principal: Principal | null, ids: string[]): Promise<DiscordCalendarSyncSummary> {
+  const now = new Date().toISOString(); const ready = await discordCalendarIsReady(env); const queuedIds: string[] = []; const missingIds: string[] = [];
+  for (const id of ids) {
+    const mapping = await db.prepare("SELECT event_id AS eventId, generation FROM discord_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(id).first<{ eventId?: string | null; generation: number }>();
+    if (!mapping) { if (ready) missingIds.push(id); continue; }
+    await db.prepare("UPDATE discord_calendar_operations SET status = 'delivered', next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert' AND status != 'delivered'").bind(now, id, mapping.generation).run();
+    if (mapping.eventId) await db.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, next_attempt_at, actor_user_id, updated_at) VALUES ('primary', ?, ?, 'delete', ?, 'pending', 0, ?, ?, ?) ON CONFLICT(installation_id, meeting_id, generation, action) DO UPDATE SET status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(id, mapping.generation, mapping.eventId, now, principal?.userId ?? null, now).run();
+    const generation = Number(mapping.generation) + 1;
+    await db.batch([
+      db.prepare("UPDATE discord_calendar_event_mappings SET event_id = NULL, generation = ?, active = 1, synced_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(generation, now, id),
+      db.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, next_attempt_at, actor_user_id, updated_at) VALUES ('primary', ?, ?, 'upsert', NULL, 'pending', 0, ?, ?, ?)").bind(id, generation, now, principal?.userId ?? null, now),
+    ]);
+    queuedIds.push(id);
+  }
+  if (ready) {
+    const created = await enqueueDiscordCalendarUpsert(db, env, principal, missingIds);
+    return addDiscordCalendarSummaries(queuedIds.length ? await processDiscordCalendarOperations(env, queuedIds) : discordCalendarEmptySummary(), created);
+  }
+  return { ...discordCalendarEmptySummary(), queued: queuedIds.length };
+}
+function addDiscordCalendarSummaries(...summaries: DiscordCalendarSyncSummary[]): DiscordCalendarSyncSummary { return summaries.reduce((total, item) => ({ synced: total.synced + item.synced, queued: total.queued + item.queued, skipped: total.skipped + item.skipped, failed: total.failed + item.failed, outcomes: [...total.outcomes, ...item.outcomes] }), discordCalendarEmptySummary()); }
+async function processDiscordCalendarOperations(env: Env, meetingIds?: string[]): Promise<DiscordCalendarSyncSummary> {
+  if (!await discordCalendarIsReady(env)) return discordCalendarEmptySummary();
+  const db = requireDatabase(env); const now = new Date().toISOString(); const filter = meetingIds?.length ? `AND o.meeting_id IN (${meetingIds.map(() => "?").join(",")})` : "AND (o.status = 'pending' OR (o.status = 'failed' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ?))"; const values = meetingIds?.length ? meetingIds : [now];
+  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.generation, o.action, o.event_id AS eventId, o.status, o.attempts, o.actor_user_id AS actorUserId FROM discord_calendar_operations o WHERE o.installation_id = 'primary' ${filter} AND o.status != 'delivered' ORDER BY o.generation, CASE o.action WHEN 'delete' THEN 0 ELSE 1 END, o.updated_at LIMIT 50`).bind(...values).all<DiscordCalendarOperation>();
+  const operations = result.results ?? []; if (!operations.length) return discordCalendarEmptySummary();
+  let config: Record<string, string>; try { config = await discordConfiguration(env); } catch { return { ...discordCalendarEmptySummary(), queued: operations.length }; }
+  const summary = discordCalendarEmptySummary();
+  for (const operation of operations) {
+    let title = "Meeting";
+    try {
+      if (operation.action === "delete") {
+        try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${operation.eventId}`, { method: "DELETE" }); }
+        catch (error) { if (!(error instanceof DiscordResponseError) || error.discordStatus !== 404) throw error; }
+        const completedAt = new Date().toISOString(); await db.batch([
+          db.prepare("UPDATE discord_calendar_operations SET status = 'delivered', attempts = attempts + 1, next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'delete'").bind(completedAt, operation.meetingId, operation.generation),
+          db.prepare("UPDATE discord_calendar_event_mappings SET event_id = NULL, synced_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND active = 0").bind(completedAt, completedAt, operation.meetingId, operation.generation),
+          db.prepare("DELETE FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ? AND external_id = ?").bind(`calendar:${operation.meetingId}`, operation.eventId),
+        ]);
+      } else {
+        const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, notes FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(operation.meetingId).first<{ id: string; title: string; startsAt: string; endsAt: string; notes?: string | null }>();
+        const mapping = await db.prepare("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ?").bind(operation.meetingId, operation.generation).first<{ eventId?: string | null; active: number }>();
+        if (!meeting || !mapping?.active) { await db.prepare("UPDATE discord_calendar_operations SET status = 'delivered', next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert'").bind(now, operation.meetingId, operation.generation).run(); summary.skipped += 1; summary.outcomes.push({ meetingId: operation.meetingId, title, status: "skipped", reason: "Meeting is no longer active" }); continue; }
+        title = meeting.title;
+        if (Date.parse(meeting.endsAt) < Date.now()) { await db.prepare("UPDATE discord_calendar_operations SET status = 'delivered', next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert'").bind(now, operation.meetingId, operation.generation).run(); summary.skipped += 1; summary.outcomes.push({ meetingId: operation.meetingId, title, status: "skipped", reason: "Meeting has already ended" }); continue; }
+        if (meeting.title.length > 100) throw new DiscordResponseError(400, "Discord event names are limited to 100 characters");
+        if ((meeting.notes?.length ?? 0) > 1_000) throw new DiscordResponseError(400, "Discord event descriptions are limited to 1,000 characters");
+        const payload = { name: meeting.title, description: meeting.notes || "LancerLogin meeting", privacy_level: 2, entity_type: 3, scheduled_start_time: meeting.startsAt, scheduled_end_time: meeting.endsAt, entity_metadata: { location: "LancerLogin" } };
+        let eventId = mapping.eventId ?? undefined;
+        if (eventId) try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }); } catch (error) { if (error instanceof DiscordResponseError && error.discordStatus === 404) eventId = undefined; else throw error; }
+        if (!eventId) { const created = await discordRequest(config, `/guilds/${config.guildId}/scheduled-events`, { method: "POST", body: JSON.stringify(payload) }); eventId = String(created.body.id ?? ""); if (!eventId) throw new DiscordResponseError(502, "Discord did not return a scheduled event ID"); }
+        const completedAt = new Date().toISOString(); await db.batch([
+          db.prepare("UPDATE discord_calendar_operations SET event_id = ?, status = 'delivered', attempts = attempts + 1, next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert'").bind(eventId, completedAt, operation.meetingId, operation.generation),
+          db.prepare("UPDATE discord_calendar_event_mappings SET event_id = ?, synced_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ?").bind(eventId, completedAt, completedAt, operation.meetingId, operation.generation),
+          db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, updated_at) VALUES ('primary', 'discord', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, updated_at = excluded.updated_at").bind(`calendar:${operation.meetingId}`, eventId, completedAt),
+        ]);
+        await db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'discord.calendar_synced', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), operation.actorUserId ?? null, operation.meetingId, JSON.stringify({ eventId }), completedAt).run();
+      }
+      summary.synced += 1; summary.outcomes.push({ meetingId: operation.meetingId, title, status: "synced" });
+    } catch (error) { const reason = await markDiscordCalendarFailure(db, operation, error); summary.failed += 1; summary.outcomes.push({ meetingId: operation.meetingId, title, status: "failed", reason }); if (error instanceof DiscordPermissionError || error instanceof DiscordRateLimitError) break; }
+  }
+  summary.queued = Math.max(0, operations.length - summary.synced - summary.skipped - summary.failed);
+  return summary;
+}
+async function syncAllDiscordCalendarMeetings(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); await requireIntegrationConfigured(env, "discord"); const db = requireDatabase(env); const now = new Date().toISOString();
+  await db.prepare("UPDATE discord_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now).run();
+  const meetings = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at ASC LIMIT 100").all<{ id: string }>();
+  const requested = await enqueueDiscordCalendarUpsert(db, env, principal, (meetings.results ?? []).map((meeting) => meeting.id)); const retries = await processDiscordCalendarOperations(env);
+  const result = addDiscordCalendarSummaries(requested, retries); await writeAudit(db, principal, "discord.calendar_sync_all_requested", "integration", "discord", { selected: meetings.results?.length ?? 0, ...result });
+  return response({ ...result, selected: meetings.results?.length ?? 0, limit: 100 });
 }
 async function discordCalendar(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; all?: boolean }>(request);
-  if (input.all) {
-    const result = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at ASC LIMIT 1000").all<{ id: string }>();
-    const summary = await syncDiscordCalendarMeetings(db, env, principal, (result.results ?? []).map((meeting) => meeting.id));
-    return response(summary);
-  }
+  if (input.all) { const result = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at ASC LIMIT 100").all<{ id: string }>(); return response(await enqueueDiscordCalendarUpsert(db, env, principal, (result.results ?? []).map((meeting) => meeting.id))); }
   if (!input.meetingId) throw new HttpError(400, "Meeting is required");
-  const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, notes FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string; startsAt: string; endsAt?: string; notes?: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
-  if (Date.parse(meeting.endsAt ?? meeting.startsAt) < Date.now()) throw new HttpError(409, "Discord calendar sync is unavailable after the scheduled meeting end");
-  const eventId = await syncDiscordCalendarMeeting(db, env, principal, meeting);
-  return response({ synced: true, eventId });
+  const meeting = await db.prepare("SELECT id, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; endsAt: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
+  if (Date.parse(meeting.endsAt) < Date.now()) throw new HttpError(409, "Discord calendar sync is unavailable after the scheduled meeting end");
+  return response(await enqueueDiscordCalendarUpsert(db, env, principal, [meeting.id]));
+}
+type CalendarLifecycleAction = "sync" | "delete" | "restore";
+type CalendarDeliveryResult = { google_calendar: GoogleCalendarSyncSummary; discord: DiscordCalendarSyncSummary };
+async function deliverCalendarLifecycle(db: D1Database, env: Env, principal: Principal, action: CalendarLifecycleAction, meetingIds: string[]): Promise<CalendarDeliveryResult> {
+  const google = await bestEffortGoogleCalendar(() => action === "delete" ? enqueueGoogleCalendarDelete(db, env, meetingIds) : action === "restore" ? restoreGoogleCalendarMeetings(db, env, meetingIds) : syncGoogleCalendarMeetings(db, env, meetingIds));
+  let discord: DiscordCalendarSyncSummary;
+  try { discord = action === "delete" ? await enqueueDiscordCalendarDelete(db, env, principal, meetingIds) : action === "restore" ? await enqueueDiscordCalendarRestore(db, env, principal, meetingIds) : await enqueueDiscordCalendarUpsert(db, env, principal, meetingIds); }
+  catch (error) { discord = { ...discordCalendarEmptySummary(), failed: 1, outcomes: [{ meetingId: meetingIds[0] ?? "meeting", title: "Meeting", status: "failed", reason: error instanceof Error ? error.message : "Discord calendar delivery failed" }] }; }
+  return { google_calendar: google, discord };
+}
+async function syncMeetingCalendars(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const input = await parseJson<{ meetingId?: string }>(request); const meetingId = input.meetingId?.trim();
+  if (!meetingId) throw new HttpError(400, "Meeting is required"); const db = requireDatabase(env);
+  const meeting = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(meetingId).first<{ id: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
+  const [googleReady, discordReady] = await Promise.all([googleCalendarIsReady(env), discordCalendarIsReady(env)]); if (!googleReady && !discordReady) throw new HttpError(409, "Configure and verify at least one calendar integration before syncing this meeting");
+  const delivery = await deliverCalendarLifecycle(db, env, principal, "sync", [meeting.id]);
+  const providers = [
+    ...(googleReady ? [{ provider: "google_calendar" as const, ...delivery.google_calendar }] : []),
+    ...(discordReady ? [{ provider: "discord" as const, ...delivery.discord }] : []),
+  ];
+  await writeAudit(db, principal, "calendar.meeting_sync_requested", "meeting", meeting.id, { providers: providers.map((item) => item.provider) });
+  return response({ meetingId: meeting.id, providers });
 }
 async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ changed: boolean; messageId?: string; online?: boolean; kioskId?: string }> {
   const db = requireDatabase(env); const config = await discordConfiguration(env);
@@ -1722,6 +1861,8 @@ const tableColumns = {
   google_calendar_authorizations: ["installation_id", "ciphertext", "iv", "key_version", "authorized_at", "verified_at", "updated_at"],
   google_calendar_event_mappings: ["installation_id", "meeting_id", "event_id", "generation", "active", "synced_at", "last_error", "updated_at"],
   google_calendar_operations: ["installation_id", "meeting_id", "event_id", "action", "starts_at", "ends_at", "status", "attempts", "next_attempt_at", "last_error", "updated_at"],
+  discord_calendar_event_mappings: ["installation_id", "meeting_id", "event_id", "generation", "active", "synced_at", "last_error", "updated_at"],
+  discord_calendar_operations: ["installation_id", "meeting_id", "generation", "action", "event_id", "status", "attempts", "next_attempt_at", "last_error", "actor_user_id", "updated_at"],
   integration_deliveries: ["id", "installation_id", "provider", "delivery_key", "status", "external_id", "created_at", "updated_at"],
   integration_state: ["installation_id", "provider", "state_key", "external_id", "content_hash", "updated_at"],
   discord_attendance_notifications: ["installation_id", "meeting_id", "status", "message_id", "attempts", "last_error", "processed_at", "updated_at", "channel_id", "expires_at", "deleted_at"],
@@ -1738,7 +1879,7 @@ const installationTables: BackupTable[] = [
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
   "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
-  "google_calendar_event_mappings", "google_calendar_operations",
+  "google_calendar_event_mappings", "google_calendar_operations", "discord_calendar_event_mappings", "discord_calendar_operations",
 ];
 const meetingTables: BackupTable[] = ["meeting_weight_categories", "meetings", "meeting_templates", "attendance_events", "attendance_corrections", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports"];
 const rosterTables: BackupTable[] = ["members"];
@@ -1752,26 +1893,26 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 12, scope, exportedAt, tables: Object.fromEntries(entries) };
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 12 });
+  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 13, scope, exportedAt, tables: Object.fromEntries(entries) };
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 13 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
   organization_settings: tableColumns.organization_settings.slice(0, -9),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
   discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -2),
 };
-const legacyInstallationTables = installationTables.filter((table) => table !== "meeting_weight_categories" && table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients" && table !== "discord_anomaly_reports" && table !== "google_calendar_authorizations" && table !== "google_calendar_event_mappings" && table !== "google_calendar_operations");
+const legacyInstallationTables = installationTables.filter((table) => table !== "meeting_weight_categories" && table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients" && table !== "discord_anomaly_reports" && table !== "google_calendar_authorizations" && table !== "google_calendar_event_mappings" && table !== "google_calendar_operations" && table !== "discord_calendar_event_mappings" && table !== "discord_calendar_operations");
 const legacyMeetingTables = meetingTables.filter((table) => table !== "meeting_weight_categories" && table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients" && table !== "discord_anomaly_reports");
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
-  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
   const sourceTables = value.tables;
-  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)));
+  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)));
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
@@ -1904,6 +2045,8 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/integrations/google-calendar/calendars" && request.method === "GET") result = await listGoogleCalendars(request, env);
     else if (url.pathname === "/admin/integrations/google-calendar/select" && ["PUT", "PATCH"].includes(request.method)) result = await selectGoogleCalendar(request, env);
     else if (url.pathname === "/admin/integrations/google-calendar/retry" && request.method === "POST") result = await retryGoogleCalendarOperations(request, env);
+    else if (url.pathname === "/admin/integrations/google-calendar/sync-all" && request.method === "POST") result = await syncAllGoogleCalendarMeetings(request, env);
+    else if (url.pathname === "/admin/integrations/discord/calendar/sync-all" && request.method === "POST") result = await syncAllDiscordCalendarMeetings(request, env);
     else if (url.pathname === "/admin/integrations/discord/channel-manager" && ["GET", "PATCH"].includes(request.method)) result = await discordChannelManagerSettings(request, env);
     else if (url.pathname === "/admin/integrations/discord/anomaly-reports" && ["GET", "PATCH"].includes(request.method)) result = await discordAnomalyReportSettings(request, env);
     else if (url.pathname === "/integrations/capabilities" && request.method === "GET") result = await integrationCapabilities(request, env);
@@ -1920,6 +2063,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/discord/contests" && request.method === "GET") result = await discordContests(request, env);
     else if (url.pathname === "/discord/contests/resolve" && request.method === "POST") result = await resolveDiscordContest(request, env);
     else if (url.pathname === "/discord/calendar" && request.method === "POST") result = await discordCalendar(request, env);
+    else if (url.pathname === "/calendars/sync" && request.method === "POST") result = await syncMeetingCalendars(request, env);
     else if (url.pathname === "/discord/kiosk-status" && request.method === "POST") result = await discordKioskStatus(request, env);
     else if (url.pathname === "/admin/privacy" && ["GET", "PATCH"].includes(request.method)) result = await privacySettings(request, env);
     else if (url.pathname === "/admin/roster/history" && request.method === "GET") result = await rosterHistory(request, env);
@@ -1946,6 +2090,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   if (controller.cron === "0 3 * * *") { try { await transmitTelemetry(env); } catch { /* Telemetry is best-effort and cannot affect attendance. */ } }
   if (controller.cron === "*/5 * * * *") {
     try { await processGoogleCalendarOperations(env); } catch { /* Google Calendar delivery retries safely on the next scheduled pass. */ }
+    try { await processDiscordCalendarOperations(env); } catch { /* Discord Calendar delivery retries safely on the next scheduled pass. */ }
     try { await syncDiscordManagedSurface(env); } catch { /* Discord channel management is best-effort and retries on the next scheduled pass. */ }
     try { await processDiscordAttendanceNotifications(env); } catch { /* Discord attendance delivery retries safely on the next scheduled pass. */ }
     try { await processDiscordAnomalyReports(env); } catch { /* Discord anomaly reports retry safely on the next scheduled pass. */ }

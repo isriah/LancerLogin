@@ -1253,13 +1253,14 @@ Release: `v0.20.0`.
 
 ### WU-074 — One-way Google Calendar meeting sync
 
-Status: in progress
+Status: merged (`4891127`)
 
 Owner: Codex task
 Branch: `codex/wu-074-google-calendar-sync`
 Base: `5dfd85a509e398fd3cba96291dbfe8d442f45ee2`
 Worktree: `C:\\Users\\Izz\\Documents\\ChatGPT\\LancerLogin Workspace`
 Task: `01a06ec5-4979-75e3-82dd-3b638c01f76e`
+Integration: branch commits `065fb24` and `f60e8b4` were merged as `48911270a5dd87e53870a23bac39ce5c7a5b638d`. On the merged tree, `npm run verify:migrations`, `npm run verify:api` (110 API/runtime tests plus API/shared typechecks), `npm run verify:dashboard` (39 structural/runtime tests plus dashboard typecheck), `npm run verify:docs`, and the complete 137-test browser suite passed. Focused provider-fake coverage proves separate narrow Calendar authorization, encrypted credential handling, generic-field allowlisting, stable provider event IDs, non-blocking meeting creation, and queued delete/recreate behavior. Desktop and mobile keyboard coverage verifies selected-calendar status and manual retry feedback. Supported-calendar manual validation remains required before release; automated checks sent no live Google traffic.
 
 Goal: optionally mirror LancerLogin meeting dates and times into one configured Google Calendar while keeping LancerLogin authoritative.
 Dependencies: WU-061 (merged); ADR-013 selects separate Calendar authorization, delete/recreate behavior, and durable non-blocking retries
@@ -1267,7 +1268,7 @@ Scope: after the credential and failure-policy decisions are recorded, add an Ad
 Sources: `docs/idea_inbox.md` (IN-087); WU-061; current official Google Calendar API and OAuth guidance; `docs/ARCHITECTURE.md`; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `docs/UI-STANDARDS.md`; `apps/api/migrations/`; `apps/api/src/index.ts`; `apps/dashboard/src/integration-settings.tsx`; `apps/dashboard/src/meeting-management.tsx`; Google integration, meeting lifecycle/recurrence, Settings, and browser tests.
 Acceptance: after the named decisions are recorded, only Admins can enable, authorize, select, rotate, or remove calendar access; a created occurrence maps to exactly one event in the configured calendar, and authorized occurrence/future-series edits update only mapped start/end values; retries cannot duplicate events; no Google-side change mutates LancerLogin; disabled, unverified, revoked, rate-limited, and unavailable-provider states follow the approved failure policy with actionable feedback; API responses never return saved credentials or refresh tokens; sign-in enablement and sole-Admin lockout safeguards remain independent and intact.
 Verification: `npm run verify:migrations`; `npm run verify:api`; `npm run verify:dashboard`; `npm run verify:docs` when setup guidance changes; focused provider-fake coverage for authorization, calendar selection, create/update/series mapping, idempotence, retries, revocation, rate limits, disabled/unverified states, transmitted-field allowlisting, deletion/restoration per the approved policy, role enforcement, and Google sign-in isolation; focused responsive keyboard Settings and meeting-workspace browser coverage at required themes/viewports; manual supported-calendar validation before release.
-Release: later Google Calendar integration bundle after WU-061 and the credential/failure-policy decisions are complete.
+Release: planned `v0.21.0` Google Calendar integration bundle, after `v0.20.0`.
 
 ## Release bundling
 

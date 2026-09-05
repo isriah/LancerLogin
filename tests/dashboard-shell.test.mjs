@@ -110,6 +110,12 @@ test("meeting detail keeps meeting-specific attendance, Discord, and contest ope
   assert.match(source, /Switch meeting/);
   assert.match(source, /Refresh attendance/);
   assert.match(source, /Attendance closes/);
+  assert.match(source, /const formatScanTime = .*toLocaleString/);
+  assert.match(source, /<span role="columnheader">Scan times<\/span>/);
+  assert.match(source, /<dt>Check-in<\/dt>/);
+  assert.match(source, /<dt>Check-out<\/dt>/);
+  assert.match(source, /<time dateTime=\{row\.checkedInAt\}>/);
+  assert.match(source, /Not recorded/);
   assert.ok(source.includes('role === "admin" && <button type="button" disabled={row.disposition === "not_required"}'));
   assert.doesNotMatch(source, /\/admin\/kiosks|AttendanceCalendar|Export CSV/);
   assert.doesNotMatch(source, /\/discord\/link|Email missed|Email report/);

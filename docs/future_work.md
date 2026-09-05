@@ -1333,9 +1333,13 @@ Release: `v0.22.0`.
 
 ### WU-078 — Calendar integration delivery parity
 
-Status: ready
+Status: in progress
 
-Owner: unassigned
+Owner: Codex task
+Branch: detached provisioning worktree
+Base: `aa52749cab6931327bc8e070f5df87f5a1961c46`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\ef58\\LancerLogin Workspace`
+Task: provisioning client `client-new-thread:2db62e70-b534-478c-875b-eeec13b4a0f3`
 
 Goal: give Discord and Google Calendar the same dependable meeting-lifecycle sync model and clear manual recovery controls.
 Dependencies: WU-022 and WU-074 (both merged); ADR-013 continues to govern Google data minimization, separate authorization, delete/recreate restoration behavior, and durable non-blocking delivery

@@ -38,6 +38,8 @@ The update command is deliberately narrower than a remote shell. The kiosk servi
 
 When Discord channel-manager mode is enabled, “status message at the top” means exactly one current LancerLogin-owned status message pinned in the configured attendance channel. If that tracked message is missing, LancerLogin recreates and pins its replacement. Pin, unpin, edit, and deletion operations remain limited to explicitly tracked LancerLogin-owned messages; unrelated and user-authored channel content is never reordered or modified.
 
-## ADR-010: Attendance anomaly history scope
+## ADR-010: Attendance anomaly metric
 
 The per-member mean anomalous-time statistic uses all preserved eligible meeting history from the member's participation start date. Reports-page date ranges and the operational reporting baseline apply only to the Reports screen at the time they are selected; they do not change statistics on member detail or other pages.
+
+Each qualifying late check-in and early check-out is one separate value in the mean. For example, arriving 10 minutes late and leaving 20 minutes early contributes the values 10 and 20, not one combined 30-minute meeting value.

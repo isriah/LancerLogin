@@ -1086,10 +1086,10 @@ Release: next Discord reliability bundle; suitable for a narrow patch if the fai
 
 ### WU-065 — Discord designated-channel manager mode
 
-Status: blocked
+Status: ready
 
 Goal: offer an opt-in Discord mode that maintains a dedicated attendance channel's LancerLogin-owned status, guidance, and expiring absence messages as one coherent operational surface.
-Dependencies: WU-061 and WU-064; product decision required on whether “status message at the top” means a Discord-pinned message or the oldest maintained LancerLogin message in the dedicated channel
+Dependencies: WU-061 and WU-064 (both merged); ADR-009 selects one pinned, tracked LancerLogin-owned status message as the approved top-of-channel mechanism
 Scope: add an Admin-only Discord configuration toggle; when enabled, maintain a persistent kiosk/status message followed by a pairing-and-contest how-to message, send controlled absence pings after each meeting's late-scan window closes, and delete each tracked absence message after the configured Discord contest window; move the contest-window setting from Settings > Configuration to the Discord card in Settings > Integrations. Restrict management to the configured attendance channel and to LancerLogin-owned, explicitly tracked messages; never delete or rewrite unrelated or user-authored content. Preserve provider verification, encrypted credentials, signed contests, recipient history, retry/idempotence, authorization, controlled mentions, and behavior when the mode is disabled. Exclude general Discord moderation, managing other channels, changing attendance or contest policy, and unrelated Settings presentation.
 Sources: `docs/idea_inbox.md` (IN-077); `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `apps/dashboard/src/integration-settings.tsx`; `apps/dashboard/src/configuration-settings.tsx`; `apps/api/src/index.ts`; `apps/api/migrations/`; Discord integration and scheduler tests; `tests-browser/settings-conformance.spec.ts`.
 Acceptance: the toggle and contest-window setting are available only to Admins in the Discord integration surface; enabled mode maintains exactly one current status message and one current how-to message according to the approved ordering mechanism, sends each eligible absence ping only after the late-scan cutoff, deletes only its tracked absence message after contest expiry, survives deleted managed messages, and leaves unrelated channel content untouched; disabled mode preserves current Discord behavior.

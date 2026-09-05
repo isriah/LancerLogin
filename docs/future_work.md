@@ -1169,7 +1169,10 @@ Release: next attendance workspace bundle.
 
 ### WU-069 — Configurable attendance-anomaly metric
 
-Status: ready
+Status: merged (`69cc8a1`)
+
+Owner: Codex task
+Integration: implemented directly on the authorized serial `main` checkout as `69cc8a11a05e28b284f7a3c49ee9070bea41ab71`. `npm run verify:migrations` passed all 23 migrations; `npm run verify:api` passed 100 tests plus API/shared typechecks; `npm run verify:dashboard` passed 39 tests plus dashboard typecheck; the focused foundation suite passed 23 tests; and the complete serial browser suite passed all 132 tests. Focused coverage verifies exact-threshold exclusion, separate late/early scan values, partial and empty histories, participation-start filtering independent of Reports state, bounded Admin-only settings with audit metadata, 10-minute migration defaults, and member-detail value/empty states at required desktop/mobile light/dark adopter-brand combinations.
 
 Goal: define configurable late-arrival and early-departure thresholds and expose each member's mean anomalous time on member detail.
 Dependencies: ADR-010 selects all preserved eligible history from the member's participation start date, keeps Reports filters local to Reports, averages qualifying late check-ins and early check-outs as separate values, displays the mean as minutes rounded to the nearest whole minute, and defaults both independently configurable thresholds to 10 minutes

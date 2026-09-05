@@ -107,6 +107,10 @@ test("Google Calendar migration and worker keep delivery minimal and retryable",
   assert.match(discordCalendarMigration, /discord_calendar_event_mappings/);
   assert.match(discordCalendarMigration, /discord_calendar_operations/);
   assert.match(discordCalendarMigration, /CHECK \(action IN \('upsert', 'delete'\)\)/);
+  assert.match(discordCalendarMigration, /status IN \('pending', 'processing', 'delivered', 'failed'\)/);
+  assert.match(discordCalendarMigration, /lease_token TEXT/);
+  assert.match(discordCalendarMigration, /lease_expires_at TEXT/);
+  assert.match(discordCalendarMigration, /revision INTEGER NOT NULL DEFAULT 1/);
   assert.match(migration, /action IN \('upsert', 'delete'\)/);
   assert.match(source, /summary: "LancerLogin meeting"/);
   assert.match(source, /Google Calendar delivery retries safely on the next scheduled pass/);

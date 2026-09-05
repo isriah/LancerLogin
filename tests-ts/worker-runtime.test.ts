@@ -1347,15 +1347,16 @@ test("scheduled Discord absence delivery waits for the late-scan cutoff and retr
 });
 
 test("scheduled Discord anomaly delivery uses the private channel, separate values, and an enforced retry nonce", async () => {
+  const now = Date.now();
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
   database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 0 });
   database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 0 });
-  database.rows.set("anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes", { lateScanMinutes: 30, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 10, enabled: 1, channelId: "323456789012345678", enabledAt: new Date(Date.now() - 90 * 60_000).toISOString() });
-  database.lists.set("LEFT JOIN discord_anomaly_reports", [{ id: "meeting-1", title: "Studio @everyone", startsAt: new Date(Date.now() - 150 * 60_000).toISOString(), endsAt: new Date(Date.now() - 31 * 60_000).toISOString() }]);
+  database.rows.set("anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes", { lateScanMinutes: 30, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 10, enabled: 1, channelId: "323456789012345678", enabledAt: new Date(now - 90 * 60_000).toISOString() });
+  database.lists.set("LEFT JOIN discord_anomaly_reports", [{ id: "meeting-1", title: "Studio @everyone", startsAt: new Date(now - 150 * 60_000).toISOString(), endsAt: new Date(now - 31 * 60_000).toISOString() }]);
   database.lists.set("LEFT JOIN discord_attendance_notifications", []);
-  const anomalyRows = Array.from({ length: 40 }, (_, index) => ({ memberId: index ? `MEMBER-${index.toString().padStart(3, "0")}` : "A-101", firstName: index ? `Member${index}` : "Avery", lastName: index ? "With a deliberately long display name for Discord provider limits" : "Stone", checkedInAt: new Date(Date.now() - 137.5 * 60_000).toISOString(), checkedOutAt: new Date(Date.now() - 48.25 * 60_000).toISOString() }));
+  const anomalyRows = Array.from({ length: 40 }, (_, index) => ({ memberId: index ? `MEMBER-${index.toString().padStart(3, "0")}` : "A-101", firstName: index ? `Member${index}` : "Avery", lastName: index ? "With a deliberately long display name for Discord provider limits" : "Stone", checkedInAt: new Date(now - 137.5 * 60_000).toISOString(), checkedOutAt: new Date(now - 48.25 * 60_000).toISOString() }));
   database.lists.set("SELECT m.external_id AS memberId", anomalyRows);
   database.lists.set("FROM discord_attendance_notifications WHERE", []);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;

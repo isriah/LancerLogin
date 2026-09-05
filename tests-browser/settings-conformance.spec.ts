@@ -279,6 +279,37 @@ for (const viewport of dashboardConformanceReferences.viewports) {
   }
 }
 
+for (const viewport of dashboardConformanceReferences.viewports) {
+  for (const theme of dashboardConformanceReferences.themes) {
+    test(`managed Discord command setup is keyboard usable at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.addInitScript((savedTheme) => {
+        localStorage.setItem("lancerlogin-theme", savedTheme);
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => undefined } });
+      }, theme);
+      await useSettingsContext(page);
+      await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: false, state: "verification_required" }] }) }));
+      await page.route("**/admin/integrations/discord/verify/start", (route) => route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: "Discord denied command management. Confirm the saved application ID belongs to this bot and install the bot in the selected server before trying verification again." }) }));
+      await page.goto("/settings/integrations");
+
+      const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+      await expect(card.getByLabel("Application ID")).toBeVisible();
+      await expect(card.getByText(/creates or updates only the guild-scoped/)).toBeVisible();
+      await expect(card.locator(".copy-value code")).toHaveText(/^http:\/\/127\.0\.0\.1:\d+\/api\/discord\/interactions$/);
+      const copyEndpoint = card.getByRole("button", { name: "Copy" });
+      await copyEndpoint.focus(); await expect(copyEndpoint).toBeFocused(); expect((await copyEndpoint.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      const verify = card.getByRole("button", { name: "Send Discord verification" });
+      await verify.focus(); await expect(verify).toBeFocused(); expect((await verify.boundingBox())!.height).toBeGreaterThanOrEqual(44); await page.keyboard.press("Enter");
+      const failure = card.getByRole("alert"); await expect(failure).toContainText("Discord denied command management"); await expect(failure).toBeFocused();
+      await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+      await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
+      await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
+      await expectResponsiveFit(page);
+    });
+  }
+}
+
 test("Operator role cannot open any Settings route", async ({ page }) => {
   await useSettingsContext(page, "operator");
   for (const [path] of routes) {

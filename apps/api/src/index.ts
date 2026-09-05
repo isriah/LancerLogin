@@ -64,11 +64,11 @@ class HttpError extends Error {
   constructor(status: number, message: string, details?: string[]) { super(message); this.status = status; this.details = details; }
 }
 class DiscordPermissionError extends HttpError {
-  constructor(kind: "calendar" | "pin" | "channel" = "channel") { super(502, kind === "calendar" ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." : kind === "pin" ? "Discord denied this request because the bot is missing Pin Messages permission in the configured attendance channel." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
+  constructor(kind: "calendar" | "pin" | "commands" | "channel" = "channel") { super(502, kind === "calendar" ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." : kind === "pin" ? "Discord denied this request because the bot is missing Pin Messages permission in the configured attendance channel." : kind === "commands" ? "Discord denied command management. Confirm the saved application ID belongs to this bot and install the bot in the selected server before trying verification again." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
 }
 class DiscordRateLimitError extends HttpError {
   readonly retryAfterMs: number;
-  constructor(retryAfterMs: number) { super(503, `Discord is rate limiting calendar sync. Wait ${Math.ceil(retryAfterMs / 1000)} seconds before trying again.`); this.retryAfterMs = retryAfterMs; }
+  constructor(retryAfterMs: number, operation = "calendar sync") { super(503, `Discord is rate limiting ${operation}. Wait ${Math.ceil(retryAfterMs / 1000)} seconds before trying again.`); this.retryAfterMs = retryAfterMs; }
 }
 class DiscordResponseError extends HttpError {
   readonly discordStatus: number;
@@ -741,11 +741,14 @@ function providerFrom(pathname: string): IntegrationProvider {
   return provider;
 }
 function validateIntegration(provider: IntegrationProvider, input: Record<string, unknown>): Record<string, string> {
-  const fields = provider === "google" ? ["clientId", "clientSecret"] : provider === "resend" ? ["apiKey", "fromEmail"] : ["botToken", "guildId", "channelId", "publicKey"];
+  const fields = provider === "google" ? ["clientId", "clientSecret"] : provider === "resend" ? ["apiKey", "fromEmail"] : ["botToken", "applicationId", "guildId", "channelId", "publicKey"];
   const output: Record<string, string> = {};
   for (const field of fields) { const value = input[field]; if (typeof value !== "string" || !value.trim() || value.length > 500) throw new HttpError(400, `${field} is required`); output[field] = value.trim(); }
   if (provider === "resend" && !validEmail(output.fromEmail)) throw new HttpError(400, "fromEmail must be a valid email address");
-  if (provider === "discord" && !/^[0-9a-f]{64}$/i.test(output.publicKey)) throw new HttpError(400, "Discord public key must contain 64 hexadecimal characters");
+  if (provider === "discord") {
+    if (!/^[0-9a-f]{64}$/i.test(output.publicKey)) throw new HttpError(400, "Discord public key must contain 64 hexadecimal characters");
+    for (const field of ["applicationId", "guildId", "channelId"]) if (!/^\d{10,24}$/.test(output[field])) throw new HttpError(400, `${field} must contain 10 to 24 digits`);
+  }
   return output;
 }
 type IntegrationRecord = { id: string; ciphertext: string; iv: string; updatedAt: string; verifiedAt?: string | null; enabled?: number };
@@ -1281,23 +1284,48 @@ const discordRetryDelay = (response: Response, body: Record<string, unknown>) =>
 };
 const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 async function discordRequest<T = Record<string, unknown>>(config: Record<string, string>, path: string, init: RequestInit): Promise<{ response: globalThis.Response; body: T }> {
+  const managesCommands = path.includes("/commands");
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const result = await fetch(`https://discord.com/api/v10${path}`, { ...init, headers: { authorization: `Bot ${config.botToken}`, "content-type": "application/json", ...init.headers } });
     const body = await result.json().catch(() => ({})) as T;
     if (result.ok) return { response: result, body };
     const errorBody = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
-    if (result.status === 403) throw new DiscordPermissionError(path.includes("/scheduled-events") ? "calendar" : path.includes("/messages/pins/") ? "pin" : "channel");
+    if (result.status === 401) throw new HttpError(502, "Discord rejected the saved bot token. Reset the token in Discord, replace the saved credentials, and try verification again.");
+    if (result.status === 403) throw new DiscordPermissionError(path.includes("/scheduled-events") ? "calendar" : path.includes("/messages/pins/") ? "pin" : managesCommands ? "commands" : "channel");
     if (result.status === 429) {
       const retryAfterMs = discordRetryDelay(result, errorBody);
-      if (attempt === 2) throw new DiscordRateLimitError(retryAfterMs);
+      if (attempt === 2) throw new DiscordRateLimitError(retryAfterMs, managesCommands ? "command setup" : path.includes("/scheduled-events") ? "calendar sync" : "this request");
       await wait(retryAfterMs);
       continue;
     }
+    if (managesCommands && result.status === 404) throw new HttpError(502, "Discord could not find that application in the selected server. Confirm the Application ID and Server ID, reinstall the bot if needed, and try verification again.");
+    if (managesCommands && result.status === 400) throw new HttpError(502, "Discord rejected the managed command configuration. Confirm the Application ID and Server ID, then try verification again.");
     const message = typeof errorBody.message === "string" ? errorBody.message.replace(/\s+/g, " ").slice(0, 180) : "";
     const code = Number(errorBody.code);
     throw new DiscordResponseError(result.status, message, Number.isFinite(code) ? code : undefined);
   }
   throw new HttpError(502, "Discord request did not complete");
+}
+type DiscordApplicationCommand = { id?: string; application_id?: string; guild_id?: string; name?: string; type?: number; description?: string; options?: { name?: string; description?: string; type?: number; required?: boolean }[] };
+const discordManagedCommands: DiscordApplicationCommand[] = [
+  { name: "pair", type: 1, description: "Link your Discord account to your LancerLogin member ID", options: [{ name: "member-id", description: "Your LancerLogin member ID", type: 3, required: true }] },
+  { name: "attendance-report", type: 1, description: "Privately view your current LancerLogin attendance report" },
+];
+function discordCommandMatches(actual: DiscordApplicationCommand, expected: DiscordApplicationCommand, config: Record<string, string>): boolean {
+  return actual.application_id === config.applicationId && actual.guild_id === config.guildId && actual.name === expected.name && actual.type === expected.type && actual.description === expected.description && JSON.stringify(actual.options ?? []) === JSON.stringify(expected.options ?? []);
+}
+async function reconcileDiscordApplicationCommands(config: Record<string, string>): Promise<void> {
+  const application = await discordRequest<{ id?: string }>(config, "/oauth2/applications/@me", { method: "GET" });
+  if (String(application.body.id ?? "") !== config.applicationId) throw new HttpError(400, "The saved Application ID does not belong to this bot token. Copy the Application ID from the same Discord application and replace the saved credentials.");
+  const guild = await discordRequest<{ id?: string }>(config, `/guilds/${encodeURIComponent(config.guildId)}`, { method: "GET" });
+  if (String(guild.body.id ?? "") !== config.guildId) throw new HttpError(400, "Discord returned a different server than the saved Server ID. Copy the intended server ID and replace the saved credentials.");
+  const channel = await discordRequest<{ guild_id?: string; type?: number }>(config, `/channels/${encodeURIComponent(config.channelId)}`, { method: "GET" });
+  if (String(channel.body.guild_id ?? "") !== config.guildId || Number(channel.body.type) !== 0) throw new HttpError(400, "The attendance channel must be a text channel in the saved Discord server. Copy the intended channel and server IDs, then replace the saved credentials.");
+  const path = `/applications/${encodeURIComponent(config.applicationId)}/guilds/${encodeURIComponent(config.guildId)}/commands`;
+  const result = await discordRequest<DiscordApplicationCommand[]>(config, path, { method: "PUT", body: JSON.stringify(discordManagedCommands) });
+  if (!Array.isArray(result.body) || result.body.length !== discordManagedCommands.length || discordManagedCommands.some((expected) => !result.body.some((actual) => discordCommandMatches(actual, expected, config)))) {
+    throw new HttpError(502, "Discord did not confirm both managed commands. No verification was started; wait briefly and try again.");
+  }
 }
 const discordMessageMissing = (error: unknown): error is DiscordResponseError => error instanceof DiscordResponseError && error.discordStatus === 404 && error.discordCode === 10_008;
 type DiscordMessageComponents = { type: number; components: { type: number; style: number; label: string; custom_id: string }[] }[];
@@ -1331,8 +1359,9 @@ async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string
 }
 async function startDiscordVerification(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env, true);
+  await db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = 'discord'").run();
   await discordRequest(config, "/users/@me", { method: "GET" });
-  await discordRequest(config, `/guilds/${encodeURIComponent(config.guildId)}`, { method: "GET" });
+  await reconcileDiscordApplicationCommands(config);
   const challenge = randomToken(24); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
   const payload = { content: "LancerLogin is ready to verify this server and attendance channel. An Admin should click the button below within 10 minutes.", allowed_mentions: { parse: [] }, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Verify LancerLogin", custom_id: `lancerlogin-verify:${challenge}` }] }] };
   const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }); const messageId = String(body.id ?? "");

@@ -43,27 +43,10 @@
   </figure>
   <h2>Configure an optional integration</h2>
   <p>Open <strong>Settings → Integrations</strong> as an Admin. Open Google OAuth, Resend, or Discord for an official console link, exact callback value, required access, and guided verification. Fields appear immediately after the copy step that uses them. Saved secret values remain hidden, and a provider shows Configured only after end-to-end verification.</p>
-  <h2 id="discord-commands">Register the Discord member commands</h2>
-  <p>Discord <a href="https://docs.discord.com/developers/interactions/application-commands#registering-a-command">registers application commands through its HTTP API</a>. Create both commands at <code>POST /applications/{application.id}/guilds/{guild.id}/commands</code>, using the application ID and server ID from General Information and Discord. Authenticate the request with the saved bot token, but never paste that token into LancerLogin documentation, screenshots, chat, or a shared shell history. Guild registration makes the commands available only in the configured server.</p>
-  <p>Register <code>/pair</code> with this chat-input command payload:</p>
-  <pre><code>{
-  "name": "pair",
-  "type": 1,
-  "description": "Link your Discord account to your LancerLogin member ID",
-  "options": [{
-    "name": "member-id",
-    "description": "Your LancerLogin member ID",
-    "type": 3,
-    "required": true
-  }]
-}</code></pre>
-  <p>Register <code>/attendance-report</code> at the same guild endpoint with this payload:</p>
-  <pre><code>{
-  "name": "attendance-report",
-  "type": 1,
-  "description": "Privately view your current LancerLogin attendance report"
-}</code></pre>
-  <p>Discord treats a same-name <code>POST</code> in the same command scope as an update. After registration, finish LancerLogin's signed Discord verification in <strong>Settings → Integrations</strong>. Both commands return ephemeral responses; <code>/attendance-report</code> works only for the invoking Discord account's single active roster link and never accepts another member ID.</p>
+  <h2 id="discord-commands">Enable the Discord member commands</h2>
+  <p>In <strong>Settings → Integrations</strong>, save the bot token, Application ID, public key, Server ID, and attendance channel ID, then choose <strong>Send Discord verification</strong>. LancerLogin validates that the bot token belongs to the saved application and server and creates or updates exactly the guild-scoped <code>/pair</code> and <code>/attendance-report</code> commands. No manual HTTP request or command payload is required.</p>
+  <p>Guild scope keeps both commands out of direct messages and every other server. Rerunning verification or replacing credentials reconciles the same two commands without duplicates. If Discord rejects the credential, identifiers, permissions, command update, or verification message, LancerLogin remains in Verification required state and shows safe retry guidance.</p>
+  <p>Keep the exact Interactions Endpoint URL from LancerLogin in Discord's General Information page. Install the bot with only the access listed in the Integrations guide and restrict it to the attendance channel. Both commands return ephemeral responses; <code>/attendance-report</code> works only for the invoking Discord account's single active roster link and never accepts another member ID.</p>
   <h2>Review an available update</h2>
   <p>An Admin-only notice appears when a newer public release is available. Open <strong>Settings → Updates</strong>, read the patch notes, and download the required entire-installation backup. LancerLogin then opens the guarded workflow in the private deployment repository; choose Upgrade, keep Latest stable selected, and authorize the run there.</p>
   <h2>Back up, restore, delete, or reset</h2>

@@ -1382,7 +1382,7 @@ Release: `v0.22.0`.
 
 ### WU-080 — Bounded Discord calendar backfill
 
-Status: in progress
+Status: merged (`b5aa65e`)
 
 Owner: Codex task
 Branch: `codex/wu-080-discord-sync-batching`
@@ -1395,7 +1395,8 @@ Scope: page the explicit Discord Sync all meetings action across bounded Worker 
 Sources: v0.22.0 supported-provider validation; `apps/api/src/index.ts`; `apps/dashboard/src/integration-settings.tsx`; `tests-ts/worker-runtime.test.ts`; `tests-browser/settings-conformance.spec.ts`; WU-078.
 Acceptance: a 48-meeting Discord backfill completes through bounded requests without the Worker subrequest-limit error; each meeting is selected once during a successful action; permission or rate-limit failures stop further client batches while retaining queued work; scheduled retries cannot process more than the bounded operation count in one invocation; summary counts remain accurate and no event is duplicated.
 Verification: `npm run verify:api`; `npm run verify:dashboard`; focused runtime coverage for multi-page sync and operation limits; focused Integrations browser coverage; unfiltered browser suite after integration; supported-server validation before patch release.
-Release: patch release after live-provider verification.
+Integration: candidate `27209fc` was merged into `main` as `b5aa65e68bd1566460a4c48cd5fbe7771f3065a6`. Review confirmed that explicit Discord backfills advance through stable meeting cursors in ten-meeting Worker invocations, scheduled processing uses the same ten-operation cap, malformed cursors fail before provider work, successful page totals aggregate in the dashboard, and a failed page with queued work stops later client requests. On the integrated tree, `npm run verify:api` passed 121 API/runtime tests plus API/shared typechecks, `npm run verify:dashboard` passed 40 dashboard tests plus dashboard typecheck, the focused responsive Integrations browser matrix passed 3/3, and the complete browser suite passed 147/147. Automated tests used provider fakes and sent no live provider traffic.
+Release: patch release after supported-server validation.
 
 ## Release bundling
 

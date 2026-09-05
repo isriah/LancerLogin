@@ -5,7 +5,7 @@ description: "Review and serially merge completed LancerLogin work-unit branches
 
 # LancerLogin Work-Unit Integration
 
-Read `AGENTS.md`, `docs/WORKFLOW.md`, and `docs/future_work.md` before acting. If this task owns a multi-WU goal, do not integrate inline; create a dedicated integration task for the named candidate or bounded cohort. In the dedicated integration task, inspect each implementation handoff, branch or recorded candidate commit, changed files, and verification. Read the relevant product documentation when a WU changes a high-risk surface.
+Read `AGENTS.md`, `docs/WORKFLOW.md`, and `docs/future_work.md` before acting. For a multi-WU goal, run integration in the goal-owning coordinator so its direct user authorization remains available; do not create a separate integration task or ask the user to repeat approval there. Inspect each implementation handoff, branch or recorded candidate commit, changed files, and verification. Read the relevant product documentation when a WU changes a high-risk surface.
 
 ## Invocation modes
 

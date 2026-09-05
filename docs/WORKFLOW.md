@@ -44,9 +44,11 @@ For a substantial initiative, save a durable plan in `docs/PLANS/<initiative>.md
 
 A request or durable goal that selects multiple WUs, `all` current WUs, or WU work plus integration or release packaging uses a coordinator task as its control plane. The selected WU IDs and authorized phases form a fixed goal snapshot; later inbox entries or WUs are excluded unless the user expands the goal. An explicit multi-WU goal authorizes creation of the supporting Codex tasks needed for those selected phases, but it does not imply deployment, cloud mutation, or Pi access.
 
-The goal-owning task remains orchestration-only for the life of the goal. It may assess dependencies and overlap, launch and monitor tasks, ask product questions, and evaluate concise handoffs. It does not rename itself after a WU, implement or test a WU, integrate a candidate, or package the release.
+The goal-owning task remains the coordinator and trusted authorization boundary for the life of the goal. It may assess dependencies and overlap, launch and monitor implementation tasks, ask product questions, evaluate handoffs, serially integrate candidates, and package an explicitly authorized release. It does not rename itself after a WU or implement and test a WU.
 
-For each WU, create a dedicated Worktree task and `codex/wu-<id>-<short-name>` branch. Independent WUs may form a bounded parallel cohort. Dependent or overlapping WUs still receive their own tasks, but launch only after the prerequisite or overlapping unit is integrated. Once a candidate or bounded cohort is ready, create a separate integration task for exactly those WU IDs. If release packaging is part of the goal, create a separate release task only after the goal's required WUs are merged and the release authorization and repository boundary are clear.
+For each WU, create a dedicated Worktree task and `codex/wu-<id>-<short-name>` branch. Independent WUs may form a bounded parallel cohort. Dependent or overlapping WUs still receive their own tasks, but launch only after the prerequisite or overlapping unit is integrated. The implementation task's coordinator-issued assignment is sufficient authorization to implement, verify, and commit that named WU; it must not ask the user to repeat approval. Once a candidate or bounded cohort is ready, the coordinator invokes `$ll-integrate` itself for exactly those WU IDs. If release packaging is part of the goal, the coordinator invokes `$ll-release` itself only after the required WUs are merged and the explicit release authorization and repository boundary are clear.
+
+Keep user-authority-sensitive mutations in the coordinator instead of relaying approval to an integration or release task. A child implementation task stops and reports a material decision or scope expansion to the coordinator, which asks the user when needed. Host or sandbox permission dialogs are separate product controls; this workflow change removes duplicate conversational approval prompts and does not bypass those controls.
 
 Use bounded task-status and wait summaries for routine monitoring. Read a task's detailed history or output only to resolve missing, stale, or conflicting handoff evidence. The coordinator asks user decisions itself, records an approved decision when required, and then launches the affected WU in a fresh implementation task.
 
@@ -58,21 +60,21 @@ Observable workflow checks for this mode are: every WU has a distinct task and b
 
 Use `$ll-wu-develop WU-###`. The implementation task reads the named sources, makes only in-scope changes, runs focused verification, reviews its diff, and commits the result. It reports a commit SHA, changed files, verification, and risks.
 
-For ordinary serial work, the same task can update the WU status after its commit is safely on `main`. For parallel work, the implementation task leaves `docs/future_work.md` unchanged; the integration task updates it after the branch is merged.
+For ordinary serial work, the same task can update the WU status after its commit is safely on `main`. For parallel work, the implementation task leaves `docs/future_work.md` unchanged; the task invoking `$ll-integrate` updates it after the branch is merged.
 
-Branch-local verification is candidate evidence, not the final integration result. The integration task reruns the combined affected checks after each merge and records `merged` only after those checks pass.
+Branch-local verification is candidate evidence, not the final integration result. The task invoking `$ll-integrate` reruns the combined affected checks after each merge and records `merged` only after those checks pass.
 
 ### 6. Use parallel work deliberately
 
 Parallelism is useful only for independently mergeable work. Before creating Worktree tasks, inspect the WUs' scopes and sources. Do not run units in parallel when they may overlap in a feature surface, shared component, API/data contract, migration/schema, authorization rule, deployment configuration, or shared documentation file.
 
-Create a separate Worktree and `codex/wu-<id>-<short-name>` branch for each approved independent WU. Start them manually from their committed base. Outside an explicitly authorized multi-WU goal, do not use a persistent coordinator to repeatedly poll or provision an entire backlog. Inside such a goal, the coordinator is limited to the fixed goal snapshot and the orchestration-only rules above.
+Create a separate Worktree and `codex/wu-<id>-<short-name>` branch for each approved independent WU. Start them manually from their committed base. Outside an explicitly authorized multi-WU goal, do not use a persistent coordinator to repeatedly poll or provision an entire backlog. Inside such a goal, the coordinator is limited to the fixed goal snapshot and the coordinator rules above.
 
 Assess overlap at the contract and edited-region level, not just by broad files such as `index.ts` or a centralized test file. Record branch, base, and Worktree before implementation starts. `npm run test:browser` assigns a worktree-specific cache and port range, so independent browser checks can run concurrently without attaching to another task's fixture server.
 
 To assess the whole ready ledger, use `$ll-coordinator assess all`. To approve its immediately preceding recommended first batch without retyping IDs, reply `$ll-coordinator launch suggested`. The coordinator rechecks that suggestion against the current ledger before creating any tasks; if it has become stale, it shows a fresh assessment instead of launching.
 
-When a branch is ready, invoke `$ll-integrate WU-###`. A dedicated integration task may name a bounded cohort, for example `$ll-integrate WU-061 WU-066`; it integrates only those candidates serially. Integration inspects each handoff, updates the branch against current `main`, runs affected verification, merges, and records the result. Archive the implementation task only after its final evidence is recorded.
+When a branch is ready, invoke `$ll-integrate WU-###`. The invoking task may name a bounded cohort, for example `$ll-integrate WU-061 WU-066`; it integrates only those candidates serially. In a multi-WU goal, invoke it in the coordinator rather than creating an integration sub-task. Integration inspects each handoff, updates the branch against current `main`, runs affected verification, merges, and records the result. Archive the implementation task only after its final evidence is recorded.
 
 To inspect several completed branches without making changes, use `$ll-integrate preview all`; it reports the safe serial merge order and includes explicitly recorded detached candidates. Use `$ll-integrate all` to authorize immediate integration of every eligible candidate. It reports the order and exclusions, revalidates each candidate before merging it, and stops at the first stale record, missing evidence, conflict, or failed verification.
 

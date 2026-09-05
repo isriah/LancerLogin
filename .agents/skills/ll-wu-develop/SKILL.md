@@ -11,6 +11,8 @@ In a dedicated implementation task, read every source the WU names before changi
 
 Confirm the unit is `ready` or explicitly assigned to this task. For work launched by a multi-WU goal, confirm this is the dedicated task in its recorded Worktree and `codex/wu-...` branch. For other parallel work, make the same confirmation. For ordinary single-WU serial work, use the branch/check-out the user authorized; do not create unrelated branches or tasks.
 
+A coordinator-issued assignment to a dedicated Worktree task authorizes implementation, focused verification, and a candidate commit for the named WU. Do not ask the user to repeat that approval in this task. Stop and report to the coordinator only for a material decision, scope expansion, or action outside implementation; never merge, release, deploy, mutate cloud resources, or update the Pi from this task.
+
 Implement only the selected unit. Follow its scope, acceptance criteria, verification, and relevant product documentation. Add or update focused tests for behavior changes. Inspect the final diff against acceptance criteria, then commit the work. Start the commit subject with the selected WU ID, for example `WU-019: clarify contest resolution failures`.
 
 For a parallel branch, do not edit `docs/future_work.md` or merge. Report the commit SHA, changed files, verification, and integration risks for `$ll-integrate`. For a serial local change that the user authorized on `main`, update the WU to `merged` only after the commit is safely on `main` and record its release impact.

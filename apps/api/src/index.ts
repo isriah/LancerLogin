@@ -884,15 +884,18 @@ async function discordRequest(config: Record<string, string>, path: string, init
   throw new HttpError(502, "Discord request did not complete");
 }
 const discordMessageMissing = (error: unknown): error is DiscordResponseError => error instanceof DiscordResponseError && error.discordStatus === 404 && error.discordCode === 10_008;
-async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string, string>, stateKey: string, content: string, pin = false): Promise<{ changed: boolean; messageId: string }> {
-  const contentHash = await sha256(content); const messagesPath = `/channels/${encodeURIComponent(config.channelId)}/messages`;
+type DiscordMessageComponents = { type: number; components: { type: number; style: number; label: string; custom_id: string }[] }[];
+const discordAttendanceReportComponents: DiscordMessageComponents = [{ type: 1, components: [{ type: 2, style: 1, label: "View my attendance report", custom_id: "lancerlogin-attendance-report" }] }];
+async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string, string>, stateKey: string, content: string, pin = false, components?: DiscordMessageComponents): Promise<{ changed: boolean; messageId: string }> {
+  const payload = { content, allowed_mentions: { parse: [] }, ...(components ? { components } : {}) };
+  const contentHash = await sha256(components ? JSON.stringify({ content, components }) : content); const messagesPath = `/channels/${encodeURIComponent(config.channelId)}/messages`;
   const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?").bind(stateKey).first<{ externalId?: string; contentHash?: string }>();
   let messageId = existing?.externalId ?? ""; let changed = false;
   if (messageId) {
     try {
       if (existing?.contentHash === contentHash) await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "GET" });
       else {
-        const { body } = await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "PATCH", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) });
+        const { body } = await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "PATCH", body: JSON.stringify(payload) });
         messageId = String(body.id ?? messageId); changed = true;
       }
     } catch (error) {
@@ -901,7 +904,7 @@ async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string
     }
   }
   if (!messageId) {
-    const { body } = await discordRequest(config, messagesPath, { method: "POST", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) });
+    const { body } = await discordRequest(config, messagesPath, { method: "POST", body: JSON.stringify(payload) });
     messageId = String(body.id ?? ""); changed = true;
     if (!messageId) throw new HttpError(502, "Discord did not return a managed message identifier");
   }
@@ -1076,7 +1079,7 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
   let parsed: unknown;
   try { parsed = JSON.parse(raw); } catch { return discordEphemeral("This Discord request is malformed. Try the command again, or ask an Operator for help."); }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return discordEphemeral("This Discord request is malformed. Try the command again, or ask an Operator for help.");
-  const interaction = parsed as { type?: number; guild_id?: string; data?: { custom_id?: string; name?: string; options?: { name?: string; value?: string }[] }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
+  const interaction = parsed as { type?: number; guild_id?: string; channel_id?: string; data?: { custom_id?: string; name?: string; options?: { name?: string; value?: string }[] }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
   if (interaction.type === 1) return response({ type: 1 });
   const customId = interaction.data?.custom_id ?? ""; const rawDiscordUserId = interaction.member?.user?.id ?? interaction.user?.id; const discordUserId = typeof rawDiscordUserId === "string" && /^\d{10,24}$/.test(rawDiscordUserId) ? rawDiscordUserId : undefined; const messageId = interaction.message?.id; const db = requireDatabase(env);
   if (record.enabled === 0) return discordEphemeral("LancerLogin's Discord integration is disabled. Ask an Admin to enable and verify it before trying again.");
@@ -1091,6 +1094,14 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
   if (interaction.type === 2 && interaction.data?.name === "attendance-report") {
     if (interaction.guild_id !== config.guildId) return discordEphemeral("Use this command in the Discord server configured for this LancerLogin installation.");
     if (!discordUserId || interaction.data.options !== undefined && (!Array.isArray(interaction.data.options) || interaction.data.options.length > 0)) return discordEphemeral("This attendance-report request is malformed. Try /attendance-report again, or ask an Operator for help.");
+    return discordEphemeral(await discordAttendanceReport(db, discordUserId));
+  }
+  if (interaction.type === 3 && customId === "lancerlogin-attendance-report") {
+    if (interaction.guild_id !== config.guildId) return discordEphemeral("Use this button in the Discord server configured for this LancerLogin installation.");
+    if (!discordUserId || !messageId || interaction.channel_id !== config.channelId) return discordEphemeral("This attendance-report button is invalid or expired. Ask an Operator for help.");
+    const manager = await db.prepare("SELECT discord_channel_manager_enabled AS enabled FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number }>();
+    const tracked = await db.prepare("SELECT external_id AS externalId FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'channel-manager-howto'").first<{ externalId?: string }>();
+    if (!manager?.enabled || !tracked?.externalId || tracked.externalId !== messageId) return discordEphemeral("This attendance-report button is invalid or expired. Ask an Operator for help.");
     return discordEphemeral(await discordAttendanceReport(db, discordUserId));
   }
   if (interaction.type === 2 && interaction.data?.name === "pair" && discordUserId && interaction.guild_id === config.guildId) {
@@ -1201,8 +1212,8 @@ async function syncDiscordManagedSurface(env: Env): Promise<void> {
   if (!settings?.enabled) { await syncDiscordKioskStatus(env); return; }
   const config = await discordConfiguration(env);
   await syncDiscordKioskStatus(env, true);
-  const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. After an absence notice appears, only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
-  await upsertTrackedDiscordMessage(db, config, "channel-manager-howto", guidance);
+  const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. Use **View my attendance report** below or `/attendance-report` to receive your private report. After an absence notice appears, only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
+  await upsertTrackedDiscordMessage(db, config, "channel-manager-howto", guidance, false, discordAttendanceReportComponents);
 }
 async function discordKioskStatus(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]);

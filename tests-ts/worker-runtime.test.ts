@@ -950,7 +950,7 @@ test("Discord verification reconciles the two managed guild commands before its 
     if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: "103456789012345678" });
     if (url.endsWith("/guilds/123456789012345678")) return Response.json({ id: "123456789012345678" });
     if (url.endsWith("/channels/223456789012345678")) return Response.json({ guild_id: "123456789012345678", type: 0 });
-    if (url.endsWith("/commands")) return Response.json((JSON.parse(String(init?.body)) as Record<string, unknown>[]).map((command, index) => ({ ...command, id: `command-${index + 1}`, application_id: "103456789012345678", guild_id: "123456789012345678" })));
+    if (url.endsWith("/commands")) return Response.json((JSON.parse(String(init?.body)) as Record<string, unknown>[]).map((command, index) => ({ ...command, id: `command-${index + 1}`, application_id: "103456789012345678", guild_id: "123456789012345678", options: Array.isArray(command.options) ? command.options.map((option) => ({ ...option, name_localizations: null, description_localizations: null, autocomplete: false })) : undefined })));
     if (url.endsWith("/channels/223456789012345678/messages")) return Response.json({ id: "verification-message-1" });
     throw new Error(`Unexpected live request: ${url}`);
   };

@@ -1312,7 +1312,8 @@ const discordManagedCommands: DiscordApplicationCommand[] = [
   { name: "attendance-report", type: 1, description: "Privately view your current LancerLogin attendance report" },
 ];
 function discordCommandMatches(actual: DiscordApplicationCommand, expected: DiscordApplicationCommand, config: Record<string, string>): boolean {
-  return actual.application_id === config.applicationId && actual.guild_id === config.guildId && actual.name === expected.name && actual.type === expected.type && actual.description === expected.description && JSON.stringify(actual.options ?? []) === JSON.stringify(expected.options ?? []);
+  const optionShape = (option: NonNullable<DiscordApplicationCommand["options"]>[number]) => ({ name: option.name, description: option.description, type: option.type, required: Boolean(option.required) });
+  return actual.application_id === config.applicationId && actual.guild_id === config.guildId && actual.name === expected.name && actual.type === expected.type && actual.description === expected.description && JSON.stringify((actual.options ?? []).map(optionShape)) === JSON.stringify((expected.options ?? []).map(optionShape));
 }
 async function reconcileDiscordApplicationCommands(config: Record<string, string>): Promise<void> {
   const application = await discordRequest<{ id?: string }>(config, "/oauth2/applications/@me", { method: "GET" });

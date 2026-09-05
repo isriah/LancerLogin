@@ -115,9 +115,9 @@ test("setup and integration guides include sanitized annotated visual callouts",
   assert.match(operations, /pending queue, last sync, issue state, and installed release/);
   assert.match(operations, /spreadsheet formula markers as text/);
   assert.match(operations, /id="discord-commands"/);
-  assert.match(operations, /applications\/\{application\.id\}\/guilds\/\{guild\.id\}\/commands/);
-  assert.match(operations, /"name": "pair"[\s\S]*"name": "member-id"/);
-  assert.match(operations, /"name": "attendance-report"/);
+  assert.match(operations, /No manual HTTP request or command payload is required/);
+  assert.match(operations, /creates or updates exactly the guild-scoped <code>\/pair<\/code> and <code>\/attendance-report<\/code> commands/);
+  assert.doesNotMatch(operations, /POST \/applications|"name": "member-id"/);
   assert.match(operations, /ephemeral responses/);
 });
 

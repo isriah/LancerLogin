@@ -937,24 +937,74 @@ test("saved but unverified Resend credentials cannot send attendance email", asy
   assert.equal(result.status, 503); assert.match((await result.json() as { error: string }).error, /verification is required/);
 });
 
-test("Discord verification checks the bot, server, channel, and signed user click", async () => {
+test("Discord verification reconciles the two managed guild commands before its signed user click", async () => {
   const database = new FakeDatabase(); const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
-  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", applicationId: "103456789012345678", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: null });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; const outbound: Array<{ input: string; init?: RequestInit }> = [];
-  globalThis.fetch = async (input, init) => { outbound.push({ input: String(input), init }); const id = String(input).includes("/channels/") ? "verification-message-1" : "validated"; return new Response(JSON.stringify({ id }), { headers: { "content-type": "application/json" } }); };
+  globalThis.fetch = async (input, init) => {
+    const url = String(input); outbound.push({ input: url, init });
+    if (url.endsWith("/users/@me")) return Response.json({ id: "bot-1" });
+    if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: "103456789012345678" });
+    if (url.endsWith("/guilds/123456789012345678")) return Response.json({ id: "123456789012345678" });
+    if (url.endsWith("/channels/223456789012345678")) return Response.json({ guild_id: "123456789012345678", type: 0 });
+    if (url.endsWith("/commands")) return Response.json((JSON.parse(String(init?.body)) as Record<string, unknown>[]).map((command, index) => ({ ...command, id: `command-${index + 1}`, application_id: "103456789012345678", guild_id: "123456789012345678" })));
+    if (url.endsWith("/channels/223456789012345678/messages")) return Response.json({ id: "verification-message-1" });
+    throw new Error(`Unexpected live request: ${url}`);
+  };
   try {
     const started = await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env);
-    assert.equal(started.status, 202); assert.match(outbound[0].input, /users\/@me$/); assert.match(outbound[1].input, /guilds\/123456789012345678$/); assert.match(outbound[2].input, /channels\/223456789012345678\/messages$/);
-    const payload = JSON.parse(String(outbound[2].init?.body)); const customId = payload.components[0].components[0].custom_id as string; const token = customId.slice("lancerlogin-verify:".length);
+    assert.equal(started.status, 202); assert.match(outbound[0].input, /users\/@me$/); assert.match(outbound[1].input, /oauth2\/applications\/@me$/); assert.match(outbound[2].input, /guilds\/123456789012345678$/); assert.match(outbound[3].input, /channels\/223456789012345678$/); assert.match(outbound[4].input, /applications\/103456789012345678\/guilds\/123456789012345678\/commands$/); assert.equal(outbound[4].init?.method, "PUT"); assert.match(outbound[5].input, /channels\/223456789012345678\/messages$/);
+    assert.equal(outbound.every(({ input }) => input.startsWith("https://discord.com/api/v10/")), true); assert.equal(outbound.some(({ input }) => /\/applications\/103456789012345678\/commands$/.test(input)), false);
+    assert.deepEqual(JSON.parse(String(outbound[4].init?.body)), [{ name: "pair", type: 1, description: "Link your Discord account to your LancerLogin member ID", options: [{ name: "member-id", description: "Your LancerLogin member ID", type: 3, required: true }] }, { name: "attendance-report", type: 1, description: "Privately view your current LancerLogin attendance report" }]);
+    const payload = JSON.parse(String(outbound[5].init?.body)); const customId = payload.components[0].components[0].custom_id as string; const token = customId.slice("lancerlogin-verify:".length);
     const challengeWrite = database.calls.find((call) => call.sql.includes("INSERT INTO integration_verification_challenges")); assert.ok(challengeWrite); assert.equal(challengeWrite.values[0], createHash("sha256").update(token).digest("base64url")); assert.equal(challengeWrite.values.includes(token), false);
     database.rows.set("FROM integration_verification_challenges", { challengeHash: challengeWrite.values[0], target: "123456789012345678", externalId: "verification-message-1", expiresAt: new Date(Date.now() + 60_000).toISOString() });
     const body = JSON.stringify({ type: 3, guild_id: "123456789012345678", data: { custom_id: customId }, member: { user: { id: "323456789012345678" } }, message: { id: "verification-message-1" } }); const timestamp = String(Math.floor(Date.now() / 1000)); const signature = sign(null, Buffer.from(timestamp + body), privateKey).toString("hex");
     const interaction = new Request("https://api.example.test/discord/interactions", { method: "POST", headers: { "content-type": "application/json", "x-signature-ed25519": signature, "x-signature-timestamp": timestamp }, body });
     const verified = await worker.fetch(interaction, env); assert.equal(verified.status, 200); assert.match(JSON.stringify(await verified.json()), /LancerLogin is verified/); assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("UPDATE encrypted_integrations SET verified_at")));
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Discord configuration requires and encrypts its application and guild identifiers", async () => {
+  const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const config = { botToken: "discord-secret", applicationId: "103456789012345678", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) };
+  assert.equal((await worker.fetch(request("/admin/integrations/discord", config, { method: "PUT", cookie: await sessionCookie("operator") }), env)).status, 403);
+  for (const invalid of [{ ...config, applicationId: "" }, { ...config, applicationId: "not-a-snowflake" }, { ...config, guildId: "123" }, { ...config, channelId: "channel" }]) assert.equal((await worker.fetch(request("/admin/integrations/discord", invalid, { method: "PUT", cookie: await sessionCookie("admin") }), env)).status, 400);
+  const saved = await worker.fetch(request("/admin/integrations/discord", config, { method: "PUT", cookie: await sessionCookie("admin") }), env); assert.equal(saved.status, 200); const publicBody = await saved.text();
+  for (const secret of Object.values(config)) assert.equal(publicBody.includes(secret), false);
+  const write = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO encrypted_integrations")); assert.ok(write); for (const secret of Object.values(config)) assert.equal(write.values.some((value) => String(value).includes(secret)), false);
+});
+
+test("Discord command setup is repeat-safe across reruns and credential rotation", async () => {
+  const database = new FakeDatabase(); const config = { botToken: "discord-secret", applicationId: "103456789012345678", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) };
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration(config, sessionSecret), verifiedAt: null });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const commandBodies: unknown[] = []; const authorizations: string[] = [];
+  globalThis.fetch = async (input, init) => { const url = String(input); authorizations.push(String((init?.headers as Record<string, string>).authorization)); if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: config.applicationId }); if (url.endsWith(`/guilds/${config.guildId}`)) return Response.json({ id: config.guildId }); if (url.endsWith(`/channels/${config.channelId}`)) return Response.json({ guild_id: config.guildId, type: 0 }); if (url.endsWith("/commands")) { const body = JSON.parse(String(init?.body)) as Record<string, unknown>[]; commandBodies.push(body); return Response.json(body.map((item, index) => ({ ...item, id: `command-${index}`, application_id: config.applicationId, guild_id: config.guildId }))); } if (url.includes("/channels/")) return Response.json({ id: crypto.randomUUID() }); return Response.json({ id: "bot-1" }); };
+  try {
+    assert.equal((await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env)).status, 202);
+    assert.equal((await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env)).status, 202);
+    const rotated = { ...config, botToken: "rotated-discord-secret" }; database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration(rotated, sessionSecret), verifiedAt: null });
+    assert.equal((await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env)).status, 202);
+    assert.equal(commandBodies.length, 3); assert.deepEqual(commandBodies[0], commandBodies[1]); assert.deepEqual(commandBodies[1], commandBodies[2]); assert.ok(authorizations.includes("Bot rotated-discord-secret"));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Discord command setup reports identity, credential, permission, rate-limit, validation, and partial failures safely", async () => {
+  const base = { botToken: "discord-secret", applicationId: "103456789012345678", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) };
+  const run = async (failure: "application" | "guild" | "channel" | "credential" | "permission" | "rate" | "validation" | "partial" | "message") => {
+    const database = new FakeDatabase(); database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration(base, sessionSecret), verifiedAt: null }); const calls: string[] = [];
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const originalFetch = globalThis.fetch; globalThis.fetch = async (input, init) => { const url = String(input); calls.push(url); if (failure === "credential" && url.endsWith("/users/@me")) return Response.json({ message: "401: Unauthorized" }, { status: 401 }); if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: failure === "application" ? "999999999999999999" : base.applicationId }); if (url.endsWith(`/guilds/${base.guildId}`)) return Response.json({ id: failure === "guild" ? "999999999999999999" : base.guildId }); if (url.endsWith(`/channels/${base.channelId}`)) return Response.json({ guild_id: failure === "channel" ? "999999999999999999" : base.guildId, type: 0 }); if (url.endsWith("/commands")) { if (failure === "permission") return Response.json({ message: "Missing Access" }, { status: 403 }); if (failure === "rate") return Response.json({ message: "rate limited", retry_after: 0 }, { status: 429 }); if (failure === "validation") return Response.json({ message: "Invalid Form Body" }, { status: 400 }); const body = JSON.parse(String(init?.body)) as Record<string, unknown>[]; const confirmed = body.map((item, index) => ({ ...item, id: `command-${index}`, application_id: base.applicationId, guild_id: base.guildId })); return Response.json(failure === "partial" ? confirmed.slice(0, 1) : confirmed); } if (url.endsWith(`/channels/${base.channelId}/messages`) && failure === "message") return Response.json({ message: "Missing Access" }, { status: 403 }); if (url.includes("/channels/")) return Response.json({ id: "verification-message-1" }); return Response.json({ id: "bot-1" }); };
+    try { const result = await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env); return { result, database, calls }; } finally { globalThis.fetch = originalFetch; }
+  };
+  const expectations = { application: /does not belong to this bot token/, guild: /different server/, channel: /attendance channel must be a text channel/, credential: /rejected the saved bot token/, permission: /denied command management/, rate: /rate limiting command setup/, validation: /rejected the managed command configuration/, partial: /did not confirm both managed commands/, message: /missing a required permission/ } as const;
+  for (const [failure, pattern] of Object.entries(expectations) as [keyof typeof expectations, RegExp][]) {
+    const { result, database, calls } = await run(failure); assert.ok([400, 502, 503].includes(result.status), failure); const payload = JSON.stringify(await result.json()); assert.match(payload, pattern, failure); assert.doesNotMatch(payload, /discord-secret/, failure); assert.equal(database.calls.some((call) => call.sql.includes("INSERT INTO integration_verification_challenges")), false, failure); if (failure !== "message") assert.equal(calls.some((url) => url.includes(`/channels/${base.channelId}/messages`)), false, failure);
+  }
 });
 
 test("signed Discord attendance reports match canonical reporting and attendance semantics", async () => {

@@ -572,7 +572,8 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /resend\/verify\/start/);
   assert.match(source, /resend\/verify\/complete/);
   assert.match(source, /discord\/verify\/start/);
-  assert.match(source, /operations\.html#discord-commands/);
+  assert.match(source, /field="applicationId" label="Application ID"/);
+  assert.match(source, /During verification, LancerLogin creates or updates only the guild-scoped/);
   assert.match(source, /<code>\/attendance-report<\/code>/);
   assert.match(source, /Verify with Google/);
   assert.match(source, /Google Calendar is ready\. New meetings will be copied automatically\./);

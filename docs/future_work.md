@@ -1293,7 +1293,7 @@ Release: `v0.22.0`.
 
 ### WU-076 — Chronological meeting table ordering
 
-Status: in progress
+Status: merged (`92a275c`)
 
 Owner: Codex task
 Branch: `codex/wu-076-chronological-meeting-table-ordering`
@@ -1301,6 +1301,7 @@ Base: `9ff534d19c6989967451e6cc2b58e70e02c8f8b5`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\00a6\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:f630f680-e145-4198-84a3-082a32fc7b1f`
 Handoff: branch is clean at candidate `5dcb220b5b40d72c8a0abf495b304e06bc2723ba` with subject `WU-076: order meeting table chronologically`; the candidate changes only the meeting Table view and its focused browser coverage.
+Integration: candidate `5dcb220b5b40d72c8a0abf495b304e06bc2723ba` was updated onto current `main` and merged as `92a275c8b6b1a49ad5e7074bd9c9eaa445ed1c27`. Before advancing `main`, `npm run verify:dashboard` passed 40 dashboard tests plus dashboard typecheck and the focused `tests-browser/dashboard-meeting-browser.spec.ts` run passed all 16 tests. On the merged tree, `npm run verify:dashboard` again passed 40 dashboard tests plus dashboard typecheck, and the complete 142-test browser suite passed. Focused coverage proves deterministic oldest-to-newest Table rows, stable source order for equal start times, canonical keyboard row navigation, saved Table choice, search/selection/bulk-action independence, and responsive light/dark adopter-branded presentation without page overflow. Release impact remains `v0.22.0`; no release, deployment, cloud mutation, or Pi update occurred.
 
 Goal: make downward movement through the Dashboard's meeting Table view consistently move from older meetings toward future meetings.
 Dependencies: none; the user confirmed IN-089 targets the meetings displayed as Table view rows, not either meeting dropdown or the five-week visual calendar

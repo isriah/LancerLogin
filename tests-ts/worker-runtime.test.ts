@@ -534,6 +534,37 @@ test("Discord kiosk status does not recreate a message for unrelated Discord fai
   }
 });
 
+test("Admins manage ordered meeting-weight categories while Operators receive only active choices", async () => {
+  const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const admin = await sessionCookie("admin"); const operator = await sessionCookie("operator");
+  database.lists.set("SELECT id, name, weight, minimum_duration_minutes AS minimumDurationMinutes", [{ id: "weight-2", name: "Long", weight: 2, minimumDurationMinutes: 180, position: 0, active: 1 }]);
+  assert.equal((await worker.fetch(request("/meeting-weight-categories", undefined, { cookie: operator }), env)).status, 200);
+  assert.equal((await worker.fetch(request("/admin/meeting-weight-categories", { name: "Blocked", weight: 2 }, { cookie: operator }), env)).status, 403);
+  assert.equal((await worker.fetch(request("/admin/meeting-weight-categories", { name: "Invalid", weight: 0 }, { cookie: admin }), env)).status, 400);
+  database.rows.set("COALESCE(MAX(position)", { position: 0 });
+  const created = await worker.fetch(request("/admin/meeting-weight-categories", { name: "Extended rehearsal", weight: 2.5, minimumDurationMinutes: 180 }, { cookie: admin }), env);
+  assert.equal(created.status, 201); const createBatch = database.batches.at(-1) ?? []; const insert = createBatch.find((call) => call.sql.includes("INSERT INTO meeting_weight_categories")); assert.ok(insert); assert.deepEqual(insert.values.slice(1, 5), ["Extended rehearsal", 2.5, 180, 1]); assert.ok(createBatch.some((call) => call.sql.includes("meeting_weight_category.created")));
+  database.lists.set("SELECT id FROM meeting_weight_categories", [{ id: "weight-2" }, { id: "weight-3" }]);
+  const reordered = await worker.fetch(request("/admin/meeting-weight-categories/order", { orderedIds: ["weight-3", "weight-2"] }, { method: "PATCH", cookie: admin }), env); assert.equal(reordered.status, 200); assert.equal(database.batches.at(-1)?.filter((call) => call.sql.includes("UPDATE meeting_weight_categories SET position")).length, 2);
+});
+
+test("category edits and retirement do not rewrite historical meeting snapshots", async () => {
+  const database = new FakeDatabase(); database.rows.set("SELECT id, name, weight, minimum_duration_minutes AS minimumDurationMinutes, position, active FROM meeting_weight_categories", { id: "weight-2", name: "Long", weight: 2, minimumDurationMinutes: 180, position: 0, active: 1 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const admin = await sessionCookie("admin");
+  const edited = await worker.fetch(request("/admin/meeting-weight-categories/weight-2", { name: "Extended", weight: 3, minimumDurationMinutes: 240 }, { method: "PATCH", cookie: admin }), env); assert.equal(edited.status, 200);
+  const update = database.calls.find((call) => call.sql.includes("UPDATE meeting_weight_categories SET name")); assert.deepEqual(update?.values.slice(0, 3), ["Extended", 3, 240]); assert.equal(database.calls.some((call) => call.sql.includes("UPDATE meetings")), false);
+  const retired = await worker.fetch(request("/admin/meeting-weight-categories/weight-2", { active: false }, { method: "PATCH", cookie: admin }), env); assert.equal(retired.status, 200); assert.ok(database.calls.some((call) => call.values.includes("meeting_weight_category.retired"))); assert.equal(database.calls.some((call) => call.sql.includes("UPDATE meetings")), false);
+});
+
+test("meeting creation uses the first matching weight rule and permits an explicit default", async () => {
+  const database = new FakeDatabase(); database.rows.set("time_zone AS timeZone", { timeZone: "UTC", lateScanMinutes: 30 }); database.rows.set("SELECT id, name, weight FROM meeting_weight_categories", { id: "weight-long", name: "Long meeting", weight: 2 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("operator");
+  const automatic = await worker.fetch(request("/meetings", { title: "Long rehearsal", startsAt: "2026-09-10T18:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z", required: true }, { cookie }), env); assert.equal(automatic.status, 201);
+  const weightedInsert = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO meetings")); assert.deepEqual(weightedInsert?.values.slice(-3), ["weight-long", "Long meeting", 2]);
+  const explicitDefault = await worker.fetch(request("/meetings", { title: "Manual default", startsAt: "2026-09-11T18:00:00.000Z", endsAt: "2026-09-11T22:00:00.000Z", required: true, weightCategoryId: null }, { cookie }), env); assert.equal(explicitDefault.status, 201);
+  const defaultInsert = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO meetings")); assert.deepEqual(defaultInsert?.values.slice(-3), [null, null, 1]);
+  assert.ok(database.calls.find((call) => call.sql.includes("minimum_duration_minutes <= ?"))?.values.includes(240));
+});
+
 test("Operator can create meetings and reasoned attendance corrections", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
@@ -666,12 +697,14 @@ test("Operator can update only an occurrence or this and future series occurrenc
     { id: "meeting-2", startsAt: "2026-09-08T20:00:00.000Z" },
     { id: "meeting-3", startsAt: "2026-09-15T20:00:00.000Z" },
   ]);
+  future.rows.set("SELECT id, name, weight FROM meeting_weight_categories", { id: "weight-3", name: "Major event", weight: 3 });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: future } as unknown as Env;
-  const result = await worker.fetch(request("/meeting-series/series-1", { meetingId: "meeting-2", title: "Updated series", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T23:00:00.000Z", required: false, notes: "Shifted" }, { method: "PATCH", cookie: await sessionCookie("operator") }), env);
+  const result = await worker.fetch(request("/meeting-series/series-1", { meetingId: "meeting-2", title: "Updated series", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T23:00:00.000Z", required: false, notes: "Shifted", weightCategoryId: "weight-3" }, { method: "PATCH", cookie: await sessionCookie("operator") }), env);
   assert.equal(result.status, 200);
   const updates = future.batches.at(-1)?.filter((call) => call.sql.includes("UPDATE meetings SET")) ?? [];
   assert.equal(updates.length, 2);
   assert.deepEqual(updates.map((call) => call.values.at(-1)), ["meeting-2", "meeting-3"]);
+  assert.ok(updates.every((call) => call.sql.includes("weight_category_id") && call.values.includes("weight-3") && call.values.includes(3)));
   assert.ok(future.batches.at(-1)?.some((call) => call.sql.includes("meeting.series_updated")));
 });
 
@@ -731,7 +764,7 @@ test("kiosk attendance is installation-scoped and idempotent by event ID", async
 
 test("attendance export is authenticated, quoted, and safe to open in spreadsheet software", async () => {
   const database = new FakeDatabase();
-  database.lists.set("FROM meetings mt", [{ meeting: "Studio, weekly", meetingStart: "2026-09-01T20:00:00Z", meetingEnd: "2026-09-01T22:00:00Z", memberId: "=HYPERLINK(\"https://example.test\")", firstName: "+Avery", lastName: "Stone", disposition: "present", checkedInAt: "2026-09-01T20:02:00Z", checkedOutAt: "2026-09-01T21:58:00Z", reason: null }]);
+  database.lists.set("FROM meetings mt", [{ meeting: "Studio, weekly", meetingStart: "2026-09-01T20:00:00Z", meetingEnd: "2026-09-01T22:00:00Z", weightCategory: "Extended", attendanceWeight: 2.5, memberId: "=HYPERLINK(\"https://example.test\")", firstName: "+Avery", lastName: "Stone", disposition: "present", checkedInAt: "2026-09-01T20:02:00Z", checkedOutAt: "2026-09-01T21:58:00Z", reason: null }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   assert.equal((await worker.fetch(request("/exports/attendance.csv"), env)).status, 401);
   const result = await worker.fetch(request("/exports/attendance.csv", undefined, { cookie: await sessionCookie("operator") }), env);
@@ -741,10 +774,12 @@ test("attendance export is authenticated, quoted, and safe to open in spreadshee
   assert.match(csv, /"Studio, weekly"/);
   assert.match(csv, /"'=HYPERLINK\(""https:\/\/example\.test""\)"/);
   assert.match(csv, /'\+Avery/);
+  assert.match(csv, /weightCategory,attendanceWeight/); assert.match(csv, /Extended,2\.5/); assert.match(csv, /present,2\.5,2\.5,2\.5/);
   const exportQuery = database.calls.find((call) => call.sql.includes("FROM meetings mt"));
   assert.match(exportQuery?.sql ?? "", /ORDER BY c\.created_at DESC/);
   assert.match(exportQuery?.sql ?? "", /e\.action = 'check_in'/);
   assert.match(exportQuery?.sql ?? "", /e\.action = 'check_out'/);
+  assert.match(exportQuery?.sql ?? "", /mt\.attendance_weight AS attendanceWeight/);
 });
 
 test("first integration save encrypts secrets and requires verification", async () => {
@@ -890,8 +925,8 @@ test("signed Discord attendance reports match canonical reporting and attendance
   database.lists.set("discord_user_id = ?", [{ id: "member-1", active: 1, rosterAddedAt: "2026-08-01T00:00:00Z", attendanceRequiredFrom: "2026-08-15" }]);
   database.rows.set("late_scan_minutes AS lateScanMinutes, attendance_reporting_starts_on", { lateScanMinutes: 30, attendanceReportingStartsOn: "2026-09-01" });
   database.lists.set("SELECT mt.title", [
-    { title: "Complete attendance", startsAt: "2026-09-07T20:00:00Z", endsAt: "2026-09-07T21:00:00Z", checkedInAt: "2026-09-07T20:01:00Z", checkedOutAt: "2026-09-07T20:59:00Z" },
-    { title: "No scan", startsAt: "2026-09-06T20:00:00Z", endsAt: "2026-09-06T21:00:00Z" },
+    { title: "Complete attendance", startsAt: "2026-09-07T20:00:00Z", endsAt: "2026-09-07T21:00:00Z", attendanceWeight: 2, checkedInAt: "2026-09-07T20:01:00Z", checkedOutAt: "2026-09-07T20:59:00Z" },
+    { title: "No scan", startsAt: "2026-09-06T20:00:00Z", endsAt: "2026-09-06T21:00:00Z", attendanceWeight: 3 },
     { title: "Corrected present", startsAt: "2026-09-05T20:00:00Z", endsAt: "2026-09-05T21:00:00Z", correction: "present" },
     { title: "Excused meeting", startsAt: "2026-09-04T20:00:00Z", endsAt: "2026-09-04T21:00:00Z", correction: "excused" },
     { title: "Optional meetup", startsAt: "2026-09-03T20:00:00Z", endsAt: "2026-09-03T21:00:00Z" },
@@ -903,12 +938,12 @@ test("signed Discord attendance reports match canonical reporting and attendance
   assert.equal(result.status, 200);
   const body = await result.json() as { type: number; data: { content: string; flags: number; allowed_mentions: { parse: string[] } } };
   assert.equal(body.type, 4); assert.equal(body.data.flags, 64); assert.deepEqual(body.data.allowed_mentions, { parse: [] });
-  assert.match(body.data.content, /Attendance: \*\*29%\*\* \(2 of 7 completed meetings\)/);
+  assert.match(body.data.content, /Attendance: \*\*30%\*\* \(3 of 10 weighted meeting points across 7 completed meetings\)/);
   for (const expected of ["No scan", "Optional meetup", "Corrected absent", "Partial scan"]) assert.match(body.data.content, new RegExp(expected));
   assert.doesNotMatch(body.data.content, /Complete attendance|Corrected present|Excused meeting/);
   const reportQuery = database.calls.find((call) => call.sql.includes("SELECT mt.title"));
   assert.match(reportQuery?.sql ?? "", /mt\.deleted_at IS NULL/); assert.match(reportQuery?.sql ?? "", /mt\.is_test = 0/); assert.match(reportQuery?.sql ?? "", /mt\.ends_at <= \?/);
-  assert.match(reportQuery?.sql ?? "", /ORDER BY c\.created_at DESC, c\.id DESC/); assert.doesNotMatch(reportQuery?.sql ?? "", /mt\.required = 1/);
+  assert.match(reportQuery?.sql ?? "", /mt\.attendance_weight AS attendanceWeight/); assert.match(reportQuery?.sql ?? "", /ORDER BY c\.created_at DESC, c\.id DESC/); assert.doesNotMatch(reportQuery?.sql ?? "", /mt\.required = 1/);
   assert.deepEqual(reportQuery?.values.slice(-2), ["2026-08-15", "2026-09-01"]);
 });
 
@@ -921,7 +956,7 @@ test("Discord attendance reports handle empty and provider-bounded histories", a
     const result = await worker.fetch(signedDiscordInteraction({ type: 2, guild_id: "123456789012345678", data: { name: "attendance-report" }, member: { user: { id: "323456789012345678" } } }, privateKey), env);
     return (await result.json() as { data: { content: string } }).data.content;
   };
-  const empty = await run([]); assert.match(empty, /Attendance: \*\*0%\*\* \(0 of 0 completed meetings\)/); assert.match(empty, /No absent meetings/);
+  const empty = await run([]); assert.match(empty, /Attendance: \*\*0%\*\* \(0 of 0 weighted meeting points across 0 completed meetings\)/); assert.match(empty, /No absent meetings/);
   const long = await run(Array.from({ length: 80 }, (_, index) => ({ title: `Very long required or optional meeting ${index + 1} ${"x".repeat(90)}`, startsAt: `2026-08-${String(index % 28 + 1).padStart(2, "0")}T20:00:00Z`, endsAt: "2020-01-01T21:00:00Z" })));
   assert.ok(long.length <= 2_000); assert.match(long, /additional absent meetings omitted to fit Discord's response limit/); assert.ok((long.match(/^• /gm) ?? []).length < 80);
 });
@@ -1644,10 +1679,10 @@ test("Admin can link roster members to dashboard accounts while non-rostered acc
   const unlinked = await worker.fetch(request("/admin/users", { email: "staff@example.test", memberId: null, role: "admin" }, { cookie: await sessionCookie("admin") }), env); assert.equal(unlinked.status, 201);
 });
 
-test("category backups include reusable meeting templates without mixing unrelated tables", async () => {
-  const database = new FakeDatabase(); database.lists.set("FROM meetings", [{ id: "meeting-1" }]); database.lists.set("FROM meeting_templates", [{ id: "template-1" }]); database.lists.set("FROM attendance_events", []); database.lists.set("FROM attendance_corrections", []); database.lists.set("FROM discord_attendance_notifications", []); database.lists.set("FROM discord_attendance_recipients", []); database.lists.set("FROM discord_attendance_contests", []); database.lists.set("FROM discord_anomaly_reports", []);
+test("category backups include reusable meeting templates and weight definitions without mixing unrelated tables", async () => {
+  const database = new FakeDatabase(); database.lists.set("FROM meeting_weight_categories", [{ id: "weight-1" }]); database.lists.set("FROM meetings", [{ id: "meeting-1" }]); database.lists.set("FROM meeting_templates", [{ id: "template-1" }]); database.lists.set("FROM attendance_events", []); database.lists.set("FROM attendance_corrections", []); database.lists.set("FROM discord_attendance_notifications", []); database.lists.set("FROM discord_attendance_recipients", []); database.lists.set("FROM discord_attendance_contests", []); database.lists.set("FROM discord_anomaly_reports", []);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 200); const backup = await result.json() as { scope: string; tables: Record<string, unknown> }; assert.equal(backup.scope, "meetings"); assert.deepEqual(Object.keys(backup.tables).sort(), ["attendance_corrections", "attendance_events", "discord_anomaly_reports", "discord_attendance_contests", "discord_attendance_notifications", "discord_attendance_recipients", "meeting_templates", "meetings"]); assert.equal("members" in backup.tables, false); assert.match(result.headers.get("content-disposition") ?? "", /meetings-backup/);
+  const result = await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 200); const backup = await result.json() as { scope: string; tables: Record<string, unknown> }; assert.equal(backup.scope, "meetings"); assert.deepEqual(Object.keys(backup.tables).sort(), ["attendance_corrections", "attendance_events", "discord_anomaly_reports", "discord_attendance_contests", "discord_attendance_notifications", "discord_attendance_recipients", "meeting_templates", "meeting_weight_categories", "meetings"]); assert.equal("members" in backup.tables, false); assert.match(result.headers.get("content-disposition") ?? "", /meetings-backup/);
 });
 
 test("restore rejects a backup from another category before executing a batch", async () => {

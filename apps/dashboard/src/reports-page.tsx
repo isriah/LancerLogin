@@ -3,7 +3,7 @@ import { api,apiBaseUrl } from "./dashboard-api";
 import { RouteLink,usePath } from "./router";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
 
-type Meeting={ id: string; title: string; startsAt: string; endsAt: string; required: boolean|number; isTest?: boolean|number; };
+type Meeting={ id: string; title: string; startsAt: string; endsAt: string; required: boolean|number; isTest?: boolean|number; attendanceWeight?: number; weightCategoryName?: string|null; };
 type MeetingResponse={ meetings: Meeting[]; attendanceReportingStartsOn?: string|null; };
 type Row={ memberId: string; externalId: string; firstName: string; lastName: string; disposition: "present"|"active"|"absent"|"excused"|"not_required"; };
 type Contest={ meetingId: string; memberId: string; firstName: string; lastName: string; meetingTitle: string; status: "open"|"approved"|"rejected"|"reviewed"; createdAt: string; };
@@ -36,11 +36,11 @@ export function ReportsPage({ discordEnabled }: { discordEnabled: boolean; }) {
     for(const meeting of filteredMeetings) for(const row of rows[meeting.id]??[]) {
       if(rosterFilter==="active"&&!roster[row.memberId]) continue;
       const member=values.get(row.memberId)??{ memberId: row.memberId,externalId: row.externalId,firstName: row.firstName,lastName: row.lastName,present: 0,primaryTotal: 0,adjustedTotal: 0,history: [] };
-      member.present+=row.disposition==="present"? 1:0; member.primaryTotal+=row.disposition==="not_required"? 0:1; member.adjustedTotal+=row.disposition==="excused"||row.disposition==="not_required"? 0:1; member.history.push({ meeting,disposition: row.disposition }); values.set(row.memberId,member);
+      const weight=meeting.attendanceWeight??1; member.present+=row.disposition==="present"? weight:0; member.primaryTotal+=row.disposition==="not_required"? 0:weight; member.adjustedTotal+=row.disposition==="excused"||row.disposition==="not_required"? 0:weight; member.history.push({ meeting,disposition: row.disposition }); values.set(row.memberId,member);
     }
     return [...values.values()].sort((a,b) => sort==="first"? a.firstName.localeCompare(b.firstName)||a.lastName.localeCompare(b.lastName):sort==="last"? a.lastName.localeCompare(b.lastName)||a.firstName.localeCompare(b.firstName):percent(b.present,b.primaryTotal)-percent(a.present,a.primaryTotal)||a.lastName.localeCompare(b.lastName));
   },[filteredMeetings,rows,roster,rosterFilter,sort]);
-  const points=filteredMeetings.slice(-Number(range)).map((meeting) => { const data=(rows[meeting.id]??[]).filter((row) => rosterFilter==="all"||roster[row.memberId]); const eligible=data.filter((row) => row.disposition!=="not_required"); return { meeting,rate: percent(eligible.filter((row) => row.disposition==="present").length,eligible.length) }; });
+  const points=filteredMeetings.slice(-Number(range)).map((meeting) => { const data=(rows[meeting.id]??[]).filter((row) => rosterFilter==="all"||roster[row.memberId]); const eligible=data.filter((row) => row.disposition!=="not_required"); const weight=meeting.attendanceWeight??1; return { meeting,rate: percent(eligible.filter((row) => row.disposition==="present").length*weight,eligible.length*weight) }; });
   const trendSummary=points.map((point) => `${point.meeting.title} ${point.rate}%`).join("; ");
   const scope=`${filteredMeetings.length} completed meeting${filteredMeetings.length===1? "":"s"}${useBaseline&&baseline? ` in the operational reporting baseline (from ${baseline})`:effectiveFrom||to? ` from ${effectiveFrom||"the beginning"} through ${to||"today"}`:" across all preserved history"}`;
 

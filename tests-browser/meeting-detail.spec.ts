@@ -37,7 +37,7 @@ test("meeting detail presents lifecycle and operational context", async ({ page 
   const iso = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
   const meetings = [
     { id: "upcoming", title: "Upcoming meeting", startsAt: iso(10), endsAt: iso(70), attendanceClosesAt: iso(100), required: 0 },
-    { id: "progress", title: "Current meeting", startsAt: iso(-10), endsAt: iso(20), attendanceClosesAt: iso(50), required: 1, notes: "Use the east entrance.", recurrenceFrequency: "biweekly", recurrenceSequence: 3, recurrenceUntil: iso(30 * 24 * 60) },
+    { id: "progress", title: "Current meeting", startsAt: iso(-10), endsAt: iso(20), attendanceClosesAt: iso(50), required: 1, notes: "Use the east entrance.", recurrenceFrequency: "biweekly", recurrenceSequence: 3, recurrenceUntil: iso(30 * 24 * 60), weightCategoryId: "extended", weightCategoryName: "Extended", attendanceWeight: 2 },
     { id: "late", title: "Late meeting", startsAt: iso(-70), endsAt: iso(-10), attendanceClosesAt: iso(20), required: 1 },
     { id: "past", title: "Past meeting", startsAt: iso(-100), endsAt: iso(-60), attendanceClosesAt: iso(-30), required: 1 },
   ];
@@ -61,10 +61,12 @@ test("meeting detail presents lifecycle and operational context", async ({ page 
   await expect(summary).toContainText("Every two weeks · Occurrence 3");
   await expect(summary).toContainText("Use the east entrance.");
   await expect(summary).toContainText("Attendance closes");
+  await expect(summary).toContainText("Extended · 2×");
 });
 
 test("detail dialogs manage occurrence and future-series scope, return focus, and carry deletion Undo to Dashboard", async ({ page }) => {
   const submitted: { url: string; method: string; body: Record<string, unknown> }[] = [];
+  await page.route("**/meeting-weight-categories", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ categories: [{ id: "extended", name: "Extended", weight: 2, minimumDurationMinutes: 60, position: 0, active: true }] }) }));
   await page.route(/\/(meeting-series\/weekly-build|meetings\/active-meeting(?:\/restore)?|meetings)$/, async (route) => {
     const request = route.request();
     if (request.method() === "GET") return route.continue();
@@ -80,6 +82,7 @@ test("detail dialogs manage occurrence and future-series scope, return focus, an
   await expect(dialog.getByLabel("Title", { exact: true })).toBeFocused();
   await dialog.getByRole("radio", { name: "This and future occurrences" }).check();
   await dialog.getByLabel("Title", { exact: true }).fill("Build session shifted");
+  await dialog.getByLabel("Attendance weight").selectOption("extended");
   await dialog.getByRole("button", { name: "Save meeting" }).click();
   await expect(dialog).toHaveCount(0);
   await expect(editButton).toBeFocused();
@@ -108,11 +111,30 @@ test("detail dialogs manage occurrence and future-series scope, return focus, an
   await expect(page.getByRole("status").filter({ hasText: "This and future series occurrences were restored." })).toBeVisible();
 
   expect(submitted).toEqual([
-    expect.objectContaining({ url: "/meeting-series/weekly-build", method: "PATCH", body: expect.objectContaining({ meetingId: "active-meeting", title: "Build session shifted" }) }),
+    expect.objectContaining({ url: "/meeting-series/weekly-build", method: "PATCH", body: expect.objectContaining({ meetingId: "active-meeting", title: "Build session shifted", weightCategoryId: "extended" }) }),
     expect.objectContaining({ url: "/meetings", method: "POST", body: expect.objectContaining({ title: "Build session copy", recurrence: expect.objectContaining({ frequency: "weekly" }) }) }),
     { url: "/meetings/active-meeting", method: "DELETE", body: { scope: "future" } },
     { url: "/meetings/active-meeting/restore", method: "POST", body: { scope: "future" } },
   ]);
+});
+
+test("editing meeting details without changing weight preserves the saved snapshot", async ({ page }) => {
+  const now = Date.now(); let submitted: Record<string, unknown> | undefined;
+  const meeting = { id: "active-meeting", title: "Saved weight meeting", startsAt: new Date(now - 30 * 60_000).toISOString(), endsAt: new Date(now + 60 * 60_000).toISOString(), attendanceClosesAt: new Date(now + 90 * 60_000).toISOString(), required: 1, weightCategoryId: "extended", weightCategoryName: "Extended when saved", attendanceWeight: 2 };
+  await page.route("**/meeting-weight-categories", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ categories: [{ id: "extended", name: "Extended now", weight: 3, minimumDurationMinutes: 60, position: 0, active: true }] }) }));
+  await page.route(/\/meetings\/active-meeting$/, async (route) => {
+    if (route.request().resourceType() === "document") return route.continue();
+    if (route.request().method() === "PATCH") { submitted = route.request().postDataJSON() as Record<string, unknown>; return route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ meeting }) });
+  });
+  await page.goto("/meetings/active-meeting");
+  await page.getByRole("button", { name: "Edit" }).click();
+  const dialog = page.getByRole("dialog", { name: "Edit meeting" });
+  await expect(dialog.getByLabel("Attendance weight")).toHaveValue("extended");
+  await dialog.getByLabel("Title", { exact: true }).fill("Title only change");
+  await dialog.getByRole("button", { name: "Save meeting" }).click();
+  expect(submitted).toMatchObject({ title: "Title only change" });
+  expect(submitted).not.toHaveProperty("weightCategoryId");
 });
 
 test("meeting-local Discord actions and contest review retain their scoped outcomes", async ({ page }) => {

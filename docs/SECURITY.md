@@ -12,4 +12,6 @@ For local sign-in, the Worker issues a signed, expiry-bound session containing o
 
 Attendance CSV cells beginning with spreadsheet formula markers are prefixed as text before RFC-style quoting. This prevents organization-controlled meeting or roster text from becoming an executable formula when an export is opened in spreadsheet software.
 
+Meeting-weight definitions are installation-scoped and Admin-only to manage. Admins and Operators may select an active category while creating or editing a meeting. Each meeting stores a bounded positive weight and category-label snapshot; later category edits and retirement cannot rewrite historical attendance. Category lifecycle, ordering, and explicit meeting assignment changes are audited. Backups restore category definitions before meetings so saved references remain valid.
+
 The optional community telemetry collector is isolated from adopter resources. It rejects fields outside the documented five-field allowlist, rejects IP-shaped location text, HMAC-hashes opaque install IDs with a collector-only secret, stores one daily row, and applies edge/global admission limits. Observability is disabled in its generated configuration. Its summary endpoint requires a separate long bearer token and returns aggregates only; metro groups require five distinct installations.

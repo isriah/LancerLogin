@@ -42,6 +42,7 @@ async function useSettingsContext(page: Page, role: "admin" | "operator" = "admi
   await page.route("**/admin/update-info", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ releaseVersion: "0.18.0", workflowUrl: "https://github.example.test/actions/workflows/deploy.yml" }) }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [{ id: "kiosk-1", name: "North entrance attendance station", active: 1, lastSeenAt: new Date().toISOString(), releaseVersion: "0.18.0" }] }) }));
   await page.route("**/admin/kiosks/kiosk-1/commands", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ commands: [] }) }));
+  await page.route("**/admin/meeting-weight-categories", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ categories: [] }) }));
   await page.route("https://api.github.com/repos/isriah/LancerLogin/releases/latest", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ tag_name: "v0.19.0", html_url: "https://example.test/releases/v0.19.0" }) }));
 }
 
@@ -93,6 +94,52 @@ test("Admin can save independent attendance anomaly limits", async ({ page }) =>
   await expect(page.getByText("Attendance configuration saved.", { exact: true })).toBeVisible();
   expect(saved?.anomalyLateThresholdMinutes).toBe(12);
   expect(saved?.anomalyEarlyThresholdMinutes).toBe(18);
+});
+
+test("Admin can add, edit, reorder, retire, and restore meeting-weight categories", async ({ page }) => {
+  await useSettingsContext(page);
+  await page.addInitScript(() => localStorage.setItem("lancerlogin-update-dismissed:0.19.0", "true"));
+  let categories = [
+    { id: "standard", name: "Standard", weight: 1, minimumDurationMinutes: 30, position: 0, active: true },
+    { id: "extended", name: "Extended", weight: 2, minimumDurationMinutes: 120, position: 1, active: true },
+  ];
+  const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
+  await page.route(/\/admin\/meeting-weight-categories(?:\/[^/?]+)?$/, async (route) => {
+    const request = route.request(); const path = new URL(request.url()).pathname; const method = request.method();
+    if (method === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ categories }) });
+    const body = request.postDataJSON() as Record<string, unknown>; requests.push({ path, method, body });
+    if (method === "POST") categories = [...categories, { id: "major", name: String(body.name), weight: Number(body.weight), minimumDurationMinutes: body.minimumDurationMinutes as number | null, position: categories.filter((item) => item.active).length, active: true }];
+    else if (path.endsWith("/order")) { const ids = body.orderedIds as string[]; categories = categories.map((item) => ({ ...item, position: ids.includes(item.id) ? ids.indexOf(item.id) : item.position })); }
+    else { const id = decodeURIComponent(path.split("/").at(-1)!); categories = categories.map((item) => item.id === id ? { ...item, ...body } : item); }
+    await route.fulfill({ status: method === "POST" ? 201 : 200, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/settings/organization");
+  const card = page.locator(".meeting-weight-settings");
+  const add = card.locator(".meeting-weight-add");
+  await add.getByLabel("Name").fill("Major event");
+  await add.getByLabel("Weight").fill("3");
+  await add.getByLabel(/Minimum duration/).fill("180");
+  await add.getByRole("button", { name: "Add category" }).click();
+  await expect(card.getByText("Weight category added.")).toBeVisible();
+
+  const standard = card.locator('li:has(input[value="Standard"])');
+  await standard.getByLabel("Weight").fill("1.5");
+  await standard.getByRole("button", { name: "Save" }).click();
+  await expect(card.getByText("Standard saved. Existing meetings keep their saved weight.")).toBeVisible();
+  await card.getByRole("button", { name: "Move Extended up" }).click();
+  await expect(card.getByText("Automatic rule priority updated.")).toBeVisible();
+  await standard.getByRole("button", { name: "Retire" }).click();
+  await expect(card.getByText("Standard retired. Existing meetings are unchanged.")).toBeVisible();
+  await card.getByText("Retired categories (1)").click();
+  await card.getByRole("button", { name: "Restore" }).click();
+  await expect(card.getByText("Standard restored. Existing meetings are unchanged.")).toBeVisible();
+  expect(requests).toEqual(expect.arrayContaining([
+    expect.objectContaining({ method: "POST", body: { name: "Major event", weight: 3, minimumDurationMinutes: 180 } }),
+    expect.objectContaining({ path: "/admin/meeting-weight-categories/order", method: "PATCH", body: { orderedIds: ["extended", "standard", "major"] } }),
+    expect.objectContaining({ path: "/admin/meeting-weight-categories/standard", method: "PATCH", body: { active: false } }),
+    expect.objectContaining({ path: "/admin/meeting-weight-categories/standard", method: "PATCH", body: { active: true } }),
+  ]));
 });
 
 async function expectResponsiveFit(page: Page) {

@@ -86,12 +86,13 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES/);
   assert.match(source, /recurrence_frequency: null/);
   assert.match(source, /deleted_at: null/);
+  assert.match(source, /weight_category_id: null, weight_category_name: null, attendance_weight: 1/);
   assert.match(source, /google_enabled: providers\.has\("google"\) \? 1 : 0/);
 });
 
@@ -136,6 +137,17 @@ test("Discord anomaly reports migrate with private-channel configuration and ret
   assert.doesNotMatch(migration, /fingerprint|biometric/i);
 });
 
+test("meeting weights migrate as bounded categories and stable per-meeting snapshots", async () => {
+  const migration = await readFile("apps/api/migrations/0025_meeting_weights.sql", "utf8");
+  assert.match(migration, /CREATE TABLE meeting_weight_categories/);
+  assert.match(migration, /weight BETWEEN 0\.1 AND 100/);
+  assert.match(migration, /minimum_duration_minutes BETWEEN 1 AND 10080/);
+  assert.match(migration, /ADD COLUMN weight_category_id/);
+  assert.match(migration, /ADD COLUMN weight_category_name/);
+  assert.match(migration, /attendance_weight REAL NOT NULL DEFAULT 1/);
+  assert.doesNotMatch(migration, /fingerprint|biometric/i);
+});
+
 test("recurring meeting migration stores series metadata without biometric data", async () => {
   const migration = await readFile("apps/api/migrations/0006_recurring_meetings.sql", "utf8");
   assert.match(migration, /recurrence_frequency/);
@@ -175,6 +187,8 @@ test("entire-installation restore inserts roster members before linked dashboard
   assert.ok(order.indexOf('"members"') >= 0);
   assert.ok(order.indexOf('"users"') > order.indexOf('"members"'));
   assert.ok(order.indexOf('"meetings"') > order.indexOf('"users"'));
+  assert.ok(order.indexOf('"meeting_weight_categories"') > order.indexOf('"users"'));
+  assert.ok(order.indexOf('"meetings"') > order.indexOf('"meeting_weight_categories"'));
   assert.ok(order.indexOf('"attendance_events"') > order.indexOf('"meetings"'));
 });
 

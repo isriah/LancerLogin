@@ -202,6 +202,35 @@ test("creation recovers API validation and preserves duplication, recurrence, an
   await expect(page).toHaveURL(/\/dashboard$/);
 });
 
+test("meeting creation shows the first automatic weight rule and permits a manual override", async ({ page }) => {
+  const submitted: Record<string, unknown>[] = [];
+  await page.route("**/meeting-weight-categories", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ categories: [
+    { id: "standard", name: "Standard", weight: 2, minimumDurationMinutes: 30, position: 0, active: true },
+    { id: "extended", name: "Extended", weight: 3, minimumDurationMinutes: 30, position: 1, active: true },
+  ] }) }));
+  await page.route("**/meetings", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const body = route.request().postDataJSON() as Record<string, unknown>; submitted.push(body);
+    await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ meeting: { id: `weighted-${submitted.length}`, ...body }, meetings: [{ id: `weighted-${submitted.length}`, ...body }] }) });
+  });
+
+  await page.goto("/dashboard");
+  await page.getByRole("button", { name: "Add meeting" }).click();
+  let dialog = page.getByRole("dialog", { name: "Create meeting" });
+  await expect(dialog.getByLabel("Attendance weight")).toHaveValue("automatic");
+  await expect(dialog.getByLabel("Attendance weight").getByRole("option").first()).toHaveText("Automatic (Standard (2×))");
+  await dialog.getByLabel("Title", { exact: true }).fill("Automatic weight");
+  await dialog.getByRole("button", { name: "Create meeting", exact: true }).click();
+
+  await page.getByRole("button", { name: "Add meeting" }).click();
+  dialog = page.getByRole("dialog", { name: "Create meeting" });
+  await dialog.getByLabel("Title", { exact: true }).fill("Manual weight");
+  await dialog.getByLabel("Attendance weight").selectOption("extended");
+  await dialog.getByRole("button", { name: "Create meeting", exact: true }).click();
+  expect(submitted[0]).not.toHaveProperty("weightCategoryId");
+  expect(submitted[1]).toMatchObject({ title: "Manual weight", weightCategoryId: "extended" });
+});
+
 test("successful creation refreshes the selected calendar or table and the meeting selector", async ({ page }) => {
   const start = new Date(Date.now() + 24 * 60 * 60_000); start.setHours(18, 0, 0, 0);
   let meetings = [{ id: "starting-meeting", title: "Starting point", startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 60 * 60_000).toISOString(), attendanceClosesAt: new Date(start.getTime() + 90 * 60_000).toISOString(), required: 1 }];

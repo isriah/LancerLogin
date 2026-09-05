@@ -163,6 +163,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
         <div><dt>Date</dt><dd>{new Date(meeting.startsAt).toLocaleDateString()}</dd></div>
         <div><dt>Time</dt><dd>{new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}–{new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</dd></div>
         <div><dt>Attendance</dt><dd>{meeting.required ? "Required" : "Optional"}</dd></div>
+        <div><dt>Weight</dt><dd>{meeting.weightCategoryName ? `${meeting.weightCategoryName} · ` : ""}{meeting.attendanceWeight ?? 1}×</dd></div>
         <div><dt>Recurrence</dt><dd>{recurrence}</dd></div>
         <div><dt>Attendance closes</dt><dd>{new Date(meeting.attendanceClosesAt).toLocaleString()}</dd></div>
         <div className="meeting-summary-notes"><dt>Notes</dt><dd>{meeting.notes || "No notes"}</dd></div>

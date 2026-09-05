@@ -1772,6 +1772,56 @@ test("provider sync-all controls are Admin-only and unverified calendars cannot 
   assert.equal((await worker.fetch(request("/calendars/sync", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env)).status, 409);
 });
 
+test("Discord sync-all pages a large meeting set across bounded provider batches", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("SELECT generation, active FROM discord_calendar_event_mappings", { generation: 1, active: 1 });
+  database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", (_sql: string, values: unknown[]) => ({ eventId: `event-${values[0]}`, active: 1 }));
+  database.rows.set("FROM meetings WHERE", (_sql: string, values: unknown[]) => ({ id: String(values[0]), title: `Meeting ${values[0]}`, startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null }));
+  const meetings = Array.from({ length: 23 }, (_, index) => ({ id: `meeting-${String(index + 1).padStart(2, "0")}`, startsAt: `2026-10-${String(index + 1).padStart(2, "0")}T20:00:00Z` }));
+  database.lists.set("SELECT id, starts_at AS startsAt FROM meetings", (_sql: string, values: unknown[]) => {
+    const afterId = typeof values[3] === "string" ? values[3] : undefined;
+    const start = afterId ? meetings.findIndex((meeting) => meeting.id === afterId) + 1 : 0;
+    return meetings.slice(start, start + Number(values[4]));
+  });
+  database.lists.set("FROM discord_calendar_operations o", (_sql: string, values: unknown[]) => values.slice(0, -1).map((meetingId) => ({ meetingId, generation: 1, action: "upsert", eventId: `event-${meetingId}`, status: "pending", attempts: 0, revision: 1, actorUserId: "admin-1" })));
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let providerCalls = 0;
+  globalThis.fetch = async () => { providerCalls += 1; return new Response(JSON.stringify({ id: "event" }), { headers: { "content-type": "application/json" } }); };
+  try {
+    const pageSizes: number[] = []; const providerBatchSizes: number[] = []; const seen = new Set<string>(); let cursor: string | null | undefined; let selected = 0; let synced = 0;
+    do {
+      const before = providerCalls;
+      const result = await worker.fetch(request(`/admin/integrations/discord/calendar/sync-all${cursor ? `?after=${encodeURIComponent(cursor)}` : ""}`, {}, { cookie: await sessionCookie("admin") }), env);
+      assert.equal(result.status, 200);
+      const body = await result.json() as { selected: number; synced: number; nextCursor?: string | null; batchLimit: number; limit: number };
+      assert.equal(body.batchLimit, 10);
+      assert.equal(body.limit, 100);
+      pageSizes.push(body.selected); providerBatchSizes.push(providerCalls - before); selected += body.selected; synced += body.synced;
+      if (body.nextCursor) assert.equal(seen.has(body.nextCursor), false);
+      if (body.nextCursor) seen.add(body.nextCursor);
+      cursor = body.nextCursor;
+    } while (cursor);
+    assert.deepEqual(pageSizes, [10, 10, 3]);
+    assert.deepEqual(providerBatchSizes, [10, 10, 3]);
+    assert.equal(selected, 23);
+    assert.equal(synced, 23);
+    assert.ok(database.calls.filter((call) => call.sql.includes("FROM discord_calendar_operations o")).every((call) => call.sql.includes("LIMIT 10")));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Discord sync-all rejects a malformed continuation cursor before provider work", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/integrations/discord/calendar/sync-all?after=not-a-cursor", {}, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 400);
+  assert.deepEqual(await result.json(), { error: "Discord calendar sync cursor is invalid" });
+  assert.equal(database.calls.some((call) => call.sql.includes("FROM discord_calendar_operations o")), false);
+});
+
 test("Operators and Admins can list contest lifetime counts and raw partial, no-scan, and complete context", async () => {
   const database = new FakeDatabase();
   database.rows.set("google_enabled AS googleEnabled", { googleEnabled: 0, resendEnabled: 0, discordEnabled: 1 });

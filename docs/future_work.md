@@ -1380,6 +1380,23 @@ Acceptance: an Admin completing the documented Discord setup causes the configur
 Verification: `npm run verify:api`; `npm run verify:dashboard`; `npm run verify:docs`; focused provider-fake coverage for initial registration, reconciliation, repeat/rotation, wrong guild/application, permissions, rate limits, invalid credentials, partial failure, and no-live-traffic guarantees; focused Admin responsive keyboard Integrations coverage at required themes/viewports; supported-server manual validation before release.
 Release: `v0.22.0`.
 
+### WU-080 — Bounded Discord calendar backfill
+
+Status: in progress
+
+Owner: Codex task
+Branch: `codex/wu-080-discord-sync-batching`
+Base: `bf4bec2f277acb4cce55044ef523eb6173bbe917`
+Worktree: `C:\\Users\\Izz\\Documents\\ChatGPT\\LancerLogin Workspace`
+
+Goal: let an Admin sync a large active-meeting set to Discord without exceeding a Cloudflare Worker invocation's provider-request budget or worsening recovery state on retry.
+Dependencies: WU-078 (merged); the live v0.22.0 provider validation reproduced the defect with 48 active meetings
+Scope: page the explicit Discord Sync all meetings action across bounded Worker invocations; cap scheduled Discord calendar operation processing to the same conservative batch size; preserve durable leases, reconciliation, idempotence, provider backoff, the 100-meeting action ceiling, and existing Google behavior. Exclude Discord credential rotation, Pi connectivity, and unrelated integration UI.
+Sources: v0.22.0 supported-provider validation; `apps/api/src/index.ts`; `apps/dashboard/src/integration-settings.tsx`; `tests-ts/worker-runtime.test.ts`; `tests-browser/settings-conformance.spec.ts`; WU-078.
+Acceptance: a 48-meeting Discord backfill completes through bounded requests without the Worker subrequest-limit error; each meeting is selected once during a successful action; permission or rate-limit failures stop further client batches while retaining queued work; scheduled retries cannot process more than the bounded operation count in one invocation; summary counts remain accurate and no event is duplicated.
+Verification: `npm run verify:api`; `npm run verify:dashboard`; focused runtime coverage for multi-page sync and operation limits; focused Integrations browser coverage; unfiltered browser suite after integration; supported-server validation before patch release.
+Release: patch release after live-provider verification.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

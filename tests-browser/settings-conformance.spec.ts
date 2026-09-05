@@ -187,7 +187,17 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: true, saved: true, authorized: true, configured: true, state: "configured", calendarName: "Operations calendar", pendingOperations: 2, failedOperations: 1, lastError: "Google Calendar is temporarily unavailable." }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: true, state: "configured", pendingOperations: 1, failedOperations: 0 }] }) }));
     await page.route("**/admin/integrations/google-calendar/retry", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ synced: 3, queued: 0, failed: 0 }) }));
     await page.route("**/admin/integrations/google-calendar/sync-all", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ selected: 4, synced: 4, queued: 0, failed: 0 }) }));
-    await page.route("**/admin/integrations/discord/calendar/sync-all", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ selected: 4, synced: 3, queued: 1, skipped: 0, failed: 0 }) }));
+    let discordSyncPage = 0;
+    await page.route("**/admin/integrations/discord/calendar/sync-all**", (route) => {
+      const pages = [
+        { selected: 2, synced: 2, queued: 0, skipped: 0, failed: 0, nextCursor: "page-2", limit: 100 },
+        { selected: 2, synced: 1, queued: 1, skipped: 0, failed: 0, nextCursor: "page-3", limit: 100 },
+        { selected: 1, synced: 1, queued: 0, skipped: 0, failed: 0, nextCursor: null, limit: 100 },
+      ];
+      const expectedCursor = discordSyncPage === 0 ? null : `page-${discordSyncPage + 1}`;
+      expect(new URL(route.request().url()).searchParams.get("after")).toBe(expectedCursor);
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(pages[discordSyncPage++]) });
+    });
     await page.goto("/settings/integrations");
     const card = page.locator(".integration-card").filter({ hasText: "Google Calendar" });
     await card.getByText("Manage configuration", { exact: true }).click();
@@ -205,10 +215,30 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await discordCard.getByText("Manage configuration", { exact: true }).click();
     await expect(discordCard.getByText("1 waiting · 0 need another attempt", { exact: true })).toBeVisible();
     await discordCard.getByRole("button", { name: "Sync all meetings" }).click();
-    await expect(discordCard.getByText(/Discord: 3 updated, 1 queued/)).toBeVisible();
+    await expect(discordCard.getByText(/Discord: 4 updated, 1 queued.*5 active meetings checked/)).toBeVisible();
+    expect(discordSyncPage).toBe(3);
     await expectResponsiveFit(page);
   });
 }
+
+test("Discord sync-all stops requesting later pages when a provider failure leaves queued work", async ({ page }) => {
+  await useSettingsContext(page);
+  await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: true, state: "configured", pendingOperations: 0, failedOperations: 1 }] }) }));
+  let requests = 0;
+  await page.route("**/admin/integrations/discord/calendar/sync-all**", (route) => {
+    requests += 1;
+    const body = requests === 1
+      ? { selected: 10, synced: 10, queued: 0, skipped: 0, failed: 0, nextCursor: "page-2", limit: 100 }
+      : { selected: 10, synced: 1, queued: 8, skipped: 0, failed: 1, nextCursor: "page-3", limit: 100 };
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  });
+  await page.goto("/settings/integrations");
+  const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+  await card.getByText("Manage configuration", { exact: true }).click();
+  await card.getByRole("button", { name: "Sync all meetings" }).click();
+  await expect(card.getByRole("alert")).toContainText("Discord: 11 updated, 8 queued, 1 need attention. 20 active meetings checked.");
+  expect(requests).toBe(2);
+});
 
 test("Settings validation, integration states, telemetry, and data dialogs remain explicit and keyboard focused", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });

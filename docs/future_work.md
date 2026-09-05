@@ -1270,6 +1270,76 @@ Acceptance: after the named decisions are recorded, only Admins can enable, auth
 Verification: `npm run verify:migrations`; `npm run verify:api`; `npm run verify:dashboard`; `npm run verify:docs` when setup guidance changes; focused provider-fake coverage for authorization, calendar selection, create/update/series mapping, idempotence, retries, revocation, rate limits, disabled/unverified states, transmitted-field allowlisting, deletion/restoration per the approved policy, role enforcement, and Google sign-in isolation; focused responsive keyboard Settings and meeting-workspace browser coverage at required themes/viewports; manual supported-calendar validation before release.
 Release: `v0.21.0`.
 
+### WU-075 — Kiosk update completion reporting
+
+Status: ready
+
+Owner: unassigned
+
+Goal: make the dashboard report a kiosk update's final installed version or an actionable terminal failure instead of leaving a successful installer handoff in an indefinite waiting state.
+Dependencies: none
+Scope: trace the fixed `install_latest` command from dashboard queueing through kiosk execution, service restart, heartbeat, and command-history display; persist or derive enough target/result evidence to reconcile a successful command with the restarted kiosk's authoritative release heartbeat; and show bounded waiting, success, stale/offline, and failure states honestly. Preserve the root-owned verified installer, fixed command allowlist, release/checksum verification, Admin-only update authorization, heartbeat privacy boundary, command expiry, and existing recovery actions. Exclude changing the installer source, accepting arbitrary tags or commands, weakening verification, deploying to a Pi, or redesigning unrelated update cards.
+Sources: `docs/idea_inbox.md` (IN-088); `docs/KIOSK.md`; `docs/SECURITY.md`; `apps/dashboard/src/updates-page.tsx`; kiosk command and heartbeat handlers in `apps/api/src/index.ts`; kiosk command execution and service tests; update dashboard tests.
+Acceptance: a successful update that restarts into the requested compatible release resolves to a stable success message using authoritative kiosk state; a failed installer, missing/rejected result, offline restart, unchanged/unknown version, and newer release appearing after dispatch remain distinguishable and actionable; refreshes cannot regress a confirmed result to indefinite waiting; no arbitrary update input or sensitive data is introduced.
+Verification: `npm run verify:api`; `npm run verify:dashboard`; focused kiosk command/heartbeat coverage for success, version mismatch, offline/stale heartbeat, explicit failure, and release-feed changes; focused Updates browser coverage at required desktop/mobile light/dark adopter-brand combinations; `npm run verify:kiosk` if kiosk execution changes; unfiltered browser suite after integration.
+Release: `v0.22.0`.
+
+### WU-076 — Chronological meeting chooser ordering
+
+Status: blocked
+
+Owner: unassigned
+
+Goal: make downward movement through the intended meeting-selection surface consistently move from older meetings toward future meetings.
+Dependencies: product decision required: identify whether IN-089 targets the Dashboard meeting dropdown, Attendance meeting dropdown, Table view, or a change to the five-week calendar navigation; the rendered calendar grid and meetings within each day are already oldest-to-newest
+Scope: after the target surface is confirmed, apply stable ascending start-time ordering to that surface and preserve canonical meeting-detail navigation, current/past/future routing, saved view choice, calendar range controls, and recurrence identity. Exclude changing meeting dates, attendance semantics, API default ordering beyond what the selected surface requires, or redesigning the calendar.
+Sources: `docs/idea_inbox.md` (IN-089); `docs/DASHBOARD.md`; `docs/UI-STANDARDS.md`; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/attendance-calendar.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/meetings-page.tsx`; meeting-browser and attendance-navigation browser tests.
+Acceptance: the confirmed surface presents meetings in deterministic ascending start-time order, with ties stable and scrolling or keyboard movement downward progressing toward the future; selection still opens the same canonical meeting route; desktop/mobile, light/dark, adopter-brand, keyboard, and overflow behavior meet the dashboard standard. No standards exception is expected.
+Verification: `npm run verify:dashboard`; focused browser coverage proving oldest-to-newest order, ties, route selection, keyboard operation, and required responsive/theme combinations; unfiltered browser suite after integration.
+Release: `v0.22.0`.
+
+### WU-077 — Dashboard steady-state status cleanup
+
+Status: ready
+
+Owner: unassigned
+
+Goal: remove redundant steady-state information from the Dashboard and canonical meeting summary while preserving useful loading, mutation, and error feedback.
+Dependencies: none; coordinate after WU-076 if its decision selects `apps/dashboard/src/home-page.tsx`
+Scope: remove the `Attendance closes` summary item from canonical meeting detail and stop rendering the `Dashboard data is current.` card/status after successful background loads; keep loading overlays, meeting creation/deletion/restore outcomes, refresh failures, accessible live feedback, attendance-window enforcement, and the underlying `attendanceClosesAt` contract unchanged. Exclude changing attendance cutoff policy, meeting fields, calendar layout, or unrelated status components.
+Sources: `docs/idea_inbox.md` (IN-091 and IN-093); `docs/DASHBOARD.md`; `docs/UI-STANDARDS.md`; `apps/dashboard/src/home-page.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `tests/dashboard-shell.test.mjs`; `tests-browser/meeting-detail.spec.ts`; dashboard meeting-browser tests.
+Acceptance: successful routine Dashboard loads leave no `Dashboard data is current.` card or equivalent empty placeholder; loading, errors, and user-triggered outcomes remain announced accessibly; meeting detail omits `Attendance closes` without changing actual scan eligibility or other summary values; required responsive, theme, branding, keyboard, and focus checks pass. No standards exception is expected.
+Verification: `npm run verify:dashboard`; focused Dashboard refresh/status and meeting-detail browser coverage at required desktop/mobile light/dark adopter-brand combinations; `npm run verify:api` only if the existing contract changes; unfiltered browser suite after integration.
+Release: `v0.22.0`.
+
+### WU-078 — Calendar integration delivery parity
+
+Status: ready
+
+Owner: unassigned
+
+Goal: give Discord and Google Calendar the same dependable meeting-lifecycle sync model and clear manual recovery controls.
+Dependencies: WU-022 and WU-074 (both merged); ADR-013 continues to govern Google data minimization, separate authorization, delete/recreate restoration behavior, and durable non-blocking delivery
+Scope: automatically enqueue or perform idempotent create/update delivery for every enabled and verified calendar provider on meeting creation and authorized occurrence/future-series edits; add durable, bounded retry state for unavailable Discord delivery without weakening Google's existing queue; delete each provider's mapped event when its LancerLogin meeting is deleted and preserve the approved Google restore generation rule; expose one meeting-detail action that syncs that meeting to every configured calendar and separate provider-specific `Sync all meetings` actions in Integrations. Preserve LancerLogin authority, provider-specific field policies, roles, recurrence scope, rate-limit handling, encrypted credentials, verification gates, and unrelated Discord messages. Exclude two-way import, attendee invitations, backfilling without an explicit manual action, changing Google event content, or deleting untracked provider events.
+Sources: `docs/idea_inbox.md` (IN-090 and IN-092); WU-022; WU-074; ADR-013 in `docs/DECISIONS.md`; `docs/ARCHITECTURE.md`; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; `docs/DASHBOARD.md`; `docs/UI-STANDARDS.md`; calendar mappings/operations migrations and handlers in `apps/api/src/index.ts`; `apps/dashboard/src/integration-settings.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/meeting-management.tsx`; provider-fake and meeting lifecycle tests.
+Acceptance: creation and supported edits request delivery to every enabled, verified configured calendar without rolling back the meeting; transient Discord and Google failures retain idempotent retryable work and never duplicate events; occurrence, future-series, single-delete, bulk-delete, restore, disabled/unverified, rate-limit, revoked-permission, and partial-provider cases follow documented provider policy; one meeting action reports per-provider outcomes and Integrations provides separate bounded sync-all actions; authorization, data minimization, responsive layout, keyboard/focus, and accessible status behavior remain intact.
+Verification: `npm run verify:migrations` if durable Discord state changes schema; `npm run verify:api`; `npm run verify:dashboard`; `npm run verify:docs`; focused provider-fake coverage for create/edit/delete/restore/series/bulk lifecycle, idempotence, retries, partial failure, disabled/unverified providers, rate limits, permissions, and field allowlists; focused meeting-detail and Integrations browser checks at required desktop/mobile light/dark adopter-brand combinations; unfiltered browser suite after integration; supported-provider manual validation before release.
+Release: `v0.22.0`.
+
+### WU-079 — Managed Discord application commands
+
+Status: ready
+
+Owner: unassigned
+
+Goal: make `/pair` and `/attendance-report` available in the configured Discord server without requiring an adopter to send command-registration payloads manually.
+Dependencies: WU-032 and WU-072 (both merged); coordinate serially with WU-078 because both change Discord configuration/provider behavior and Integrations presentation
+Scope: use the saved Discord application ID, bot credential, and configured server ID to create or reconcile exactly the two supported guild-scoped chat-input commands during an appropriate Admin-controlled configuration or verification flow; make registration repeat-safe and surface permission, credential, validation, and provider failures with actionable feedback; update setup guidance to remove manual payload instructions while retaining the interaction-endpoint and least-privilege steps. Preserve signed interaction verification, configured-server binding, ephemeral responses, member-linking privacy, encrypted credentials, provider fakes, and all existing command semantics. Exclude global commands, direct-message availability, arbitrary command schemas, bot hosting outside the existing Worker, or changing attendance calculations.
+Sources: `docs/idea_inbox.md` (IN-094); WU-032; WU-072; `docs/INTEGRATIONS.md`; `docs/SECURITY.md`; public operations/setup guidance; Discord configuration and verification handlers in `apps/api/src/index.ts`; `apps/dashboard/src/integration-settings.tsx`; signed-interaction and provider-fake tests.
+Acceptance: an Admin completing the documented Discord setup causes the configured guild to contain correct `/pair` and `/attendance-report` schemas without manual HTTP payloads; repeated setup or credential rotation reconciles rather than duplicates commands; failures do not mark an invalid setup healthy and provide safe retry guidance; commands remain guild-only, signed, private where required, and behaviorally identical to the existing handlers; automated tests send no live Discord traffic.
+Verification: `npm run verify:api`; `npm run verify:dashboard`; `npm run verify:docs`; focused provider-fake coverage for initial registration, reconciliation, repeat/rotation, wrong guild/application, permissions, rate limits, invalid credentials, partial failure, and no-live-traffic guarantees; focused Admin responsive keyboard Integrations coverage at required themes/viewports; supported-server manual validation before release.
+Release: `v0.22.0`.
+
 ## Release bundling
 
 - Release planning happens after units are merged. Create a release bundle from completed units that form a clear user-facing story and have compatible risk and deployment requirements.

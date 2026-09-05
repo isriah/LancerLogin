@@ -713,3 +713,59 @@ Recorded: 2026-09-04
 Source: WU Idea Inbox
 Request: Add an optional one-way Google Calendar integration for a configured calendar. Create an event when a meeting is created in the dashboard and immediately push dashboard edits; do not back-port Google Calendar changes to LancerLogin. Sync only meeting date and time.
 Disposition: WU-074
+
+## IN-088
+
+Status: promoted
+Recorded: 2026-09-05
+Source: WU Idea Inbox
+Request: Investigate the kiosk update card, which appears to always display Kiosk received the request and started its verified installer. Waiting for the restarted service to report its installed version.
+Disposition: WU-075
+
+## IN-089
+
+Status: promoted
+Recorded: 2026-09-05
+Source: WU Idea Inbox
+Request: Sort the meeting calendar view oldest first, so scrolling downward moves into the future.
+Disposition: WU-076
+
+## IN-090
+
+Status: promoted
+Recorded: 2026-09-05
+Source: WU Idea Inbox
+Request: Align Google Calendar and Discord calendar syncing: sync all enabled calendars on meeting creation or edit; cache and retry a sync if a calendar is unavailable; provide one Sync to calendar button on each meeting page; and provide separate Sync all meetings buttons for Discord and Google Calendar on Integrations.
+Disposition: WU-078
+
+## IN-091
+
+Status: promoted
+Recorded: 2026-09-05
+Source: WU Idea Inbox
+Request: Remove the Attendance closes item from the meeting page.
+Disposition: WU-077
+
+## IN-092
+
+Status: promoted
+Recorded: 2026-09-05
+Source: WU Idea Inbox
+Request: When a meeting is deleted, delete its corresponding events from attached calendar integrations.
+Disposition: WU-078
+
+## IN-093
+
+Status: promoted
+Recorded: 2026-09-05
+Source: WU Idea Inbox
+Request: Remove the card that reads Dashboard data is current.
+Disposition: WU-077
+
+## IN-094
+
+Status: promoted
+Recorded: 2026-09-05
+Source: WU Idea Inbox
+Request: Build `/pair` for account linking and `/attendance-report` for an ephemeral personal attendance report directly into the Discord bot, without requiring users to make the manual payload requests described in current documentation.
+Disposition: WU-079

@@ -86,7 +86,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES/);
@@ -123,6 +123,17 @@ test("attendance anomaly thresholds migrate with safe ten-minute defaults", asyn
   assert.match(migration, /anomaly_late_threshold_minutes INTEGER NOT NULL DEFAULT 10/);
   assert.match(migration, /anomaly_early_threshold_minutes INTEGER NOT NULL DEFAULT 10/);
   assert.equal((migration.match(/BETWEEN 0 AND 1440/g) ?? []).length, 2);
+});
+
+test("Discord anomaly reports migrate with private-channel configuration and retry state", async () => {
+  const migration = await readFile("apps/api/migrations/0024_discord_anomaly_reports.sql", "utf8");
+  assert.match(migration, /discord_anomaly_reports_enabled INTEGER NOT NULL DEFAULT 0/);
+  assert.match(migration, /discord_anomaly_report_channel_id TEXT/);
+  assert.match(migration, /discord_anomaly_reports_enabled_at TEXT/);
+  assert.match(migration, /CREATE TABLE discord_anomaly_reports/);
+  assert.match(migration, /status IN \('pending', 'delivered', 'no_anomalies', 'failed'\)/);
+  assert.match(migration, /length\(nonce\) BETWEEN 1 AND 25/);
+  assert.doesNotMatch(migration, /fingerprint|biometric/i);
 });
 
 test("recurring meeting migration stores series metadata without biometric data", async () => {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { attendanceClosesAt, attendanceDisposition, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState } from "../apps/api/src/attendance-lifecycle.ts";
+import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState } from "../apps/api/src/attendance-lifecycle.ts";
 
 test("organization late-scan setting determines one meeting cutoff", () => {
   assert.equal(attendanceClosesAt("2026-09-01T22:00:00.000Z", 30), "2026-09-01T22:30:00.000Z");
@@ -43,4 +43,11 @@ test("anomalous scan values are averaged separately above the configured thresho
   assert.equal(meanAnomalousMinutes([{ ...rows[0], checkedOutAt: undefined }], 10, 10), 12);
   assert.equal(meanAnomalousMinutes([], 10, 10), null);
   assert.throws(() => meanAnomalousMinutes(rows, -1, 10), /0 to 1440/);
+});
+
+test("attendance anomaly values preserve separate raw late and early durations", () => {
+  const row = { startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T21:00:00.000Z", checkedInAt: "2026-09-01T20:12:30.000Z", checkedOutAt: "2026-09-01T20:42:45.000Z" };
+  assert.deepEqual(attendanceAnomalyMinutes(row, 10, 10), { lateMinutes: 12.5, earlyMinutes: 17.25 });
+  assert.deepEqual(attendanceAnomalyMinutes({ ...row, checkedInAt: "2026-09-01T20:10:00.000Z", checkedOutAt: "2026-09-01T20:50:00.000Z" }, 10, 10), {});
+  assert.deepEqual(attendanceAnomalyMinutes({ ...row, checkedOutAt: undefined }, 10, 10), { lateMinutes: 12.5 });
 });

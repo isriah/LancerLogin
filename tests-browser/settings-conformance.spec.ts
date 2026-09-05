@@ -37,6 +37,7 @@ async function useSettingsContext(page: Page, role: "admin" | "operator" = "admi
   await page.route("**/admin/users", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ users: [{ id: "user-1", localUsername: "admin", role: "admin", active: 1, memberId: "member-1", memberExternalId: "A-101", memberFirstName: "Avery", memberLastName: "Stone", createdAt: new Date().toISOString() }] }) }));
   await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: true, saved: true, configured: true, state: "configured" }, { provider: "resend", enabled: true, saved: true, configured: false, state: "verification_required" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] }) }));
   await page.route("**/admin/integrations/discord/channel-manager", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ enabled: false, contestWindowHours: 24 }) }));
+  await page.route("**/admin/integrations/discord/anomaly-reports", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ enabled: false, channelId: "" }) }));
   await page.route("**/admin/privacy", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ telemetryAccepted: false, notice: "Anonymous usage reporting is off. No report will be sent.", installationReference: "installation-reference-without-personal-data" }) }));
   await page.route("**/admin/update-info", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ releaseVersion: "0.18.0", workflowUrl: "https://github.example.test/actions/workflows/deploy.yml" }) }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [{ id: "kiosk-1", name: "North entrance attendance station", active: 1, lastSeenAt: new Date().toISOString(), releaseVersion: "0.18.0" }] }) }));
@@ -52,6 +53,11 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await useSettingsContext(page);
     await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: true, state: "configured" }] }) }));
     await page.route("**/admin/integrations/discord/channel-manager", async (route) => route.fulfill({ status: 200, contentType: "application/json", body: route.request().method() === "PATCH" ? route.request().postData() ?? "{}" : JSON.stringify({ enabled: true, contestWindowHours: 36 }) }));
+    let anomalySettings: Record<string, unknown> | undefined;
+    await page.route("**/admin/integrations/discord/anomaly-reports", async (route) => {
+      if (route.request().method() === "PATCH") anomalySettings = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({ status: 200, contentType: "application/json", body: route.request().method() === "PATCH" ? route.request().postData() ?? "{}" : JSON.stringify({ enabled: true, channelId: "323456789012345678" }) });
+    });
     await page.goto("/settings/integrations");
     const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
     await card.getByText("Manage configuration", { exact: true }).click();
@@ -60,6 +66,13 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await expect(manager.getByLabel("Contest window (hours)")).toHaveValue("36");
     await manager.getByRole("button", { name: "Save channel manager" }).click();
     await expect(card.getByText("Discord channel manager settings saved.")).toBeVisible();
+    const anomalyReports = card.locator(".discord-anomaly-reports");
+    await expect(anomalyReports.getByRole("switch", { name: "Send private anomaly reports" })).toBeChecked();
+    await expect(anomalyReports.getByLabel("Private report channel ID")).toHaveValue("323456789012345678");
+    await anomalyReports.getByLabel("Private report channel ID").fill("423456789012345678");
+    await anomalyReports.getByRole("button", { name: "Save anomaly reports" }).click();
+    await expect(card.getByText("Private anomaly report settings saved.")).toBeVisible();
+    expect(anomalySettings).toEqual({ enabled: true, channelId: "423456789012345678" });
     await expectResponsiveFit(page);
   });
 }

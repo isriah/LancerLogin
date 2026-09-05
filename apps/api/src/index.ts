@@ -1,6 +1,6 @@
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
-import { attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
+import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 
 type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
@@ -16,6 +16,7 @@ type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "co
 type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
 type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number; discordContestWindowHours?: number; attendanceReportingStartsOn?: string | null; anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number };
 type DiscordChannelManagerInput = { enabled?: boolean; contestWindowHours?: number };
+type DiscordAnomalyReportsInput = { enabled?: boolean; channelId?: string | null };
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null; attendanceRequiredFrom?: string | null };
 type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
@@ -674,6 +675,29 @@ async function discordChannelManagerSettings(request: Request, env: Env): Promis
   await writeAudit(db, principal, "discord.channel_manager_updated", "integration", "discord", { enabled: input.enabled, contestWindowHours: input.contestWindowHours });
   return response({ enabled: input.enabled, contestWindowHours: input.contestWindowHours });
 }
+async function discordAnomalyReportSettings(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const existing = await db.prepare("SELECT discord_anomaly_reports_enabled AS enabled, discord_anomaly_report_channel_id AS channelId, discord_anomaly_reports_enabled_at AS enabledAt FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number; channelId?: string | null; enabledAt?: string | null }>();
+  if (request.method === "GET") return response({ enabled: Boolean(existing?.enabled), channelId: existing?.channelId ?? "" });
+  const input = await parseJson<DiscordAnomalyReportsInput>(request); const errors: string[] = [];
+  if (typeof input.enabled !== "boolean") errors.push("Anomaly reports enabled must be true or false");
+  const channelId = input.channelId === undefined ? existing?.channelId ?? null : input.channelId?.trim() || null;
+  if (channelId && !/^\d{10,24}$/.test(channelId)) errors.push("Private report channel ID must contain 10 to 24 digits");
+  if (input.enabled && !channelId) errors.push("A private report channel ID is required when anomaly reports are enabled");
+  if (errors.length) throw new HttpError(400, "Invalid Discord anomaly report settings", errors);
+  if (input.enabled && channelId) {
+    await requireIntegrationConfigured(env, "discord");
+    const config = await discordConfiguration(env);
+    if (channelId === config.channelId) throw new HttpError(400, "Choose a separate private channel, not the member-facing attendance channel");
+    const { body } = await discordRequest(config, `/channels/${encodeURIComponent(channelId)}`, { method: "GET" });
+    if (String(body.guild_id ?? "") !== config.guildId || Number(body.type) !== 0) throw new HttpError(400, "The private report channel must be a text channel in the verified Discord server");
+  }
+  const now = new Date().toISOString();
+  const enabledAt = input.enabled ? (!existing?.enabled || existing.channelId !== channelId ? now : existing.enabledAt ?? now) : null;
+  await db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = ?, discord_anomaly_report_channel_id = ?, discord_anomaly_reports_enabled_at = ? WHERE installation_id = 'primary'").bind(input.enabled ? 1 : 0, channelId, enabledAt).run();
+  await writeAudit(db, principal, "discord.anomaly_reports_updated", "integration", "discord", { enabled: input.enabled, channelId });
+  return response({ enabled: input.enabled, channelId: channelId ?? "" });
+}
 async function integrationCapabilities(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const flags = await integrationFlags(env);
   const records = await requireDatabase(env).prepare("SELECT provider, verified_at AS verifiedAt FROM encrypted_integrations WHERE installation_id = 'primary'").all<{ provider: IntegrationProvider; verifiedAt?: string | null }>();
@@ -691,13 +715,14 @@ async function integrationConfiguration(request: Request, env: Env, provider: In
     if (provider === "google" && !input.enabled) await requireLocalAdminSignIn(db);
     const column = integrationFlagSqlColumns[provider]; const statements = [db.prepare(`UPDATE installations SET ${column} = ? WHERE id = 'primary'`).bind(input.enabled ? 1 : 0)];
     if (!input.enabled) statements.push(db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider));
+    if (provider === "discord" && !input.enabled) statements.push(db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 0, discord_anomaly_reports_enabled_at = NULL WHERE installation_id = 'primary'"));
     if (provider === "google") statements.push(db.prepare(`UPDATE installations SET auth_mode = CASE WHEN ? = 1 AND auth_mode = 'local' THEN 'both' WHEN ? = 0 AND auth_mode = 'both' THEN 'local' ELSE auth_mode END WHERE id = 'primary'`).bind(input.enabled ? 1 : 0, input.enabled ? 1 : 0));
     await db.batch(statements); await writeAudit(db, principal, input.enabled ? "integration.enabled" : "integration.disabled", "integration", provider);
     return response({ provider, enabled: input.enabled });
   }
   if (request.method === "DELETE") {
     if (provider === "google") await requireLocalAdminSignIn(db);
-    await db.batch([db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare("DELETE FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare(`UPDATE installations SET ${integrationFlagSqlColumns[provider]} = 0 WHERE id = 'primary'`), ...(provider === "google" ? [db.prepare("UPDATE installations SET auth_mode = 'local' WHERE id = 'primary'")] : [])]);
+    await db.batch([db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare("DELETE FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare(`UPDATE installations SET ${integrationFlagSqlColumns[provider]} = 0 WHERE id = 'primary'`), ...(provider === "google" ? [db.prepare("UPDATE installations SET auth_mode = 'local' WHERE id = 'primary'")] : []), ...(provider === "discord" ? [db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 0, discord_anomaly_reports_enabled_at = NULL WHERE installation_id = 'primary'")] : [])]);
     await writeAudit(db, principal, "integration.removed", "integration", provider); return response({ configured: false, provider });
   }
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
@@ -705,6 +730,7 @@ async function integrationConfiguration(request: Request, env: Env, provider: In
   await db.batch([
     db.prepare("INSERT INTO encrypted_integrations (id, installation_id, provider, ciphertext, iv, verified_at, updated_at) VALUES (?, 'primary', ?, ?, ?, NULL, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET ciphertext = excluded.ciphertext, iv = excluded.iv, verified_at = NULL, key_version = key_version + 1, updated_at = excluded.updated_at").bind(crypto.randomUUID(), provider, encrypted.ciphertext, encrypted.iv, now),
     db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider),
+    ...(provider === "discord" ? [db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 0, discord_anomaly_reports_enabled_at = NULL WHERE installation_id = 'primary'")] : []),
   ]);
   if (provider === "google" && await integrationIsEnabled(env, "google")) await db.prepare("UPDATE installations SET auth_mode = CASE WHEN auth_mode = 'local' THEN 'both' ELSE auth_mode END WHERE id = 'primary'").run();
   await writeAudit(db, principal, existing ? "integration.rotated" : "integration.saved", "integration", provider); return response({ saved: true, configured: false, created: !existing, provider, state: "verification_required", updatedAt: now });
@@ -996,6 +1022,67 @@ async function processDiscordAttendanceNotifications(env: Env, now = Date.now())
     if ((!meeting.notificationStatus && newlyEligible) || retry) await sendDiscordAttendanceNotification(env, meeting);
   }
 }
+type DiscordAnomalyRow = { memberId: string; firstName: string; lastName: string; checkedInAt?: string; checkedOutAt?: string; lateMinutes?: number; earlyMinutes?: number };
+const discordReportText = (value: string, limit: number) => value.replace(/[\r\n\t]+/g, " ").replace(/[\\`*_~|<>@]/g, "").replace(/\s+/g, " ").trim().slice(0, limit);
+const discordReportMinutes = (minutes: number) => Number(minutes.toFixed(1)).toString();
+function discordAnomalyReportContent(meeting: { title: string; startsAt: string }, rows: DiscordAnomalyRow[]): string {
+  const header = `**Attendance anomalies · ${discordReportText(meeting.title, 120)}**\nMeeting date: ${meeting.startsAt.slice(0, 10)}`;
+  const lines = rows.map((row) => {
+    const values = [row.lateMinutes !== undefined ? `arrived ${discordReportMinutes(row.lateMinutes)} min late` : "", row.earlyMinutes !== undefined ? `left ${discordReportMinutes(row.earlyMinutes)} min early` : ""].filter(Boolean).join("; ");
+    return `• ${discordReportText(`${row.firstName} ${row.lastName}`, 120)} (${discordReportText(row.memberId, 80)}) — ${values}`;
+  });
+  const included: string[] = [];
+  for (const line of lines) {
+    if (`${header}\n${[...included, line].join("\n")}`.length > 1_900) break;
+    included.push(line);
+  }
+  const omitted = lines.length - included.length;
+  return `${header}\n${included.join("\n")}${omitted ? `\n… ${omitted} more anomalous member${omitted === 1 ? "" : "s"} omitted.` : ""}`;
+}
+async function sendDiscordAnomalyReport(env: Env, config: Record<string, string>, channelId: string, meeting: { id: string; title: string; startsAt: string; endsAt: string }, thresholds: { late: number; early: number }): Promise<void> {
+  const db = requireDatabase(env); const now = new Date().toISOString();
+  const existing = await db.prepare("SELECT status, nonce, message_id AS messageId, attempts FROM discord_anomaly_reports WHERE installation_id = 'primary' AND meeting_id = ?").bind(meeting.id).first<{ status: string; nonce?: string; messageId?: string; attempts: number }>();
+  if (["delivered", "no_anomalies"].includes(existing?.status ?? "")) return;
+  const nonce = existing?.nonce ?? (await sha256(`discord-anomaly-report:primary:${meeting.id}`)).slice(0, 25);
+  if (!existing) await db.prepare("INSERT INTO discord_anomaly_reports (installation_id, meeting_id, channel_id, status, nonce, attempts, updated_at) VALUES ('primary', ?, ?, 'pending', ?, 1, ?)").bind(meeting.id, channelId, nonce, now).run();
+  else await db.prepare("UPDATE discord_anomaly_reports SET channel_id = ?, status = 'pending', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(channelId, now, meeting.id).run();
+  const raw = await db.prepare("SELECT m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt FROM members m WHERE m.installation_id = 'primary' AND COALESCE(m.attendance_required_from, substr(m.created_at, 1, 10)) <= substr(?, 1, 10) AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ?) OR EXISTS (SELECT 1 FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ?)) ORDER BY m.last_name, m.first_name, m.external_id").bind(meeting.id, meeting.id, meeting.startsAt, meeting.id, meeting.id).all<Omit<DiscordAnomalyRow, "lateMinutes" | "earlyMinutes">>();
+  const anomalies = (raw.results ?? []).flatMap((row) => {
+    const values = attendanceAnomalyMinutes({ ...meeting, ...row }, thresholds.late, thresholds.early);
+    return values.lateMinutes === undefined && values.earlyMinutes === undefined ? [] : [{ ...row, ...values }];
+  });
+  if (!anomalies.length) {
+    await db.prepare("UPDATE discord_anomaly_reports SET status = 'no_anomalies', processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, now, meeting.id).run();
+    return;
+  }
+  try {
+    const payload = { content: discordAnomalyReportContent(meeting, anomalies), allowed_mentions: { parse: [] }, nonce, enforce_nonce: true };
+    const { body } = await discordRequest(config, `/channels/${encodeURIComponent(channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) });
+    const messageId = String(body.id ?? "");
+    if (!messageId) throw new HttpError(502, "Discord did not return an anomaly-report message identifier");
+    const processedAt = new Date().toISOString();
+    await db.prepare("UPDATE discord_anomaly_reports SET status = 'delivered', message_id = ?, last_error = NULL, processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(messageId, processedAt, processedAt, meeting.id).run();
+  } catch (error) {
+    await db.prepare("UPDATE discord_anomaly_reports SET status = 'failed', last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(error instanceof Error ? error.message.slice(0, 300) : "Discord delivery failed", new Date().toISOString(), meeting.id).run();
+    throw error;
+  }
+}
+async function processDiscordAnomalyReports(env: Env, now = Date.now()): Promise<void> {
+  const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0 || !discord.verifiedAt) return;
+  const db = requireDatabase(env);
+  const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes, discord_anomaly_reports_enabled AS enabled, discord_anomaly_report_channel_id AS channelId, discord_anomaly_reports_enabled_at AS enabledAt FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes?: number; anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number; enabled?: number; channelId?: string; enabledAt?: string }>();
+  if (!settings?.enabled || !settings.channelId || !settings.enabledAt) return;
+  const lateScanMinutes = settings.lateScanMinutes ?? 30; const enabledAt = Date.parse(settings.enabledAt);
+  if (!Number.isFinite(enabledAt)) return;
+  const earliestEnd = new Date(enabledAt - lateScanMinutes * 60_000).toISOString();
+  const meetings = await db.prepare("SELECT m.id, m.title, m.starts_at AS startsAt, m.ends_at AS endsAt, r.status AS reportStatus FROM meetings m LEFT JOIN discord_anomaly_reports r ON r.installation_id = m.installation_id AND r.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.is_test = 0 AND m.ends_at IS NOT NULL AND m.ends_at >= ? AND (r.status IS NULL OR r.status IN ('pending', 'failed')) ORDER BY m.ends_at ASC LIMIT 100").bind(earliestEnd).all<{ id: string; title: string; startsAt: string; endsAt: string; reportStatus?: string }>();
+  const config = await discordConfiguration(env);
+  for (const meeting of meetings.results ?? []) {
+    const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, lateScanMinutes));
+    if (cutoff < enabledAt || cutoff > now) continue;
+    try { await sendDiscordAnomalyReport(env, config, settings.channelId, meeting, { late: settings.anomalyLateThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES, early: settings.anomalyEarlyThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES }); } catch { /* One failed report must not delay other eligible meetings. */ }
+  }
+}
 async function discordMissing(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string }>(request);
   if (!input.meetingId) throw new HttpError(400, "Meeting is required");
@@ -1260,7 +1347,7 @@ async function privacySettings(request: Request, env: Env): Promise<Response> {
 type BackupScope = "meetings" | "roster" | "installation";
 const tableColumns = {
   installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id", "google_enabled", "resend_enabled", "discord_enabled"],
-  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes"],
+  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at"],
   meetings: ["id", "installation_id", "title", "starts_at", "ends_at", "required", "notes", "created_by", "created_at", "is_test", "series_id", "recurrence_frequency", "recurrence_until", "recurrence_sequence", "deleted_at"],
@@ -1277,6 +1364,7 @@ const tableColumns = {
   discord_attendance_notifications: ["installation_id", "meeting_id", "status", "message_id", "attempts", "last_error", "processed_at", "updated_at", "channel_id", "expires_at", "deleted_at"],
   discord_attendance_recipients: ["installation_id", "meeting_id", "member_id", "discord_user_id", "message_id", "delivered_at"],
   discord_attendance_contests: ["installation_id", "meeting_id", "member_id", "message_id", "status", "resolved_by", "resolved_at", "created_at", "submitted_by_discord_user_id", "review_note"],
+  discord_anomaly_reports: ["installation_id", "meeting_id", "channel_id", "status", "nonce", "message_id", "attempts", "last_error", "processed_at", "updated_at"],
   audit_log: ["id", "installation_id", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "created_at"],
   telemetry_diagnostics: ["installation_id", "error_category", "last_seen_at"],
 } as const;
@@ -1286,9 +1374,9 @@ const installationTables: BackupTable[] = [
   "installations", "organization_settings", "members", "users", "meetings", "meeting_templates",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
   "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "integration_deliveries",
-  "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "audit_log", "telemetry_diagnostics",
+  "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
 ];
-const meetingTables: BackupTable[] = ["meetings", "meeting_templates", "attendance_events", "attendance_corrections", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests"];
+const meetingTables: BackupTable[] = ["meetings", "meeting_templates", "attendance_events", "attendance_corrections", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports"];
 const rosterTables: BackupTable[] = ["members"];
 const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -1300,37 +1388,37 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 9, scope, exportedAt, tables: Object.fromEntries(entries) };
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 9 });
+  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 10, scope, exportedAt, tables: Object.fromEntries(entries) };
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 10 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
-  organization_settings: tableColumns.organization_settings.slice(0, -6),
+  organization_settings: tableColumns.organization_settings.slice(0, -9),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
   discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -2),
 };
-const legacyInstallationTables = installationTables.filter((table) => table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients");
-const legacyMeetingTables = meetingTables.filter((table) => table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients");
+const legacyInstallationTables = installationTables.filter((table) => table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients" && table !== "discord_anomaly_reports");
+const legacyMeetingTables = meetingTables.filter((table) => table !== "meeting_templates" && table !== "discord_attendance_notifications" && table !== "discord_attendance_recipients" && table !== "discord_anomaly_reports");
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
-  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
   const sourceTables = value.tables;
-  const requiredTables = schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope);
+  const requiredTables = schemaVersion < 6 ? legacyTablesForScope(scope) : schemaVersion < 10 ? tablesForScope(scope).filter((table) => table !== "discord_anomaly_reports") : tablesForScope(scope);
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -3) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -5) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -3) : tableColumns[table];
+    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -3) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -5) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -3) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
 
   const tables = Object.fromEntries((Object.keys(tableColumns) as BackupTable[]).map((table) => [table, [] as Record<string, unknown>[]])) as Record<BackupTable, Record<string, unknown>[]>;
   for (const table of requiredTables) tables[table] = (sourceTables[table] as Record<string, unknown>[]).map((row) => ({ ...row }));
-  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, ...row }));
+  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, discord_anomaly_reports_enabled: 0, discord_anomaly_report_channel_id: null, discord_anomaly_reports_enabled_at: null, ...row }));
   if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
   if (schemaVersion < 7 && tables.installations) { const providers = new Set(tables.encrypted_integrations.map((row) => row.provider)); tables.installations = tables.installations.map((row) => ({ ...row, google_enabled: providers.has("google") ? 1 : 0, resend_enabled: providers.has("resend") ? 1 : 0, discord_enabled: providers.has("discord") ? 1 : 0 })); }
@@ -1365,8 +1453,8 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
   const expected = `RESTORE ${scope.toUpperCase()}`; if (input.confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`); const backup = normalizeBackup(input.backup, scope); const tables = backup.tables;
   let statements: D1Statement[];
   if (scope === "meetings") statements = [
-    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"),
-    ...insertBackupRows(db, "meetings", tables.meetings), ...insertBackupRows(db, "meeting_templates", tables.meeting_templates), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_notifications", tables.discord_attendance_notifications), ...insertBackupRows(db, "discord_attendance_recipients", tables.discord_attendance_recipients), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests),
+    db.prepare("DELETE FROM discord_anomaly_reports WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"),
+    ...insertBackupRows(db, "meetings", tables.meetings), ...insertBackupRows(db, "meeting_templates", tables.meeting_templates), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_notifications", tables.discord_attendance_notifications), ...insertBackupRows(db, "discord_attendance_recipients", tables.discord_attendance_recipients), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests), ...insertBackupRows(db, "discord_anomaly_reports", tables.discord_anomaly_reports),
   ];
   else if (scope === "roster") statements = [
     db.prepare("UPDATE members SET active = 0 WHERE installation_id = 'primary'"),
@@ -1391,7 +1479,7 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
   const expected = input.scope === "attendance" ? "DELETE ATTENDANCE" : input.scope === "roster" ? "DELETE ROSTER" : input.scope === "installation" ? "DELETE INSTALLATION" : undefined;
   if (!expected || input.confirmation !== expected) throw new HttpError(400, `Type ${expected ?? "a valid confirmation"} exactly to continue`);
   if (input.scope === "attendance") await db.batch([
-    db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"),
+    db.prepare("DELETE FROM discord_anomaly_reports WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.attendance_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString()),
   ]);
   else if (input.scope === "roster") {
@@ -1441,6 +1529,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/exports/attendance.csv" && request.method === "GET") result = await attendanceExport(request, env);
     else if (url.pathname === "/admin/integrations" && request.method === "GET") result = await integrationsStatus(request, env);
     else if (url.pathname === "/admin/integrations/discord/channel-manager" && ["GET", "PATCH"].includes(request.method)) result = await discordChannelManagerSettings(request, env);
+    else if (url.pathname === "/admin/integrations/discord/anomaly-reports" && ["GET", "PATCH"].includes(request.method)) result = await discordAnomalyReportSettings(request, env);
     else if (url.pathname === "/integrations/capabilities" && request.method === "GET") result = await integrationCapabilities(request, env);
     else if (/^\/admin\/integrations\/(google|resend|discord)$/.test(url.pathname) && ["PUT", "PATCH", "DELETE"].includes(request.method)) result = await integrationConfiguration(request, env, providerFrom(url.pathname));
     else if (url.pathname === "/admin/integrations/resend/verify/start" && request.method === "POST") result = await startResendVerification(request, env);
@@ -1482,6 +1571,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   if (controller.cron === "*/5 * * * *") {
     try { await syncDiscordManagedSurface(env); } catch { /* Discord channel management is best-effort and retries on the next scheduled pass. */ }
     try { await processDiscordAttendanceNotifications(env); } catch { /* Discord attendance delivery retries safely on the next scheduled pass. */ }
+    try { await processDiscordAnomalyReports(env); } catch { /* Discord anomaly reports retry safely on the next scheduled pass. */ }
   } else try { await syncDiscordManagedSurface(env); } catch { /* Discord status is best-effort and cannot affect kiosk operation. */ }
 } };
 export default worker;

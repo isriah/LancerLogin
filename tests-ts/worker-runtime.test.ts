@@ -1139,6 +1139,36 @@ test("Discord channel manager settings are Admin-only and audited", async () => 
   assert.equal((await worker.fetch(request("/admin/integrations/discord/channel-manager", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
 });
 
+test("Discord anomaly reports require an Admin-selected separate text channel in the verified server", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_anomaly_reports_enabled AS enabled", { enabled: 0, channelId: null, enabledAt: null });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const adminCookie = await sessionCookie("admin"); const originalFetch = globalThis.fetch; let channelGuildId = "123456789012345678";
+  globalThis.fetch = async () => new Response(JSON.stringify({ id: "323456789012345678", guild_id: channelGuildId, type: 0 }), { headers: { "content-type": "application/json" } });
+  try {
+    const read = await worker.fetch(request("/admin/integrations/discord/anomaly-reports", undefined, { cookie: adminCookie }), env);
+    assert.deepEqual(await read.json(), { enabled: false, channelId: "" });
+    const saved = await worker.fetch(request("/admin/integrations/discord/anomaly-reports", { enabled: true, channelId: "323456789012345678" }, { method: "PATCH", cookie: adminCookie }), env);
+    assert.deepEqual(await saved.json(), { enabled: true, channelId: "323456789012345678" });
+    const update = database.calls.find((call) => call.sql.includes("SET discord_anomaly_reports_enabled = ?"));
+    assert.equal(update?.values[0], 1); assert.equal(update?.values[1], "323456789012345678"); assert.ok(Date.parse(String(update?.values[2])) > 0);
+    assert.ok(database.calls.some((call) => call.values.includes("discord.anomaly_reports_updated")));
+    const sameChannel = await worker.fetch(request("/admin/integrations/discord/anomaly-reports", { enabled: true, channelId: "223456789012345678" }, { method: "PATCH", cookie: adminCookie }), env);
+    assert.equal(sameChannel.status, 400);
+    assert.match(String((await sameChannel.json() as { error: string }).error), /separate private channel/);
+    channelGuildId = "999999999999999999";
+    const wrongServer = await worker.fetch(request("/admin/integrations/discord/anomaly-reports", { enabled: true, channelId: "423456789012345678" }, { method: "PATCH", cookie: adminCookie }), env);
+    assert.equal(wrongServer.status, 400);
+    assert.match(String((await wrongServer.json() as { error: string }).error), /verified Discord server/);
+    const disabled = await worker.fetch(request("/admin/integrations/discord", { enabled: false }, { method: "PATCH", cookie: adminCookie }), env);
+    assert.equal(disabled.status, 200);
+    assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("discord_anomaly_reports_enabled = 0")));
+    assert.equal((await worker.fetch(request("/admin/integrations/discord/anomaly-reports", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("enabled Discord channel manager creates status before guidance and pins only the tracked status", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
@@ -1279,6 +1309,64 @@ test("scheduled Discord absence delivery waits for the late-scan cutoff and retr
   const retry = await run(new Date(Date.now() - 20 * 60_000).toISOString(), "failed");
   assert.equal(retry.payloads.filter((payload) => String(payload.content).includes("Attendance has closed")).length, 1);
   assert.ok(retry.database.calls.some((call) => call.sql.includes("attempts = attempts + 1")));
+});
+
+test("scheduled Discord anomaly delivery uses the private channel, separate values, and an enforced retry nonce", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 0 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 0 });
+  database.rows.set("anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes", { lateScanMinutes: 30, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 10, enabled: 1, channelId: "323456789012345678", enabledAt: new Date(Date.now() - 90 * 60_000).toISOString() });
+  database.lists.set("LEFT JOIN discord_anomaly_reports", [{ id: "meeting-1", title: "Studio @everyone", startsAt: new Date(Date.now() - 150 * 60_000).toISOString(), endsAt: new Date(Date.now() - 31 * 60_000).toISOString() }]);
+  database.lists.set("LEFT JOIN discord_attendance_notifications", []);
+  const anomalyRows = Array.from({ length: 40 }, (_, index) => ({ memberId: index ? `MEMBER-${index.toString().padStart(3, "0")}` : "A-101", firstName: index ? `Member${index}` : "Avery", lastName: index ? "With a deliberately long display name for Discord provider limits" : "Stone", checkedInAt: new Date(Date.now() - 137.5 * 60_000).toISOString(), checkedOutAt: new Date(Date.now() - 48.25 * 60_000).toISOString() }));
+  database.lists.set("SELECT m.external_id AS memberId", anomalyRows);
+  database.lists.set("FROM discord_attendance_notifications WHERE", []);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const outbound: Array<{ url: string; method: string; payload?: Record<string, unknown> }> = []; let created = 0;
+  globalThis.fetch = async (input, init) => { const payload = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined; outbound.push({ url: String(input), method: String(init?.method), payload }); if (init?.method === "POST") created += 1; return new Response(JSON.stringify({ id: `message-${created}` }), { headers: { "content-type": "application/json" } }); };
+  try {
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    const report = outbound.find((call) => call.method === "POST" && call.url.includes("/channels/323456789012345678/messages"));
+    assert.ok(report);
+    assert.match(String(report.payload?.content), /Avery Stone \(A-101\).*arrived 12\.5 min late.*left 17\.3 min early/);
+    assert.match(String(report.payload?.content), /more anomalous members omitted/);
+    assert.ok(String(report.payload?.content).length <= 2_000);
+    assert.doesNotMatch(String(report.payload?.content), /@everyone/);
+    assert.deepEqual(report.payload?.allowed_mentions, { parse: [] });
+    assert.equal(report.payload?.enforce_nonce, true); assert.equal(String(report.payload?.nonce).length, 25);
+    assert.ok(database.calls.some((call) => call.sql.includes("SET status = 'delivered'") && call.values.includes("meeting-1")));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Discord anomaly scheduling waits for enablement and records empty meetings without posting", async () => {
+  async function run(enabledAt: string, verifiedAt: string | null, anomalies: unknown[], integrationEnabled = 1) {
+    const database = new FakeDatabase();
+    const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+    database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt, enabled: integrationEnabled });
+    database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 0 });
+    database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 0 });
+    database.rows.set("anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes", { lateScanMinutes: 30, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 10, enabled: 1, channelId: "323456789012345678", enabledAt });
+    database.lists.set("LEFT JOIN discord_anomaly_reports", [{ id: "meeting-1", title: "Studio", startsAt: new Date(Date.now() - 120 * 60_000).toISOString(), endsAt: new Date(Date.now() - 31 * 60_000).toISOString() }]);
+    database.lists.set("LEFT JOIN discord_attendance_notifications", []); database.lists.set("SELECT m.external_id AS memberId", anomalies); database.lists.set("FROM discord_attendance_notifications WHERE", []);
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const originalFetch = globalThis.fetch; const urls: string[] = [];
+    globalThis.fetch = async (input, init) => { if (init?.method === "POST") urls.push(String(input)); return new Response(JSON.stringify({ id: "message" }), { headers: { "content-type": "application/json" } }); };
+    try { await worker.scheduled({ cron: "*/5 * * * *" }, env); } finally { globalThis.fetch = originalFetch; }
+    return { database, urls };
+  }
+  const beforeEnablement = await run(new Date().toISOString(), "2026-08-30T00:01:00Z", [{ memberId: "A-101", firstName: "Avery", lastName: "Stone", checkedInAt: new Date().toISOString() }]);
+  assert.equal(beforeEnablement.urls.some((url) => url.includes("323456789012345678")), false);
+  const empty = await run(new Date(Date.now() - 90 * 60_000).toISOString(), "2026-08-30T00:01:00Z", []);
+  assert.equal(empty.urls.some((url) => url.includes("323456789012345678")), false);
+  assert.ok(empty.database.calls.some((call) => call.sql.includes("SET status = 'no_anomalies'") && call.values.includes("meeting-1")));
+  const unverified = await run(new Date(Date.now() - 90 * 60_000).toISOString(), null, []);
+  assert.equal(unverified.database.calls.some((call) => call.sql.includes("discord_anomaly_reports_enabled AS enabled")), false);
+  assert.equal(unverified.urls.some((url) => url.includes("323456789012345678")), false);
+  const disabled = await run(new Date(Date.now() - 90 * 60_000).toISOString(), "2026-08-30T00:01:00Z", [], 0);
+  assert.equal(disabled.database.calls.some((call) => call.sql.includes("discord_anomaly_reports_enabled AS enabled")), false);
+  assert.equal(disabled.urls.some((url) => url.includes("323456789012345678")), false);
 });
 
 test("channel manager deletes only an expired tracked absence message and records completion", async () => {
@@ -1557,9 +1645,9 @@ test("Admin can link roster members to dashboard accounts while non-rostered acc
 });
 
 test("category backups include reusable meeting templates without mixing unrelated tables", async () => {
-  const database = new FakeDatabase(); database.lists.set("FROM meetings", [{ id: "meeting-1" }]); database.lists.set("FROM meeting_templates", [{ id: "template-1" }]); database.lists.set("FROM attendance_events", []); database.lists.set("FROM attendance_corrections", []); database.lists.set("FROM discord_attendance_notifications", []); database.lists.set("FROM discord_attendance_recipients", []); database.lists.set("FROM discord_attendance_contests", []);
+  const database = new FakeDatabase(); database.lists.set("FROM meetings", [{ id: "meeting-1" }]); database.lists.set("FROM meeting_templates", [{ id: "template-1" }]); database.lists.set("FROM attendance_events", []); database.lists.set("FROM attendance_corrections", []); database.lists.set("FROM discord_attendance_notifications", []); database.lists.set("FROM discord_attendance_recipients", []); database.lists.set("FROM discord_attendance_contests", []); database.lists.set("FROM discord_anomaly_reports", []);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 200); const backup = await result.json() as { scope: string; tables: Record<string, unknown> }; assert.equal(backup.scope, "meetings"); assert.deepEqual(Object.keys(backup.tables).sort(), ["attendance_corrections", "attendance_events", "discord_attendance_contests", "discord_attendance_notifications", "discord_attendance_recipients", "meeting_templates", "meetings"]); assert.equal("members" in backup.tables, false); assert.match(result.headers.get("content-disposition") ?? "", /meetings-backup/);
+  const result = await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 200); const backup = await result.json() as { scope: string; tables: Record<string, unknown> }; assert.equal(backup.scope, "meetings"); assert.deepEqual(Object.keys(backup.tables).sort(), ["attendance_corrections", "attendance_events", "discord_anomaly_reports", "discord_attendance_contests", "discord_attendance_notifications", "discord_attendance_recipients", "meeting_templates", "meetings"]); assert.equal("members" in backup.tables, false); assert.match(result.headers.get("content-disposition") ?? "", /meetings-backup/);
 });
 
 test("restore rejects a backup from another category before executing a batch", async () => {

@@ -114,6 +114,11 @@ test("setup and integration guides include sanitized annotated visual callouts",
   assert.match(operations, /Rotate in place/);
   assert.match(operations, /pending queue, last sync, issue state, and installed release/);
   assert.match(operations, /spreadsheet formula markers as text/);
+  assert.match(operations, /id="discord-commands"/);
+  assert.match(operations, /applications\/\{application\.id\}\/guilds\/\{guild\.id\}\/commands/);
+  assert.match(operations, /"name": "pair"[\s\S]*"name": "member-id"/);
+  assert.match(operations, /"name": "attendance-report"/);
+  assert.match(operations, /ephemeral responses/);
 });
 
 test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", async () => {

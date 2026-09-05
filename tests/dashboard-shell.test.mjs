@@ -560,6 +560,8 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /resend\/verify\/start/);
   assert.match(source, /resend\/verify\/complete/);
   assert.match(source, /discord\/verify\/start/);
+  assert.match(source, /operations\.html#discord-commands/);
+  assert.match(source, /<code>\/attendance-report<\/code>/);
   assert.match(source, /Verify with Google/);
   assert.match(source, /setup\.html#google-oauth/);
   assert.match(source, /Authorized redirect URI/);

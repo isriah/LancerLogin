@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
@@ -45,6 +45,10 @@ const request = (path: string, body?: unknown, options: { method?: string; cooki
 });
 const sessionSecret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const sessionCookie = async (role: "admin" | "operator") => `lancerlogin_session=${await createSessionCodec(sessionSecret).issue({ userId: `${role}-1`, role })}`;
+const signedDiscordInteraction = (payload: unknown, privateKey: KeyObject, rawBody?: string) => {
+  const body = rawBody ?? JSON.stringify(payload); const timestamp = String(Math.floor(Date.now() / 1000)); const signature = sign(null, Buffer.from(timestamp + body), privateKey).toString("hex");
+  return new Request("https://api.example.test/discord/interactions", { method: "POST", headers: { "content-type": "application/json", "x-signature-ed25519": signature, "x-signature-timestamp": timestamp }, body });
+};
 
 test("Worker bootstrap validates input before writing D1", async () => {
   const database = new FakeDatabase();
@@ -859,6 +863,76 @@ test("Discord verification checks the bot, server, channel, and signed user clic
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("signed Discord attendance reports match canonical reporting and attendance semantics", async () => {
+  const database = new FakeDatabase(); const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-09-04T00:00:00Z", verifiedAt: "2026-09-04T00:01:00Z", enabled: 1 });
+  database.lists.set("discord_user_id = ?", [{ id: "member-1", active: 1, rosterAddedAt: "2026-08-01T00:00:00Z", attendanceRequiredFrom: "2026-08-15" }]);
+  database.rows.set("late_scan_minutes AS lateScanMinutes, attendance_reporting_starts_on", { lateScanMinutes: 30, attendanceReportingStartsOn: "2026-09-01" });
+  database.lists.set("SELECT mt.title", [
+    { title: "Complete attendance", startsAt: "2026-09-07T20:00:00Z", endsAt: "2026-09-07T21:00:00Z", checkedInAt: "2026-09-07T20:01:00Z", checkedOutAt: "2026-09-07T20:59:00Z" },
+    { title: "No scan", startsAt: "2026-09-06T20:00:00Z", endsAt: "2026-09-06T21:00:00Z" },
+    { title: "Corrected present", startsAt: "2026-09-05T20:00:00Z", endsAt: "2026-09-05T21:00:00Z", correction: "present" },
+    { title: "Excused meeting", startsAt: "2026-09-04T20:00:00Z", endsAt: "2026-09-04T21:00:00Z", correction: "excused" },
+    { title: "Optional meetup", startsAt: "2026-09-03T20:00:00Z", endsAt: "2026-09-03T21:00:00Z" },
+    { title: "Corrected absent", startsAt: "2026-09-02T20:00:00Z", endsAt: "2026-09-02T21:00:00Z", checkedInAt: "2026-09-02T20:01:00Z", checkedOutAt: "2026-09-02T20:59:00Z", correction: "absent" },
+    { title: "Partial scan", startsAt: "2026-09-01T20:00:00Z", endsAt: "2026-09-01T21:00:00Z", checkedInAt: "2026-09-01T20:01:00Z" },
+  ]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(signedDiscordInteraction({ type: 2, guild_id: "123456789012345678", data: { name: "attendance-report" }, member: { user: { id: "323456789012345678" } } }, privateKey), env);
+  assert.equal(result.status, 200);
+  const body = await result.json() as { type: number; data: { content: string; flags: number; allowed_mentions: { parse: string[] } } };
+  assert.equal(body.type, 4); assert.equal(body.data.flags, 64); assert.deepEqual(body.data.allowed_mentions, { parse: [] });
+  assert.match(body.data.content, /Attendance: \*\*29%\*\* \(2 of 7 completed meetings\)/);
+  for (const expected of ["No scan", "Optional meetup", "Corrected absent", "Partial scan"]) assert.match(body.data.content, new RegExp(expected));
+  assert.doesNotMatch(body.data.content, /Complete attendance|Corrected present|Excused meeting/);
+  const reportQuery = database.calls.find((call) => call.sql.includes("SELECT mt.title"));
+  assert.match(reportQuery?.sql ?? "", /mt\.deleted_at IS NULL/); assert.match(reportQuery?.sql ?? "", /mt\.is_test = 0/); assert.match(reportQuery?.sql ?? "", /mt\.ends_at <= \?/);
+  assert.match(reportQuery?.sql ?? "", /ORDER BY c\.created_at DESC, c\.id DESC/); assert.doesNotMatch(reportQuery?.sql ?? "", /mt\.required = 1/);
+  assert.deepEqual(reportQuery?.values.slice(-2), ["2026-08-15", "2026-09-01"]);
+});
+
+test("Discord attendance reports handle empty and provider-bounded histories", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519"); const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
+  const run = async (rows: unknown[]) => {
+    const database = new FakeDatabase(); database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-09-04T00:01:00Z", enabled: 1 }); database.lists.set("discord_user_id = ?", [{ id: "member-1", active: 1, rosterAddedAt: "2026-01-01T00:00:00Z" }]); database.rows.set("late_scan_minutes AS lateScanMinutes, attendance_reporting_starts_on", { lateScanMinutes: 30 }); database.lists.set("SELECT mt.title", rows);
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const result = await worker.fetch(signedDiscordInteraction({ type: 2, guild_id: "123456789012345678", data: { name: "attendance-report" }, member: { user: { id: "323456789012345678" } } }, privateKey), env);
+    return (await result.json() as { data: { content: string } }).data.content;
+  };
+  const empty = await run([]); assert.match(empty, /Attendance: \*\*0%\*\* \(0 of 0 completed meetings\)/); assert.match(empty, /No absent meetings/);
+  const long = await run(Array.from({ length: 80 }, (_, index) => ({ title: `Very long required or optional meeting ${index + 1} ${"x".repeat(90)}`, startsAt: `2026-08-${String(index % 28 + 1).padStart(2, "0")}T20:00:00Z`, endsAt: "2020-01-01T21:00:00Z" })));
+  assert.ok(long.length <= 2_000); assert.match(long, /additional absent meetings omitted to fit Discord's response limit/); assert.ok((long.match(/^• /gm) ?? []).length < 80);
+});
+
+test("Discord attendance-report failures stay private, actionable, and non-disclosing", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519"); const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
+  const run = async (record: Record<string, unknown>, members: unknown[], payload: unknown) => {
+    const database = new FakeDatabase(); database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, ...record }); database.lists.set("discord_user_id = ?", members);
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const result = await worker.fetch(signedDiscordInteraction(payload, privateKey), env); const body = await result.json() as { data?: { content?: string; flags?: number; allowed_mentions?: { parse: string[] } } };
+    assert.equal(body.data?.flags, 64); assert.deepEqual(body.data?.allowed_mentions, { parse: [] }); assert.doesNotMatch(body.data?.content ?? "", /Attendance:|Absent meetings|%/);
+    return { content: body.data?.content ?? "", database };
+  };
+  const base = { type: 2, guild_id: "123456789012345678", data: { name: "attendance-report" }, member: { user: { id: "323456789012345678" } } };
+  assert.match((await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [], base)).content, /not linked to exactly one active/);
+  assert.match((await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [{ id: "member-1", active: 0 }], base)).content, /active LancerLogin roster member/);
+  assert.match((await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [{ id: "member-1", active: 1 }, { id: "member-2", active: 1 }], base)).content, /exactly one active/);
+  const wrongServer = await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [{ id: "member-1", active: 1 }], { ...base, guild_id: "999999999999999999" }); assert.match(wrongServer.content, /server configured/); assert.equal(wrongServer.database.calls.some((call) => call.sql.includes("discord_user_id = ?")), false);
+  assert.match((await run({ enabled: 0, verifiedAt: "2026-09-04T00:01:00Z" }, [], base)).content, /disabled/);
+  assert.match((await run({ enabled: 1, verifiedAt: null }, [], base)).content, /not been verified/);
+  assert.match((await run({ enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }, [], { ...base, data: { name: "attendance-report", options: [{ name: "member-id", value: "someone-else" }] } })).content, /malformed/);
+
+  const malformedDatabase = new FakeDatabase(); malformedDatabase.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, enabled: 1, verifiedAt: "2026-09-04T00:01:00Z" }); const malformedEnv = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", INTEGRATION_KEY: sessionSecret, DB: malformedDatabase } as unknown as Env;
+  const malformed = await worker.fetch(signedDiscordInteraction({}, privateKey, "{not-json"), malformedEnv); assert.equal(malformed.status, 200); assert.match(JSON.stringify(await malformed.json()), /malformed/);
+  const nullBody = await worker.fetch(signedDiscordInteraction({}, privateKey, "null"), malformedEnv); assert.equal(nullBody.status, 200); assert.match(JSON.stringify(await nullBody.json()), /malformed/);
+  const unsigned = await worker.fetch(new Request("https://api.example.test/discord/interactions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(base) }), malformedEnv); assert.equal(unsigned.status, 401); assert.deepEqual(await unsigned.json(), { error: "Discord interaction signature is invalid" });
+  const signed = signedDiscordInteraction(base, privateKey); const tampered = new Request(signed.url, { method: "POST", headers: signed.headers, body: JSON.stringify({ ...base, guild_id: "tampered" }) }); const rejected = await worker.fetch(tampered, malformedEnv); assert.equal(rejected.status, 401); assert.doesNotMatch(await rejected.text(), /Attendance:|Absent meetings|%/);
+});
+
 test("Google-only installations cannot remove their sole sign-in integration", async () => {
   const database = new FakeDatabase();
   database.rows.set("auth_mode AS authMode", { authMode: "google" });
@@ -1134,7 +1208,7 @@ test("a signed Discord button creates a contest only for the delivered linked me
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(interaction, env);
   assert.equal(result.status, 200);
-  assert.deepEqual(await result.json(), { type: 4, data: { content: "Your attendance contest was recorded for review. Your attendance has not been changed.", flags: 64 } });
+  assert.deepEqual(await result.json(), { type: 4, data: { content: "Your attendance contest was recorded for review. Your attendance has not been changed.", flags: 64, allowed_mentions: { parse: [] } } });
   assert.ok(database.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO discord_attendance_contests") && call.values.includes("323456789012345678")));
 });
 

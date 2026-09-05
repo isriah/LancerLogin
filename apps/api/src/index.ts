@@ -838,6 +838,12 @@ async function discordConfiguration(env: Env, allowUnverified = false): Promise<
   if (!allowUnverified && !record.verifiedAt) throw new HttpError(503, "Discord verification is required before using attendance workflows");
   return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
 }
+async function discordInteractionConfiguration(env: Env): Promise<{ config: Record<string, string>; record: IntegrationRecord }> {
+  if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
+  const record = await integrationRecord(env, "discord");
+  if (!record) throw new HttpError(503, "Discord credentials are not configured");
+  return { config: await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY), record };
+}
 const discordRetryDelay = (response: Response, body: Record<string, unknown>) => {
   const bodyValue = body.retry_after;
   const retryAfter = typeof bodyValue === "number" ? bodyValue : Number(response.headers.get("retry-after"));
@@ -962,14 +968,55 @@ async function verifyDiscordInteraction(request: Request, config: Record<string,
     return crypto.subtle.verify({ name: "Ed25519" }, key, byteBuffer(hexBytes(signature)), byteBuffer(new TextEncoder().encode(timestamp + body)));
   } catch { return false; }
 }
-const discordEphemeral = (content: string) => response({ type: 4, data: { content, flags: 64 } });
+const discordEphemeral = (content: string) => response({ type: 4, data: { content, flags: 64, allowed_mentions: { parse: [] } } });
+type DiscordReportRow = { title: string; startsAt: string; endsAt: string; correction?: "present" | "absent" | "excused"; checkedInAt?: string; checkedOutAt?: string };
+function discordReportContent(rows: DiscordReportRow[], lateScanMinutes: number): string {
+  const dispositions = rows.map((row) => {
+    const events = [{ action: "check_in" as const, occurredAt: row.checkedInAt }, ...(row.checkedOutAt ? [{ action: "check_out" as const, occurredAt: row.checkedOutAt }] : [])].filter((event) => event.occurredAt);
+    const derived = attendanceDisposition(events, row.correction);
+    return { ...row, disposition: derived === "active" && Date.now() > Date.parse(attendanceClosesAt(row.endsAt, lateScanMinutes)) ? "absent" : derived };
+  });
+  const present = dispositions.filter((row) => row.disposition === "present").length;
+  const percentage = dispositions.length ? Math.round(present / dispositions.length * 100) : 0;
+  const absent = dispositions.filter((row) => row.disposition === "absent");
+  const heading = `**Your attendance report**\nAttendance: **${percentage}%** (${present} of ${dispositions.length} completed meetings)`;
+  if (!absent.length) return `${heading}\n\nNo absent meetings in the current reporting period.`;
+  const lines = absent.map((row) => `• ${row.startsAt.slice(0, 10)} — ${row.title.replace(/\s+/g, " ").trim()}`);
+  let content = `${heading}\n\n**Absent meetings**`;
+  for (let index = 0; index < lines.length; index += 1) {
+    const omitted = lines.length - index - 1;
+    const summary = omitted ? `\n… ${omitted} additional absent meeting${omitted === 1 ? "" : "s"} omitted to fit Discord's response limit.` : "";
+    const candidate = `${content}\n${lines[index]}${summary}`;
+    if (candidate.length > 2_000) break;
+    content += `\n${lines[index]}`;
+  }
+  const included = content.split("\n").filter((line) => line.startsWith("• ")).length;
+  const omitted = lines.length - included;
+  if (omitted) content += `\n… ${omitted} additional absent meeting${omitted === 1 ? "" : "s"} omitted to fit Discord's response limit.`;
+  return content;
+}
+async function discordAttendanceReport(db: D1Database, discordUserId: string): Promise<string> {
+  const linked = await db.prepare("SELECT id, active, created_at AS rosterAddedAt, attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id = 'primary' AND discord_user_id = ?").bind(discordUserId).all<{ id: string; active: number; rosterAddedAt?: string; attendanceRequiredFrom?: string }>();
+  const members = linked.results ?? [];
+  if (members.length !== 1 || !members[0].active) return "Your Discord account is not linked to exactly one active LancerLogin roster member. Ask an Operator to check your roster link.";
+  const member = members[0];
+  const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, attendance_reporting_starts_on AS attendanceReportingStartsOn FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes?: number; attendanceReportingStartsOn?: string }>();
+  const participationStartsOn = member.attendanceRequiredFrom ?? member.rosterAddedAt?.slice(0, 10) ?? "";
+  const reportingStartsOn = settings?.attendanceReportingStartsOn ?? "";
+  const now = new Date().toISOString();
+  const result = await db.prepare("SELECT mt.title, mt.starts_at AS startsAt, mt.ends_at AS endsAt, (SELECT c.disposition FROM attendance_corrections c WHERE c.installation_id = mt.installation_id AND c.member_id = ? AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = mt.installation_id AND e.member_id = ? AND e.meeting_id = mt.id AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = mt.installation_id AND e.member_id = ? AND e.meeting_id = mt.id AND e.action = 'check_out') AS checkedOutAt FROM meetings mt WHERE mt.installation_id = 'primary' AND mt.deleted_at IS NULL AND mt.is_test = 0 AND mt.ends_at <= ? AND substr(mt.starts_at, 1, 10) >= ? AND substr(mt.starts_at, 1, 10) >= ? ORDER BY mt.starts_at DESC").bind(member.id, member.id, member.id, now, participationStartsOn, reportingStartsOn).all<DiscordReportRow>();
+  return discordReportContent(result.results ?? [], settings?.lateScanMinutes ?? 30);
+}
 async function discordInteraction(request: Request, env: Env): Promise<Response> {
-  const config = await discordConfiguration(env, true); const raw = await request.text();
+  const { config, record } = await discordInteractionConfiguration(env); const raw = await request.text();
   if (!await verifyDiscordInteraction(request, config, raw)) throw new HttpError(401, "Discord interaction signature is invalid");
-  let interaction: { type?: number; guild_id?: string; data?: { custom_id?: string; name?: string; options?: { name?: string; value?: string }[] }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
-  try { interaction = JSON.parse(raw); } catch { throw new HttpError(400, "Discord interaction body is invalid"); }
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return discordEphemeral("This Discord request is malformed. Try the command again, or ask an Operator for help."); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return discordEphemeral("This Discord request is malformed. Try the command again, or ask an Operator for help.");
+  const interaction = parsed as { type?: number; guild_id?: string; data?: { custom_id?: string; name?: string; options?: { name?: string; value?: string }[] }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
   if (interaction.type === 1) return response({ type: 1 });
-  const customId = interaction.data?.custom_id ?? ""; const discordUserId = interaction.member?.user?.id ?? interaction.user?.id; const messageId = interaction.message?.id; const db = requireDatabase(env);
+  const customId = interaction.data?.custom_id ?? ""; const rawDiscordUserId = interaction.member?.user?.id ?? interaction.user?.id; const discordUserId = typeof rawDiscordUserId === "string" && /^\d{10,24}$/.test(rawDiscordUserId) ? rawDiscordUserId : undefined; const messageId = interaction.message?.id; const db = requireDatabase(env);
+  if (record.enabled === 0) return discordEphemeral("LancerLogin's Discord integration is disabled. Ask an Admin to enable and verify it before trying again.");
   if (interaction.type === 3 && customId.startsWith("lancerlogin-verify:") && discordUserId && messageId) {
     const token = customId.slice("lancerlogin-verify:".length);
     const challenge = await db.prepare("SELECT challenge_hash AS challengeHash, target, external_id AS externalId, expires_at AS expiresAt FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = 'discord'").first<{ challengeHash: string; target: string; externalId: string; expiresAt: string }>();
@@ -977,8 +1024,12 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
     await markIntegrationVerified(db, "discord", null, { discordUserId, guildId: interaction.guild_id, messageId });
     return discordEphemeral("LancerLogin is verified. You can return to the dashboard.");
   }
-  const record = await integrationRecord(env, "discord");
   if (!record?.verifiedAt) return discordEphemeral("This LancerLogin Discord integration has not been verified by an Admin.");
+  if (interaction.type === 2 && interaction.data?.name === "attendance-report") {
+    if (interaction.guild_id !== config.guildId) return discordEphemeral("Use this command in the Discord server configured for this LancerLogin installation.");
+    if (!discordUserId || interaction.data.options !== undefined && (!Array.isArray(interaction.data.options) || interaction.data.options.length > 0)) return discordEphemeral("This attendance-report request is malformed. Try /attendance-report again, or ask an Operator for help.");
+    return discordEphemeral(await discordAttendanceReport(db, discordUserId));
+  }
   if (interaction.type === 2 && interaction.data?.name === "pair" && discordUserId && interaction.guild_id === config.guildId) {
     const memberId = interaction.data.options?.find((option) => option.name === "member-id")?.value?.trim();
     if (!memberId || memberId.length > 80) return discordEphemeral("Provide your LancerLogin member ID with /pair. Ask an Operator for help if you need it.");

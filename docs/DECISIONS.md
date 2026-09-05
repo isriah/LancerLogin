@@ -53,3 +53,11 @@ Late-arrival and early-departure thresholds both default to 10 minutes. Admins m
 Attendance anomaly reports use a separate, Admin-configured private Discord channel rather than the member-facing attendance channel. LancerLogin requires that channel to belong to the already verified Discord server and refuses to use the configured attendance channel for this purpose. Adopters remain responsible for limiting channel access to the appropriate attendance staff.
 
 The five-minute scheduler sends one report after each eligible meeting's late-scan window closes. A report contains that meeting's qualifying late-arrival and early-departure values under ADR-010, uses no mentions, and is tracked by meeting for retry safety. Meetings with no qualifying anomalies produce no Discord message. Enabling or changing the report channel starts a new delivery window at that time, so the feature does not backfill older meetings or deliver reports accumulated while it was disabled.
+
+## ADR-012: Meeting-weight assignment and reporting
+
+Meeting weights change attendance percentages and attendance CSV reporting. A member's weighted attendance percentage is the sum of the weights of meetings where the member is present divided by the sum of the weights of meetings where that member is eligible. The excuse-adjusted percentage removes excused meetings from its denominator. Existing meetings without an assigned category retain a weight of 1.
+
+Admins manage an ordered list of reusable weight categories. A category may have a minimum-duration rule. During meeting creation, LancerLogin preselects the first active category in that Admin-controlled order whose rule matches the meeting duration. Categories without a rule remain available for manual selection but do not match automatically. An authorized meeting creator may keep the automatic choice, select another active category, or use the default unweighted value.
+
+Each meeting stores the selected category identity, display name, and weight as an assignment snapshot. Editing or retiring a category does not silently change historical meetings. Changing a meeting's assignment is explicit and audited. For a recurring meeting, the existing edit scope applies: the authorized editor chooses either only that occurrence or that occurrence and all future occurrences.

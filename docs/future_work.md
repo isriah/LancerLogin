@@ -1199,15 +1199,15 @@ Release: include in `v0.20.0`; validate delivery to a supported private Discord 
 
 ### WU-071 — Configurable meeting weights
 
-Status: blocked
+Status: in progress
 
 Goal: let organizations define reusable meeting-weight categories, optional duration-based automatic criteria, and manual per-meeting assignments.
-Dependencies: product decision required on what meeting weights change in attendance percentages and reports, how multiple matching automatic criteria resolve, and how assignment edits propagate across recurring-series occurrences
+Dependencies: ADR-012 selects weighted attendance percentages and CSV reporting, first-match priority from the Admin-controlled category order, explicit assignment snapshots, and the existing occurrence-or-future recurring edit scope
 Scope: after the weighting contract is approved, add an Admin-managed ordered category model with a bounded positive weight and optional duration criterion; allow categories to be added, edited, reordered, and retired without invalidating historical meetings; preselect the approved automatic match during meeting creation while allowing manual assignment with no matching criterion; and expose assignment editing on canonical meeting detail. Preserve required/optional attendance, participation dates, meeting overlap rules, recurrence safety, existing unweighted history, roles, and auditability. Exclude hard-coded category names or thresholds, retroactive silent reassignment, changing kiosk scan behavior, and unrelated template or report redesign.
 Sources: `docs/idea_inbox.md` (IN-084); `docs/DECISIONS.md`; `docs/DASHBOARD.md`; `docs/UI-STANDARDS.md`; `apps/api/migrations/`; `apps/api/src/index.ts`; `apps/dashboard/src/organization-settings.tsx`; `apps/dashboard/src/meeting-management.tsx`; `apps/dashboard/src/attendance-workspace.tsx`; `apps/dashboard/src/reports-page.tsx`; meeting lifecycle, recurrence, reporting, Settings, and meeting-workspace tests.
 Acceptance: after the named policy decisions are recorded, Admins can manage validated weight categories and optional criteria; meeting creation deterministically preselects the approved match and always permits an authorized manual choice; detail edits obey the approved occurrence/series rule; retired categories remain readable on historical meetings; attendance percentages and exports apply weights exactly according to the approved contract; upgrades preserve prior results with a documented default weight.
 Verification: `npm run verify:migrations`; `npm run verify:api`; `npm run verify:dashboard`; focused coverage for category lifecycle, validation, automatic matching/ties, manual override, recurrence edits, retirement/history, migration defaults, authorization, and weighted calculations; responsive keyboard browser coverage for Organization settings and meeting create/detail at required themes/viewports; unfiltered browser suite after integration.
-Release: later weighted-attendance feature bundle after the product decisions are resolved.
+Release: include in `v0.20.0`.
 
 ### WU-072 — Discord member attendance-report command
 

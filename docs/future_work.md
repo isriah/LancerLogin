@@ -1336,7 +1336,7 @@ Release: `v0.22.0`.
 Status: in progress
 
 Owner: Codex task
-Branch: detached provisioning worktree
+Branch: `codex/wu-078-calendar-delivery-parity`
 Base: `aa52749cab6931327bc8e070f5df87f5a1961c46`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\ef58\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:2db62e70-b534-478c-875b-eeec13b4a0f3`

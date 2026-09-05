@@ -260,6 +260,49 @@ test("meeting attendance preserves member-local corrections and Admin-only clear
   await expect(page.getByRole("button", { name: "Present" }).first()).toBeVisible();
 });
 
+test("meeting attendance shows authoritative scan times for complete, partial, missing, and corrected rows", async ({ page }) => {
+  const attendance = [
+    { memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", disposition: "active", checkedInAt: "2026-09-03T20:05:00Z" },
+    { memberId: "member-2", externalId: "A-102", firstName: "Morgan", lastName: "Diaz", disposition: "present", checkedInAt: "2026-09-03T20:02:00Z", checkedOutAt: "2026-09-03T21:01:00Z" },
+    { memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", disposition: "absent" },
+    { memberId: "member-4", externalId: "A-104", firstName: "Riley", lastName: "Chen", disposition: "excused", checkedInAt: "2026-09-03T20:07:00Z", checkedOutAt: "2026-09-03T20:48:00Z", reason: "Approved correction" },
+  ];
+  await page.route(/\/attendance\?meetingId=active-meeting$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ attendance }) }));
+
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    for (const theme of ["light", "dark"] as const) {
+      await page.setViewportSize(viewport);
+      await page.goto("/meetings/active-meeting");
+      const themeSwitch = page.getByRole("switch", { name: "Dark mode" });
+      if ((await themeSwitch.getAttribute("aria-checked")) !== String(theme === "dark")) await themeSwitch.click();
+      await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+
+      const table = page.getByRole("table", { name: "Meeting attendance" });
+      const partial = table.getByRole("row").filter({ hasText: "Avery Stone" });
+      const complete = table.getByRole("row").filter({ hasText: "Morgan Diaz" });
+      const missing = table.getByRole("row").filter({ hasText: "Jordan Lee" });
+      const corrected = table.getByRole("row").filter({ hasText: "Riley Chen" });
+      await expect(partial.locator('time[datetime="2026-09-03T20:05:00Z"]')).toBeVisible();
+      await expect(partial.getByText("Not recorded", { exact: true })).toBeVisible();
+      await expect(complete.locator("time")).toHaveCount(2);
+      await expect(missing.getByText("Not recorded", { exact: true })).toHaveCount(2);
+      await expect(corrected.locator("time")).toHaveCount(2);
+      await expect(corrected.locator(".attendance-state")).toHaveText("excused");
+      for (const row of [partial, complete, missing, corrected]) {
+        await expect(row.getByText("Check-in", { exact: true })).toBeVisible();
+        await expect(row.getByText("Check-out", { exact: true })).toBeVisible();
+      }
+
+      await partial.getByRole("button", { name: "Present" }).focus();
+      await expect(partial.getByRole("button", { name: "Present" })).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(partial.getByRole("button", { name: "Excuse" })).toBeFocused();
+      const dimensions = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
+      expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+    }
+  }
+});
+
 test("meeting detail remains operable and contained at a compact mobile width", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/meetings/active-meeting");

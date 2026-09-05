@@ -120,10 +120,7 @@ test("meeting browser empty, loading, error, success, and partial Discord outcom
   await expectContained(page);
 });
 
-for (const context of [
-  { role: "admin" as const, viewport: { width: 1280, height: 900 }, theme: "light" as const },
-  { role: "operator" as const, viewport: { width: 390, height: 844 }, theme: "dark" as const },
-]) {
+for (const context of dashboardConformanceReferences.viewports.flatMap((viewport) => dashboardConformanceReferences.themes.map((theme) => ({ role: theme === "light" ? "admin" as const : "operator" as const, viewport, theme })))) {
   test(`${context.role} meeting detail conforms at ${context.viewport.width}x${context.viewport.height} in ${context.theme} mode`, async ({ page }) => {
     await page.setViewportSize(context.viewport);
     await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), context.theme);
@@ -132,7 +129,15 @@ for (const context of [
     await expect(page.locator("main h1")).toHaveCount(1);
     await expect(page.getByRole("heading", { level: 1, name: "Build session" })).toBeVisible();
     await expect(page.getByRole("table", { name: "Meeting attendance" })).toBeVisible();
-    await expect(page.locator('[role="columnheader"]')).toHaveCount(3);
+    await expect(page.locator('[role="columnheader"]')).toHaveCount(4);
+    const scanHeader = page.locator('[role="columnheader"]').filter({ hasText: "Scan times" });
+    if (context.viewport.width > 760) await expect(scanHeader).toBeVisible();
+    else {
+      await expect(scanHeader).toBeHidden();
+      const firstAttendanceRow = page.locator(".attendance-row").filter({ hasText: "Avery Stone" });
+      await expect(firstAttendanceRow.getByText("Check-in", { exact: true })).toBeVisible();
+      await expect(firstAttendanceRow.getByText("Check-out", { exact: true })).toBeVisible();
+    }
     await expect(page.getByRole("button", { name: "Clear" })).toHaveCount(context.role === "admin" ? 3 : 0);
     await expect(page.locator(".attendance-state.active")).toContainText("Active · not checked out");
     await expect(page.locator(".attendance-state.present")).toContainText("present");

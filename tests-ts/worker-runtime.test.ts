@@ -239,6 +239,22 @@ test("Admin can set a dated attendance reporting baseline and it is returned wit
   assert.ok(database.calls.some((call) => call.sql.includes("attendance_reporting_starts_on")));
 });
 
+test("Admin can configure bounded attendance anomaly thresholds with audit history", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("admin");
+  const base = { organizationName: "Example Arts Club", primaryColor: "#123456", secondaryColor: "#abcdef", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 };
+  assert.equal((await worker.fetch(request("/admin/branding", { ...base, anomalyLateThresholdMinutes: -1, anomalyEarlyThresholdMinutes: 10 }, { method: "PATCH", cookie }), env)).status, 400);
+  assert.equal((await worker.fetch(request("/admin/branding", { ...base, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 1441 }, { method: "PATCH", cookie }), env)).status, 400);
+  const saved = await worker.fetch(request("/admin/branding", { ...base, anomalyLateThresholdMinutes: 12, anomalyEarlyThresholdMinutes: 18 }, { method: "PATCH", cookie }), env);
+  assert.equal(saved.status, 200);
+  const update = database.calls.find((call) => call.sql.includes("anomaly_late_threshold_minutes = COALESCE"));
+  assert.ok(update?.values.includes(12));
+  assert.ok(update?.values.includes(18));
+  const audit = database.calls.find((call) => call.values.includes("branding.updated"));
+  assert.match(String(audit?.values.find((value) => typeof value === "string" && value.includes("anomalyLateThresholdMinutes"))), /"anomalyLateThresholdMinutes":12/);
+});
+
 test("Admin can persist shared checklist progress with an audit record", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
@@ -563,17 +579,20 @@ test("Reports may request inactive roster history without changing the default a
 test("member history is stable by roster ID and available to Operators", async () => {
   const database = new FakeDatabase();
   database.rows.set("external_id = ?", { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", discordUserId: "123456789012", active: 0, attendanceRequiredFrom: "2026-09-02" });
-  database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
-  database.lists.set("FROM meetings meeting", [{ meetingId: "meeting-1", title: "Pre-start meeting", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", checkedInAt: "2026-09-01T20:05:00.000Z", checkedOutAt: "2026-09-01T21:10:00.000Z" }, { meetingId: "meeting-2", title: "Practice", startsAt: "2026-09-02T20:00:00.000Z", endsAt: "2026-09-02T22:00:00.000Z", correction: "excused", reason: "Medical appointment" }]);
+  database.rows.set("anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes", { lateScanMinutes: 30, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 10 });
+  database.lists.set("FROM meetings meeting", [{ meetingId: "meeting-1", title: "Pre-start meeting", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", checkedInAt: "2026-09-01T20:05:00.000Z", checkedOutAt: "2026-09-01T21:10:00.000Z" }, { meetingId: "meeting-2", title: "Practice", startsAt: "2026-09-02T20:00:00.000Z", endsAt: "2026-09-02T22:00:00.000Z", correction: "excused", reason: "Medical appointment" }, { meetingId: "meeting-3", title: "Build", startsAt: "2026-09-03T20:00:00.000Z", endsAt: "2026-09-03T22:00:00.000Z", checkedInAt: "2026-09-03T20:12:00.000Z", checkedOutAt: "2026-09-03T21:42:00.000Z" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/admin/members/A-101/history", undefined, { cookie: await sessionCookie("operator") }), env);
   assert.equal(result.status, 200);
-  const body = await result.json() as { member: { active: boolean; memberId: string; discordUserId?: string; attendanceRequiredFrom?: string }; history: Array<{ disposition: string; checkedInAt?: string; checkedOutAt?: string; reason?: string }> };
+  const body = await result.json() as { member: { active: boolean; memberId: string; discordUserId?: string; attendanceRequiredFrom?: string }; history: Array<{ disposition: string; checkedInAt?: string; checkedOutAt?: string; reason?: string }>; meanAnomalyMinutes: number|null };
   assert.deepEqual(body.member, { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", discordUserId: "123456789012", active: false, attendanceRequiredFrom: "2026-09-02" });
   assert.doesNotMatch(JSON.stringify(body), /token|ciphertext|publicKey|guildId|channelId/i);
-  assert.equal(body.history.length, 1);
+  assert.equal(body.history.length, 2);
   assert.equal(body.history[0].disposition, "excused");
   assert.equal(body.history[0].reason, "Medical appointment");
+  assert.equal(body.meanAnomalyMinutes, 15);
+  const settingsQuery = database.calls.find((call) => call.sql.includes("anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes"));
+  assert.doesNotMatch(settingsQuery?.sql ?? "", /attendance_reporting_starts_on/);
 
   const unauthorized = await worker.fetch(request("/admin/members/A-101/history"), env);
   assert.equal(unauthorized.status, 401);

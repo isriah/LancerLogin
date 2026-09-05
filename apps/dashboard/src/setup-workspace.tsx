@@ -16,7 +16,7 @@ const steps = [
   ["confirm-attendance", "Attendance confirmation", "Confirm the expected check-in reached the dashboard."],
 ] as const;
 type StepId = typeof steps[number][0];
-export type Branding = { organizationName: string; subtitle?: string; logoData?: string; primaryColor: string; secondaryColor: string; appearance: "system" | "light" | "dark"; logoBackdrop: LogoBackdrop; lateScanMinutes: number; discordContestWindowHours: number; attendanceReportingStartsOn?: string | null };
+export type Branding = { organizationName: string; subtitle?: string; logoData?: string; primaryColor: string; secondaryColor: string; appearance: "system" | "light" | "dark"; logoBackdrop: LogoBackdrop; lateScanMinutes: number; discordContestWindowHours: number; attendanceReportingStartsOn?: string | null; anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number };
 type Member = RosterMember;
 type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; pairedAt: string };
 type Meeting = { id: string; title: string; startsAt: string; endsAt: string };

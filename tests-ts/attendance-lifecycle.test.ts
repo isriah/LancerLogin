@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { attendanceClosesAt, attendanceDisposition, nextAttendanceAction, overlappingMeetingWindows, scanWindowState } from "../apps/api/src/attendance-lifecycle.ts";
+import { attendanceClosesAt, attendanceDisposition, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState } from "../apps/api/src/attendance-lifecycle.ts";
 
 test("organization late-scan setting determines one meeting cutoff", () => {
   assert.equal(attendanceClosesAt("2026-09-01T22:00:00.000Z", 30), "2026-09-01T22:30:00.000Z");
@@ -31,4 +31,16 @@ test("one scan pair transitions from absent through active to present", () => {
 test("audited corrections override scan-derived status", () => {
   assert.equal(attendanceDisposition([{ action: "check_in" }], "excused"), "excused");
   assert.equal(attendanceDisposition([], "present"), "present");
+});
+
+test("anomalous scan values are averaged separately above the configured thresholds", () => {
+  const rows = [
+    { startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", checkedInAt: "2026-09-01T20:12:00.000Z", checkedOutAt: "2026-09-01T21:42:00.000Z" },
+    { startsAt: "2026-09-02T20:00:00.000Z", endsAt: "2026-09-02T22:00:00.000Z", checkedInAt: "2026-09-02T20:10:00.000Z" },
+  ];
+  assert.equal(meanAnomalousMinutes(rows, 10, 10), 15);
+  assert.equal(meanAnomalousMinutes([{ ...rows[0], checkedInAt: "2026-09-01T20:10:00.000Z", checkedOutAt: undefined }], 10, 10), null);
+  assert.equal(meanAnomalousMinutes([{ ...rows[0], checkedOutAt: undefined }], 10, 10), 12);
+  assert.equal(meanAnomalousMinutes([], 10, 10), null);
+  assert.throws(() => meanAnomalousMinutes(rows, -1, 10), /0 to 1440/);
 });

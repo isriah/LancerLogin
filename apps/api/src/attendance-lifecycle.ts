@@ -1,11 +1,31 @@
 export const DEFAULT_LATE_SCAN_MINUTES = 30;
 export const MAX_LATE_SCAN_MINUTES = 180;
+export const DEFAULT_ANOMALY_THRESHOLD_MINUTES = 10;
+export const MAX_ANOMALY_THRESHOLD_MINUTES = 1_440;
 export const DUPLICATE_SCAN_WINDOW_MS = 90_000;
 
 export type AttendanceAction = "check_in" | "check_out";
 export type AttendanceDisposition = "absent" | "active" | "present" | "excused";
 export type AttendanceEventLike = { id?: string; action: AttendanceAction; occurredAt?: string };
 export type MeetingWindowLike = { id?: string; title?: string; startsAt: string; endsAt: string };
+export type AnomalyScanLike = MeetingWindowLike & { checkedInAt?: string; checkedOutAt?: string };
+
+export function meanAnomalousMinutes(rows: AnomalyScanLike[], lateThresholdMinutes = DEFAULT_ANOMALY_THRESHOLD_MINUTES, earlyThresholdMinutes = DEFAULT_ANOMALY_THRESHOLD_MINUTES): number | null {
+  for (const threshold of [lateThresholdMinutes, earlyThresholdMinutes]) {
+    if (!Number.isInteger(threshold) || threshold < 0 || threshold > MAX_ANOMALY_THRESHOLD_MINUTES) throw new Error("Anomaly thresholds must be from 0 to 1440 minutes");
+  }
+  const values: number[] = [];
+  for (const row of rows) {
+    const start = Date.parse(row.startsAt); const end = Date.parse(row.endsAt);
+    const checkIn = row.checkedInAt ? Date.parse(row.checkedInAt) : NaN;
+    const checkOut = row.checkedOutAt ? Date.parse(row.checkedOutAt) : NaN;
+    const lateMinutes = (checkIn - start) / 60_000;
+    const earlyMinutes = (end - checkOut) / 60_000;
+    if (Number.isFinite(lateMinutes) && lateMinutes > lateThresholdMinutes) values.push(lateMinutes);
+    if (Number.isFinite(earlyMinutes) && earlyMinutes > earlyThresholdMinutes) values.push(earlyMinutes);
+  }
+  return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
+}
 
 export function attendanceClosesAt(endsAt: string, lateScanMinutes = DEFAULT_LATE_SCAN_MINUTES): string {
   const end = Date.parse(endsAt);

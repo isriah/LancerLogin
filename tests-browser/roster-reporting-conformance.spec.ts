@@ -12,6 +12,8 @@ const referenceSettings={
   appearance: "dark",
   logoBackdrop: "auto",
   lateScanMinutes: 30,
+  anomalyLateThresholdMinutes: 10,
+  anomalyEarlyThresholdMinutes: 10,
 };
 
 const roster=[
@@ -71,6 +73,21 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.getByText("Inactive",{ exact: true })).toBeVisible();
       await expect(page.getByText("Not linked",{ exact: true })).toBeVisible();
       await expect(page.getByRole("button",{ name: "Add member" })).toBeVisible();
+      await expectResponsiveFit(page);
+    });
+  }
+}
+
+for(const viewport of dashboardConformanceReferences.viewports) {
+  for(const theme of dashboardConformanceReferences.themes) {
+    test(`member anomaly metric conforms at ${viewport.width}x${viewport.height} in ${theme} mode`,async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme",savedTheme),theme);
+      await useReferenceContext(page,"operator");
+      await page.route("**/admin/members/A-101/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ member: roster[0],meanAnomalyMinutes: 15,history: [{ meetingId: "meeting-1",title: "Build session",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",checkedInAt: "2026-09-01T18:12:00Z",checkedOutAt: "2026-09-01T19:42:00Z",disposition: "present" }] }) }));
+      await page.goto("/roster/A-101");
+      await expect(page.getByText("Mean anomalous time",{ exact: true })).toBeVisible();
+      await expect(page.getByText("15 minutes",{ exact: true })).toBeVisible();
       await expectResponsiveFit(page);
     });
   }
@@ -136,7 +153,7 @@ test("Admin member and import dialogs contain focus, report errors, and return f
 
 test("Operator and member-detail states preserve identity policy, history, and unavailable recovery",async ({ page }) => {
   await useReferenceContext(page,"operator");
-  await page.route("**/admin/members/A-101/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ member: roster[0],history: [{ meetingId: "meeting-1",title: "Build session with a deliberately long name",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",checkedInAt: "2026-09-01T18:05:00Z",checkedOutAt: "2026-09-01T19:58:00Z",disposition: "present" }] }) }));
+  await page.route("**/admin/members/A-101/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ member: roster[0],meanAnomalyMinutes: null,history: [{ meetingId: "meeting-1",title: "Build session with a deliberately long name",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",checkedInAt: "2026-09-01T18:05:00Z",checkedOutAt: "2026-09-01T19:58:00Z",disposition: "present" }] }) }));
   await page.route("**/admin/members/missing/history",(route) => route.fulfill({ status: 404,contentType: "application/json",body: JSON.stringify({ error: "Member not found" }) }));
 
   await page.goto("/roster");
@@ -147,6 +164,7 @@ test("Operator and member-detail states preserve identity policy, history, and u
   await expect(page.getByText("Active roster member",{ exact: true })).toBeVisible();
   await expect(page.getByText("123456789012",{ exact: true })).toBeVisible();
   await expect(page.getByRole("table",{ name: "Complete attendance history" })).toContainText("Build session with a deliberately long name");
+  await expect(page.getByText("No anomalous scans",{ exact: true })).toBeVisible();
   await expect(page.getByRole("button",{ name: "Edit" })).toHaveCount(0);
 
   await page.goto("/roster/missing");

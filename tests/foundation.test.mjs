@@ -86,9 +86,10 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
+  assert.match(source, /attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES/);
   assert.match(source, /recurrence_frequency: null/);
   assert.match(source, /deleted_at: null/);
   assert.match(source, /google_enabled: providers\.has\("google"\) \? 1 : 0/);
@@ -115,6 +116,13 @@ test("Discord channel manager migration tracks only owned messages and expiry st
   assert.match(migration, /ADD COLUMN deleted_at TEXT/);
   assert.match(migration, /idx_discord_attendance_notifications_expiry/);
   assert.doesNotMatch(migration, /fingerprint|biometric/i);
+});
+
+test("attendance anomaly thresholds migrate with safe ten-minute defaults", async () => {
+  const migration = await readFile("apps/api/migrations/0023_attendance_anomaly_thresholds.sql", "utf8");
+  assert.match(migration, /anomaly_late_threshold_minutes INTEGER NOT NULL DEFAULT 10/);
+  assert.match(migration, /anomaly_early_threshold_minutes INTEGER NOT NULL DEFAULT 10/);
+  assert.equal((migration.match(/BETWEEN 0 AND 1440/g) ?? []).length, 2);
 });
 
 test("recurring meeting migration stores series metadata without biometric data", async () => {

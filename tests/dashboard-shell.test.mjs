@@ -226,6 +226,8 @@ test("Settings separates operational configuration, access, and kiosk update com
   assert.match(shell, /\["\/settings\/updates", "Updates"\]/);
   assert.match(shell, /role === "admin" && path === "\/settings\/access"/);
   assert.match(configuration, /Late scan allowance \(minutes\)/);
+  assert.match(configuration, /Late-arrival limit \(minutes\)/);
+  assert.match(configuration, /Early-departure limit \(minutes\)/);
   assert.doesNotMatch(configuration, /Discord contest window \(hours\)/);
   assert.match(integrations, /Contest window \(hours\)/);
   assert.match(integrations, /Manage the configured attendance channel/);
@@ -484,6 +486,8 @@ test("member detail routes preserve deep links, history, and role-limited action
   assert.match(detail, /Check-out/);
   assert.match(roster, /attendanceRequiredFrom/);
   assert.match(detail, /Attendance required from/);
+  assert.match(detail, /Mean anomalous time/);
+  assert.match(detail, /No anomalous scans/);
   assert.match(detail, /role\s*===\s*"admin"/);
   assert.match(shell, /discordEnabled=\{integrations\.discord\.enabled\}/);
   assert.match(detail, /discordEnabled\s*&&\s*<div><dt>Discord identity<\/dt>/);

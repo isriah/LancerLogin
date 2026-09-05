@@ -12,6 +12,8 @@ const settings = {
   lateScanMinutes: 30,
   discordContestWindowHours: 24,
   attendanceReportingStartsOn: null,
+  anomalyLateThresholdMinutes: 10,
+  anomalyEarlyThresholdMinutes: 10,
 };
 
 const routes = [
@@ -61,6 +63,24 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await expectResponsiveFit(page);
   });
 }
+
+test("Admin can save independent attendance anomaly limits", async ({ page }) => {
+  await useSettingsContext(page);
+  let saved: Record<string, unknown> | undefined;
+  await page.route("**/admin/branding", async (route) => {
+    if (route.request().method() === "PATCH") saved = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({ status: 200, contentType: "application/json", body: route.request().method() === "PATCH" ? JSON.stringify({ ok: true }) : JSON.stringify({ settings }) });
+  });
+  await page.goto("/settings/configuration");
+  await expect(page.getByLabel("Late-arrival limit (minutes)")).toHaveValue("10");
+  await expect(page.getByLabel("Early-departure limit (minutes)")).toHaveValue("10");
+  await page.getByLabel("Late-arrival limit (minutes)").fill("12");
+  await page.getByLabel("Early-departure limit (minutes)").fill("18");
+  await page.getByRole("button", { name: "Save configuration" }).click();
+  await expect(page.getByText("Attendance configuration saved.", { exact: true })).toBeVisible();
+  expect(saved?.anomalyLateThresholdMinutes).toBe(12);
+  expect(saved?.anomalyEarlyThresholdMinutes).toBe(18);
+});
 
 async function expectResponsiveFit(page: Page) {
   const geometry = await page.evaluate(() => ({

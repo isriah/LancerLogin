@@ -1275,11 +1275,11 @@ Release: `v0.21.0`.
 Status: in progress
 
 Owner: Codex task
-Branch: `codex/wu-075-kiosk-update-completion-replacement`
-Base: `05ecdb8b5d99e13bffd8c2f2ed82437abce46b59`
-Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\5641\\LancerLogin Workspace`
-Task: replacement provisioning client `client-new-thread:9cb856b2-0a81-472a-a190-a33cda54cb55`
-Prior attempt: provisioning client `client-new-thread:7a4a0058-b40e-4583-9b98-6e1a236c2454` created branch `codex/wu-075-kiosk-update-completion` at `522b7181b8e4aaa5343cd8c2c10dd0fbe7ac7a3e` in `C:\\Users\\Izz\\.codex\\worktrees\\7e77\\LancerLogin Workspace`, but never exposed an addressable task and remained clean at its base through three bounded checks; it was retired as inactive before replacement.
+Branch: `codex/wu-075-kiosk-update-completion`
+Base: `522b7181b8e4aaa5343cd8c2c10dd0fbe7ac7a3e`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\7e77\\LancerLogin Workspace`
+Task: delayed provisioning client `client-new-thread:7a4a0058-b40e-4583-9b98-6e1a236c2454`
+Coordination: the original client became active after three clean/absent checks and after replacement client `client-new-thread:9cb856b2-0a81-472a-a190-a33cda54cb55` had been started in `C:\\Users\\Izz\\.codex\\worktrees\\5641\\LancerLogin Workspace`. The original is the selected implementation because it independently resolves the official compatible release and covers kiosk-executor failure reporting. The overlapping replacement must be stopped and its branch `codex/wu-075-kiosk-update-completion-replacement` must not be integrated.
 
 Goal: make the dashboard report a kiosk update's final installed version or an actionable terminal failure instead of leaving a successful installer handoff in an indefinite waiting state.
 Dependencies: none

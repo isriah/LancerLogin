@@ -1032,9 +1032,10 @@ Release: next documentation and setup-guidance bundle.
 Status: in progress
 
 Owner: Codex task
-Branch: `codex/wu-062-public-docs-conformance` (requested; provisioning Worktree)
+Branch: `codex/wu-062-public-docs-conformance`
 Base: `77d7a47`
-Task: provisioning client `client-new-thread:36a3b24d-7866-4ff1-b9a0-ee8aef2a5c96`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\8527\\LancerLogin Workspace`
+Task: `01a06ede-ee19-7cc3-af9d-549dfa0ebb1a` (provisioned from client `client-new-thread:36a3b24d-7866-4ff1-b9a0-ee8aef2a5c96`)
 
 Goal: make the complete public documentation site feel like LancerLogin while remaining readable, responsive, and accessible in light and dark environments.
 Dependencies: WU-061 (both units change the public setup guide, shared documentation styles, and documentation coverage; settle OAuth content before the site-wide presentation pass)
@@ -1139,7 +1140,8 @@ Status: in progress
 Owner: Codex task
 Branch: `codex/wu-068-attendance-scan-times` (requested; provisioning Worktree)
 Base: `77d7a47`
-Task: provisioning client `client-new-thread:96bfd272-cdb8-45c5-b8ae-8ac74c63549b`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\0f69\\LancerLogin Workspace` (detached while provisioning)
+Task: `01a06ede-fca3-78c0-aaa9-92003f7713bb` (provisioned from client `client-new-thread:96bfd272-cdb8-45c5-b8ae-8ac74c63549b`)
 
 Goal: show each member's recorded check-in and check-out times directly in the canonical meeting attendance workspace.
 Dependencies: WU-063 (both units touch the meeting-browser/detail dashboard presentation and shared styling; integrate selector conformance first)
@@ -1192,7 +1194,8 @@ Status: in progress
 Owner: Codex task
 Branch: `codex/wu-072-discord-attendance-report` (requested; provisioning Worktree)
 Base: `77d7a47`
-Task: provisioning client `client-new-thread:2d644f08-aaef-46f5-a8e6-8a04938bbeb2`
+Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\a1d5\\LancerLogin Workspace` (detached while provisioning)
+Task: `01a06edf-0dad-7160-aae9-37b0b5bcb6e5` (provisioned from client `client-new-thread:2d644f08-aaef-46f5-a8e6-8a04938bbeb2`)
 
 Goal: let a Discord-linked roster member privately request their own current attendance report.
 Dependencies: WU-064 (both units change the Discord interaction handler and provider-fake coverage; integrate the reliability repair first)

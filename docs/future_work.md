@@ -1400,7 +1400,10 @@ Release: `v0.22.1`; supported-server validation follows the private upgrade beca
 
 ### WU-081 — Discord command reconciliation for upgraded integrations
 
-Status: ready
+Status: merged (`e03ef91`)
+
+Owner: Codex task
+Integration: implemented directly on the authorized serial `main` checkout as `e03ef91a65b5e547b9d45a9059f9c322a7c3cf99`. The repair adds an Admin-only configured-state command reconciliation action, derives the authoritative Discord application identity for legacy encrypted records, retains explicit-ID mismatch rejection, and does not rewrite verification, credentials, calendar mappings or operations, channel-manager or anomaly-report configuration, pairings, or other Discord state. `npm run verify:api` passed 123 API/runtime tests plus API/shared typechecks; `npm run verify:dashboard` passed 40 dashboard/conformance tests plus dashboard typecheck; `npm run verify:docs` passed 7 documentation tests; the focused responsive command-repair browser matrix passed 4/4; and the complete browser suite passed 151/151. Automated tests used provider fakes and sent no live Discord traffic. Release impact remains `v0.22.2`; supported-server validation is still required before release, and no release, deployment, cloud mutation, provider mutation, or Pi update occurred.
 
 Goal: make `/pair` and `/attendance-report` appear in an already-configured Discord server after upgrading from a release that predates managed command registration.
 Dependencies: WU-079 (merged); the v0.22.1 supported-server investigation found that command reconciliation runs only during the verification flow, while an already-configured integration hides that flow and legacy encrypted Discord configuration may not contain the application ID added by WU-079

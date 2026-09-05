@@ -1296,7 +1296,7 @@ Release: `v0.22.0`.
 Status: in progress
 
 Owner: Codex task
-Branch: detached provisioning worktree
+Branch: `codex/wu-076-chronological-meeting-table-ordering`
 Base: `9ff534d19c6989967451e6cc2b58e70e02c8f8b5`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\00a6\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:f630f680-e145-4198-84a3-082a32fc7b1f`

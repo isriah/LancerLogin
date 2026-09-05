@@ -1005,7 +1005,7 @@ Release: v0.19.0 dashboard design conformance.
 
 ### WU-061 — Google OAuth setup guidance
 
-Status: in progress
+Status: merged (`c4e553a`)
 
 Owner: Codex task
 Branch: `codex/wu-061-google-oauth-guidance` (requested; provisioning Worktree)
@@ -1017,6 +1017,7 @@ Replacement branch: `codex/wu-061-google-oauth-guidance-v2`
 Replacement base: `dc72fcf`
 Replacement Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\cbca\\LancerLogin Workspace`
 Replacement task: `01a06ecc-a2d5-7fb1-a72d-79499dfe9c48` (provisioned from client `client-new-thread:e674f441-5105-4192-a775-2ee93eb5da0e`)
+Integration: candidate `2a39f6efcbba5cf48aec89c4bfa519dca41be16f` was merged as `c4e553aaeb82727d3781829e47412a4102b04a8b`. `npm run verify:dashboard`, `npm run verify:docs`, and the complete 118-test browser suite passed on the integrated tree. Current official Google Auth Platform guidance was checked for Branding, Audience, Clients, Data Access, Verification Center, Internal/External publishing behavior, exact redirect matching, and the basic-identity scope exception. No live Google project was mutated and no real identifiers or secrets were added.
 
 Goal: make Google OAuth setup accurate, current, and easy to complete from either first-Admin setup or Settings without crowding the dashboard with screenshots.
 Dependencies: none

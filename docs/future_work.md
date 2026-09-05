@@ -1313,7 +1313,7 @@ Release: `v0.22.0`.
 
 ### WU-077 — Dashboard steady-state status cleanup
 
-Status: in progress
+Status: merged (`6cb10e7`)
 
 Owner: Codex task
 Branch: detached provisioning worktree
@@ -1321,6 +1321,7 @@ Base: `b5fd990c2d829d2f91a72d597d9071ac0d2cf29a`
 Worktree: `C:\\Users\\Izz\\.codex\\worktrees\\36e3\\LancerLogin Workspace`
 Task: provisioning client `client-new-thread:f05538e4-0101-472a-8eaf-fad02e1b6111`
 Handoff: the provisioning client remained detached but completed clean candidate `fb15c46fa90c0eb0febbecf033a194d5b2fd4e02` in the recorded Worktree with subject `WU-077: remove redundant dashboard status details`.
+Integration: candidate `fb15c46fa90c0eb0febbecf033a194d5b2fd4e02` was updated onto current `main` and merged as `6cb10e7df72f5f4a890c5c4a3d37b7ce6699bef4`. Before advancing `main`, `npm run verify:dashboard` passed 40 dashboard tests plus dashboard typecheck and the focused `tests-browser/meeting-workspace-conformance.spec.ts` and `tests-browser/meeting-detail.spec.ts` run passed all 22 tests. On the merged tree, `npm run verify:dashboard` again passed 40 dashboard tests plus dashboard typecheck, and the complete 142-test browser suite passed. Focused coverage confirms successful routine loads render no steady-state status placeholder, loading/errors/user-triggered outcomes remain explicit and accessible, meeting detail omits `Attendance closes` while retaining the underlying attendance-window behavior, and the required desktop/mobile light/dark adopter-branded keyboard/focus layouts remain contained. Release impact remains `v0.22.0`; no release, deployment, cloud mutation, or Pi update occurred.
 
 Goal: remove redundant steady-state information from the Dashboard and canonical meeting summary while preserving useful loading, mutation, and error feedback.
 Dependencies: none; coordinate after WU-076 if its decision selects `apps/dashboard/src/home-page.tsx`

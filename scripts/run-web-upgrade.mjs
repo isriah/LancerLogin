@@ -171,7 +171,10 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
     },
     async migrate() { await wrangler(["d1", "migrations", "apply", `${context.slug}-data`, "--remote"]); },
     async deployApi() { await wrangler(["deploy", "--message", `Web update ${context.requestId}`]); },
-    async deployPages() { await wrangler(["pages", "deploy", "apps/dashboard/dist", `--project-name=${context.slug}-dashboard`, "--branch=main", `--commit-hash=${context.sha}`, "--commit-dirty=false"]); },
+    async deployPages() {
+      // Pages rejects custom --config paths; the generated configuration belongs to the Worker only.
+      await command(process.execPath, [resolve(source, "node_modules/wrangler/bin/wrangler.js"), "pages", "deploy", "apps/dashboard/dist", `--project-name=${context.slug}-dashboard`, "--branch=main", `--commit-hash=${context.sha}`, "--commit-dirty=false"], source, processEnvironment);
+    },
     async health() {
       let healthy = false;
       for (let attempt = 0; attempt < 12; attempt++) {

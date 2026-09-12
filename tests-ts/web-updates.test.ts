@@ -23,7 +23,13 @@ class D1 {
     return { bind(...values: unknown[]) { params = values; return this; },
       async first<T>() { return (database.sqlite.prepare(sql).get(...params as []) ?? null) as T | null; },
       async all<T>() { return { results: database.sqlite.prepare(sql).all(...params as []) as T[] }; },
-      async run() { const result = database.sqlite.prepare(sql).run(...params as []); return { success: true, meta: { changes: Number(result.changes) } }; } };
+      async run() {
+        // D1 reports total_changes() deltas, including trigger writes, rather than direct statement changes.
+        const before = Number(database.sqlite.prepare("SELECT total_changes() AS n").get()?.n);
+        database.sqlite.prepare(sql).run(...params as []);
+        const after = Number(database.sqlite.prepare("SELECT total_changes() AS n").get()?.n);
+        return { success: true, meta: { changes: after - before } };
+      } };
   }
   async batch(statements: Array<{ run(): Promise<unknown> }>) { return Promise.all(statements.map((statement) => statement.run())); }
 }

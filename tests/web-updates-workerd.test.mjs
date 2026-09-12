@@ -13,7 +13,7 @@ const script = `${updater}
 export default { async fetch(request, env) {
   const path = new URL(request.url).pathname;
   if (path === '/runtime') return Response.json({ manual: new Request('https://example.invalid', { redirect: 'manual' }).redirect, timeout: typeof AbortSignal.timeout });
-  try { const result = path === '/prepare' ? await prepareWebUpdate(env) : path === '/start' ? await startWebUpdate(env, await request.json()) : await webUpdateStatus(env); return Response.json(result); }
+  try { const result = path === '/prepare' ? await prepareWebUpdate(env, 'synthetic-admin') : path === '/start' ? await startWebUpdate(env, await request.json(), 'synthetic-admin') : await webUpdateStatus(env); return Response.json(result); }
   catch(error) { return Response.json({ code: error.code, error: error.message }, { status: error.status || 500 }); }
 } };`;
 
@@ -80,6 +80,30 @@ test("actual workerd normal dispatch and status preserve the pinned request", as
     assert.equal(status.request.state, "awaiting_approval"); assert.equal(status.request.requestId, requestId);
     assert.deepEqual(instance.calls.map((call) => call.method), ["POST", "GET"]);
     assert.equal(instance.calls.every((call) => call.authorization === "Bearer synthetic-runtime-token"), true);
+  } finally { await instance.worker.dispose(); }
+});
+
+test("actual workerd D1 includes the started audit trigger in change metadata", async () => {
+  const instance = await runtime();
+  try {
+    await instance.seed();
+    const result = await instance.database.prepare("UPDATE web_update_requests SET state = 'dispatching', started_at = ?, started_by = 'synthetic-admin' WHERE id = ? AND state = 'prepared'").bind(new Date().toISOString(), requestId).run();
+    assert.equal(result.meta.changes, 2);
+    assert.equal((await instance.database.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE action = 'web_update.started'").first()).count, 1);
+  } finally { await instance.worker.dispose(); }
+});
+
+test("actual workerd simultaneous Admin starts and replay dispatch once and audit once", async () => {
+  const instance = await runtime();
+  try {
+    await instance.seed(); const input = { requestId, backupSaved: true };
+    await Promise.all(Array.from({ length: 3 }, () => instance.fetch("/start", input)));
+    const replay = await (await instance.fetch("/start", input)).json();
+    assert.equal(replay.request.state, "queued"); assert.equal(replay.request.targetCommit, sha);
+    assert.equal(instance.calls.length, 1); assert.equal(instance.calls[0].method, "POST");
+    const row = await instance.database.prepare("SELECT started_by, run_id FROM web_update_requests WHERE id = ?").bind(requestId).first();
+    assert.deepEqual(row, { started_by: "synthetic-admin", run_id: "123" });
+    assert.equal((await instance.database.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE action = 'web_update.started'").first()).count, 1);
   } finally { await instance.worker.dispose(); }
 });
 

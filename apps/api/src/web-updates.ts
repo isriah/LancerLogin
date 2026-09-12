@@ -117,8 +117,9 @@ export async function startWebUpdate(env: WebUpdateEnv, input: Record<string, un
   if (Date.parse(row.expires_at) <= Date.now()) fail(409, "request_expired", "The prepared update expired. Prepare it again.");
   if (input.backupSaved !== true || !row.backup_exported_at) fail(409, "backup_required", "Download this update's entire-installation backup and confirm it was saved.");
   credential(env); const repo = repository(env); const now = new Date().toISOString();
-  const claim = await db(env).prepare("UPDATE web_update_requests SET state = 'dispatching', stage = 'dispatching', started_at = ?, started_by = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state = 'prepared'").bind(now, actorId ?? null, now, row.id).run();
-  if (claim.meta?.changes !== 1) return updateView(await requestRow(env, row.id), env);
+  // RETURNING identifies the atomic winner; D1 meta.changes also counts the started audit trigger.
+  const claim = await db(env).prepare("UPDATE web_update_requests SET state = 'dispatching', stage = 'dispatching', started_at = ?, started_by = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state = 'prepared' RETURNING id").bind(now, actorId ?? null, now, row.id).first<{ id: string }>();
+  if (claim?.id !== row.id) return updateView(await requestRow(env, row.id), env);
   try {
     const response = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}/dispatches`, env, { method: "POST", body: JSON.stringify({ ref: "main", inputs: { request_id: row.id, release_tag: row.release_tag, release_sha: row.release_sha } }) });
     const data = response.status === 200 ? await response.json() as { workflow_run_id?: number } : undefined;

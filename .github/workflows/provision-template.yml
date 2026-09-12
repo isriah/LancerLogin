@@ -42,7 +42,7 @@ jobs:
       LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
       INPUT_OPERATION: ${{ inputs.operation }}
       RELEASE_SELECTION: ${{ inputs.release }}
-      TEMPLATE_RELEASE: v1.0.1
+      TEMPLATE_RELEASE: v0.24.2
       INSTALLATION_SLUG: ${{ inputs.installation_slug }}
       REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
       LANCERLOGIN_UPDATE_WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/workflows/provision-template.yml

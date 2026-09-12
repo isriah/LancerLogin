@@ -6,6 +6,11 @@
   <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html" aria-current="page">Releases</a><a href="technical.html">Technical</a></nav></header>
   <header class="page-header"><div><p class="eyebrow">Patch notes</p><h1>LancerLogin releases</h1><p>Review user-visible changes and migration notes before manually authorizing an upgrade in your private deployment repository.</p></div></header>
   <main id="main" class="page"><article>
+<p class="eyebrow">v0.24.1</p><h2>Worker-compatible web update bridge</h2>
+<p>Corrects the Worker runtime defect that prevented web update preparation in v0.24.0 and v1.0.0. Credentials stay on the fixed GitHub host; unexpected redirects are rejected. Polling cadence is unchanged.</p>
+<p>Bridge existing web installations to official v0.24.1 through the reviewed private workflow, then use Settings → Updates for the pinned, backed-up V1.0.1 upgrade. Update the Physical kiosk separately. No new migrations, dependencies or permissions. Read the <a href="https://github.com/isriah/LancerLogin/blob/main/docs/releases/v0.24.1.md">v0.24.1 release notes</a> for verification and recovery limits.</p>
+</article><article>
+
 <p class="eyebrow">v1.0.0</p><h2>Community Edition</h2>
 <p>V1 retains the attendance, onboarding, kiosk and guarded update behavior introduced in v0.24.0. There are no additional migrations or dependency changes.</p>
 <p>Bridge existing web and Pi installations to v0.24.0 first. In Settings → Updates, review the pinned release, save and confirm the entire-installation backup, then start and track the Dashboard upgrade. Update the Physical kiosk separately and verify its installed version.</p>

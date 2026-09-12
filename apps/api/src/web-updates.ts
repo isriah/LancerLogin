@@ -38,8 +38,10 @@ async function github(path: string, env?: WebUpdateEnv, init: RequestInit = {}):
   const headers = new Headers({ accept: "application/vnd.github+json", "user-agent": "LancerLogin", "x-github-api-version": "2026-03-10", "content-type": "application/json" });
   if (env) headers.set("authorization", `Bearer ${credential(env)}`);
   let result: Response;
-  try { result = await fetch(`https://api.github.com${path}`, { ...init, headers, redirect: "error", signal: AbortSignal.timeout(4_000) }); }
+  // Workers supports manual/follow only. Inspect manual responses to keep credentials on the fixed host.
+  try { result = await fetch(`https://api.github.com${path}`, { ...init, headers, redirect: "manual", signal: AbortSignal.timeout(4_000) }); }
   catch { return fail(503, "provider_unavailable", "GitHub is unavailable. The update request has been retained."); }
+  if (result.status >= 300 && result.status < 400) fail(503, "provider_unavailable", "GitHub returned an unexpected redirect. The request was not forwarded.");
   if (result.status === 401 || env && result.status === 404) fail(503, "credential_required", "The deployment credential cannot access the fixed private workflow.");
   if (result.status === 403 || result.status === 429) fail(429, "cooldown", "GitHub requires a cooldown or credential approval. Try again later.");
   return result;

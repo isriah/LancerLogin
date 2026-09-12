@@ -1,0 +1,31 @@
+# Browser-led setup design
+
+## Adopter flow
+
+1. Use the public LancerLogin repository as a GitHub template in the adopter's own account and choose **Private** for the generated deployment repository. Public source, releases, CI, and documentation remain in `isriah/LancerLogin`; adopter deployment history and credentials remain private.
+2. Before a dashboard exists, open the public [setup walkthrough](https://isriah.github.io/LancerLogin/setup.html) and [Cloudflare dashboard](https://dash.cloudflare.com/) in the browser. Under **Manage account → Account API tokens**, choose **Create Token**, name it for human reference, select **Start from scratch** instead of a template, and grant only Workers Scripts Edit, D1 Edit, Pages Edit, and Account Settings Read for the selected account. [The account-linking guide](CLOUDFLARE-LINKING.md) explains this flow.
+3. In the private repository, create a `production` environment. Add the token value—not its Cloudflare label—as the environment secret `CLOUDFLARE_API_TOKEN`. Use Cloudflare Quick search and the exact `Copy account ID` command, then add that 32-character value as `CLOUDFLARE_ACCOUNT_ID`. Add a unique password-manager-generated value of at least 16 characters as `LANCERLOGIN_SETUP_CODE`. Use secrets, not variables. Add a required environment reviewer when the GitHub plan supports it.
+4. Before provisioning, configure the separate repository-scoped Actions-write token and expiry through secure provider interfaces using [WEB-UPDATES.md](WEB-UPDATES.md). After creation, record exact installation resource variables for future updates. Open **Install or upgrade LancerLogin**, set `operation` to `create`, keep `release` as **latest stable**, and enter `installation_slug`. Record that slug with the private repository. Review the three inputs, select **Run workflow**, and review/approve the pending `production` environment deployment when a required reviewer is configured. The workflow refuses to run from a public repository, resolves the latest public release, verifies the exact Cloudflare account-token pair, creates the adopter-named Worker, D1 database, Pages dashboard, and Worker secrets, then outputs the Pages URL. Use `operation: resume` with the same slug only after an interrupted run.
+5. Open the Pages URL and enter the private `LANCERLOGIN_SETUP_CODE` before creating the first Admin. The Worker stores only its SHA-256 hash, and the bootstrap route closes permanently once the installation record exists. Local setup requires matching password fields. If Google OAuth is selected, the form links to the public [Google OAuth setup guide](https://isriah.github.io/LancerLogin/setup.html#google-oauth) and keeps the installation's exact authorized redirect URI visible and copyable beside the credential fields. The OAuth secret is encrypted before storage and is never displayed again.
+6. Review anonymous usage reporting, which is enabled by default, and uncheck it to opt out. The plain summary is: **Anonymous usage data only. No roster or user data is ever shared.** It can be changed later under **Settings → Privacy**.
+7. Complete the one-step-at-a-time wizard: organization and brand, roster, hardware or simulator pairing, kiosk input test, and attendance confirmation. Steps are skippable and resumable across Admins. With an empty schedule, use **Create meeting** in the kiosk input test or attendance confirmation step; the new meeting is selected after creation. For an immediate test, choose today and a start time at or before now, with an attendance window that is still open. Creation alone does not complete either test step. Integrations are separate and optional. The final confirmation shows an accessible celebration; dismiss it to enter dashboard Home.
+8. On the Pi, download and run one guided installer. It installs and starts the unpaired local service without asking for a Worker URL, kiosk name, or code. The dashboard then creates one time-limited pairing key containing those values. From a phone or laptop on the same network, open the `.local` or LAN-IP address printed by the installer and paste the key. No repository clone or manual source edit is required. Hardware-free acceptance may use the browser simulator instead.
+
+## Upgrade flow
+
+The v0.24.0 web-update control prepares a pinned official release, associates an entire-installation backup with its durable request, and dispatches/tracks the fixed private upgrade workflow. It accepts no browser-selected resources or credentials. The Settings interaction consumes the [WEB-UPDATES.md](WEB-UPDATES.md) contract, which documents endpoints, one-time workflow/credential provisioning, approvals and recovery. The existing installation must receive its reviewed private controller and v0.24.0 bridge before app-driven V1 updates. Manual provisioning remains available for initial setup and the bridge with separately authorized live operations.
+
+Application upgrades do not rewrite the private repository's workflow file. A private repository made from a pre-v0.7.0 template may still display the older optional exact-tag text box; leave it empty while **latest** is selected. Newer template repositories use the simplified dropdown. Copy a newer workflow into an existing private repository only as a separate, reviewed repository change.
+
+## Deployment safety
+
+Local tests use fake clients, synthetic provider IO and isolated SQLite/D1. Provisioning, fixed web upgrades and credential refresh are account-changing paths guarded by private identity, production approvals and shared concurrency. Docs/releases run only in official public source; collector deployment only in private maintainer development. Provisioning validates create/resume/upgrade and slug and rejects create collisions. Install the reviewed controller/scoped credential using [WEB-UPDATES.md](WEB-UPDATES.md) before v0.24.0 provisioning.
+
+## Required first-run inputs
+
+- organization name, optional subtitle/logo, primary/secondary colors, and mode
+- one or both authentication methods
+- first Admin identity or local credentials
+- Google OAuth client ID and client secret when Google or both sign-in methods are selected
+- time zone
+- anonymous usage reporting choice, enabled by default with an opt-out checkbox

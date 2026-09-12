@@ -1,0 +1,10 @@
+.roster-page .roster-row { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) minmax(15rem,max-content); }
+.roster-page .roster-row.with-discord { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) minmax(15rem,max-content); }
+.roster-page .roster-attendance-rate { color: var(--ui-text); font-family: var(--font-body); font-size: var(--text-body); }
+.roster-page .roster-attendance-help { color: var(--ui-text-muted); font-size: var(--text-small); }
+@media (max-width: 900px) {
+  .roster-page .roster-row,.roster-page .roster-row.with-discord { grid-template-columns: minmax(0,1fr) auto; }
+  .roster-page .roster-attendance-rate { grid-column: 1 / -1; display: grid; gap: var(--space-1); }
+  .roster-page .roster-attendance-rate::before { content: "Attendance rate"; color: var(--ui-text-muted); font-size: var(--text-caption); }
+}
+.roster-page .roster-identity .member-link { display: inline-flex; align-items: center; min-height: var(--control-min-block-size); }

@@ -1,0 +1,7 @@
+# Release notes
+
+Clean public history begins with v0.24.0; earlier development releases and assets are retired from this public address.
+
+- [v0.24.0](v0.24.0.md) - Safe upgrades and in-app web updates
+
+Read the [installation guide](../BOOTSTRAPPING.md), [web update and recovery contract](../WEB-UPDATES.md), and [Pi bridge instructions](../KIOSK.md).

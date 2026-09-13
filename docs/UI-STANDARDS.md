@@ -2,14 +2,14 @@
 
 This document is the required design contract for new or changed LancerLogin dashboard UI. It preserves the current LancerLogin identity while keeping layout, typography, controls, and interaction states predictable. Read it before planning dashboard presentation work and use the review checklist before handing that work off.
 
-Existing dashboard CSS is grandfathered until its owning surface is intentionally changed. A change should improve the touched surface toward this standard without expanding into an unrelated retrofit. If a requirement cannot follow a rule below, record the exception and reason in the work-unit handoff.
+Existing dashboard CSS is grandfathered until its owning surface is intentionally changed. A change should improve the touched surface toward this standard without expanding into an unrelated retrofit. If a requirement cannot follow a rule below, record the exception and reason in the change review.
 
 ## Scope and principles
 
 This standard applies to the authenticated dashboard, its setup and sign-in flows, and dashboard dialogs. It does not govern the physical kiosk, the kiosk simulator presentation, provisioning pages outside the React dashboard, or public documentation.
 
 - Preserve the current visual character: Roboto for body and controls, Bebas Neue for display headings, adopter-selected primary and secondary colors, rounded panels, and calm light and dark surfaces.
-- Prefer a shared token or established pattern over a page-local value. Add a semantic token only when an existing role cannot express a recurring need; explain the addition in the work-unit handoff.
+- Prefer a shared token or established pattern over a page-local value. Add a semantic token only when an existing role cannot express a recurring need; explain the addition in the change review.
 - Use semantic HTML first. Native controls are the default; custom ARIA widgets require an interaction that a native element cannot provide and focused keyboard coverage.
 - Treat accessibility measurements as design defaults, not as a new claim of formal WCAG conformance. Deviations must be deliberate and documented.
 
@@ -97,4 +97,4 @@ Before handoff:
 - Inspect at 1280x900 and 390x844 in light and dark modes using representative custom primary and secondary colors.
 - Check for clipping, unintended horizontal page scrolling, inconsistent padding, and new literal values that duplicate a token.
 - Run `npm run verify:dashboard` and the focused browser test for any changed interaction.
-- Record remaining legacy inconsistencies separately rather than broadening the selected work unit.
+- Record remaining legacy inconsistencies separately rather than broadening the selected change.

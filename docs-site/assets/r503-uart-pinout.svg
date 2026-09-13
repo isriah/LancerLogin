@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520" role="img" aria-labelledby="title description">
   <title id="title">R503 fingerprint reader to Raspberry Pi UART pinout</title>
-  <desc id="description">A wiring diagram showing R503 power and ground connections plus crossed UART transmit and receive connections to Raspberry Pi header pins 2, 6, 8, and 10.</desc>
+  <desc id="description">A wiring diagram showing R503 power and ground connections plus crossed UART transmit and receive connections to Raspberry Pi header pins 1, 6, 8, and 10.</desc>
   <style>
     .canvas { fill: #f6f3f1; }
     .panel { fill: #ffffff; stroke: #d9cbc7; stroke-width: 2; }
@@ -33,7 +33,7 @@
   <text class="label" x="764" y="130" text-anchor="middle">Raspberry Pi GPIO header</text>
   <text class="detail" x="764" y="159" text-anchor="middle">Physical header pin numbers</text>
   <rect class="pin" x="654" y="190" width="220" height="50" rx="10"/>
-  <text class="pinText" x="764" y="222">Pin 2 · 5V</text>
+  <text class="pinText" x="764" y="222">Pin 1 · 3.3V</text>
   <rect class="pin" x="654" y="265" width="220" height="50" rx="10"/>
   <text class="pinText" x="764" y="297">Pin 6 · GND</text>
   <rect class="pin" x="654" y="340" width="220" height="50" rx="10"/>
@@ -48,6 +48,6 @@
   <text class="wireText" x="480" y="354">Reader transmit to Pi receive</text>
   <path class="wire rx" d="M306 430 H480 V430 H654"/>
   <text class="wireText" x="480" y="419">Reader receive to Pi transmit</text>
-  <text class="detail" x="480" y="482" text-anchor="middle">Confirm that the reader revision supports 5 V before connecting power.</text>
+  <text class="detail" x="480" y="482" text-anchor="middle">Connect VCC to the Pi 3.3 V rail on physical pin 1.</text>
   <text class="detail" x="480" y="510" text-anchor="middle">The optional touch or wake lead is not used by LancerLogin.</text>
 </svg>

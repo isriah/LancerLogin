@@ -28,11 +28,11 @@ Install all eight heat-set inserts in the case before beginning assembly. Use th
 
 ![R503 fingerprint reader to Raspberry Pi UART wiring](../docs-site/assets/r503-uart-pinout.svg)
 
-This basic wiring assumes a standard R503 revision marked for 3.6–6 V input. Confirm that marking and the included reader diagram before connecting power. LancerLogin uses only the UART connection at the /dev/serial0 device; an optional reader touch or wake lead is not connected.
+Power the reader from the Pi's 3.3 V rail. Confirm the reader's printed pin labels and included wiring diagram before connecting power. LancerLogin uses only the UART connection at the /dev/serial0 device; an optional reader touch or wake lead is not connected.
 
 | R503 label | Raspberry Pi physical header pin | Raspberry Pi signal |
 | --- | --- | --- |
-| VCC | 2 or 4 | 5 V |
+| VCC | 1 | 3.3 V |
 | GND | 6 | Ground |
 | TXD | 10 | GPIO 15 / RXD |
 | RXD | 8 | GPIO 14 / TXD |

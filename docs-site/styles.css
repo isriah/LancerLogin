@@ -276,9 +276,14 @@ h3 { margin: 0; font-size: var(--text-card-heading); }
   font-weight: 900;
   box-shadow: 0 .2rem .65rem rgba(0, 0, 0, .42);
 }
-.pin.one { top: 18%; left: 28%; }
-.pin.two { top: 40%; left: 54%; }
-.pin.three { top: 28%; right: 8%; }
+.annotated:not(.kiosk-shot) .pin.one { top: 18%; left: 28%; }
+.annotated:not(.kiosk-shot) .pin.two { top: 40%; left: 54%; }
+.annotated:not(.kiosk-shot) .pin.three { top: 28%; right: 8%; }
+.kiosk-shot .kiosk-screen { position: relative; }
+.kiosk-shot .pin.one { top: 6%; left: 3%; }
+.kiosk-shot .pin.two { top: 65%; left: 48%; }
+.kiosk-shot .pin.three { top: 89%; left: 48%; }
+.kiosk-shot .pin.four { top: 6%; left: 25%; }
 .callouts.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .annotated > .callouts { margin-top: var(--space-5); }
 .callouts > .field-help { grid-column: 1 / -1; margin: 0; }

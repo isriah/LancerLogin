@@ -16,6 +16,11 @@ test("public docs share the fixed brand, device palettes, focus, and motion cont
   assert.match(styles, /\.credential-table[\s\S]*overflow-x:\s*auto;/);
   assert.match(styles, /\.annotated > \.callouts \{ margin-top: var\(--space-5\); \}/);
   assert.match(styles, /\.callouts > \.field-help \{ grid-column: 1 \/ -1; margin: 0; \}/);
+  assert.match(styles, /\.kiosk-shot \.kiosk-screen \{ position: relative; \}/);
+  assert.match(styles, /\.kiosk-shot \.pin\.one \{ top: 6%; left: 3%; \}/);
+  assert.match(styles, /\.kiosk-shot \.pin\.two \{ top: 65%; left: 48%; \}/);
+  assert.match(styles, /\.kiosk-shot \.pin\.three \{ top: 89%; left: 48%; \}/);
+  assert.match(styles, /\.kiosk-shot \.pin\.four \{ top: 6%; left: 25%; \}/);
 
   for (const page of pages) {
     const html = await readFile(`docs-site/${page}`, "utf8");
@@ -114,6 +119,8 @@ test("setup and integration guides include sanitized annotated visual callouts",
   assert.match(operations, /integration-controls\.png/);
   assert.match(operations, /Check status, not secrets/);
   assert.match(operations, /Rotate in place/);
+  assert.match(operations, /Google Calendar/);
+  assert.match(operations, /Sync configured calendars/);
   assert.match(operations, /unified place to schedule meetings and open their attendance workspaces/);
   assert.match(operations, /Calendar.*rolling five-week schedule.*Table/s);
   assert.match(operations, /Settings → Access/);
@@ -140,11 +147,15 @@ test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", as
   assert.match(kiosk, /class="annotated kiosk-shot"/);
   assert.match(kiosk, /cad\.onshape\.com\/documents\/255122503ddb0de539e7c548/);
   assert.match(kiosk, /r503-uart-pinout\.svg/);
+  assert.match(kiosk, /VCC to 3\.3-volt pin 1/);
   assert.match(kiosk, /GPIO 15 \/ RXD/);
+  assert.match(kiosk, /class="pin four"/);
+  assert.match(kiosk, /Organization identity/);
   assert.match(kiosk, /phone or laptop/);
   assert.match(kiosk, /Scan without choosing a meeting/);
   assert.match(kiosk, /Recovery accepts only those fixed/);
   assert.doesNotMatch(kiosk, /Enter the Worker API URL/);
+  assert.doesNotMatch(kiosk, /5-volt pin 2|<td>2 or 4<\/td>|<td>5 V<\/td>/);
 });
 
 test("privacy page publishes the approved collector operator, retention, access, and deletion process", async () => {

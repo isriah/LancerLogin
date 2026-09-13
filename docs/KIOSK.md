@@ -1,14 +1,49 @@
 # Physical kiosk
 
-Supported hardware: Raspberry Pi 3B+, 4, or 5 with at least 1 GB RAM; Waveshare 7-inch DSI LCD (E); R503 fingerprint reader; Wi-Fi or Ethernet. Fingerprint templates remain exclusively inside the R503.
+This guide is for Operators who run attendance and Administrators who pair, monitor, or recover a Raspberry Pi kiosk. Supported hardware is a Raspberry Pi 3B+, 4, or 5 with at least 1 GB RAM, a Waveshare 7-inch DSI LCD (E), an R503 fingerprint reader, and Wi-Fi or Ethernet. Fingerprint templates remain exclusively inside the R503.
 
 The dashboard's Kiosks page keeps physical heartbeat, reader, network, queue, sync, and release health together. When Discord is enabled and verified, the same physical-health card lets an Admin or Operator manually refresh the persistent kiosk-status message; automatic heartbeat and five-minute reconciliation remain best-effort and never block kiosk operation.
+
+## Assemble the enclosure
+
+The enclosure CAD is available in [Onshape](https://cad.onshape.com/documents/255122503ddb0de539e7c548/w/e84888f58700fc04a13850fb/e/b577b6bf33e1b0cef5140c36). Print one case, one case back, and two screen brackets with no support material.
+
+Before opening the electronics packaging, gather:
+
+- Eight M3 heat-set inserts and eight matching M3 × 6 socket-cap screws.
+- A Raspberry Pi 3B+, 4, or 5; a Waveshare 7-inch DSI LCD (E); and an R503 reader.
+- The display's own Pi mounting hardware and DSI ribbon cable.
+
+Install all eight heat-set inserts in the case before beginning assembly. Use the temperature appropriate for the printed material, press each insert straight into its pocket until flush, and let the plastic cool before threading a screw. The M3 × 6 screws close the printed enclosure at the insert locations. Use the display's supplied mounting hardware for the Pi-to-display connection unless the display documentation specifies otherwise.
+
+1. Put the display face down on a clean, nonconductive surface. Attach the Raspberry Pi to the display with its mounting screws or standoffs. Do not over-tighten the display board.
+2. Connect the DSI ribbon cable between the display and Pi. Fully seat both ends, close their retaining tabs, and check the cable orientation against the marks on the boards.
+3. Press the included reader nut into the matching pocket in the front case. Thread the R503 reader into that nut from the outside of the case. Tighten it only enough to prevent movement and leave the cable free of twists.
+4. Lower the Pi-and-display assembly into the case with the display facing the front opening. Keep the DSI cable inside its intended path and do not trap it under a standoff or case edge.
+5. Connect the R503 lead to the Pi UART using the pinout below. Confirm the reader's printed pin labels before applying power. Do not rely on wire color alone.
+6. Fit the two screen brackets, then secure the display assembly using the prepared M3 × 6 screws. Confirm that the screen sits squarely and that no cable is pinched.
+7. Place the case back over the assembly, arrange the remaining cable slack away from screw posts, and fasten it with the remaining M3 × 6 screws. Stop if a screw does not start cleanly in its insert.
+
+### R503 UART pinout
+
+![R503 fingerprint reader to Raspberry Pi UART wiring](../docs-site/assets/r503-uart-pinout.svg)
+
+This basic wiring assumes a standard R503 revision marked for 3.6–6 V input. Confirm that marking and the included reader diagram before connecting power. LancerLogin uses only the UART connection at the /dev/serial0 device; an optional reader touch or wake lead is not connected.
+
+| R503 label | Raspberry Pi physical header pin | Raspberry Pi signal |
+| --- | --- | --- |
+| VCC | 2 or 4 | 5 V |
+| GND | 6 | Ground |
+| TXD | 10 | GPIO 15 / RXD |
+| RXD | 8 | GPIO 14 / TXD |
+
+The transmit and receive lines cross: reader TXD goes to Pi RXD, and reader RXD goes to Pi TXD. If the reader label, voltage requirement, or harness differs from this table, stop and use the reader's supplied wiring documentation before powering the kiosk.
 
 ## Install or upgrade the Pi
 
 The Kiosks page links the guided installer from the latest immutable GitHub release. Run it with `--dry-run` to preview or `--install` with `sudo` to proceed. It requires Raspberry Pi OS, Node.js 18 or newer at `/usr/bin/node`, NetworkManager, and an enabled UART exposed as `/dev/serial0`.
 
-The installer verifies the Pi model, memory, CPU architecture, artifact checksum, serial prerequisites, and local service health. It uses a dedicated `lancerlogin` account, installs code under `/opt/lancerlogin`, keeps owner-only state under `/var/lib/lancerlogin`, configures the serial port before every systemd start, and opens local Chromium in kiosk mode at desktop login. When Chromium is installed, it also adds a **LancerLogin Kiosk** desktop shortcut for reopening the local attendance screen full-screen if the Pi is sitting at the desktop. An upgrade retains pairing, branding, pending events, slot mappings, and the local settings PIN.
+The installer verifies the Pi model, memory, CPU architecture, artifact checksum, serial prerequisites, and local service health. It uses a dedicated `lancerlogin` account, installs code under `/opt/lancerlogin`, keeps owner-only state under `/var/lib/lancerlogin`, configures the serial port before every systemd start, and opens local Chromium in kiosk mode at desktop login. When Chromium is installed, it also adds a **LancerLogin Kiosk** desktop shortcut for reopening the local attendance screen full-screen if the Pi is sitting at the desktop. An ordinary upgrade retains pairing, branding, pending events, slot mappings, and the local settings PIN.
 
 LancerLogin never takes port 8788 from another program. If a pre-community or other kiosk service still uses the port, the installer prints the owning process and exits. Stop or uninstall that service intentionally, then rerun the installer. On a failed health check it prints the current systemd status and recent journal entries.
 
@@ -78,44 +113,29 @@ Operators can monitor the active kiosk's online state, reader state, pending sca
 - **Restart software** restarts the sandboxed systemd service.
 - **Reboot Pi** requests a device reboot after explicit confirmation.
 - **Reset network PIN** removes only the local salted PIN record after explicit confirmation; the next local visit creates a new one.
-- **Update to latest stable** starts a fixed, root-owned update unit. It resolves the official latest release once, accepts strict stable `vMAJOR.MINOR.PATCH` versions across majors, rejects draft/prerelease releases and missing installer/archive/checksum assets, verifies the installer checksum and kiosk archive checksum, then restarts the kiosk service. It does not accept an administrator-provided URL, tag, shell command, or argument.
+- **Update to latest stable** starts a fixed, root-owned update unit. It resolves the official latest release once, accepts strict stable `vMAJOR.MINOR.PATCH` versions across majors, rejects draft or prerelease releases and missing installer, archive, or checksum assets, verifies the installer and kiosk archive checksums, then restarts the kiosk service. It does not accept an Administrator-provided URL, tag, shell command, or argument.
 
-The paired kiosk polls for these commands every five seconds. Commands expire from polling after 15 minutes. The API accepts no shell text or arbitrary arguments, and the service account receives only narrow NetworkManager, reboot, and one-unit update permissions. The first kiosk update must use a release that includes this updater; install that release once through the existing guided installer, then future Latest stable updates can be queued from **Kiosks** or **Settings → Updates**.
+The paired kiosk polls for these commands every five seconds. Commands expire from polling after 15 minutes. The API accepts no shell text or arbitrary arguments, and the service account receives only narrow NetworkManager, reboot, and one-unit update permissions.
 
-### v0 to v1 bridge and exact-v0.24.0 recovery
+## Update a physical kiosk
 
-Install v0.24.0 while it is still the official latest release, then verify the actual `/usr/local/sbin/lancerlogin-install-release` helper before V1.0.0 becomes latest. Updating packaged source alone does not update a Pi. Earlier helpers reject v1; if the bridge was missed, an authorized operator must bootstrap the exact official v0.24.0 installer through the Pi terminal. This is a manual recovery action, not a new dashboard argument or helper override. Do not run it until v0.24.0 and its verified assets are published and the installation update is explicitly authorized.
+The kiosk update is separate from a web update. It changes the Raspberry Pi software only. It does not create a dashboard backup, deploy the web installation, or repair a failed web update.
 
-Before either path, preserve a private recovery copy of `/var/lib/lancerlogin`, `/opt/lancerlogin`, the kiosk/update units, version drop-in and installed helper on operator-controlled storage outside source control. The state directory contains pairing credentials, mappings, PIN state and pending attendance: never paste, log, commit or share its contents. Pause scans and stop the kiosk for a consistent local checkpoint; coordinate the downtime so no attendance is lost. Retain the installation's web backup and Worker encryption/session secrets through secure provider interfaces. Do not delete local state, re-pair, recreate resources or restore D1 automatically.
+1. As an Administrator, open **Kiosks** or **Settings → Updates**. Confirm that the physical kiosk is online and that a newer compatible stable release is shown.
+2. Choose **Update to latest stable**. The kiosk normally receives the fixed command within five seconds, then the update card reports its result and the kiosk returns online with its installed release.
+3. If the release lookup is unavailable or the card does not show a successful installed version, do not assume an update was queued or completed. Check the kiosk status and use the approved on-device recovery path instead of repeatedly submitting the command.
 
-After taking the checkpoint, run this fixed bootstrap in a new Bash subshell on the Pi (not as an unattended remote command):
+Use the Administrator's available access method for an approved on-device recovery procedure. Raspberry Pi Connect remote shell, SSH, and direct local access are all compatible with LancerLogin when the installation permits them. An authorized operator can start the existing no-argument `lancerlogin-update.service` when an operational recovery procedure calls for it. The unit invokes only the installed verified helper, which resolves the official stable release and accepts no user-supplied arguments.
 
-```bash
-(
-  set -euo pipefail
-  temporary="$(mktemp -d)"
-  trap 'rm -rf -- "$temporary"' EXIT
-  readonly release_root="https://github.com/isriah/LancerLogin/releases/download/v0.24.0"
-  curl --fail --location --proto '=https' --tlsv1.2 "$release_root/install-lancerlogin.sh" --output "$temporary/install-lancerlogin.sh"
-  curl --fail --location --proto '=https' --tlsv1.2 "$release_root/install-lancerlogin.sh.sha256" --output "$temporary/install-lancerlogin.sh.sha256"
-  (cd "$temporary" && sha256sum --check install-lancerlogin.sh.sha256)
-  sudo env LANCERLOGIN_VERSION=0.24.0 /usr/bin/bash "$temporary/install-lancerlogin.sh" --install
-)
-```
+Before manual recovery, preserve a private checkpoint of the local state and retain the installation's web backup through approved secure storage. The local state directory includes pairing credentials, mappings, PIN state, and pending attendance. Do not copy it into source control, chat, or a support ticket. Do not delete local state, re-pair, recreate resources, restore D1, or restore an old queue automatically. Restoring a historical queue can duplicate or discard attendance.
 
-The installer verifies the exact-v0.24.0 architecture archive checksum and preserves `/var/lib/lancerlogin`. Confirm installed helper replacement without printing credentials:
+If checksum, helper, or health verification fails, stop and keep the checkpoint. The updater attempts to restart a kiosk that was active before its failure, but it does not restore earlier code bytes. An authorized operator should inspect scrubbed service status through their available access method and choose a reviewed recovery action that preserves the current queue and pairing state.
 
-```bash
-sudo cmp --silent /opt/lancerlogin/scripts/lancerlogin-install-release.sh /usr/local/sbin/lancerlogin-install-release
-sudo stat -c '%U:%G:%a' /usr/local/sbin/lancerlogin-install-release
-sudo systemctl is-active lancerlogin-kiosk.service
-sudo systemctl cat lancerlogin-update.service
-curl --fail --silent --show-error http://127.0.0.1:8788/display-state | /usr/bin/node -e 'let data="";process.stdin.on("data",chunk=>data+=chunk);process.stdin.on("end",()=>{if(JSON.parse(data).releaseVersion!=="0.24.0")process.exit(1);console.log("Installed release: 0.24.0");});'
-```
+### Historical V1 migration context
 
-Require `cmp` success, `root:root:755`, an active kiosk, and an update unit whose `ExecStart` is exactly `/usr/local/sbin/lancerlogin-install-release` with no arguments. The verified packaged helper must include the stable-major validator. Confirm retained pairing, mappings and pending queue by their operational status, then normal/offline scanning and controlled queue replay, reader/enrollment, restart and reboot recovery. Record operator evidence separately from mocked/Linux tests. Only then authorize and exercise the app-driven V1 update, requiring the reported installed version rather than command acceptance alone.
+v1.0.2 is the stable public release. The earlier v0.24.0 bridge and its exact-release bootstrap were historical migration procedures, not current update instructions. A dashboard release lookup can be unavailable, so treat a missing completion status as unconfirmed and use an approved recovery procedure rather than guessing the cause.
 
-If a checksum, helper verification or health check fails, stop the transition and retain the checkpoint. The update helper attempts to restart a previously active kiosk after failure; it does not restore previous code bytes. Have an authorized operator inspect scrubbed service status and choose exact-release reinstall or checkpoint code/unit recovery compatible with the current installation. Preserve current pending state; restoring an older queue can duplicate or discard events. Never restore D1 or pairing/encryption material as an automatic rollback.
+An isolated rehearsal can retain a stale reload card after a manual version change. Simulator, source, and rehearsal results do not establish physical kiosk acceptance for an installation.
 
 ## Browser simulator boundary
 

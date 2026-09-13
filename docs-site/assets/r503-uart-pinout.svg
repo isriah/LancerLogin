@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520" role="img" aria-labelledby="title description">
+  <title id="title">R503 fingerprint reader to Raspberry Pi UART pinout</title>
+  <desc id="description">A wiring diagram showing R503 power and ground connections plus crossed UART transmit and receive connections to Raspberry Pi header pins 2, 6, 8, and 10.</desc>
+  <style>
+    .canvas { fill: #f6f3f1; }
+    .panel { fill: #ffffff; stroke: #d9cbc7; stroke-width: 2; }
+    .title { fill: #241b1a; font: 700 30px system-ui, sans-serif; }
+    .label { fill: #241b1a; font: 700 23px system-ui, sans-serif; }
+    .detail { fill: #675b58; font: 18px system-ui, sans-serif; }
+    .pin { fill: #760100; }
+    .pinText { fill: #ffffff; font: 700 18px system-ui, sans-serif; text-anchor: middle; }
+    .vcc { stroke: #b27b00; }
+    .ground { stroke: #3f5368; }
+    .tx { stroke: #176847; }
+    .rx { stroke: #970100; }
+    .wire { fill: none; stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+    .wireText { fill: #241b1a; font: 700 18px system-ui, sans-serif; text-anchor: middle; }
+  </style>
+  <rect class="canvas" width="960" height="520"/>
+  <text class="title" x="480" y="48" text-anchor="middle">R503 fingerprint reader to Raspberry Pi UART</text>
+  <rect class="panel" x="46" y="86" width="300" height="370" rx="18"/>
+  <text class="label" x="196" y="130" text-anchor="middle">R503 reader</text>
+  <text class="detail" x="196" y="159" text-anchor="middle">Use the labels on your reader harness</text>
+  <rect class="pin" x="86" y="190" width="220" height="50" rx="10"/>
+  <text class="pinText" x="196" y="222">VCC</text>
+  <rect class="pin" x="86" y="265" width="220" height="50" rx="10"/>
+  <text class="pinText" x="196" y="297">GND</text>
+  <rect class="pin" x="86" y="340" width="220" height="50" rx="10"/>
+  <text class="pinText" x="196" y="372">TXD</text>
+  <rect class="pin" x="86" y="405" width="220" height="50" rx="10"/>
+  <text class="pinText" x="196" y="437">RXD</text>
+  <rect class="panel" x="614" y="86" width="300" height="370" rx="18"/>
+  <text class="label" x="764" y="130" text-anchor="middle">Raspberry Pi GPIO header</text>
+  <text class="detail" x="764" y="159" text-anchor="middle">Physical header pin numbers</text>
+  <rect class="pin" x="654" y="190" width="220" height="50" rx="10"/>
+  <text class="pinText" x="764" y="222">Pin 2 · 5V</text>
+  <rect class="pin" x="654" y="265" width="220" height="50" rx="10"/>
+  <text class="pinText" x="764" y="297">Pin 6 · GND</text>
+  <rect class="pin" x="654" y="340" width="220" height="50" rx="10"/>
+  <text class="pinText" x="764" y="372">Pin 10 · GPIO 15 · RXD</text>
+  <rect class="pin" x="654" y="405" width="220" height="50" rx="10"/>
+  <text class="pinText" x="764" y="437">Pin 8 · GPIO 14 · TXD</text>
+  <path class="wire vcc" d="M306 215 H654"/>
+  <text class="wireText" x="480" y="204">Power</text>
+  <path class="wire ground" d="M306 290 H654"/>
+  <text class="wireText" x="480" y="279">Ground</text>
+  <path class="wire tx" d="M306 365 H480 V365 H654"/>
+  <text class="wireText" x="480" y="354">Reader transmit to Pi receive</text>
+  <path class="wire rx" d="M306 430 H480 V430 H654"/>
+  <text class="wireText" x="480" y="419">Reader receive to Pi transmit</text>
+  <text class="detail" x="480" y="482" text-anchor="middle">Confirm that the reader revision supports 5 V before connecting power.</text>
+  <text class="detail" x="480" y="510" text-anchor="middle">The optional touch or wake lead is not used by LancerLogin.</text>
+</svg>

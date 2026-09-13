@@ -1,23 +1,19 @@
 # Anonymous usage reporting governance
 
-RoboLancers operates the optional LancerLogin anonymous usage collector. Internal code and infrastructure may retain the technical term `telemetry`. Questions, deletion requests, and responsible incident reports go to `robolancers@gmail.com`. Community support is best-effort and has no response-time or uptime SLA.
+RoboLancers operates the optional LancerLogin anonymous usage collector. Community support, deletion requests, and responsible incident reports go to robolancers@gmail.com. There is no response-time or uptime service-level agreement.
 
 ## Collection and consent
 
-Anonymous usage reporting is enabled by default on the first-Admin form, where the plain privacy notice and an immediate opt-out checkbox are shown together. An Admin can later turn reporting off in **Settings → Privacy**, which stops future reports and clears the installation's local reporting reference.
+Anonymous usage reporting is enabled by default during first-Admin setup, with a plain-language opt-out. An Administrator can later turn it off in **Settings → Privacy**. Turning it off stops future reports and clears the installation's local reporting reference.
 
-An accepted installation can send only an opaque random installation reference, release version, active kiosk count (`0` or `1`), one scrubbed diagnostic category, and best-effort city/metro. Raw IP is used only by Cloudflare to derive coarse connection location and is not read into the application payload or stored. Organization, roster, attendance, fingerprint, credential, and raw-IP data are prohibited by the collector schema and request validation.
+The collector accepts only an opaque installation reference, release version, active kiosk count (`0` or `1`), one scrubbed diagnostic category, and optional city or metro. It must not receive organization, roster, attendance, fingerprint, credential, raw-IP, request-path, or message-content data. Cloudflare may use the connection to derive coarse location, but raw IP is not in the application payload or collector storage.
 
 ## Retention and access
 
-Reports are retained for 30 days and then deleted by a daily scheduled job. The collector stores at most one row per installation per UTC day and replaces the raw random reference with a keyed HMAC before storage. Only designated RoboLancers maintainers may access the authenticated aggregate endpoint. That endpoint never returns installation references or hashes, and metro groups with fewer than five installations are suppressed.
+The collector retains one report per installation per UTC day for 30 days. It replaces the raw reference with a keyed HMAC before storage. Only designated maintainers can access its authenticated aggregate endpoint, which never returns installation references or hashes. Metro groups with fewer than five installations are suppressed.
 
-## Deletion requests
+## Deletion and incidents
 
-While reporting is enabled, an Admin can copy the opaque deletion-request reference shown in **Settings → Privacy** and email it to `robolancers@gmail.com`. Maintainers verify the request through the reply channel, submit the reference to the authenticated deletion route, and remove all matching reports and the pseudonymous installation row. The deletion route hashes the supplied reference in memory and does not persist it. Turning reporting off stops future reports but cannot identify already pseudonymized collector rows after the local reference is cleared, so request deletion before opting out if removal of retained reports is wanted.
+While reporting remains enabled, an Administrator can copy the deletion-request reference from **Settings → Privacy** and email it to RoboLancers. Maintainers verify the request through that reply channel, submit the reference to the authenticated deletion route, and remove matching reports and the pseudonymous installation row. Request deletion before opting out if removal of already pseudonymized reports is required.
 
-## Incidents and disclosure
-
-RoboLancers will investigate reports sent to the support address, contain the collector or disable its endpoint when needed, delete affected data where appropriate, and publish a plain-language notice in the public repository when an incident could materially affect community installations. The notice will describe the affected period and data categories, mitigations, and recommended adopter actions without exposing installation or personal data.
-
-The collector uses fresh, dedicated Cloudflare resources and credentials. It never shares an account, database, Worker, secret, repository, or deployment path with an adopter installation or any earlier attendance system.
+If an incident could materially affect installations, RoboLancers will investigate, contain or disable the collector when needed, remove affected data where appropriate, and publish a plain-language public notice describing the affected period, data categories, mitigation, and recommended adopter actions.

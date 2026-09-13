@@ -14,6 +14,8 @@ test("public docs share the fixed brand, device palettes, focus, and motion cont
   assert.match(styles, /:focus-visible/);
   assert.match(styles, /--control-min-block-size:\s*2\.75rem;/);
   assert.match(styles, /\.credential-table[\s\S]*overflow-x:\s*auto;/);
+  assert.match(styles, /\.annotated > \.callouts \{ margin-top: var\(--space-5\); \}/);
+  assert.match(styles, /\.callouts > \.field-help \{ grid-column: 1 \/ -1; margin: 0; \}/);
 
   for (const page of pages) {
     const html = await readFile(`docs-site/${page}`, "utf8");
@@ -39,14 +41,18 @@ test("public docs are task-first, keyboard-navigable, and consistently linked", 
   assert.ok(home.indexOf("Choose what you need to do") < home.indexOf("Release boundaries"));
 });
 
-test("public release notes explain the bridge, saved backup, approvals and recovery", async () => {
+test("public release notes explain visible changes and the manual upgrade path", async () => {
   const releases = await readFile("docs-site/releases.html", "utf8");
-  assert.match(releases, /v0\.24\.0/);
-  assert.match(releases, /V1\.0\.0/);
-  assert.match(releases, /Entire installation backup/);
-  assert.match(releases, /confirm the saved backup/);
-  assert.match(releases, /environment approval/);
-  assert.match(releases, /never automatically restore D1/);
+  assert.match(releases, /v0\.5\.0/);
+  assert.match(releases, /v0\.7\.0/);
+  assert.match(releases, /v0\.8\.0/);
+  assert.match(releases, /v0\.9\.0/);
+  assert.match(releases, /Unattended kiosk operations/);
+  assert.match(releases, /remote kiosk pairing/i);
+  assert.match(releases, /Verified integrations/);
+  assert.match(releases, /arrival and departure/);
+  assert.match(releases, /manually run/);
+  assert.match(releases, /application public key/);
 });
 
 test("annotated dashboard screenshot is a real non-empty asset with text alternative", async () => {
@@ -108,7 +114,13 @@ test("setup and integration guides include sanitized annotated visual callouts",
   assert.match(operations, /integration-controls\.png/);
   assert.match(operations, /Check status, not secrets/);
   assert.match(operations, /Rotate in place/);
-  assert.match(operations, /pending queue, last sync, issue state, and installed release/);
+  assert.match(operations, /unified place to schedule meetings and open their attendance workspaces/);
+  assert.match(operations, /Calendar.*rolling five-week schedule.*Table/s);
+  assert.match(operations, /Settings → Access/);
+  assert.match(operations, /Refresh attendance/);
+  assert.match(operations, /Excusing or marking absent requires a reason/);
+  assert.doesNotMatch(operations, /Home, Meetings, Attendance, Reports, Roster, and Kiosks are separate/);
+  assert.match(operations, /pairing, reader, network, pending queue, last successful sync, installed release, and heartbeat/);
   assert.match(operations, /spreadsheet formula markers as text/);
   assert.match(operations, /id="discord-commands"/);
   assert.match(operations, /No manual HTTP request or command payload is required/);
@@ -119,10 +131,16 @@ test("setup and integration guides include sanitized annotated visual callouts",
 
 test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", async () => {
   assert.ok((await stat("docs-site/assets/kiosk-touch-ui.png")).size > 20_000);
+  assert.ok((await stat("docs-site/assets/r503-uart-pinout.svg")).size > 1_000);
   const kiosk = await readFile("docs-site/kiosk.html", "utf8");
   assert.match(kiosk, /kiosk-touch-ui\.png/);
   assert.match(kiosk, /800 by 480 pixels/);
+  assert.match(kiosk, /Source-backed LancerLogin kiosk preview/);
+  assert.doesNotMatch(kiosk, /Illustration using synthetic data/);
   assert.match(kiosk, /class="annotated kiosk-shot"/);
+  assert.match(kiosk, /cad\.onshape\.com\/documents\/255122503ddb0de539e7c548/);
+  assert.match(kiosk, /r503-uart-pinout\.svg/);
+  assert.match(kiosk, /GPIO 15 \/ RXD/);
   assert.match(kiosk, /phone or laptop/);
   assert.match(kiosk, /Scan without choosing a meeting/);
   assert.match(kiosk, /Recovery accepts only those fixed/);

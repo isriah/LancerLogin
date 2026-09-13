@@ -2,7 +2,7 @@
 
 LancerLogin uses focused checks during implementation and one complete gate when preparing a release. All commands are local and use mocks or an isolated local D1 database; they do not contact or deploy to an adopter's Cloudflare account.
 
-Use focused verification for source changes.
+Read the guide for the surface you are changing and use its stated acceptance criteria. Keep implementation, verification, and review focused on that surface.
 
 ## During implementation
 
@@ -21,11 +21,17 @@ For a changed browser interaction, use `npm run test:browser -- <test-file-or--g
 
 If a change crosses areas, run each affected scope. Migration changes also require `npm run verify:migrations`.
 
+### Documentation changes
+
+Classify a documentation surface as current guidance, reference, historical evidence, or generated output before changing it. Use the released interface labels, keep private installation details out of public material, and run `npm run verify:docs` after changing maintained documentation. Add focused reference, command, boundary, or asset checks when the static documentation test does not cover a meaningful risk.
+
+Static site and Markdown changes need a rendered review at the affected desktop and mobile sizes. Check headings, keyboard focus, links, captions, alternative text, and clipped content. A simulator, source inspection, or local mock is not physical kiosk acceptance. Do not run a release gate, deployment, update, or destructive recovery command merely to verify prose.
+
 ### Dashboard visual changes
 
 Web-update API checks use isolated real SQLite for unique-lock/audit/idempotency and retryable disk-queue replay. Provisioning checks include canonical migration hashes, official release/resource/credential guards, actual Pages identity and explicit recovery. `npm run rehearse:web-upgrade` runs an eleven-case provider-free synthetic bridge/V1/failure matrix. It is not fresh-adopter or live provider/Pi acceptance. Review compatibility-manifest ownership and secure rehearsal requirements in [WEB-UPDATES.md](WEB-UPDATES.md); workflow changes also require actionlint.
 
-Reuse shared UI tokens and controls; verify keyboard focus, themes, desktop and mobile layouts and behavior.
+Reuse shared UI tokens and controls; verify keyboard focus, themes, desktop and mobile layouts and behavior. Do not expand a focused change into a retrofit of unrelated styling.
 
 ## Release preparation
 

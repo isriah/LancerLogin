@@ -1,6 +1,16 @@
-# In-app web deployment contract
+# Web updates
 
-Web updates use the fixed private `upgrade-web.yml` on `main`. Only an active Admin can prepare, start or read status. Mutations require the exact dashboard Origin and JSON. The browser cannot select a repository, workflow, ref, slug or executable parameter. One complete stable official release is resolved and pinned by public commit. Downgrades are refused.
+This guide is for Administrators preparing a dashboard installation update and maintainers responsible for its fixed private controller. A web update changes the Cloudflare dashboard installation. It is separate from a physical kiosk update, which is described in [KIOSK.md](KIOSK.md).
+
+## Update the dashboard installation
+
+1. Sign in as an Administrator and open **Settings → Updates**.
+2. In the **Dashboard** card, choose **Back up and begin update**. Review the pinned release notes.
+3. Choose **Download entire-installation backup**, save the file securely outside the installation, and select the confirmation checkbox. Refreshing the page never confirms that you saved the file.
+4. Choose **Start update to vMAJOR.MINOR.PATCH** once it becomes available. Track any required GitHub approval and the deployment status in the card.
+5. Choose **Reload updated dashboard** only after the card reports verified completion. If the card reports recovery required or progress cannot be confirmed, stop and use the diagnostic link with an authorized recovery plan. Do not start another update or restore D1 automatically.
+
+The fixed private `upgrade-web.yml` workflow runs on `main`. Only an active Admin can prepare, start, or read status. Mutations require the exact dashboard Origin and JSON. The browser cannot select a repository, workflow, ref, slug, or executable parameter. One complete stable official release is resolved and pinned by public commit. Downgrades are refused.
 
 ## Dashboard API
 
@@ -17,17 +27,17 @@ Prepare/start/status return `{ releaseVersion, workflowUrl, request }`. `request
 
 States: `prepared`, `dispatching`, `queued`, `awaiting_approval`, `running`, `verifying`, `succeeded`, `failed`, `recovery_required`, `expired`. Stages identify build/checkpoint/migrations/API deployment/Pages deployment/health. Keep the fixed workflow/run URL as diagnostics/manual recovery; environment approval stays in GitHub. Reloads resume through status without browser-local request storage. Failed/expired requests permit deliberate new prepare; recovery-required retains the active lock. Started requests impose a two-minute cooldown.
 
-Settings keeps Dashboard and Physical kiosk updates separate. Preparing shows pinned release notes as plain text; download the associated entire-installation backup, save it securely, then check the saved-file confirmation to enable Start. Refreshing or opening another tab restores server progress but never restores that confirmation. GitHub approval is shown as a direct review link when required; request IDs, technical stages and manual recovery links are under Diagnostics. The explicit Reload updated dashboard action appears only after verified finalization and when the running JavaScript bundle differs from the target version; persisted success never causes automatic reload loops.
+Settings keeps **Dashboard** and **Physical kiosk** updates separate. Preparing shows pinned release notes as plain text; download the associated entire-installation backup, save it securely, then check the saved-file confirmation to enable **Start update to vMAJOR.MINOR.PATCH**. Refreshing or opening another tab restores server progress but never restores that confirmation. GitHub approval is shown as a direct review link when required; request IDs, technical stages, and manual recovery links are under **Diagnostics and manual recovery**. The explicit **Reload updated dashboard** action appears only after verified finalization and when the running JavaScript bundle differs from the target version; persisted success never causes automatic reload loops.
 
 Errors use `{ error, code }` plus existing authorization errors. Safe codes: `not_configured`, `credential_required`, `credential_expired`, `not_private`, `workflow_required`, `cooldown`, `already_current`, `release_unavailable`, `invalid_request`, `request_missing`, `request_expired`, `backup_required`, `provider_unavailable`, `run_mismatch`. Definite dispatch credential/cooldown rejection is retained as `request.errorCode`; uncertain outcomes use `dispatch_ambiguous`. Both retain the one-way claim and return 202/current request. Inspect state/error instead of treating 202 as success. Reconcile the exact request run-name and workflow path; multiple/unresolved runs become `dispatch_unresolved` recovery after fifteen minutes. Never blind redispatch. Completed failure before executor claim is `failed/preflight_failed`; a completed claimed executor without verified finalization requires recovery.
 
 The partial unique installation index and permanent executor claim prevent concurrent dispatch, duplicate-run mutation and same-run rerun mutation. Database audit triggers record the server-authenticated Admin once on prepare/start. Polling cannot overwrite terminal workflow finalization. Reads and sign-in/logout remain available during maintenance; domain mutations, kiosk attendance and scheduled provider writes pause. Kiosks receive retryable HTTP 503/Retry-After and retain disk queues through restart/replay.
 
-## Secure provisioning and renewal
+## Maintainer controls
 
 Definite dispatch credential/cooldown rejection ends this request as failed with its diagnostic code, allowing deliberate new prepare after renewal/cooldown. Its existing request ID still cannot redispatch. Uncertain provider/network outcomes retain the active claim for reconciliation.
 
-Before v0.24.0 provisioning, install the reviewed `upgrade-web.yml`, `refresh-web-update-credential.yml` and controller scripts in the existing private deployment repository through a separately approved repository change. App upgrades never rewrite the private controller. Provision/upgrade/refresh share `lancerlogin-production-installation` concurrency and `production`; enable required reviewers where supported.
+The reviewed `upgrade-web.yml`, `refresh-web-update-credential.yml`, and controller scripts live in the existing private deployment repository. Install or change them only through a separately approved repository change. App upgrades never rewrite the private controller. Provision, upgrade, and refresh share `lancerlogin-production-installation` concurrency and `production`; enable required reviewers where supported.
 
 Through GitHub's secure token UI, create a fine-grained token scoped to **only the private deployment repository**, with **Actions: write** and default Metadata read. Default expiry is ninety days where policy permits. Save its value as production environment secret `LANCERLOGIN_WEB_UPDATE_TOKEN`. Cloudflare account-owned scoped credentials remain in environment secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Never put values in chat, command arguments, D1, backups, tracked files or logs.
 
@@ -49,7 +59,13 @@ On recovery-required, retain write suspension and inspect the private run and op
 
 After a known completed run and both releases healthy on the **same** previous or target version, use `scripts/recover-web-update.mjs` only with current live recovery authorization. Provide fixed resource process environment metadata and provider credentials securely, `RECOVERY_REQUEST_ID`, exact `RECOVERY_CONFIRMATION=RECOVER WEB UPDATE <UUID>`, and `RECOVERY_SCHEMA_COMPATIBILITY_REVIEWED=yes` after review. It verifies account/resources, exact completed workflow request and both releases/health before clearing maintenance. It does no restore/rollback/resource creation/credential rotation. An unproved run requires manual provider investigation; never fabricate a run ID.
 
-Operational rows are excluded from dashboard category backups/restores and have no installation cascade. Application restore/delete cannot erase an active lock. Full provider D1 exports/Time Travel retain the table; inspect restored control state before resuming service.
+Operational rows are excluded from dashboard category backups/restores and have no installation cascade. Application restore or deletion cannot erase an active lock. Full provider D1 exports and Time Travel retain the table; inspect restored control state before resuming service.
+
+## Current release and migration evidence
+
+The stable public release is v1.0.2. Each installation must verify its own data, session, migrations, update tracking, and maintenance state. Web-update evidence does not establish physical-kiosk operation, and physical-kiosk evidence does not establish web-update completion.
+
+The private deployment repository has an inherited CI assertion failure. Do not describe all private CI as green. The isolated rehearsal has a historical reload-card limitation after manual version changes. These facts and the earlier waived physical checks are evidence limits, not reasons to bypass the fixed web-update controls.
 
 ## References and limits
 

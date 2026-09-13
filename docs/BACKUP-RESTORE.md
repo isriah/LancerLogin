@@ -1,37 +1,37 @@
-# Data retention, export, backup, and restore
+# Data backup and restore
 
-LancerLogin retains roster, meetings, attendance, audit data, settings, and encrypted integration settings until an Admin deletes them. Exporting creates a copy and does not delete the stored records. CSV is the supported report export format. PDF and spreadsheet exports are not included.
+This guide is for Administrators. Back up before a web update, bulk deletion, or recovery decision. A backup is sensitive: it can contain attendance information, password hashes, encrypted integration values, kiosk credential hashes, and audit history.
 
-## Dashboard category backups
+## Dashboard backups
 
-Open **Settings → Data** for three independent controls:
+Open **Settings → Data**. Each category has separate download, restore, and typed-confirmation deletion controls.
 
-- **Meetings and attendance** backs up or restores meetings, check-ins, corrections, excuses, and Discord attendance contests. Its delete action leaves the roster, accounts, settings, and integrations intact.
-- **Roster** backs up or restores roster identity/contact/link state. Dashboard accounts are deliberately separate. Roster deletion is blocked while attendance history still references members; delete Meetings and attendance first if that is intentional.
-- **Entire installation** backs up or restores retained application data. This file includes password hashes, encrypted integration values, kiosk credential hashes, settings, and audit history. Operational deployment locks are excluded as described below. Protect the file like an administrator credential and restore it only while the installation encryption secrets are unchanged.
+| Category | Includes | Important boundary |
+| --- | --- | --- |
+| Meetings and attendance | Meetings, scans, corrections, excuses, and contests | Deletion keeps roster, accounts, settings, integrations, and audit history. |
+| Roster | Member identity/contact data, Discord links, and active state | Dashboard accounts remain separate. Historical members missing from a restore remain inactive when referenced. |
+| Entire installation | All retained D1 state | Restore only while the installation encryption secrets are unchanged. |
 
-Every JSON backup records its scope and schema version. The dashboard refuses cross-category restores and requires an exact `RESTORE <CATEGORY>` confirmation. Dashboard restore supports files up to 10 MiB; use the D1 workflow below for larger or infrastructure-level recovery. **Reset onboarding** clears only shared checklist progress and then reopens Setup; it does not delete organization data.
+Each JSON file records its scope and schema version. The dashboard rejects a file from another category and requires `RESTORE <CATEGORY>` exactly. Dashboard restore accepts files up to 10 MiB. **Reset onboarding** only reopens the shared Guided Setup checklist; it does not delete organization data.
 
-Web deployment operational locks/recovery records are excluded from category backups/restores and survive application installation deletion. This prevents a restore from erasing an active deployment claim. Full D1 exports and Time Travel include them; inspect restored control state before reopening writes. See [WEB-UPDATES.md](WEB-UPDATES.md). Worker update credentials are secrets and never appear in either backup.
+Operational web-update locks and recovery records are deliberately outside the dashboard category backups. They prevent an old restore from erasing an active deployment claim. Worker update credentials are secrets and are never in a backup.
 
-## D1 backup
+## D1 export and restore
 
-From the adopter-owned repository checkout, create a D1 export before upgrades or bulk deletion. Create a fresh narrowly scoped Account API Token if the setup token is no longer available, then expose it to the process as `CLOUDFLARE_API_TOKEN` and expose the selected account ID as `CLOUDFLARE_ACCOUNT_ID` without putting either value in a command line or repository file. Replace `sample-club` with the installation slug used by the provisioning workflow:
+For a larger or infrastructure-level recovery, work from the adopter-owned private repository checkout. Create a fresh export before an upgrade or restore. Put `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in the current shell through the organization's approved secret-handling method, not a command line or repository file.
 
 ```sh
 npm run backup-d1 -- --database sample-club-data --output lancerlogin-backup.sql
 ```
 
-The helper refuses to overwrite an existing backup. Store the export securely because it contains personal attendance data and encrypted integration ciphertext. Record the release version and UTC export time alongside it. The command verifies the account-owned token against the exact `CLOUDFLARE_ACCOUNT_ID`, and the repository contains no adopter account identifier.
+The helper refuses to overwrite an existing backup. Store the export securely, and record the installed release and UTC export time beside it.
 
-## Restore
-
-Restore only into the same adopter-owned installation after taking a fresh pre-restore export:
+Restore only to the same adopter-owned installation after taking a fresh pre-restore export:
 
 ```sh
 npm run restore-d1 -- --database sample-club-data --file lancerlogin-backup.sql --confirm "RESTORE sample-club-data"
 ```
 
-The exact confirmation phrase is required. Verify row counts for members, meetings, attendance events, corrections, audit records, and settings before opening the dashboard. Encrypted integration values require the same installation's `INTEGRATION_KEY`; rotate integrations if that secret changed. Re-pair a kiosk only if its pairing record was restored inconsistently. Never restore data into another organization without an explicit privacy and retention review.
+Replace `sample-club-data` with the private installation database name. Verify members, meetings, attendance events, corrections, audit records, and settings before reopening normal writes. If `INTEGRATION_KEY` changed, rotate the affected integration. Do not restore a historical kiosk queue or a backup into another organization automatically.
 
-Each category delete action is separate and requires its own typed confirmation. Deleting an entire installation returns it to first-Admin setup. There is no live migration path from another attendance installation. Exported roster rows and local R503 slot mappings can be prepared with the kiosk helper described in `docs/KIOSK.md`; biometric templates are not exported or transferred.
+Cloudflare documents D1 exports and its separate Time Travel recovery capability in its [D1 documentation](https://developers.cloudflare.com/d1/). Use those provider controls only with an explicit recovery plan for the intended installation.

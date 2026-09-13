@@ -12,7 +12,6 @@ const governedRoutes = [
   ["/settings/configuration", "Configuration"],
   ["/settings/access", "Dashboard access"],
   ["/settings/integrations", "Integrations"],
-  ["/settings/privacy", "Privacy"],
   ["/settings/data", "Data management"],
   ["/settings/guided-setup", "Guided Setup"],
   ["/settings/updates", "Updates"],

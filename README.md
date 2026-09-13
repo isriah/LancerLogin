@@ -1,8 +1,8 @@
 # LancerLogin
 
-LancerLogin is open-source, self-hosted attendance software for clubs, classrooms, teams, and arts groups. Each installation uses one Raspberry Pi fingerprint kiosk and a dashboard in the organization's own Cloudflare account.
+LancerLogin is standalone, open-source, self-hosted attendance software for clubs, classrooms, teams, and arts groups. Each installation uses one Raspberry Pi fingerprint kiosk and a dashboard in the organization's own Cloudflare account.
 
-The current stable public release is **1.0.2**. The public repository contains source, reviewed releases, and public documentation. Create a separate **private** repository from the template for an installation. That private repository holds deployment history and secrets.
+The current stable public release is **1.0.3**. The public repository contains source, reviewed releases, and public documentation. Create a separate **private** repository from the template for an installation. That private repository holds deployment history and secrets.
 
 ## What it does
 

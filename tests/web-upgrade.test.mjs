@@ -105,8 +105,17 @@ test("Pages reports its own exact release and never infers identity from proxy h
 test("workflow boundaries and concurrency isolate official publication from private upgrades", async () => {
   for (const name of ["provision-template", "upgrade-web", "refresh-web-update-credential"]) assert.match(await readFile(`.github/workflows/${name}.yml`, "utf8"), /group: lancerlogin-production-installation/);
   for (const name of ["docs", "release"]) assert.match(await readFile(`.github/workflows/${name}.yml`, "utf8"), /github\.repository == 'isriah\/LancerLogin' && github\.event\.repository\.private == false/);
-  assert.match(await readFile(".github/workflows/deploy-telemetry-collector.yml", "utf8"), /github\.repository == 'isriah\/LancerLogin-dev' && github\.event\.repository\.private == true/);
   const workflow = await readFile(".github/workflows/upgrade-web.yml", "utf8");
   assert.match(workflow, /environment: production/); assert.match(workflow, /repository: isriah\/LancerLogin/);
   assert.doesNotMatch(workflow, /inputs\.(?:installation_slug|repository|workflow|command)/);
+});
+
+test("renamed controller checks retained database name, UUID, account and Worker binding together", async () => {
+  const renamed = { ...env, INSTALLATION_SLUG: "renamed", API_URL: "https://renamed-api.account.workers.dev", DATABASE_NAME: "original-data" };
+  assert.equal(validateUpgradeEnvironment(renamed).databaseName, "original-data");
+  assert.throws(() => validateUpgradeEnvironment({ ...renamed, DATABASE_NAME: "../unsafe" }), /fixed_database_name_invalid/);
+  const result = (url, name = "original-data") => url.endsWith("/tokens/verify") ? { status: "active" } : url.includes("/d1/") ? { uuid: env.DATABASE_ID, name } : { bindings: [{ name: "DB", type: "d1", id: env.DATABASE_ID }] };
+  await verifyCredentialTarget(renamed, async (url) => Response.json({ success: true, result: result(url) }));
+  await assert.rejects(verifyCredentialTarget(renamed, async (url) => Response.json({ success: true, result: result(url, "renamed-data") })), /database_identity_mismatch/);
+  await assert.rejects(verifyCredentialTarget(renamed, async (url) => Response.json({ success: true, result: url.includes("/settings") ? { bindings: [{ name: "DB", type: "d1", id: "wrong" }] } : result(url) })), /worker_database_mismatch/);
 });

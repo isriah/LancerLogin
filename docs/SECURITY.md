@@ -12,7 +12,7 @@ Google OAuth uses signed, expiring state and validates issuer, audience, verifie
 
 Integration credentials are encrypted with an installation-specific Worker secret and never returned in API responses. Saved but unverified or disabled integrations cannot send operational messages. Verification, credential changes, access changes, exports, and attendance changes are audited.
 
-Google Calendar sends only a generic event name and meeting times. Discord operations are limited to the configured server and LancerLogin-tracked message or event identifiers. The adopter must restrict any staff-only Discord channel it chooses. LancerLogin does not enumerate, moderate, or delete unrelated Discord content.
+Google Calendar sends only a generic event name and meeting times. Discord signed interactions are verified before processing. Discord operations are limited to the configured server and LancerLogin-tracked message or event identifiers. The adopter must restrict any staff-only Discord channel it chooses. LancerLogin does not enumerate, moderate, or delete unrelated Discord content.
 
 CSV export prefixes formula-like values as text before quoting. This prevents roster or meeting data from being interpreted as a spreadsheet formula.
 

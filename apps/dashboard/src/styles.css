@@ -102,10 +102,6 @@ legend { margin-bottom: .8rem; font-size: .86rem; font-weight: 800; }
 .choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .choice strong { align-self: end; font-size: .88rem; }
 .choice span { color: var(--muted); font-size: .76rem; line-height: 1.4; }
-.telemetry-choice { display: grid !important; grid-template-columns: auto 1fr; gap: .75rem; align-items: start; padding: 1rem; margin: 1.5rem 0 !important; background: var(--surface-soft); border-radius: .75rem; cursor: pointer; }
-.telemetry-choice input { width: 1.05rem; height: 1.05rem; margin-top: .15rem; accent-color: var(--primary); }
-.telemetry-choice span { display: grid; gap: .2rem; }
-.telemetry-choice small { color: var(--muted); font-size: .77rem; line-height: 1.45; }
 .form-error { padding: .8rem; color: #8f3028; background: #fff0ee; border-radius: .55rem; font-size: .84rem; }
 .app[data-theme="dark"] .form-error { color: #ffd5d2; background: #531b17; }
 .inline-field-error { padding: .65rem; margin: .35rem 0 0; color: #fff; background: #b42318; border-radius: .5rem; font-size: .82rem; font-weight: 750; }
@@ -959,9 +955,6 @@ label { font-size: .9rem; }
 .choice:has(input:focus-visible),.logo-backdrop-options label:has(input:focus-visible) { outline: 3px solid var(--ui-focus); outline-offset: 3px; }
 .choice strong { color: var(--ui-text); font-size: var(--text-small); }
 .choice span { color: var(--ui-text-muted); font-size: var(--text-caption); }
-.telemetry-choice { min-height: var(--control-min-block-size); gap: var(--space-3); align-items: center; padding: var(--space-4); margin: var(--space-4) 0 !important; border: 1px solid var(--ui-border); background: var(--ui-surface-subtle); border-radius: var(--radius-card); }
-.telemetry-choice input { width: 1.25rem; height: 1.25rem; margin: 0; }
-.telemetry-choice small { color: var(--ui-text-muted); font-size: var(--text-small); }
 .oauth-walkthrough { display: grid; gap: var(--space-3); padding: var(--space-4); margin: 0 0 var(--space-4); border-color: var(--ui-border); background: var(--ui-surface-subtle); border-radius: var(--radius-card); }
 .oauth-walkthrough > * { margin: 0; }
 .oauth-walkthrough ol { gap: var(--space-2); color: var(--ui-text-muted); font-size: var(--text-small); }
@@ -1226,7 +1219,7 @@ label { font-size: .9rem; }
 .privacy-section > div { display: grid; gap: var(--space-2); }
 .privacy-section > div > * { margin: 0; }
 .privacy-section .telemetry-choice { min-height: var(--control-min-block-size); align-items: center; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--ui-border); background: var(--ui-surface-subtle); border-radius: var(--radius-card); }
-.privacy-section .telemetry-choice input,.integration-toggle input { width: 1.25rem; height: 1.25rem; margin: 0; accent-color: var(--primary); }
+.integration-toggle input { width: 1.25rem; height: 1.25rem; margin: 0; accent-color: var(--primary); }
 .integration-grid { grid-template-columns: 1fr; gap: var(--space-4); margin: 0; }
 .integration-card { overflow: clip; }
 .integration-card.disabled { border-radius: var(--radius-card); }

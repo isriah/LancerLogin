@@ -70,7 +70,7 @@ test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", 
   assert.match(source, /navigator\.clipboard\.writeText/);
   assert.match(source, /Confirm Admin password/);
   assert.match(source, /localPassword !== localPasswordConfirmation/);
-  assert.match(source, /Allow anonymous usage reporting/);
+  assert.doesNotMatch(source, /Allow anonymous usage reporting/);
 });
 
 test("guided setup keeps branding local and makes its compact progress accessible", async () => {
@@ -628,21 +628,19 @@ test("Settings routes share semantic page, form, status, and destructive-action 
   const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   const access = await readFile("apps/dashboard/src/user-settings.tsx", "utf8");
   const integrations = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
-  const privacy = await readFile("apps/dashboard/src/privacy-settings.tsx", "utf8");
   const data = await readFile("apps/dashboard/src/data-settings.tsx", "utf8");
   const updates = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
 
-  for (const route of ["organization", "configuration", "access", "integrations", "privacy", "data", "guided-setup", "updates"]) {
+  for (const route of ["organization", "configuration", "access", "integrations", "data", "guided-setup", "updates"]) {
     assert.match(shell, new RegExp(`/settings/${route}`));
   }
-  for (const source of [organization, configuration, shell, integrations, privacy, data, updates]) assert.match(source, /<h1/);
+  for (const source of [organization, configuration, shell, integrations, data, updates]) assert.match(source, /<h1/);
   assert.match(access, /aria-invalid=\{confirmation !== "" && password !== confirmation\}/);
   assert.match(access, /aria-describedby=\{confirmation !== "" && password !== confirmation \? "password-confirmation-error"/);
   assert.match(data, /aria-describedby="data-action-description"/);
   assert.match(data, /aria-invalid=\{Boolean\(error\)\}/);
   assert.match(integrations, /integration-state ui-status/);
   assert.match(integrations, /className="danger-button"[\s\S]*?Remove integration/);
-  assert.match(privacy, /disabled=\{busy\}/);
   assert.match(updates, /data-tone=\{updateTone\}/);
   assert.match(styles, /\/\* Settings workspace conformance\. \*\//);
   assert.match(styles, /\.settings-page select,.settings-integrations select \{ appearance: none; padding-right: var\(--space-12\)/);

@@ -12,6 +12,12 @@ This guide is for Administrators preparing a dashboard installation update and m
 
 The fixed private `upgrade-web.yml` workflow runs on `main`. Only an active Admin can prepare, start, or read status. Mutations require the exact dashboard Origin and JSON. The browser cannot select a repository, workflow, ref, slug, or executable parameter. One complete stable official release is resolved and pinned by public commit. Downgrades are refused.
 
+## Fixed database identity
+
+An installation rename may keep its original D1 name. Set optional `LANCERLOGIN_DATABASE_NAME` in the private repository or production environment; workflows pass it to controller scripts as `DATABASE_NAME`. If unset, it defaults to `<installation-slug>-data`. Never add database identity as a workflow-dispatch input.
+
+Keep the fixed name with the existing database UUID in configuration generation, backups, migration commands, credential maintenance and recovery. Preflight still verifies provider metadata and the Worker DB binding against the selected account. Backup and restore commands use the actual database name, not a newly derived name. Rename is a separate reviewed cutover and reversal procedure; do not run fresh provisioning or a same-version upgrade to perform it.
+
 ## Dashboard API
 
 These Worker routes are called under the dashboard's same-origin `/api` prefix. Responses are JSON with `cache-control: no-store`.
@@ -63,7 +69,7 @@ Operational rows are excluded from dashboard category backups/restores and have 
 
 ## Current release and migration evidence
 
-The stable public release is v1.0.2. Each installation must verify its own data, session, migrations, update tracking, and maintenance state. Web-update evidence does not establish physical-kiosk operation, and physical-kiosk evidence does not establish web-update completion.
+The stable public release is v1.0.3. Each installation must verify its own data, session, migrations, update tracking, and maintenance state. Web-update evidence does not establish physical-kiosk operation, and physical-kiosk evidence does not establish web-update completion.
 
 The private deployment repository has an inherited CI assertion failure. Do not describe all private CI as green. The isolated rehearsal has a historical reload-card limitation after manual version changes. These facts and the earlier waived physical checks are evidence limits, not reasons to bypass the fixed web-update controls.
 

@@ -10,10 +10,6 @@ Fingerprint templates remain in the attached R503 sensor. LancerLogin does not u
 
 The dashboard stores local-password hashes, encrypted optional-integration credentials, roster and attendance records, and audit history. Saved integration values are not displayed in the browser. An entire-installation backup can contain password hashes, encrypted integration ciphertext, kiosk credential hashes, and audit history. Protect it like an Administrator credential.
 
-## Anonymous usage reporting
+## Community telemetry retirement
 
-The first-Admin form labels this option **Anonymous usage reporting**. It is enabled by default and has an immediate opt-out. An Administrator can change it in **Settings → Privacy**.
-
-While reporting is enabled, LancerLogin can send an opaque random installation reference, release version, active kiosk count, one scrubbed diagnostic category, and best-effort city or metro. It does not send names, roster data, attendance, fingerprint data, organization name, dashboard accounts, credentials, message content, request paths, or raw IP addresses. Turning reporting off clears the local reporting reference and stops future reports.
-
-RoboLancers operates the optional community collector. It retains reports for 30 days and restricts aggregate access to designated maintainers. While reporting is enabled, an Administrator can copy the deletion-request reference from **Settings → Privacy** and email robolancers@gmail.com. Community support has no service-level agreement. See [telemetry governance](TELEMETRY-GOVERNANCE.md) for retention, deletion, and incident handling.
+Community reporting is disabled. LancerLogin does not collect or transmit Community telemetry. Older consent inputs are ignored. Historical telemetry fields remain inert to preserve migration and backup compatibility. General attendance, backup, and security data stays within the installation.

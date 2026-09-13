@@ -6,9 +6,14 @@
   <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html" aria-current="page">Releases</a><a href="technical.html">Technical</a></nav></header>
   <header class="page-header"><div><p class="eyebrow">Patch notes</p><h1>LancerLogin releases</h1><p>Read the history behind each published version. For a current task, start with the operating guide instead of replaying an older migration.</p></div></header>
   <main id="main" class="page"><section class="notice"><strong>How to read this page</strong> Each entry preserves release-time guidance. Earlier-version upgrade steps are historical, not a replacement for the current web-update or kiosk guide.</section><article>
+<p class="eyebrow">v1.0.3</p><h2>Community telemetry retirement</h2>
+<p>Removes usage reporting and its setup/settings controls. Older privacy requests remain compatible with telemetry disabled. Existing migrations and backup fields remain unchanged.</p>
+<p>Private controller templates support an independently fixed database name for reviewed installation renames. Upgrade web components through the backup-first update flow; an installed v1.0.2 kiosk can remain on that version.</p>
+<p><a href="https://github.com/isriah/LancerLogin/blob/main/docs/releases/v1.0.3.md">Read v1.0.3 release notes</a>.</p>
+</article><article>
 <p class="eyebrow">v1.0.2</p><h2>Reliable Community Edition updates</h2>
 <p>Repairs authenticated update claiming and the Pages executor command. Concurrent starts retain one dispatch and audit history. No new migrations, dependencies or permissions.</p>
-<p>v1.0.2 is the current stable public release. Verify each installation's web and physical-kiosk update outcome independently. Read the <a href="https://github.com/isriah/LancerLogin/blob/main/docs/releases/v1.0.2.md">v1.0.2 release notes</a> for historical verification limits.</p>
+<p>v1.0.2 is immutable historical release context. Verify each installation's web and physical-kiosk update outcome independently. Read the <a href="https://github.com/isriah/LancerLogin/blob/main/docs/releases/v1.0.2.md">v1.0.2 release notes</a> for historical verification limits.</p>
 </article><article>
 <p class="eyebrow">v0.24.2</p><h2>Reliable web update bridge</h2>
 <p>Repairs authenticated update claiming and the Pages executor command. Concurrent starts retain one dispatch and audit history. No new migrations, dependencies or permissions.</p>

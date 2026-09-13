@@ -15,7 +15,7 @@ Raspberry Pi kiosk ── local service ── R503 fingerprint sensor
 
 The dashboard is a static Pages application with an advanced-mode `_worker.js` proxy for `/api/*`. Browser sessions therefore remain first-party on the adopter's Pages origin while API work is forwarded to the separate Worker. The Worker owns authorization, onboarding state, non-overlapping meeting-window validation, scan-time meeting resolution, data validation, encrypted secret handling, exports, and integration calls. Optional Google Calendar and Discord scheduled-event delivery each keep installation-scoped meeting mappings and durable retry operations in D1. Google Calendar keeps separate encrypted authorization and its generic timing-only event policy; Discord keeps its verified bot configuration and provider-specific event fields. LancerLogin remains authoritative and never imports provider changes. D1 contains all organization-level data but no fingerprint templates. The Pi service owns sensor I/O, owner-only local pairing material, local slot-to-member mappings, offline scan queue, kiosk display state, and PIN-protected local network/fingerprint tools.
 
-An optional community telemetry collector is a separate maintainer service and never shares adopter resources. The adopter Worker sends only the consent-gated allowlist to its public ingestion route. The collector HMAC-hashes the opaque install ID, stores one bounded daily row, and exposes only authenticated aggregates; it never receives roster, attendance, biometric, organization, credential, or raw-IP fields.
+Community telemetry has been retired. Historical database columns remain inert for backup compatibility.
 
 Worker persistence adapters scope every query and write to an installation ID. Their test double captures bound parameters so cross-installation access is rejected by contract before a real D1 binding is used.
 
@@ -30,7 +30,6 @@ Web updates use Admin-only prepare/start/status control and an installation-scop
 | R503 sensor | fingerprint templates | cloud credentials |
 | Pi local storage | slot/member mapping, queued attendance, pairing material | fingerprint templates copied from sensor |
 | D1 | roster, meetings, attendance, settings, audit records, encrypted integration secrets | fingerprint templates, raw biometric scans, raw IP |
-| Telemetry endpoint | approved aggregate fields | roster, attendance, organization, biometrics, raw IP |
 
 ## Security controls
 

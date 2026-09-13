@@ -83,15 +83,18 @@ test("first setup rejects simple cross-origin media types before any D1 write", 
   assert.equal(database.batches.length, 0);
 });
 
-test("local Worker bootstrap creates the first Admin with a salted password hash", async () => {
+test("local Worker bootstrap creates a salted Admin and ignores legacy telemetry consent", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Arts Club", timeZone: "America/New_York", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple", telemetryAccepted: false }), env);
+  const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Arts Club", timeZone: "America/New_York", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple", telemetryAccepted: true }), env);
   assert.equal(result.status, 201);
   assert.equal(database.batches.length, 1);
   assert.equal(database.batches[0].length, 4);
   const userInsert = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO users"));
   assert.match(String(userInsert?.values[4]), /^scrypt\$/);
+  const installationInsert = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO installations"));
+  assert.equal(installationInsert?.values[3], null);
+  assert.equal(installationInsert?.values[4], null);
   assert.equal((await result.json() as { telemetryAccepted: boolean }).telemetryAccepted, false);
 });
 
@@ -1999,71 +2002,31 @@ test("a signed Discord button creates a contest only for the delivered linked me
   assert.ok(database.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO discord_attendance_contests") && call.values.includes("323456789012345678")));
 });
 
-test("telemetry transmits only after acceptance and strictly allowlists its payload", async () => {
+test("retired privacy compatibility stays disabled with historical consent and never writes or transmits", async () => {
   const database = new FakeDatabase();
-  database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "2f1c7d4a-81cb-4cef-934e-4c23181933fd" });
-  database.rows.set("COUNT(*) AS count", { count: 1 });
-  database.rows.set("FROM telemetry_diagnostics", { errorCategory: "worker-internal" });
-  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, TELEMETRY_ENDPOINT: "https://telemetry.example.test/v1", RELEASE_VERSION: "0.1.0", DB: database } as unknown as Env;
-  const originalFetch = globalThis.fetch; let payload: Record<string, unknown> | undefined; let fetchOptions: RequestInit | undefined;
-  globalThis.fetch = async (_input, init) => { fetchOptions = init; payload = JSON.parse(String(init?.body)); return new Response(null, { status: 202 }); };
-  try {
-    const telemetryRequest = request("/admin/privacy", { telemetryAccepted: true }, { method: "PATCH", cookie: await sessionCookie("admin") });
-    Object.defineProperty(telemetryRequest, "cf", { value: { city: "Example Metro", ip: "192.0.2.1" } });
-    const result = await worker.fetch(telemetryRequest, env);
-    assert.equal(result.status, 200);
-    assert.deepEqual(payload, { installId: "2f1c7d4a-81cb-4cef-934e-4c23181933fd", releaseVersion: "0.1.0", activeKioskCount: 1, metro: "Example Metro", errorCategory: "worker-internal" });
-    assert.equal(fetchOptions?.redirect, "error");
-    assert.equal(JSON.stringify(payload).includes("192.0.2.1"), false);
-    assert.equal(JSON.stringify(payload).includes("organization"), false);
-    assert.ok(database.calls.some((call) => call.sql.includes("DELETE FROM telemetry_diagnostics")));
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-test("privacy settings expose the opaque deletion reference only while telemetry is accepted", async () => {
-  const accepted = new FakeDatabase();
-  accepted.rows.set("telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installationReference", { acceptedAt: "2026-08-30T00:00:00Z", installationReference: "2f1c7d4a-81cb-4cef-934e-4c23181933fd" });
-  const acceptedEnv = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: accepted } as unknown as Env;
-  const acceptedResult = await worker.fetch(request("/admin/privacy", undefined, { cookie: await sessionCookie("admin") }), acceptedEnv);
-  assert.equal(acceptedResult.status, 200);
-  assert.equal((await acceptedResult.json() as { installationReference?: string }).installationReference, "2f1c7d4a-81cb-4cef-934e-4c23181933fd");
-
-  const declined = new FakeDatabase();
-  declined.rows.set("telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installationReference", { installationReference: "must-not-be-returned" });
-  const declinedEnv = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: declined } as unknown as Env;
-  const declinedResult = await worker.fetch(request("/admin/privacy", undefined, { cookie: await sessionCookie("admin") }), declinedEnv);
-  assert.equal("installationReference" in await declinedResult.json(), false);
-});
-
-test("five-minute Discord reconciliation does not increase the daily telemetry cadence", async () => {
-  const database = new FakeDatabase();
-  database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "2f1c7d4a-81cb-4cef-934e-4c23181933fd" });
-  database.rows.set("COUNT(*) AS count", { count: 1 });
-  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, TELEMETRY_ENDPOINT: "https://telemetry.example.test/v1/report", RELEASE_VERSION: "0.1.3", DB: database } as unknown as Env;
+  database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "legacy-reference" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, TELEMETRY_ENDPOINT: "https://telemetry.example.test/v1", DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; let reports = 0;
-  globalThis.fetch = async () => { reports += 1; return new Response(null, { status: 204 }); };
+  globalThis.fetch = async () => { reports += 1; throw new Error("Reporting must never run"); };
   try {
+    for (const method of ["GET", "PATCH"]) {
+      const result = await worker.fetch(request("/admin/privacy", method === "PATCH" ? { telemetryAccepted: true } : undefined, { method, cookie: await sessionCookie("admin") }), env);
+      assert.equal(result.status, 200);
+      const body = await result.json() as { telemetryAccepted: boolean; acceptedAt: unknown; installationReference?: string };
+      assert.equal(body.telemetryAccepted, false);
+      assert.equal(body.acceptedAt, null);
+      assert.equal("installationReference" in body, false);
+    }
+    assert.equal((await worker.fetch(request("/admin/privacy"), env)).status, 401);
+    assert.equal((await worker.fetch(request("/admin/privacy", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
+    await worker.scheduled({ cron: "0 3 * * *" }, env);
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
     assert.equal(reports, 0);
-    await worker.scheduled({ cron: "0 3 * * *" }, env);
-    assert.equal(reports, 1);
+    assert.equal(database.calls.some((call) => /telemetry|audit_log/.test(call.sql)), false);
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("telemetry refuses endpoint credentials, query strings, and URL fragments", async () => {
-  const database = new FakeDatabase();
-  database.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z", installId: "2f1c7d4a-81cb-4cef-934e-4c23181933fd" });
-  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, TELEMETRY_ENDPOINT: "https://user:secret@telemetry.example.test/v1?token=secret#fragment", RELEASE_VERSION: "0.1.0", DB: database } as unknown as Env;
-  const originalFetch = globalThis.fetch; let called = false;
-  globalThis.fetch = async () => { called = true; return new Response(null, { status: 202 }); };
-  try {
-    const result = await worker.fetch(request("/admin/privacy", { telemetryAccepted: true }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
-    assert.equal(result.status, 200);
-    assert.equal(called, false);
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-test("scrubbed diagnostics are recorded only after telemetry consent", async () => {
+test("error paths never record retired telemetry diagnostics", async () => {
   const encrypted = await encryptIntegration({ clientId: "client-id", clientSecret: "client-secret" }, sessionSecret);
   const accepted = new FakeDatabase();
   accepted.rows.set("auth_mode AS authMode", { authMode: "google" });
@@ -2071,7 +2034,7 @@ test("scrubbed diagnostics are recorded only after telemetry consent", async () 
   accepted.rows.set("telemetry_accepted_at AS acceptedAt", { acceptedAt: "2026-08-30T00:00:00Z" });
   const acceptedEnv = { APP_MODE: "configured", ALLOWED_ORIGIN: "not-a-valid-origin", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: accepted } as unknown as Env;
   assert.equal((await worker.fetch(request("/auth/google/start"), acceptedEnv)).status, 500);
-  assert.ok(accepted.calls.some((call) => call.sql.includes("INSERT INTO telemetry_diagnostics") && call.values.includes("worker-internal")));
+  assert.equal(accepted.calls.some((call) => call.sql.includes("INSERT INTO telemetry_diagnostics")), false);
 
   const declined = new FakeDatabase();
   declined.rows.set("auth_mode AS authMode", { authMode: "google" });

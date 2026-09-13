@@ -38,6 +38,7 @@ jobs:
       RELEASE_SHA: ${{ inputs.release_sha }}
       EXECUTOR_RUN_ID: ${{ github.run_id }}
       INSTALLATION_SLUG: ${{ vars.LANCERLOGIN_INSTALLATION_SLUG }}
+      DATABASE_NAME: ${{ vars.LANCERLOGIN_DATABASE_NAME }}
       DATABASE_ID: ${{ vars.LANCERLOGIN_DATABASE_ID }}
       API_URL: ${{ vars.LANCERLOGIN_API_URL }}
       WEB_UPDATE_TOKEN_EXPIRES_AT: ${{ vars.WEB_UPDATE_TOKEN_EXPIRES_AT }}

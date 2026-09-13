@@ -2,7 +2,7 @@
 
 Meaningful release notes are published in [`docs/releases`](docs/releases/) and attached verbatim to each GitHub Release. LancerLogin follows semantic versioning while the Community Edition matures.
 
-> Historical release summary. The stable public release is [v1.0.2](docs/releases/v1.0.2.md). Use the release-note index and current operating guides for upgrade decisions; the entries below preserve their release-time summaries.
+> Historical release summary. The stable public release is [v1.0.3](docs/releases/v1.0.3.md). Use the release-note index and current operating guides for upgrade decisions; the entries below preserve their release-time summaries.
 
 ## 0.9.0 — Unattended kiosk operations
 
@@ -66,3 +66,7 @@ See [`docs/releases/v0.6.0.md`](docs/releases/v0.6.0.md) for upgrade notes, limi
 - Repair first-time Worker secret upload and let private deployment workflows default to the latest release or choose a specific tag.
 
 See [`docs/releases/v0.5.0.md`](docs/releases/v0.5.0.md) for upgrade notes and validation details.
+
+## v1.0.3
+
+Retires Community telemetry and its consent/settings UI. Preserves old authenticated privacy requests, migrations and backup fields. Fixed private controller database names support installation renames without moving data.

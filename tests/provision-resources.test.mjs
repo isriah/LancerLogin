@@ -18,8 +18,8 @@ test("generated Worker configuration is account-neutral until D1 discovery", () 
   assert.equal("d1_databases" in missing.config, false);
   assert.equal(missing.config.vars.ALLOWED_ORIGIN, "https://example-club-dashboard.pages.dev");
   assert.equal(missing.config.vars.RELEASE_VERSION, "1.2.3");
-  assert.equal(missing.config.vars.TELEMETRY_ENDPOINT, "https://lancerlogin-community-telemetry.robolancers.workers.dev/v1/report");
-  assert.deepEqual(missing.config.triggers.crons, ["*/5 * * * *", "0 3 * * *"]);
+  assert.equal("TELEMETRY_ENDPOINT" in missing.config.vars, false);
+  assert.deepEqual(missing.config.triggers.crons, ["*/5 * * * *"]);
   assert.throws(() => buildProvisionConfig("example-club", [], "latest"), /Invalid release version/);
 });
 
@@ -46,4 +46,15 @@ test("generated Worker configuration records only a validated private updater UR
 test("Pages project discovery is resumable", () => {
   assert.equal(resourceExists("pages", "example-club-dashboard", [{ name: "example-club-dashboard" }]), true);
   assert.equal(resourceExists("pages", "other-dashboard", [{ name: "example-club-dashboard" }]), false);
+});
+
+test("renamed installation retains its independently fixed database identity", () => {
+  const database = { name: "original-data", uuid: "11111111-1111-1111-1111-111111111111" };
+  const result = buildProvisionConfig("renamed", [database], "1.0.3", "original-data");
+  assert.equal(result.state, "exists");
+  assert.equal(result.config.name, "renamed-api");
+  assert.equal(result.config.d1_databases[0].database_name, "original-data");
+  assert.equal(result.config.d1_databases[0].database_id, database.uuid);
+  assert.equal(buildProvisionConfig("renamed", [{ ...database, name: "renamed-data" }], "1.0.3", "original-data").state, "missing");
+  assert.throws(() => buildProvisionConfig("renamed", [database], "1.0.3", "../original-data"), /fixed_database_name_invalid/);
 });

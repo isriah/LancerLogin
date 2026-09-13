@@ -4,7 +4,7 @@ This guide is for Administrators and Operators. An Administrator configures the 
 
 ## Navigation and access
 
-After sign-in, the primary navigation contains **Dashboard**, **Reports**, **Roster**, and **Kiosks**. Administrators also see **Settings**. Settings has separate **Organization**, **Configuration**, **Access**, **Integrations**, **Privacy**, **Data**, **Guided Setup**, and **Updates** pages.
+After sign-in, the primary navigation contains **Dashboard**, **Reports**, **Roster**, and **Kiosks**. Administrators also see **Settings**. Settings has separate **Organization**, **Configuration**, **Access**, **Integrations**, **Data**, **Guided Setup**, and **Updates** pages.
 
 An unfinished installation opens Guided Setup instead of the normal dashboard for Administrators. Any Administrator can resume its shared progress. Operators do not complete or reset Guided Setup.
 
@@ -44,7 +44,6 @@ The **Browser simulator** is available to Administrators. It uses browser-select
 - **Configuration** controls attendance timing and the reporting baseline.
 - **Access** controls authenticated Administrator and Operator accounts.
 - **Integrations** controls optional Google, Resend, and Discord connections.
-- **Privacy** controls anonymous usage reporting and exposes its deletion reference while reporting is enabled.
 - **Data** downloads or restores category-specific backups and performs typed-confirmation deletion.
 - **Guided Setup** reopens the shared setup checklist without deleting data.
 - **Updates** compares releases and provides the backup-first web update flow.

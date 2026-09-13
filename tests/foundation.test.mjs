@@ -318,34 +318,3 @@ test("Cloudflare setup is adopter-guided and does not require a target account",
   assert.match(guide, /Account Settings Read/);
   assert.doesNotMatch(guide, /account_id\s*=|database_id\s*=/i);
 });
-
-test("telemetry deployment is dedicated, collision-safe, and does not activate adopter reporting", async () => {
-  const workflow = await readFile(".github/workflows/deploy-telemetry-collector.yml", "utf8");
-  assert.match(workflow, /workflow_dispatch/);
-  assert.match(workflow, /environment: telemetry-production/);
-  assert.match(workflow, /LANCERLOGIN_TELEMETRY_CLOUDFLARE_API_TOKEN/);
-  assert.match(workflow, /LANCERLOGIN_TELEMETRY_CLOUDFLARE_ACCOUNT_ID/);
-  assert.match(workflow, /cfat_/);
-  assert.match(workflow, /LANCERLOGIN_TELEMETRY_INSTALL_PEPPER/);
-  assert.match(workflow, /LANCERLOGIN_TELEMETRY_ADMIN_TOKEN/);
-  assert.doesNotMatch(workflow, /secrets\.CLOUDFLARE_API_TOKEN/);
-  assert.match(workflow, /CREATE LANCERLOGIN TELEMETRY/);
-  assert.match(workflow, /test "\$database" = "missing"/);
-  assert.match(workflow, /test "\$worker" = "missing"/);
-  assert.match(workflow, /Deploy existing collector with retained secret values/);
-  assert.match(workflow, /workingDirectory: \.collector/);
-  assert.match(workflow, /preCommands: npx wrangler deploy/);
-  assert.match(workflow, /Exercise and remove a mock report/);
-  assert.match(workflow, /Adopter releases activate the reviewed public endpoint separately/);
-  assert.doesNotMatch(workflow, /TELEMETRY_ENDPOINT=/);
-});
-
-test("approved telemetry governance is public and operational", async () => {
-  const policy = await readFile("docs/TELEMETRY-GOVERNANCE.md", "utf8");
-  assert.match(policy, /RoboLancers operates/);
-  assert.match(policy, /robolancers@gmail\.com/);
-  assert.match(policy, /30 days/);
-  assert.match(policy, /designated RoboLancers maintainers/);
-  assert.match(policy, /deletion-request reference/);
-  assert.match(policy, /plain-language notice/);
-});

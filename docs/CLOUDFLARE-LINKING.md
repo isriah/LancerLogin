@@ -1,6 +1,6 @@
 # Link the Cloudflare account
 
-This guide is for the Administrator creating a new private deployment repository. It uses an account-owned API token in the adopter's Cloudflare account. Cloudflare's current [account token guide](https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/) calls the path **Manage Account → Account API Tokens** and requires Super Administrator access to create or update a token.
+This guide is for the Administrator creating a new private deployment repository. It uses an account-owned API token in the adopter's own Cloudflare account. Cloudflare's current [account token guide](https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/) calls the path **Manage Account → Account API Tokens** and requires Super Administrator access to create or update a token.
 
 ## Create the token
 
@@ -11,6 +11,7 @@ This guide is for the Administrator creating a new private deployment repository
    - **D1**: Edit
    - **Pages**: Edit
    - **Account Settings**: Read
+   Account Settings Read permits the workflow to verify the selected account.
 4. Review the policy, create the token, and copy its value immediately. Cloudflare shows the value once. Do not screenshot or record the reveal screen.
 5. Use Cloudflare's current account-ID control to copy the selected account's ID. Confirm it is the account ID, not a zone ID.
 

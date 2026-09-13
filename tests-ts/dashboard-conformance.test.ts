@@ -11,7 +11,7 @@ test("dashboard conformance inventory assigns every governed surface to 01-authe
   for (const route of [
     "/dashboard", "/meetings", "/meetings/[ID]", "/attendance", "/reports", "/roster", "/roster/[ID]", "/kiosks",
     "/settings/organization", "/settings/configuration", "/settings/access", "/settings/integrations",
-    "/settings/privacy", "/settings/data", "/settings/guided-setup", "/settings/updates",
+    "/settings/data", "/settings/guided-setup", "/settings/updates",
   ]) assert.equal(routes.includes(route), true, `${route} must remain in the executable inventory`);
 
   const overlays = dashboardConformanceMatrix.flatMap(({ overlays }) => overlays).join(" ");

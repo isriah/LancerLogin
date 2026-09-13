@@ -22,7 +22,6 @@ const routes = [
   ["/settings/configuration", "Configuration"],
   ["/settings/access", "Dashboard access"],
   ["/settings/integrations", "Integrations"],
-  ["/settings/privacy", "Privacy"],
   ["/settings/data", "Data management"],
   ["/settings/guided-setup", "Guided Setup"],
   ["/settings/updates", "Updates"],
@@ -276,7 +275,7 @@ test("Discord sync-all stops requesting later pages when a provider failure leav
   expect(requests).toBe(2);
 });
 
-test("Settings validation, integration states, telemetry, and data dialogs remain explicit and keyboard focused", async ({ page }) => {
+test("Settings validation, integration states and data dialogs remain explicit and keyboard focused", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
   await page.addInitScript(() => { localStorage.setItem("lancerlogin-theme", "dark"); localStorage.setItem("lancerlogin-update-dismissed:0.19.0", "true"); });
@@ -296,10 +295,9 @@ test("Settings validation, integration states, telemetry, and data dialogs remai
   await expect(page.getByRole("group").filter({ hasText: "Set up Resend email" })).toBeVisible();
 
   await page.goto("/settings/privacy");
-  const telemetry = page.getByRole("checkbox", { name: "Allow anonymous usage reporting" });
-  await telemetry.focus();
-  await expect(telemetry).toBeFocused();
-  expect((await telemetry.locator("xpath=..").boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await expect(page).toHaveURL(/\/settings\/data$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Data" })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "Allow anonymous usage reporting" })).toHaveCount(0);
 
   await page.goto("/settings/data");
   const opener = page.getByRole("button", { name: "Delete" }).last();

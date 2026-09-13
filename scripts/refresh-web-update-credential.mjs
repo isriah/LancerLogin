@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 
+import { resolveDatabaseName } from "./database-identity.mjs";
+
 export async function verifyDispatchCredential(env, request = fetch) {
   const repo = env.LANCERLOGIN_UPDATE_REPOSITORY;
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo ?? "") || repo.toLowerCase() === "isriah/lancerlogin") throw new Error("private_repository_required");
@@ -30,7 +32,7 @@ export async function verifyCredentialTarget(env, request = fetch) {
   };
   if ((await get("/tokens/verify")).status !== "active") throw new Error("account_token_invalid");
   const database = await get(`/d1/database/${env.DATABASE_ID}`);
-  if (database.uuid !== env.DATABASE_ID || database.name !== `${env.INSTALLATION_SLUG}-data`) throw new Error("database_identity_mismatch");
+  if (database.uuid !== env.DATABASE_ID || database.name !== resolveDatabaseName(env.INSTALLATION_SLUG, env.DATABASE_NAME)) throw new Error("database_identity_mismatch");
   const worker = await get(`/workers/scripts/${env.INSTALLATION_SLUG}-api/settings`);
   if (!worker.bindings?.some((binding) => binding.name === "DB" && binding.type === "d1" && binding.id === env.DATABASE_ID)) throw new Error("worker_database_mismatch");
 }

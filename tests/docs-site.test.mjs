@@ -158,11 +158,8 @@ test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", as
   assert.doesNotMatch(kiosk, /5-volt pin 2|<td>2 or 4<\/td>|<td>5 V<\/td>/);
 });
 
-test("privacy page publishes the approved collector operator, retention, access, and deletion process", async () => {
+test("privacy page states telemetry retirement while preserving general privacy guidance", async () => {
   const privacy = await readFile("docs-site/privacy.html", "utf8");
-  assert.match(privacy, /RoboLancers operates/);
-  assert.match(privacy, /30 days/);
-  assert.match(privacy, /designated maintainers/);
-  assert.match(privacy, /deletion-request reference/);
-  assert.match(privacy, /robolancers@gmail\.com/);
+  assert.match(privacy, /does not collect or transmit Community telemetry/);
+  assert.doesNotMatch(privacy, /Settings → Privacy|30 days|deletion-request reference/);
 });

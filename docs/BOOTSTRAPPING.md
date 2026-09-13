@@ -1,6 +1,6 @@
 # Installation setup
 
-This guide is for the Administrator creating a new organization-owned LancerLogin installation. It describes a fresh installation, not a migration or a recovery. The current stable public release is 1.0.2.
+This guide is for the Administrator creating a new organization-owned LancerLogin installation. It describes a fresh installation, not a migration or a recovery. The current stable public release is 1.0.3.
 
 ## Before you start
 
@@ -29,7 +29,7 @@ Use `resume` only after an interrupted initial setup with the same slug. Use `up
 
 1. Open the dashboard URL and enter `LANCERLOGIN_SETUP_CODE`.
 2. Create the first Admin with a local password, Google sign-in, or both. The setup code is not the Admin password.
-3. Review **Anonymous usage reporting**. It is enabled by default and has an immediate opt-out. It can be changed later in **Settings → Privacy**.
+3. Create the installation. Community telemetry is disabled.
 4. If you use Google sign-in, copy the exact redirect URI shown by the dashboard into the Google OAuth client. Do not guess or edit the URL. See [Integrations](INTEGRATIONS.md).
 
 The bootstrap route closes after the installation record exists. If sign-in configuration needs recovery later, use the documented local recovery procedure rather than trying to reopen first-Admin setup.

@@ -6,7 +6,7 @@ import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DE
 type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
 interface D1Database { prepare(query: string): D1Statement; batch(statements: D1Statement[]): Promise<D1Result[]>; }
-export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; TELEMETRY_ENDPOINT?: string; RELEASE_VERSION?: string; DB?: D1Database; }
+export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DB?: D1Database; }
 type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
 type ScheduledController = { cron?: string };
 
@@ -150,7 +150,7 @@ async function setupStatus(env: Env): Promise<Response> {
   const installation = await db.prepare("SELECT id, auth_mode AS authMode, telemetry_accepted_at AS telemetryAcceptedAt FROM installations WHERE id = ?").bind("primary").first<{ id: string; authMode: AuthMode; telemetryAcceptedAt?: string }>();
   if (!installation) return response({ configured: false });
   const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone, logo_backdrop AS logoBackdrop, late_scan_minutes AS lateScanMinutes, discord_contest_window_hours AS discordContestWindowHours, attendance_reporting_starts_on AS attendanceReportingStartsOn, anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes FROM organization_settings WHERE installation_id = ?").bind(installation.id).first();
-  return response({ configured: true, installation: { ...installation, telemetryAccepted: Boolean(installation.telemetryAcceptedAt) }, settings });
+  return response({ configured: true, installation: { id: installation.id, authMode: installation.authMode, telemetryAccepted: false }, settings });
 }
 function validateBootstrap(input: BootstrapInput): string[] {
   const errors: string[] = [];
@@ -174,9 +174,9 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   if ((input.authMode === "google" || input.authMode === "both") && !env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const now = new Date().toISOString(); const adminId = crypto.randomUUID(); const mode = input.authMode!;
   const passwordHash = mode === "local" || mode === "both" ? await hashPassword(input.localPassword!) : null;
-  const telemetryAcceptedAt = input.telemetryAccepted ? now : null;
+  const telemetryAcceptedAt = null; // Historical columns remain inert for backup compatibility.
   const statements = [
-    db.prepare("INSERT INTO installations (id, created_at, auth_mode, telemetry_accepted_at, telemetry_install_id, google_enabled) VALUES (?, ?, ?, ?, ?, ?)").bind("primary", now, mode, telemetryAcceptedAt, input.telemetryAccepted ? crypto.randomUUID() : null, mode === "google" || mode === "both" ? 1 : 0),
+    db.prepare("INSERT INTO installations (id, created_at, auth_mode, telemetry_accepted_at, telemetry_install_id, google_enabled) VALUES (?, ?, ?, ?, ?, ?)").bind("primary", now, mode, telemetryAcceptedAt, null, mode === "google" || mode === "both" ? 1 : 0),
     db.prepare("INSERT INTO organization_settings (installation_id, organization_name, time_zone) VALUES (?, ?, ?)").bind("primary", input.organizationName!.trim(), input.timeZone),
     db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, 'admin', ?)").bind(adminId, "primary", input.adminEmail?.toLowerCase() ?? null, input.localUsername?.trim().toLowerCase() ?? null, passwordHash, now),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), "primary", adminId, "installation.created", "installation", "primary", now),
@@ -189,8 +189,7 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
     );
   }
   await db.batch(statements);
-  if (telemetryAcceptedAt) { const cf = (request as Request & { cf?: { city?: string; metroCode?: string } }).cf; try { await transmitTelemetry(env, cf?.city || cf?.metroCode); } catch { /* Setup must survive best-effort telemetry failure. */ } }
-  return response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, telemetryAccepted: Boolean(telemetryAcceptedAt) }, 201);
+  return response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, telemetryAccepted: false }, 201);
 }
 async function updateInfo(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
@@ -1917,36 +1916,11 @@ async function discordKioskStatus(request: Request, env: Env): Promise<Response>
   return response({ changed: result.changed, messageId: result.messageId, online: result.online });
 }
 
-async function transmitTelemetry(env: Env, metro?: string): Promise<boolean> {
-  if (!env.TELEMETRY_ENDPOINT || !env.RELEASE_VERSION || !env.DB) return false;
-  const endpoint = new URL(env.TELEMETRY_ENDPOINT); if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return false;
-  const installation = await env.DB.prepare("SELECT telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installId FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string; installId?: string }>();
-  if (!installation?.acceptedAt || !installation.installId) return false;
-  const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM kiosks WHERE installation_id = 'primary' AND active = 1").first<{ count: number }>();
-  const diagnostic = await env.DB.prepare("SELECT error_category AS errorCategory FROM telemetry_diagnostics WHERE installation_id = 'primary'").first<{ errorCategory?: "worker-internal" | "integration-upstream" }>();
-  const payload: Record<string, unknown> = { installId: installation.installId, releaseVersion: env.RELEASE_VERSION, activeKioskCount: Number(count?.count ?? 0) };
-  if (metro) payload.metro = String(metro).slice(0, 100);
-  if (diagnostic?.errorCategory) payload.errorCategory = diagnostic.errorCategory;
-  const sent = (await fetch(endpoint, { method: "POST", redirect: "error", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })).ok;
-  if (sent && diagnostic?.errorCategory) await env.DB.prepare("DELETE FROM telemetry_diagnostics WHERE installation_id = 'primary' AND error_category = ?").bind(diagnostic.errorCategory).run();
-  return sent;
-}
-async function recordTelemetryDiagnostic(env: Env, errorCategory: "worker-internal" | "integration-upstream"): Promise<void> {
-  if (!env.DB) return;
-  try {
-    const consent = await env.DB.prepare("SELECT telemetry_accepted_at AS acceptedAt FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string }>();
-    if (!consent?.acceptedAt) return;
-    await env.DB.prepare("INSERT INTO telemetry_diagnostics (installation_id, error_category, last_seen_at) VALUES ('primary', ?, ?) ON CONFLICT(installation_id) DO UPDATE SET error_category = excluded.error_category, last_seen_at = excluded.last_seen_at").bind(errorCategory, new Date().toISOString()).run();
-  } catch { /* Diagnostics are best-effort and never alter the request response. */ }
-}
+// Compatibility endpoint for older authenticated clients. No consent writes or reports.
 async function privacySettings(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const installation = await db.prepare("SELECT telemetry_accepted_at AS acceptedAt, telemetry_install_id AS installationReference FROM installations WHERE id = 'primary'").first<{ acceptedAt?: string; installationReference?: string }>(); return response({ telemetryAccepted: Boolean(installation?.acceptedAt), acceptedAt: installation?.acceptedAt, installationReference: installation?.acceptedAt ? installation.installationReference : undefined, notice: "Anonymous usage data only. No roster or user data is ever shared." }); }
-  const input = await parseJson<{ telemetryAccepted?: boolean }>(request); if (typeof input.telemetryAccepted !== "boolean") throw new HttpError(400, "telemetryAccepted must be true or false"); const now = new Date().toISOString();
-  await db.prepare("UPDATE installations SET telemetry_accepted_at = ?, telemetry_install_id = ? WHERE id = 'primary'").bind(input.telemetryAccepted ? now : null, input.telemetryAccepted ? crypto.randomUUID() : null).run();
-  await writeAudit(db, principal, input.telemetryAccepted ? "telemetry.accepted" : "telemetry.declined", "installation", "primary");
-  if (input.telemetryAccepted) { const cf = (request as Request & { cf?: { city?: string; metroCode?: string } }).cf; try { await transmitTelemetry(env, cf?.city || cf?.metroCode); } catch { /* Consent remains saved if reporting is unavailable. */ } }
-  return response({ telemetryAccepted: input.telemetryAccepted, acceptedAt: input.telemetryAccepted ? now : null });
+  await requireRole(request, env, ["admin"]);
+  if (request.method === "PATCH") await parseJson<{ telemetryAccepted?: boolean }>(request);
+  return response({ telemetryAccepted: false, acceptedAt: null, notice: "Anonymous usage reporting has been retired. No telemetry is collected or transmitted." });
 }
 
 type BackupScope = "meetings" | "roster" | "installation";
@@ -2196,14 +2170,12 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else result = response({ error: "Not found" }, 404);
   } catch (error) {
     const status = error instanceof HttpError || error instanceof WebUpdateError ? error.status : 500;
-    if (status === 500 || status === 502) await recordTelemetryDiagnostic(env, status === 502 ? "integration-upstream" : "worker-internal");
     const detail = error instanceof HttpError ? error.details : env.APP_MODE === "unconfigured" && error instanceof Error ? [error.message] : undefined;
     result = response({ error: error instanceof HttpError || error instanceof WebUpdateError ? error.message : "Request failed", details: detail, ...(error instanceof WebUpdateError ? { code: error.code } : {}) }, status);
   }
   return withCors(result, request, env);
 }, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
   if (await webUpdateMaintenance(env)) return;
-  if (controller.cron === "0 3 * * *") { try { await transmitTelemetry(env); } catch { /* Telemetry is best-effort and cannot affect attendance. */ } }
   if (controller.cron === "*/5 * * * *") {
     try { await processGoogleCalendarOperations(env); } catch { /* Google Calendar delivery retries safely on the next scheduled pass. */ }
     try { await processDiscordCalendarOperations(env); } catch { /* Discord Calendar delivery retries safely on the next scheduled pass. */ }

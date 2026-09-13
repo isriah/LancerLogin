@@ -5,6 +5,8 @@ import { createHash } from "node:crypto";
 import { buildProvisionConfig } from "./prepare-cloudflare-provision.mjs";
 import { buildPagesProxy } from "./prepare-pages-proxy.mjs";
 
+import { resolveDatabaseName } from "./database-identity.mjs";
+
 const stable = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?![\s\S])/;
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const shaPattern = /^[0-9a-f]{40}$/;
@@ -18,7 +20,7 @@ export function validateUpgradeEnvironment(env) {
   if (!/^[0-9a-f]{32}$/.test(env.CLOUDFLARE_ACCOUNT_ID ?? "") || !env.CLOUDFLARE_API_TOKEN?.startsWith("cfat_")) throw new Error("scoped_account_credential_required");
   if (!(Date.parse(env.WEB_UPDATE_TOKEN_EXPIRES_AT ?? "") > Date.now())) throw new Error("dispatch_credential_expiry_required");
   return { requestId: env.REQUEST_ID, tag: env.RELEASE_TAG, sha: env.RELEASE_SHA, runId: env.EXECUTOR_RUN_ID,
-    slug: env.INSTALLATION_SLUG, databaseId: env.DATABASE_ID, apiUrl: api.origin,
+    slug: env.INSTALLATION_SLUG, databaseName: resolveDatabaseName(env.INSTALLATION_SLUG, env.DATABASE_NAME), databaseId: env.DATABASE_ID, apiUrl: api.origin,
     dashboardUrl: `https://${env.INSTALLATION_SLUG}-dashboard.pages.dev`, repository: env.UPDATE_REPOSITORY };
 }
 export async function validateOfficialSource(context, get) {
@@ -89,7 +91,8 @@ function command(program, args, cwd, env, { json = false } = {}) {
 
 export async function createLiveUpgradeIO(context, environment, sourceDirectory) {
   const source = resolve(sourceDirectory); const configPath = resolve(source, ".provision/wrangler.json");
-  const config = buildProvisionConfig(context.slug, [{ name: `${context.slug}-data`, uuid: context.databaseId }], context.tag.slice(1)).config;
+  const databaseName = resolveDatabaseName(context.slug, context.databaseName);
+  const config = buildProvisionConfig(context.slug, [{ name: databaseName, uuid: context.databaseId }], context.tag.slice(1), databaseName).config;
   config.vars.UPDATE_REPOSITORY = context.repository;
   config.vars.UPDATE_WORKFLOW_URL = `https://github.com/${context.repository}/actions/workflows/upgrade-web.yml`;
   await mkdir(resolve(source, ".provision"), { recursive: true });
@@ -124,7 +127,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
       if (`v${version}` !== context.tag || await command("git", ["rev-parse", "HEAD"], source, processEnvironment) !== context.sha) throw new Error("source_identity_mismatch");
       const token = await cf("/tokens/verify"); if (token.status !== "active") throw new Error("account_token_invalid");
       const database = await cf(`/d1/database/${context.databaseId}`);
-      if (database.uuid !== context.databaseId || database.name !== `${context.slug}-data`) throw new Error("database_identity_mismatch");
+      if (database.uuid !== context.databaseId || database.name !== databaseName) throw new Error("database_identity_mismatch");
       const settings = await cf(`/workers/scripts/${context.slug}-api/settings`);
       if (!settings.bindings?.some((binding) => binding.type === "d1" && binding.name === "DB" && binding.id === context.databaseId)) throw new Error("worker_database_mismatch");
       const secretNames = new Set((await wrangler(["secret", "list", "--format", "json"], { json: true })).map((entry) => entry.name));
@@ -156,7 +159,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
     },
     async drain() { await new Promise((done) => setTimeout(done, 60_000)); },
     async checkpoint() {
-      const bookmark = await wrangler(["d1", "time-travel", "info", `${context.slug}-data`, "--json"], { json: true });
+      const bookmark = await wrangler(["d1", "time-travel", "info", databaseName, "--json"], { json: true });
       const deployments = await cf(`/workers/scripts/${context.slug}-api/deployments`);
       const active = deployments.deployments?.[0];
       const pages = await cf(`/pages/projects/${context.slug}-dashboard`);
@@ -169,7 +172,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
       const result = await sql(`UPDATE web_update_requests SET recovery_json = ?, updated_at = ? WHERE ${owned}`, [JSON.stringify(recovery), new Date().toISOString(), context.requestId, context.runId]);
       if (result[0]?.meta?.changes !== 1) throw new Error("checkpoint_save_failed");
     },
-    async migrate() { await wrangler(["d1", "migrations", "apply", `${context.slug}-data`, "--remote"]); },
+    async migrate() { await wrangler(["d1", "migrations", "apply", databaseName, "--remote"]); },
     async deployApi() { await wrangler(["deploy", "--message", `Web update ${context.requestId}`]); },
     async deployPages() {
       // Pages rejects custom --config paths; the generated configuration belongs to the Worker only.

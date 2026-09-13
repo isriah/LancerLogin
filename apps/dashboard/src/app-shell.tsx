@@ -9,7 +9,6 @@ import { MemberDetailPage } from "./member-detail-page";
 import { OrganizationSettings } from "./organization-settings";
 import { ConfigurationSettings } from "./configuration-settings";
 import { IntegrationSettings } from "./integration-settings";
-import { PrivacySettings } from "./privacy-settings";
 import { DataSettings } from "./data-settings";
 import { UpdatesPage } from "./updates-page";
 import { UserSettings } from "./user-settings";
@@ -46,7 +45,7 @@ export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { r
   useEffect(() => { if (onboarding) return; void api<{ integrations: IntegrationCapabilities }>("/integrations/capabilities").then((result) => setIntegrations(result.integrations)).catch(() => setIntegrations(disabledCapabilities)); }, [onboarding]);
   function openSetup() { setOnboarding(true); window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" })); }
   const primary = [["/dashboard", "Dashboard"], ["/reports", "Reports"], ["/roster", "Roster"], ["/kiosks", "Kiosks"], ...(role === "admin" ? [["/settings/organization", "Settings"]] : [])] as [string, string][];
-  const settings = [["/settings/organization", "Organization"], ["/settings/configuration", "Configuration"], ["/settings/access", "Access"], ["/settings/integrations", "Integrations"], ["/settings/privacy", "Privacy"], ["/settings/data", "Data"], ["/settings/guided-setup", "Guided Setup"], ["/settings/updates", "Updates"]] as const;
+  const settings = [["/settings/organization", "Organization"], ["/settings/configuration", "Configuration"], ["/settings/access", "Access"], ["/settings/integrations", "Integrations"], ["/settings/data", "Data"], ["/settings/guided-setup", "Guided Setup"], ["/settings/updates", "Updates"]] as const;
   const viewingSettings = path.startsWith("/settings/");
   const wideDashboardLayout = onboarding === false && (["/dashboard", "/reports", "/roster", "/kiosks"].includes(path) || path.startsWith("/meetings/") || path.startsWith("/roster/"));
   let page: React.ReactNode;
@@ -64,7 +63,6 @@ export function AppShell({ role, branding, onBrandingChanged, onSignedOut }: { r
   else if (role === "admin" && path === "/settings/configuration") page = <ConfigurationSettings initialBranding={branding} onChanged={onBrandingChanged} />;
   else if (role === "admin" && path === "/settings/access") page = <AccessSettings />;
   else if (role === "admin" && path === "/settings/integrations") page = <IntegrationSettings onEnabledChanged={(provider, enabled, configured) => setIntegrations((current) => ({ ...current, [provider]: { enabled, configured } }))} />;
-  else if (role === "admin" && path === "/settings/privacy") page = <PrivacySettings />;
   else if (role === "admin" && path === "/settings/data") page = <DataSettings />;
   else if (role === "admin" && path === "/settings/guided-setup") page = <GuidedSetupSettings onOpenSetup={openSetup} />;
   else if (role === "admin" && path === "/settings/updates") page = <UpdatesPage />;

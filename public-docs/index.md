@@ -1,6 +1,6 @@
 # LancerLogin guide
 
-LancerLogin is a self-hosted attendance dashboard and one-Raspberry-Pi kiosk for an organization that manages its own GitHub and Cloudflare accounts. The current stable public release is **1.0.2**.
+LancerLogin is a self-hosted attendance dashboard and one-Raspberry-Pi kiosk for an organization that manages its own GitHub and Cloudflare accounts. The current stable public release is **1.0.3**.
 
 ## Start here
 
@@ -22,3 +22,7 @@ LancerLogin is a self-hosted attendance dashboard and one-Raspberry-Pi kiosk for
 Public documentation never contains private repository details, account IDs, backup contents, credentials, attendance records, or operator output. A Raspberry Pi kiosk can be managed locally or through the access method its Administrator has configured, such as SSH or Raspberry Pi Connect. Neither remote method is required by LancerLogin.
 
 The public site uses sanitized provider screenshots and generated example values. A browser simulator demonstrates dashboard-to-kiosk behavior but is not physical kiosk evidence.
+
+## Screenshot coverage
+
+The setup walkthrough includes sanitized GitHub, Cloudflare and integration controls, with annotated dashboard and kiosk examples. Screenshots describe the documented flow and contain generated example values. They are not proof of physical kiosk behavior or a complete installation-specific credential inventory.

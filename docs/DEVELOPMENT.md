@@ -15,7 +15,6 @@ Run the smallest command that covers the files being changed:
 | Public documentation | `npm run verify:docs` | Static documentation content and accessibility assertions |
 | Raspberry Pi kiosk | `npm run verify:kiosk` | Kiosk, installer, extracted release-artifact smoke tests plus kiosk typecheck |
 | GitHub/Cloudflare provisioning | `npm run verify:provisioning` | Account-neutral workflow, setup, maintenance, and template checks |
-| Anonymous usage collector | `npm run verify:telemetry` | Collector configuration/runtime tests plus collector typecheck |
 
 For a changed browser interaction, use `npm run test:browser -- <test-file-or--grep>` during implementation and the unfiltered `npm run test:browser` after integration. The wrapper gives each worktree its own transform cache and deterministic three-port range and refuses to reuse an existing fixture server.
 

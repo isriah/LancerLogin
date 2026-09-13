@@ -4,7 +4,13 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./civil-time": "./src/civil-time.ts",
+    "./upload-proxy": "./src/upload-proxy.ts",
+    "./documentation-proxy": "./src/documentation-proxy.ts",
+    "./hours-proxy": "./src/hours-proxy.ts",
+    "./updater/application-release": "./src/updater/application-release.mjs",
+    "./updater/dashboard-archive": "./src/updater/dashboard-archive.mjs"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

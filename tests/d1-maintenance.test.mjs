@@ -7,7 +7,7 @@ test("D1 maintenance builds a token-neutral backup command", () => {
   const config = parseD1MaintenanceArgs(["backup", "--database", "sample-club-data", "--output", "backup.sql"]);
   assert.equal(config.operation, "backup");
   assert.deepEqual(wranglerD1Args(config).slice(0, 5), ["wrangler", "d1", "export", "sample-club-data", "--remote"]);
-  assert.doesNotMatch(wranglerD1Args(config).join(" "), /account/i);
+  assert.deepEqual(wranglerD1Args(config), ["wrangler", "d1", "export", "sample-club-data", "--remote", "--output", config.file]);
 });
 
 test("D1 restore requires an exact destructive confirmation", () => {

@@ -1,0 +1,26 @@
+import { api } from './dashboard-api';
+import { addCalendarDays, elapsedIntegerMinutes, instantToCivil, selectCivilTime, type CivilTimeOccurrence } from '@lancerlogin/shared/civil-time';
+import { boundedText, identity } from './hours-contract';
+export type Entry = { id:string; memberId:string; activityId:string; serviceDate:string; timeZone:string; startLocal:string; endLocal:string; endNextDay:boolean; startOccurrence:CivilTimeOccurrence|null; endOccurrence:CivilTimeOccurrence|null; startMs:number; endMs:number; startOffsetSeconds:number; endOffsetSeconds:number; durationMinutes:number; taskNotes:string; status:'counted'|'void'; channel:'staff'|'public'|'discord'; attribution:string; revision:number; createdAt:string; updatedAt:string };
+export type EntrySettings = { revision:number; reportingDays:number; reopenHours:number; timeZone:string; today:string };
+export type WindowRecord = {id:string;activityId:string|null;startsMs:number;expiresMs:number;revoked:boolean;active:boolean;revision:number;createdAt:string};
+export function revision(value:unknown):value is number { return Number.isSafeInteger(value) && Number(value)>=0; }
+export function settings(value:EntrySettings) { if (!value || !revision(value.revision) || !Number.isInteger(value.reportingDays) || value.reportingDays<1 || value.reportingDays>365 || !Number.isInteger(value.reopenHours) || value.reopenHours<1 || value.reopenHours>168) throw Error('Invalid settings'); instantToCivil(Date.now(),value.timeZone); addCalendarDays(value.today,0); return value; }
+export function entry(value:Entry) {
+  if (!value || ![value.id,value.memberId,value.activityId].every(identity) || !revision(value.revision) || !['counted','void'].includes(value.status) || !['staff','public','discord'].includes(value.channel) || !['staff_recorded','self_asserted','linked_discord'].includes(value.attribution) || !boundedText(value.taskNotes) || typeof value.endNextDay!=='boolean' || ![value.startOccurrence,value.endOccurrence].every(v=>v===null||v==='earlier'||v==='later')) throw Error('Invalid entry');
+  if(!boundedText(value.timeZone,100)||!value.timeZone||![value.startMs,value.endMs,value.startOffsetSeconds,value.endOffsetSeconds].every(Number.isSafeInteger)||![value.startMs,value.endMs].every(ms=>Number.isFinite(new Date(ms).getTime())))throw Error('Invalid saved timing');
+  // Recorded offsets are the authority for read-only history, independent of browser IANA updates.
+  const start=selectCivilTime({date:value.serviceDate,time:value.startLocal,timeZone:'UTC'}); const end=selectCivilTime({date:addCalendarDays(value.serviceDate,Number(value.endNextDay)),time:value.endLocal,timeZone:'UTC'});
+  if (start.epochMilliseconds!==value.startMs+value.startOffsetSeconds*1000 || end.epochMilliseconds!==value.endMs+value.endOffsetSeconds*1000 || elapsedIntegerMinutes(value.startMs,value.endMs)!==value.durationMinutes || !boundedText(value.createdAt,40) || !boundedText(value.updatedAt,40) || !Number.isFinite(Date.parse(value.createdAt)) || !Number.isFinite(Date.parse(value.updatedAt))) throw Error('Invalid accounting times'); return value;
+}
+export function windowRecord(value:WindowRecord) { if (!value || !identity(value.id) || (value.activityId!==null&&!identity(value.activityId)) || !revision(value.revision) || typeof value.revoked!=='boolean' || typeof value.active!=='boolean' || !Number.isSafeInteger(value.startsMs) || !Number.isSafeInteger(value.expiresMs) || value.expiresMs<=value.startsMs || value.expiresMs-value.startsMs>168*3600000 || ![value.startsMs,value.expiresMs].every(ms=>Number.isFinite(new Date(ms).getTime())) || (value.active&&value.revoked) || !Number.isFinite(Date.parse(value.createdAt))) throw Error('Invalid window'); return value; }
+export function submissionReceipt(raw:any,payload:Record<string,unknown>) {
+  if(!raw||![0,1,false,true].includes(raw.end_next_day))throw Error('Invalid receipt');
+  const original=entry({...Object.fromEntries(Object.entries(raw).map(([key,value])=>[key.replace(/_([a-z])/g,(_,c:string)=>c.toUpperCase()),value])),endNextDay:Boolean(raw.end_next_day),memberId:payload.memberId,status:'counted',channel:'staff',attribution:'staff_recorded',revision:0,updatedAt:raw.created_at} as Entry);
+  if(original.timeZone!==payload.expectedTimeZone||original.startLocal!==payload.startLocal||original.endLocal!==payload.endLocal||original.endNextDay!==payload.endNextDay||original.startOccurrence!==(payload.startOccurrence??null)||original.endOccurrence!==(payload.endOccurrence??null)||original.taskNotes!==(payload.taskNotes??'')||original.serviceDate!==payload.serviceDate||(payload.activityId&&original.activityId!==payload.activityId))throw Error('Receipt does not describe submitted hours');
+  return original;
+}
+export const durationLabel = (minutes:number) => `${minutes} minutes (${(minutes/60).toFixed(2)} hours)`;
+export const entryFailure = 'The result could not be confirmed. No change is retried automatically. Reload current records before another change. Check for overlap, future or invalid clocks, a changed organization time zone, stale revisions or changed access.';
+
+export function hourApi<T>(path:string,init?:RequestInit):Promise<T> { return api<T>(path,{signal:AbortSignal.timeout(15000),...init}); }

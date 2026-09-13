@@ -20,7 +20,6 @@ import { networkApp, networkStyles } from "../apps/kiosk/src/network-ui.mjs";
 import { maintenanceApp, maintenanceHtml, maintenanceLayoutStyles, maintenanceStyles } from "../apps/kiosk/src/maintenance-ui.mjs";
 import { recoveryApp } from "../apps/kiosk/src/recovery-ui.mjs";
 import { startVerifiedKioskUpdate } from "../apps/kiosk/src/update-command.mjs";
-import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 
 test("pairing code is hashed, single-use, and expires", () => {
@@ -87,10 +86,8 @@ test("kiosk update unit permits only a checksum-verified latest stable release",
     readFile("apps/kiosk/systemd/lancerlogin-update.service", "utf8"),
     readFile("apps/kiosk/polkit/49-lancerlogin-update.rules", "utf8"),
   ]);
-  assert.match(helper, /repos\/isriah\/LancerLogin\/releases\/latest/);
-  assert.match(helper, /release\.draft !== false/);
-  assert.match(helper, /release\.prerelease !== false/);
-  assert.match(helper, /accepts no arguments/);
+  assert.match(helper, /\/usr\/bin\/node \/opt\/lancerlogin\/src\/kiosk-release\.mjs/);
+  assert.match(helper, /Invalid compatible kiosk release/);
   assert.match(helper, /install-lancerlogin\.sh\.sha256/);
   assert.match(helper, /sha256sum --check install-lancerlogin\.sh\.sha256/);
   assert.doesNotMatch(helper, /\$1|VERSION:-|GITHUB_API=.*\$/);
@@ -317,7 +314,7 @@ test("continuous scanner records a mapped match without a meeting ID", async () 
   const displays = []; const queued = []; const led = [];
   const scanner = createScanner({
     scanSensor: async () => ({ status: "match", slot: 12, score: 80 }), setLed: async (state) => led.push(state), mappings: { memberForSlot: async () => "ROSTER-001" },
-    queue: { pending: async () => [...queued], enqueue: async (event) => { queued.push(event); return true; } }, loadPairing: async () => ({ kioskToken: "secret" }),
+    queue: { enqueue: async (event) => { queued.push(event); return true; } }, loadPairing: async () => ({ kioskToken: "secret" }),
     flushAttendance: async () => ({ acknowledgements: [{ eventId: "scan-1", action: "check_in", member: { displayName: "Avery Stone" }, meeting: { title: "Build" } }] }),
     onDisplay: async (state, values) => displays.push({ state, ...values }), onReader: () => undefined, onCloud: () => undefined,
     now: () => Date.parse("2026-09-01T20:00:00.000Z"), delay: async () => undefined, eventId: () => "scan-1",
@@ -350,7 +347,7 @@ test("scanner keeps offline saved, rejected, and unknown outcomes textually dist
     const displays = [];
     const scanner = createScanner({
       scanSensor, setLed: async () => undefined, mappings: { memberForSlot: async () => "ROSTER-001" },
-      queue: { pending: async () => [], enqueue: async () => true }, loadPairing: async () => ({ kioskToken: "secret" }), flushAttendance,
+      queue: { enqueue: async () => true }, loadPairing: async () => ({ kioskToken: "secret" }), flushAttendance,
       onDisplay: async (state, values) => displays.push({ state, ...values }), onReader: () => undefined, onCloud: () => undefined,
       now: () => Date.parse("2026-09-01T20:00:00.000Z"), delay: async () => undefined, eventId: () => "scan-1",
     });
@@ -358,102 +355,10 @@ test("scanner keeps offline saved, rejected, and unknown outcomes textually dist
     return displays;
   }
 
-  assert.deepEqual(await displaysFor(async () => ({ status: "match", slot: 12 }), async () => { throw new Error("offline"); }), [{ state: "processing" }, { state: "welcome", detail: "Saved for sync | Welcome" }]);
+  assert.deepEqual((await displaysFor(async () => ({ status: "match", slot: 12 }), async () => { throw new Error("offline"); })).map(({ state }) => state), ["processing", "offline"]);
   const rejected = await displaysFor(async () => ({ status: "match", slot: 12 }), async () => ({ acknowledgements: [{ eventId: "scan-1", rejected: true, error: "No eligible meeting" }] }));
   assert.deepEqual(rejected, [{ state: "processing" }, { state: "rejected", detail: "No eligible meeting" }]);
   assert.deepEqual(await displaysFor(async () => ({ status: "not_found" }), async () => ({ acknowledgements: [] })), [{ state: "unknown" }]);
-});
-
-let syntheticRuntimeId = 0;
-function queuedScanner(queue, flushAttendance = async () => { throw new Error("offline"); }) {
-  const runtimeId = ++syntheticRuntimeId;
-  let time = Date.parse("2026-09-01T20:00:00.000Z"); let sequence = 0; let observation;
-  const displays = []; const leds = []; const clouds = [];
-  const scanner = createScanner({
-    queue, flushAttendance, scanSensor: async () => observation,
-    mappings: { memberForSlot: async (slot) => ({ 12: "m1", 13: "m1", 14: "m2" })[slot] },
-    setLed: async (id) => leds.push(id), loadPairing: async () => ({ kioskId: "synthetic-kiosk" }),
-    onDisplay: async (state, values) => displays.push({ state, ...values }), onReader: () => undefined,
-    onCloud: (online) => clouds.push(online), now: () => time, delay: async () => undefined,
-    eventId: () => `synthetic-${runtimeId}-${time}-${++sequence}`,
-  });
-  return { displays, leds, clouds, async scan(slot, elapsed = 8_001) {
-    time += elapsed; observation = typeof slot === "number" ? { status: "match", slot } : { status: slot };
-    await scanner.tick(); return displays.at(-1);
-  } };
-}
-
-test("offline direction is independent per member and shared by mapped fingers; held and unknown scans do not advance it", async () => {
-  const events = [];
-  const queue = { pending: async () => [...events], enqueue: async (event) => { events.push(event); return true; } };
-  const runtime = queuedScanner(queue);
-  assert.deepEqual(await runtime.scan(12), { state: "welcome", detail: "Saved for sync | Welcome" });
-  const displayCount = runtime.displays.length;
-  await runtime.scan(12, 100);
-  assert.equal(runtime.displays.length, displayCount);
-  assert.equal(events.length, 1);
-  assert.equal((await runtime.scan("not_found")).state, "unknown");
-  assert.equal((await runtime.scan(99)).state, "unknown");
-  assert.equal((await runtime.scan("no_finger")).state, "unknown");
-  assert.deepEqual(await runtime.scan(14), { state: "welcome", detail: "Saved for sync | Welcome" });
-  assert.deepEqual(await runtime.scan(13), { state: "goodbye", detail: "Saved for sync | Goodbye" });
-  assert.deepEqual(await runtime.scan(12), { state: "welcome", detail: "Saved for sync | Welcome" });
-  assert.deepEqual(await runtime.scan(14), { state: "goodbye", detail: "Saved for sync | Goodbye" });
-  assert.deepEqual(runtime.leds.filter((id) => id === "welcome" || id === "goodbye"), ["welcome", "welcome", "goodbye", "welcome", "goodbye"]);
-  assert.deepEqual(runtime.clouds, [false, false, false, false, false]);
-  for (const event of events) assert.deepEqual(Object.keys(event).sort(), ["eventId", "memberId", "occurredAt"]);
-});
-
-test("offline estimates survive restart using durable events and conservatively recalculate after partial/background replay", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-offline-direction-")); const path = join(directory, "queue.json");
-  try {
-    const first = queuedScanner(createFileQueue(path));
-    await first.scan(12); await first.scan(14);
-    const queue = createFileQueue(path); const restarted = queuedScanner(queue);
-    assert.deepEqual(await restarted.scan(13), { state: "goodbye", detail: "Saved for sync | Goodbye" });
-    const beforeReplay = await queue.pending(); const sent = [];
-    await queue.flush(async (event) => { if (sent.length === 1) throw new Error("offline"); sent.push(event.eventId); });
-    assert.deepEqual(sent, [beforeReplay[0].eventId]);
-    assert.deepEqual(await restarted.scan(12), { state: "goodbye", detail: "Saved for sync | Goodbye" });
-    await queue.flush(async (event) => sent.push(event.eventId));
-    assert.equal(new Set(sent).size, sent.length);
-    assert.deepEqual(await createFileQueue(path).pending(), []);
-    assert.deepEqual(await restarted.scan(13), { state: "welcome", detail: "Saved for sync | Welcome" });
-    const persisted = JSON.parse(await readFile(path, "utf8"));
-    assert.equal(persisted.length, 1);
-    assert.deepEqual(Object.keys(persisted[0]).sort(), ["eventId", "memberId", "occurredAt"]);
-  } finally { await rm(directory, { recursive: true }); }
-});
-
-test("Worker acknowledgements override estimates; confirmed, duplicate and rejected events reset pending history", async () => {
-  for (const result of [{ action: "check_out" }, { action: "check_in" }, { duplicate: true }, { rejected: true, error: "No eligible meeting" }]) {
-    const events = []; let connected = true;
-    const queue = { pending: async () => [...events], enqueue: async (event) => { events.push(event); return true; } };
-    const runtime = queuedScanner(queue, async () => {
-      if (!connected) throw new Error("offline");
-      return { acknowledgements: events.splice(0).map((event) => ({ eventId: event.eventId, ...result, member: { displayName: "Synthetic Member" }, meeting: { title: "Synthetic Meeting" } })) };
-    });
-    const display = await runtime.scan(12);
-    assert.equal(display.state, result.rejected ? "rejected" : result.duplicate ? "duplicate" : result.action === "check_out" ? "goodbye" : "welcome");
-    assert.equal(display.detail?.includes("Saved for sync") ?? false, false);
-    assert.deepEqual(await queue.pending(), []);
-    assert.deepEqual(runtime.clouds, [true]);
-    connected = false;
-    assert.deepEqual(await runtime.scan(13), { state: "welcome", detail: "Saved for sync | Welcome" });
-  }
-});
-
-test("failed local save, queue read and duplicate enqueue never claim saved feedback or contact cloud", async () => {
-  for (const queue of [
-    { pending: async () => [], enqueue: async () => { throw new Error("disk full"); } },
-    { pending: async () => { throw new Error("queue unreadable"); }, enqueue: async () => true },
-    { pending: async () => [], enqueue: async () => false },
-  ]) {
-    const runtime = queuedScanner(queue, async () => assert.fail("An unsaved scan must not flush attendance"));
-    assert.deepEqual(await runtime.scan(12), { state: "rejected", detail: "This scan could not be saved. Ask an operator for help." });
-    assert.deepEqual(runtime.clouds, []);
-    assert.deepEqual(runtime.leds, ["processing", "rejected"]);
-  }
 });
 
 test("R503 enrollment creates and stores a template without returning biometric data", async () => {
@@ -535,31 +440,4 @@ test("kiosk footer shows the release version without masking reader failures", (
   assert.equal(kioskReaderStatus({ readerOnline: false, releaseVersion: "0.17.0" }), "Fingerprint reader offline");
   assert.match(kioskApp, /kioskReaderStatus\(value\)/);
   assert.doesNotMatch(kioskApp, /Fingerprint reader online/);
-});
-
-test("root helper executes strict release validation before any download", async () => {
-  const helper = await readFile("apps/kiosk/scripts/lancerlogin-install-release.sh", "utf8");
-  const validator = helper.split("/usr/bin/node -e '")[1].split("' \"$temporary/release.json\"")[0];
-  assert.ok(validator.includes("required.every"));
-  const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-release-validation-"));
-  const path = join(scratch, "release.json");
-  const release = tag => ({ tag_name: tag, draft: false, prerelease: false, assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap(arch => {
-    const archive = `lancerlogin-kiosk-${tag.slice(1)}-linux-${arch}.tar.gz`;
-    return [archive, `${archive}.sha256`];
-  })].map(name => ({ name })) });
-  try {
-    for (const tag of ["v0.24.0", "v1.0.0", "v12.3.45", "v01.0.0", "v1.00.0", "v1.0.00", "v1.0.0-beta", "v1.0.0+build", "v1.0.0\n", "v1.0.0/evil"]) {
-      await writeFile(path, JSON.stringify(release(tag)));
-      const result = spawnSync(process.execPath, ["-e", validator, path], { encoding: "utf8" });
-      const valid = ["v0.24.0", "v1.0.0", "v12.3.45"].includes(tag);
-      assert.equal(result.status, valid ? 0 : 2, tag);
-      assert.equal(result.stdout, valid ? tag.slice(1) : "");
-    }
-    const good = release("v1.0.0");
-    for (const payload of [{ ...good, draft: true }, { ...good, prerelease: true }, { ...good, draft: undefined }, { ...good, prerelease: "false" }, { ...good, assets: undefined }, ...good.assets.map(missing => ({ ...good, assets: good.assets.filter(asset => asset !== missing) }))]) {
-      await writeFile(path, JSON.stringify(payload));
-      assert.equal(spawnSync(process.execPath, ["-e", validator, path]).status, 2);
-    }
-    assert.equal((helper.match(/curl .*GITHUB_API/g) || []).length, 1);
-  } finally { await rm(scratch, { recursive: true, force: true }); }
 });

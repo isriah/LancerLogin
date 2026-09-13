@@ -1,0 +1,45 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync,readdirSync} from 'node:fs';
+import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import {migrationStatements} from './migration-statements.mjs';
+import worker from '../apps/api/src/index.ts';
+import {encryptIntegration} from '../apps/api/src/integration-crypto.ts';
+import {hashPassword} from '../apps/api/src/runtime-security.ts';
+import {createSessionCodec} from '../apps/api/src/runtime-security.ts';
+import {storageRoute} from '../apps/api/src/google-drive-storage.ts';
+import {googleHash} from '../apps/api/src/google-connection.ts';
+const key='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+test('durable Drive root consumes verified selection, fences races and restores as inventory only',{timeout:180000},async()=>{
+ const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:'export default {fetch(){return new Response("fixture")}}',compatibilityDate:'2026-08-01',d1Databases:['DB']})),original=globalThis.fetch;
+ try{
+ const db=await mf.getD1Database('DB'),directory=new URL('../apps/api/migrations/',import.meta.url);for(const name of readdirSync(directory).filter(x=>x.endsWith('.sql')).sort())await db.batch(migrationStatements(readFileSync(new URL(name,directory),'utf8')).map(s=>db.prepare(s)));
+ await db.batch([db.prepare("INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-01-01','local')"),db.prepare("INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','synthetic-admin','admin','2026-01-01'),('staff','primary','synthetic-staff','staff','2026-01-01')")]);
+ await db.prepare("INSERT INTO hours_entry_settings(installation_id) VALUES('primary')").run();
+ await db.prepare("UPDATE users SET password_hash=? WHERE id='admin'").bind(await hashPassword('synthetic recovery password')).run();
+ const active={loginEnabled:false,calendarEnabled:false,loginProof:false,calendarProof:false,legacyFingerprint:JSON.stringify([null,null,'fixture']),clientId:'synthetic-client',clientSecret:'synthetic-secret',generation:'synthetic-generation',driveEnabled:true,organizationProof:true,grant:{proofId:'synthetic-proof',subject:'synthetic-subject',refreshToken:'synthetic-refresh',scopes:['https://www.googleapis.com/auth/drive.file']}};
+ const encrypted=await encryptIntegration({installation:'primary',slot:'active',payload:JSON.stringify(active)},key);
+ await db.prepare("INSERT INTO google_connections(installation_id,shared_mode,revision,active_ciphertext,active_iv,updated_at,grant_proof_id) VALUES('primary',1,1,?,?,'2026-01-01','synthetic-proof')").bind(encrypted.ciphertext,encrypted.iv).run();
+ const env={DB:db,SESSION_KEY:key,INTEGRATION_KEY:key,ALLOWED_ORIGIN:'https://fixture.test',APP_MODE:'configured'},session=await createSessionCodec(key).issue({userId:'admin',role:'admin'}),sessionHash=await googleHash(session),base='/admin/connections/google/storage';
+ const call=async(path=base,input,method=input?'PUT':'GET',user='admin')=>worker.fetch(new Request('https://fixture.test'+path,{method,headers:{cookie:'lancerlogin_session='+(user==='admin'?session:await createSessionCodec(key).issue({userId:user,role:'admin'})),...(input?{'content-type':'application/json'}:{})},...(input?{body:JSON.stringify(input)}:{})}),env);
+ const good=async(...args)=>{const r=await call(...args);assert.ok(r.ok,await r.clone().text());return r.json();};
+ const select=async(extra={})=>{const id=crypto.randomUUID(),sealed=await encryptIntegration({installation:'primary',purpose:'drive-picker',fileId:'synthetic-root'},key);await db.prepare("INSERT INTO google_picker_intents VALUES('primary',?,?,?,?,?,1,'root',?,?,?,?)").bind(id,'synthetic-state-'+id,'admin',extra.sessionHash??sessionHash,'synthetic-generation',extra.status??'selected',extra.expiry??Date.now()+600000,sealed.ciphertext,sealed.iv).run();return id;};
+ let problem='',reads=0;globalThis.fetch=async(url,init)=>{reads++;if(String(url).includes('oauth2.googleapis.com/token')){assert.equal(new URLSearchParams(init.body).get('grant_type'),'refresh_token');return Response.json({access_token:'synthetic-org-token'});}assert.equal(init.method??'GET','GET');assert.equal(init.redirect,'manual');assert.equal(init.headers.authorization,'Bearer synthetic-org-token');if(String(url).includes('/permissions')){if(problem==='rotation')await db.prepare('UPDATE google_connections SET active_iv=?').bind('AAAAAAAAAAAAAAAA').run();if(problem==='revision')await db.prepare('UPDATE google_connections SET revision=2').run();if(problem==='grant')await db.prepare("UPDATE google_connections SET grant_error='revoked'").run();if(problem==='admin')await db.prepare("UPDATE users SET role='staff' WHERE id='admin'").run();return Response.json({permissions:problem==='empty'?[]:problem==='shared'?[{type:'anyone',role:'reader'}]:[{type:'user',role:'owner'}],...(problem==='pages'?{nextPageToken:'more'}:{})});}assert.match(String(url),/\/drive\/v3\/files\/synthetic-root\?/);return Response.json({id:'synthetic-root',name:'Synthetic private root',mimeType:'application/vnd.google-apps.folder',trashed:false,ownedByMe:problem!=='foreign',capabilities:{canAddChildren:true}});};
+ assert.equal((await call(base,undefined,'GET','staff')).status,403);
+ for(const extra of [{status:'claimed'},{sessionHash:'foreign'},{expiry:Date.now()-1}]){const id=await select(extra),before=reads;assert.equal((await call(base,{revision:0,connectionRevision:1,pickerIntentId:id})).status,409);assert.equal(reads,before);}
+ for(const value of ['empty','shared','pages','foreign','rotation','revision','grant','admin']){problem=value;const id=await select();assert.ok([403,409].includes((await call(base,{revision:0,connectionRevision:1,pickerIntentId:id})).status));assert.equal((await db.prepare('SELECT COUNT(*) n FROM google_drive_storage').first()).n,0);await db.prepare("UPDATE users SET role='admin' WHERE id='admin'").run();await db.prepare('UPDATE google_connections SET revision=1,active_iv=?,grant_error=NULL').bind(encrypted.iv).run();}
+ problem='';const selected=await select(),saved=await good(base,{revision:0,connectionRevision:1,pickerIntentId:selected});assert.equal(saved.revision,1);assert.equal((await db.prepare('SELECT COUNT(*) n FROM google_picker_intents WHERE id=?').bind(selected).first()).n,0);assert.equal((await good()).verifiedForConnection,true);
+ for(const change of ['admin','storage','connection']){
+  const racedDb={prepare(sql){const statement=db.prepare(sql);if(!sql.startsWith('SELECT s.*,CASE'))return statement;return {bind(...args){return {async first(){if(change==='admin')await db.prepare("UPDATE users SET role='staff' WHERE id='admin'").run();if(change==='storage')await db.prepare("UPDATE google_drive_storage SET root_id='changed-root',root_name='Changed root',revision=2,verified_iv=NULL,verified_at=NULL").run();if(change==='connection')await db.prepare("UPDATE google_connections SET active_iv='AAAAAAAAAAAAAAAA'").run();return statement.bind(...args).first();}};}};},batch:items=>db.batch(items)};
+  const read=()=>storageRoute({...env,DB:racedDb},new Request('https://fixture.test'+base),{userId:'admin',expiresAt:Date.now()+60000});
+  if(change==='admin')await assert.rejects(read,e=>e.status===403);else{const result=await read();assert.equal(result.verifiedForConnection,false);if(change==='storage')assert.equal(result.rootId,'changed-root');}
+  await db.prepare("UPDATE users SET role='admin' WHERE id='admin'").run();await db.prepare('UPDATE google_connections SET active_iv=?').bind(encrypted.iv).run();await db.prepare("UPDATE google_drive_storage SET root_id='synthetic-root',root_name='Synthetic private root',revision=1,verified_iv=?,verified_at=?").bind(encrypted.iv,saved.verifiedAt).run();
+ }
+ const before=reads;assert.equal((await call(base,{revision:1,connectionRevision:1,pickerIntentId:selected})).status,409);assert.equal(reads,before);
+ const backup=await good('/admin/data/backup?scope=installation');assert.equal(backup.schemaVersion,28);assert.equal(backup.tables.google_drive_storage[0].root_id,'synthetic-root');
+ const bad=structuredClone(backup);bad.tables.google_drive_storage[0].installation_id='foreign';assert.equal((await call('/admin/data/restore',{scope:'installation',confirmation:'RESTORE INSTALLATION',backup:bad},'POST')).status,400);
+ const meetings=await good('/admin/data/backup?scope=meetings');await good('/admin/data/restore',{scope:'meetings',confirmation:'RESTORE MEETINGS',backup:meetings},'POST');assert.equal((await good()).verifiedForConnection,true);
+ await good('/admin/data/restore',{scope:'installation',confirmation:'RESTORE INSTALLATION',backup},'POST');const restored=await good();assert.equal(restored.rootId,'synthetic-root');assert.equal(restored.verifiedAt,null);assert.equal(restored.verifiedForConnection,false);assert.equal((await db.prepare('SELECT COUNT(*) n FROM google_picker_intents').first()).n,0);
+ assert.deepEqual((await db.prepare('PRAGMA foreign_key_check').all()).results,[]);
+ }finally{globalThis.fetch=original;await mf.dispose();}
+});

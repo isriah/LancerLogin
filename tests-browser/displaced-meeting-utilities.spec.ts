@@ -76,8 +76,11 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
     body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: false } } }),
   }));
   await page.goto("/kiosks");
-  await expect(page.getByRole("region", { name: "Discord kiosk status" })).toHaveCount(0);
+  const unavailableDiscordStatus = page.getByRole("region", { name: "Discord kiosk status" });
+  await expect(unavailableDiscordStatus).toBeVisible();
+  await expect(unavailableDiscordStatus.getByText("Unavailable until the Discord integration is enabled, saved, and verified.", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Sync Discord status" })).toHaveCount(0);
+  expect(syncRequests).toBe(2);
 
   await page.route("**/integrations/capabilities", (route) => route.fulfill({
     status: 200,

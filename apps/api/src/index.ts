@@ -1,16 +1,48 @@
-import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
+import { documentationAvailable } from '../../../packages/shared/src/release-capabilities.ts';
+import { runApplication, type MaintenanceEnv } from './maintenance.ts';
+import { providerFetch } from './maintenance.ts';
+import { updaterRoute, updaterConfigured, type UpdaterBinding } from './updater.ts';
+import {isDocumentationFileDiscord,documentationFileDiscordInteraction} from './documentation-discord-file.ts';
+import {driveCopyRoute,driveCopyColumns,prepareDriveCopyRestore} from './documentation-drive-intake.ts';
+import {uploadRoute,uploadColumns,prepareUploadRestore} from './documentation-upload.ts';
+import {isDocumentationDiscord,documentationDiscordInteraction} from './documentation-discord.ts';
+import {publicDocumentation} from './public-documentation.ts';
+import {claimColumns,claimRoute,validateClaimBackup} from './documentation-claims.ts';
+import {documentComputeProof,type DocumentComputeBinding} from './document-compute-proof.ts';
+import {artifactPreservedColumns,artifactColumns,artifactRoute,validateArtifactBackup} from './documentation-artifacts.ts';
+import {storageColumns,storageRoute,prepareStorageRestore} from './google-drive-storage.ts';
+import {metricColumns,metricRoute,validateMetricBackup} from './documentation-metrics.ts';
+import {initiativeColumns,initiativeRoute,validateInitiativeBackup} from './documentation-initiatives.ts';
+import {documentationColumns,documentationRoute,validateDocumentationBackup} from './documentation-foundation.ts';
+import {attachmentDevelopmentOrigin,isAttachmentProof,attachmentInteraction,attachmentAdmin} from './discord-attachment-feasibility.ts';
+import {isDailyD1ReadQuota} from './database-unavailable.ts';
+import { publicHours } from './public-hours.ts';
+import {publicationColumns,isPublicationPath,hoursPublicationRoute,processHoursPublication,publicationModuleEnabled,preparePublicationRestore} from './hours-publication.ts';
+import { reviewColumns, hourReviewRoute, isHourReviewPath, validateReviewBackup } from './hour-review-reports.ts';
+import { accountingColumns, accountingRoute, isAccountingPath, validateAccountingBackup } from './hour-accounting.ts';
+import { hoursCatalogRoute, hoursColumns, seedHours, validateHoursBackup } from "./hours-catalogs.ts";
+import { HttpError } from "./http-error.ts";
+import { DiscordPermissionError, DiscordRateLimitError, DiscordResponseError, discordConfiguration, discordInteractionConfiguration, discordRequest, reconcileDiscordApplicationCommands, verifyDiscordInteraction, readDiscordBody, discordReadDeadline } from "./discord-platform.ts";
+import { isHourDiscord, hourDiscordInteraction } from './hour-discord.ts';
+import { GoogleConnectionError, validateGoogleIdentity, readGoogleBody, prepareGoogleConnectionRestore, googleScopes, invalidateGoogleSession, sharedGoogleManaged, rememberGoogleLogin, consumeGoogleLogin, activeGoogleConnection, googleConnectionRoute, googleConnectionCallback, googleCapability, validateGoogleConnectionBackup } from './google-connection.ts';
+import { clearPickerSession, isPickerCallback, drivePickerCallback, drivePickerRoute } from './google-drive-picker.ts';
+import { SchedulerBudget, schedulerBudgetKey } from "./scheduler-budget.ts";
+import { schedulerClass, type SchedulerNamespace } from "./platform-scheduler.ts";
+import { ModuleError, moduleSnapshot, configureModules, setModuleGrants, getModuleGrants, validateModuleBackup } from "./platform-modules.ts";
+import { createSessionCodec } from "./runtime-security.ts";
+import { hashApiPassword, verifyApiPassword, type PasswordNamespace } from "./password-computation.ts";
+export { PasswordComputation } from "./password-computation.ts";
 import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
-import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance } from "./web-updates.ts";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 
 type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
 interface D1Database { prepare(query: string): D1Statement; batch(statements: D1Statement[]): Promise<D1Result[]>; }
-export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DB?: D1Database; }
+export interface Env extends MaintenanceEnv { UPDATER?: UpdaterBinding; UPDATER_APP_KEY?: string; UPDATER_INSTALLATION_ID?: string; APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; DOCUMENT_COMPUTE?:DocumentComputeBinding; DOCUMENT_COMPUTE_PROOF_MODE?:string; SESSION_KEY?: string; PASSWORD_COMPUTATION_MODE?: string; PASSWORD_COMPUTATION?: PasswordNamespace; INTEGRATION_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; RELEASE_VERSION?: string; DB?: D1Database; PLATFORM_SCHEDULER_MODE?: string; PLATFORM_SCHEDULER?: SchedulerNamespace; [schedulerBudgetKey]?: SchedulerBudget; }
 type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
 type ScheduledController = { cron?: string };
 
-type Role = "admin" | "operator";
+type Role = "admin" | "operator" | "staff";
 type Principal = { userId: string; role: Role; expiresAt: number };
 type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "confirm-attendance";
@@ -26,34 +58,40 @@ type MeetingWeightCategory = { id: string; name: string; weight: number; minimum
 type MeetingWeightCategoryInput = { name?: string; weight?: number; minimumDurationMinutes?: number | null; active?: boolean };
 type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
 const latestKioskReleaseUrl = "https://api.github.com/repos/isriah/LancerLogin/releases/latest";
-const compatibleKioskRelease = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?![\s\S])/;
-type GitHubRelease = { tag_name?: unknown; draft?: unknown; prerelease?: unknown; assets?: unknown };
+const kioskReleasesUrl = "https://api.github.com/repos/isriah/LancerLogin/releases?per_page=20";
+const compatibleKioskRelease = /^v0\.\d+\.\d+$/;
 function compatibleReleaseTag(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const release = value as GitHubRelease;
-  if (release.draft !== false || release.prerelease !== false || typeof release.tag_name !== "string") return undefined;
-  if (!compatibleKioskRelease.test(release.tag_name) || !Array.isArray(release.assets)) return undefined;
-  const names = new Set(release.assets.map((asset) => asset?.name));
-  const version = release.tag_name.slice(1);
-  const required = ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => {
-    const archive = `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`;
-    return [archive, `${archive}.sha256`];
-  })];
-  return required.every((name) => names.has(name)) ? release.tag_name : undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Malformed release");
+  const release = value as { tag_name?: unknown; draft?: unknown; prerelease?: unknown };
+  if (typeof release.tag_name !== "string" || !release.tag_name || release.tag_name.length > 128
+    || release.draft !== undefined && typeof release.draft !== "boolean"
+    || release.prerelease !== undefined && typeof release.prerelease !== "boolean") throw new Error("Malformed release");
+  if (release.draft === true || release.prerelease === true) return undefined;
+  return compatibleKioskRelease.test(release.tag_name) ? release.tag_name : undefined;
 }
-async function latestCompatibleKioskRelease(): Promise<string> {
-  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 4_000);
+async function latestCompatibleKioskRelease(env?: Env): Promise<string> {
+  const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => { reject(new Error("Release lookup timed out")); controller.abort(); }, 4_000); });
   try {
-    // GitHub rejects API requests without a valid application User-Agent.
-    const request = { headers: { accept: "application/vnd.github+json", "user-agent": "LancerLogin" }, signal: controller.signal };
-    const latest = await fetch(latestKioskReleaseUrl, request);
-    if (!latest.ok) throw new Error("Latest release feed unavailable");
-    const latestTag = compatibleReleaseTag(await latest.json().catch(() => undefined));
-    if (latestTag) return latestTag;
-
-    // Match the no-argument root helper: one latest resolution, no fallback
-    // to a different release and no dashboard-supplied tag or response URL.
-    throw new Error("No compatible release");
+    return await Promise.race([(async () => {
+      // Both fixed official endpoints share one deadline. No response URLs,
+      // redirects, caller-supplied tags or development updater sources are used.
+      const request: RequestInit = { headers: { accept: "application/vnd.github+json", "user-agent": "LancerLogin" }, signal: controller.signal, redirect: "manual" };
+      const latest = await providerFetch(env)(latestKioskReleaseUrl, request);
+      if (!latest.ok) throw new Error("Latest release feed unavailable");
+      const latestTag = compatibleReleaseTag(await latest.json());
+      controller.signal.throwIfAborted();
+      if (latestTag) return latestTag;
+      // Only a valid but incompatible latest release permits the bounded fallback.
+      const releases = await providerFetch(env)(kioskReleasesUrl, request);
+      if (!releases.ok) throw new Error("Release feed unavailable");
+      const payload: unknown = await releases.json();
+      controller.signal.throwIfAborted();
+      if (!Array.isArray(payload) || payload.length > 20) throw new Error("Malformed release feed");
+      const tag = payload.map(compatibleReleaseTag).find((candidate): candidate is string => Boolean(candidate));
+      if (!tag) throw new Error("No compatible release");
+      return tag;
+    })(), deadline]);
   } catch {
     throw new HttpError(503, "No compatible official kiosk release is currently available. Try again after checking the release feed.");
   } finally { clearTimeout(timer); }
@@ -65,8 +103,6 @@ const validTimeZone = (value: string) => { try { new Intl.DateTimeFormat("en-US"
 const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const validColor = (value: string) => /^#[0-9a-f]{6}$/i.test(value);
 const validLogoData = (value: string) => value.length <= 180_000 && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value);
-let dummyPasswordHash: Promise<string> | undefined;
-const timingEqualizerHash = () => dummyPasswordHash ??= hashPassword("LancerLogin timing equalizer", new Uint8Array(16));
 
 function response(body: unknown, status = 200, extraHeaders?: HeadersInit): Response {
   const headers = new Headers(baseHeaders);
@@ -78,23 +114,6 @@ function withCors(result: Response, request: Request, env: Env): Response {
   const origin = request.headers.get("origin");
   if (origin && origin === env.ALLOWED_ORIGIN) { headers.set("access-control-allow-origin", origin); headers.set("access-control-allow-credentials", "true"); headers.set("vary", "origin"); }
   return new Response(result.body, { status: result.status, headers });
-}
-class HttpError extends Error {
-  readonly status: number;
-  readonly details?: string[];
-  constructor(status: number, message: string, details?: string[]) { super(message); this.status = status; this.details = details; }
-}
-class DiscordPermissionError extends HttpError {
-  constructor(kind: "calendar" | "pin" | "commands" | "channel" = "channel") { super(502, kind === "calendar" ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." : kind === "pin" ? "Discord denied this request because the bot is missing Pin Messages permission in the configured attendance channel." : kind === "commands" ? "Discord denied command management. Confirm the saved application ID belongs to this bot and install the bot in the selected server before trying command setup again." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
-}
-class DiscordRateLimitError extends HttpError {
-  readonly retryAfterMs: number;
-  constructor(retryAfterMs: number, operation = "calendar sync") { super(503, `Discord is rate limiting ${operation}. Wait ${Math.ceil(retryAfterMs / 1000)} seconds before trying again.`); this.retryAfterMs = retryAfterMs; }
-}
-class DiscordResponseError extends HttpError {
-  readonly discordStatus: number;
-  readonly discordCode?: number;
-  constructor(status: number, message: string, code?: number) { super(502, `Discord rejected the request (${status})${message ? `: ${message}` : ""}`); this.discordStatus = status; this.discordCode = code; }
 }
 class GoogleCalendarProviderError extends Error {
   readonly providerStatus: number;
@@ -117,7 +136,7 @@ async function principalFor(request: Request, env: Env): Promise<Principal> {
   const principal = token ? await createSessionCodec(env.SESSION_KEY).verify(token) : undefined;
   if (!principal) throw new HttpError(401, "Sign in required");
   const current = await requireDatabase(env).prepare("SELECT id, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; role: Role }>();
-  if (!current) throw new HttpError(401, "Session user is unavailable");
+  if (!current || !["admin", "operator", "staff"].includes(current.role)) throw new HttpError(401, "Session user is unavailable");
   return { ...principal, role: current.role };
 }
 async function requireRole(request: Request, env: Env, roles: Role[]): Promise<Principal> {
@@ -173,7 +192,7 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   if (errors.length) throw new HttpError(400, "Invalid setup", errors);
   if ((input.authMode === "google" || input.authMode === "both") && !env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const now = new Date().toISOString(); const adminId = crypto.randomUUID(); const mode = input.authMode!;
-  const passwordHash = mode === "local" || mode === "both" ? await hashPassword(input.localPassword!) : null;
+  const passwordHash = mode === "local" || mode === "both" ? await hashApiPassword(env, input.localPassword!, "first-admin") : null;
   const telemetryAcceptedAt = null; // Historical columns remain inert for backup compatibility.
   const statements = [
     db.prepare("INSERT INTO installations (id, created_at, auth_mode, telemetry_accepted_at, telemetry_install_id, google_enabled) VALUES (?, ?, ?, ?, ?, ?)").bind("primary", now, mode, telemetryAcceptedAt, null, mode === "google" || mode === "both" ? 1 : 0),
@@ -181,6 +200,7 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, 'admin', ?)").bind(adminId, "primary", input.adminEmail?.toLowerCase() ?? null, input.localUsername?.trim().toLowerCase() ?? null, passwordHash, now),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), "primary", adminId, "installation.created", "installation", "primary", now),
   ];
+  statements.push(...seedHours(db, "primary", now), db.prepare("INSERT INTO hours_entry_settings(installation_id) VALUES (?)").bind("primary"));
   if (mode === "google" || mode === "both") {
     const encrypted = await encryptIntegration({ clientId: input.googleClientId!.trim(), clientSecret: input.googleClientSecret!.trim() }, env.INTEGRATION_KEY!);
     statements.push(
@@ -193,27 +213,22 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
 }
 async function updateInfo(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
-  if (!env.UPDATE_WORKFLOW_URL) throw new HttpError(503, "The private deployment workflow is not configured");
-  return response({ releaseVersion: env.RELEASE_VERSION ?? "development", workflowUrl: env.UPDATE_WORKFLOW_URL });
-}
-async function webUpdates(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]);
-  if (request.method === "GET") return response(await webUpdateStatus(env));
-  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Web updates require the dashboard origin");
-  const input = await parseJson<Record<string, unknown>>(request, 2_048);
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "Invalid web update request");
-  if (new URL(request.url).pathname.endsWith("/prepare")) {
-    if (Object.keys(input).length) throw new HttpError(400, "Prepare accepts no release or deployment parameters");
-    return response(await prepareWebUpdate(env, principal.userId));
-  }
-  return response(await startWebUpdate(env, input, principal.userId), 202);
+
+  return response({ releaseVersion: env.RELEASE_VERSION ?? "development", updaterConfigured: updaterConfigured(env) });
 }
 async function localLogin(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); if (!env.SESSION_KEY) throw new HttpError(503, "Local authentication is not configured");
   const input = await parseJson<{ username?: string; password?: string }>(request);
   if (!input.username || !input.password) throw new HttpError(400, "Username and password are required");
-  const user = await db.prepare("SELECT id, role, password_hash AS passwordHash, failed_login_count AS failedLoginCount, locked_until AS lockedUntil FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; passwordHash: string | null; failedLoginCount: number; lockedUntil?: string }>();
-  const passwordValid = await verifyPassword(input.password, user?.passwordHash ?? await timingEqualizerHash());
+  let user = await db.prepare("SELECT id, role, password_hash AS passwordHash, failed_login_count AS failedLoginCount, locked_until AS lockedUntil FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; passwordHash: string | null; failedLoginCount: number; lockedUntil?: string }>();
+  const passwordValid = await verifyApiPassword(env, input.password, user?.passwordHash ?? null);
+  if (env.PASSWORD_COMPUTATION_MODE === "durable" && user) {
+    // The bounded queue adds an asynchronous authority boundary. Never issue a
+    // session or clear/increment counters against a replaced credential/account.
+    const current = await db.prepare("SELECT id, role, password_hash AS passwordHash, failed_login_count AS failedLoginCount, locked_until AS lockedUntil FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(user.id).first<typeof user>();
+    if (!current || current.passwordHash !== user.passwordHash || current.role !== user.role) throw new HttpError(401, "Invalid username or password");
+    user = current;
+  }
   const locked = Boolean(user?.lockedUntil && Date.parse(user.lockedUntil) > Date.now());
   if (!user?.passwordHash || !passwordValid || locked) {
     if (user && !locked) { const failures = Number(user.failedLoginCount ?? 0) + 1; const lockedUntil = failures >= 5 ? new Date(Date.now() + 15 * 60_000).toISOString() : null; await db.prepare("UPDATE users SET failed_login_count = ?, locked_until = ? WHERE installation_id = 'primary' AND id = ?").bind(failures, lockedUntil, user.id).run(); }
@@ -349,10 +364,10 @@ async function manageMember(request: Request, env: Env, memberId: string): Promi
   if (request.method === "DELETE") {
     const input = await parseJson<{ confirmation?: string }>(request);
     if (input.confirmation !== `DELETE MEMBER ${member.memberId}`) throw new HttpError(400, `Type DELETE MEMBER ${member.memberId} exactly to continue`);
-    const references = await db.prepare("SELECT (SELECT COUNT(*) FROM attendance_events WHERE member_id = ?) + (SELECT COUNT(*) FROM attendance_corrections WHERE member_id = ?) AS count").bind(member.id, member.id).first<{ count: number }>();
-    if (references?.count) throw new HttpError(409, "This member has attendance history. Deactivate them instead to preserve the record.");
-    await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id = ?").bind(member.id), db.prepare("DELETE FROM members WHERE installation_id = 'primary' AND id = ?").bind(member.id)]);
-    await writeAudit(db, principal, "roster.member_deleted", "member", member.id, { memberId: member.memberId }); return response({ deleted: true, memberId: member.id });
+    const references = await db.prepare("SELECT (SELECT COUNT(*) FROM attendance_events WHERE member_id = ?) + (SELECT COUNT(*) FROM attendance_corrections WHERE member_id = ?) + (SELECT COUNT(*) FROM hours_entries WHERE installation_id='primary' AND member_id=?) + (SELECT COUNT(*) FROM hours_entry_revisions WHERE installation_id='primary' AND member_id=?) + (SELECT COUNT(*) FROM hours_correction_requests WHERE installation_id='primary' AND requester_member_id=?) + (SELECT COUNT(*) FROM documentation_notes WHERE installation_id='primary' AND author_member_id=?) AS count").bind(member.id, member.id, member.id, member.id, member.id, member.id).first<{ count: number }>();
+    if (references?.count) throw new HttpError(409, "This member has recorded history. Deactivate them instead to preserve the record.");
+    try { await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id = ?").bind(member.id), db.prepare("DELETE FROM members WHERE installation_id = 'primary' AND id = ?").bind(member.id), db.prepare("INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,created_at) VALUES (?,'primary',?,'roster.member_deleted','member',?,?)").bind(crypto.randomUUID(),principal.userId,member.id,new Date().toISOString())]); } catch(error) { if (/FOREIGN KEY/.test(String(error))) throw new HttpError(409,"This member acquired recorded history. Deactivate them instead."); throw error; }
+    return response({ deleted: true, memberId: member.id });
   }
   const input = await parseJson<{ firstName?: string; lastName?: string; email?: string | null; active?: boolean; attendanceRequiredFrom?: string | null }>(request);
   if (input.firstName !== undefined && (!input.firstName.trim() || input.firstName.length > 100)) throw new HttpError(400, "First name must be 1 to 100 characters");
@@ -476,7 +491,7 @@ async function queueKioskCommand(request: Request, env: Env, kioskId: string): P
   const kiosk = await db.prepare("SELECT id, name, release_version AS releaseVersion FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string; releaseVersion?: string }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
   let requestedReleaseVersion: string | null = null;
-  if (input.command === "install_latest") requestedReleaseVersion = await latestCompatibleKioskRelease();
+  if (input.command === "install_latest") requestedReleaseVersion = await latestCompatibleKioskRelease(env);
   const id = crypto.randomUUID(); const now = new Date().toISOString();
   await db.batch([
     db.prepare("INSERT INTO kiosk_commands (id, installation_id, kiosk_id, command_type, created_by, created_at, requested_release_version, release_version_before) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, kioskId, input.command, principal.userId, now, requestedReleaseVersion, input.command === "install_latest" ? kiosk.releaseVersion ?? null : null),
@@ -803,8 +818,9 @@ async function requireIntegrationConfigured(env: Env, provider: IntegrationProvi
   const record = await integrationRecord(env, provider);
   if (!record?.enabled || !record.verifiedAt) throw new HttpError(409, `${provider === "google" ? "Google OAuth" : provider === "resend" ? "Resend" : "Discord"} must be enabled and verified`);
 }
-type GoogleCalendarAuthorizationRecord = { ciphertext?: string | null; iv?: string | null; keyVersion?: number; authorizedAt?: string | null; verifiedAt?: string | null; updatedAt?: string | null; enabled?: number };
+type GoogleCalendarAuthorizationRecord = { ciphertext?: string | null; iv?: string | null; keyVersion?: number; authorizedAt?: string | null; verifiedAt?: string | null; updatedAt?: string | null; enabled?: number; calendarLabel?: string };
 async function googleCalendarAuthorizationRecord(env: Env): Promise<GoogleCalendarAuthorizationRecord | null> {
+  const shared=await activeGoogleConnection(env); if(shared) return { enabled:shared.calendarEnabled?1:0, ciphertext:"shared", iv:"shared", authorizedAt:shared.authorizedAt??null, verifiedAt:shared.grantError!=="revoked"&&shared.calendarProof&&googleScopes.calendar.every(scope=>shared.grant?.scopes.includes(scope))?shared.calendarVerifiedAt:null, updatedAt:shared.authorizedAt, calendarLabel:shared.calendarLabel };
   return requireDatabase(env).prepare("SELECT a.ciphertext, a.iv, a.key_version AS keyVersion, a.authorized_at AS authorizedAt, a.verified_at AS verifiedAt, a.updated_at AS updatedAt, x.google_calendar_enabled AS enabled FROM installations x LEFT JOIN google_calendar_authorizations a ON a.installation_id = x.id WHERE x.id = 'primary'").first<GoogleCalendarAuthorizationRecord>();
 }
 async function googleCalendarIntegrationStatus(env: Env) {
@@ -812,8 +828,8 @@ async function googleCalendarIntegrationStatus(env: Env) {
     googleCalendarAuthorizationRecord(env),
     db.prepare("SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, MAX(CASE WHEN status = 'failed' THEN last_error ELSE NULL END) AS lastError FROM google_calendar_operations WHERE installation_id = 'primary'").first<{ pending?: number; failed?: number; lastError?: string | null }>(),
   ]);
-  let calendarName: string | undefined;
-  if (record?.ciphertext && record.iv && env.INTEGRATION_KEY) try { calendarName = (await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY) as GoogleCalendarSecret).calendarLabel; } catch { /* Status must not expose or depend on secret values. */ }
+  let calendarName: string | undefined = record?.calendarLabel;
+  if (!calendarName && record?.ciphertext && record.iv && env.INTEGRATION_KEY) try { calendarName = (await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY) as GoogleCalendarSecret).calendarLabel; } catch { /* Status must not expose or depend on secret values. */ }
   const enabled = Boolean(record?.enabled); const saved = Boolean(record?.ciphertext); const configured = enabled && Boolean(record?.verifiedAt);
   return { provider: "google_calendar" as const, enabled, saved, authorized: Boolean(record?.authorizedAt), configured, state: !enabled ? "disabled" as const : !saved ? "not_configured" as const : configured ? "configured" as const : "verification_required" as const, updatedAt: record?.updatedAt ?? undefined, verifiedAt: record?.verifiedAt ?? undefined, calendarName, pendingOperations: Number(queue?.pending ?? 0), failedOperations: Number(queue?.failed ?? 0), lastError: queue?.lastError ?? undefined };
 }
@@ -825,6 +841,7 @@ async function integrationsStatus(request: Request, env: Env): Promise<Response>
   await requireRole(request, env, ["admin"]);
   const [result, flags, calendar, discordCalendar] = await Promise.all([requireDatabase(env).prepare("SELECT i.provider, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, EXISTS(SELECT 1 FROM integration_verification_challenges c WHERE c.installation_id = i.installation_id AND c.provider = i.provider AND c.expires_at > ?) AS verificationPending FROM encrypted_integrations i WHERE i.installation_id = 'primary' ORDER BY i.provider").bind(new Date().toISOString()).all<{ provider: IntegrationProvider; updatedAt: string; verifiedAt?: string | null; verificationPending: number }>(), integrationFlags(env), googleCalendarIntegrationStatus(env), discordCalendarQueueStatus(env)]);
   const saved = new Map((result.results ?? []).map((item) => [item.provider, item]));
+  const shared=await activeGoogleConnection(env);if(shared) saved.set("google",{provider:"google",updatedAt:shared.authorizedAt??"",verifiedAt:shared.loginProof?shared.loginVerifiedAt:null,verificationPending:0});
   return response({ integrations: [...[...integrationProviders].map((provider) => { const item = saved.get(provider); const enabled = Boolean(flags[integrationFlagColumns[provider]]); return { provider, enabled, saved: Boolean(item), configured: enabled && Boolean(item?.verifiedAt), state: !enabled ? "disabled" : !item ? "not_configured" : item.verifiedAt ? "configured" : "verification_required", updatedAt: item?.updatedAt, verifiedAt: item?.verifiedAt ?? undefined, verificationPending: enabled && Boolean(item?.verificationPending), ...(provider === "discord" ? discordCalendar : {}) }; }), calendar] });
 }
 async function discordChannelManagerSettings(request: Request, env: Env): Promise<Response> {
@@ -855,7 +872,7 @@ async function discordAnomalyReportSettings(request: Request, env: Env): Promise
     await requireIntegrationConfigured(env, "discord");
     const config = await discordConfiguration(env);
     if (channelId === config.channelId) throw new HttpError(400, "Choose a separate private channel, not the member-facing attendance channel");
-    const { body } = await discordRequest(config, `/channels/${encodeURIComponent(channelId)}`, { method: "GET" });
+    const { body } = await discordRequest(config, `/channels/${encodeURIComponent(channelId)}`, { method: "GET" }, undefined, env);
     if (String(body.guild_id ?? "") !== config.guildId || Number(body.type) !== 0) throw new HttpError(400, "The private report channel must be a text channel in the verified Discord server");
   }
   const now = new Date().toISOString();
@@ -868,6 +885,7 @@ async function integrationCapabilities(request: Request, env: Env): Promise<Resp
   await requireRole(request, env, ["admin", "operator"]); const flags = await integrationFlags(env);
   const records = await requireDatabase(env).prepare("SELECT provider, verified_at AS verifiedAt FROM encrypted_integrations WHERE installation_id = 'primary'").all<{ provider: IntegrationProvider; verifiedAt?: string | null }>();
   const verified = new Map((records.results ?? []).map((item) => [item.provider, Boolean(item.verifiedAt)]));
+  const shared=await activeGoogleConnection(env);if(shared)verified.set("google",shared.loginProof);
   const calendar = await googleCalendarAuthorizationRecord(env); const googleCalendarEnabled = Boolean(calendar?.enabled);
   return response({ integrations: { ...Object.fromEntries([...integrationProviders].map((provider) => [provider, { enabled: Boolean(flags[integrationFlagColumns[provider]]), configured: Boolean(flags[integrationFlagColumns[provider]]) && Boolean(verified.get(provider)) }])), google_calendar: { enabled: googleCalendarEnabled, configured: googleCalendarEnabled && Boolean(calendar?.verifiedAt) } } });
 }
@@ -877,6 +895,7 @@ async function requireLocalAdminSignIn(db: D1Database): Promise<void> {
 }
 async function integrationConfiguration(request: Request, env: Env, provider: IntegrationProvider): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if(provider==="google" && await sharedGoogleManaged(env)) throw new HttpError(409,"Manage the shared Google connection instead");
   if (request.method === "PATCH") {
     const input = await parseJson<{ enabled?: boolean }>(request); if (typeof input.enabled !== "boolean") throw new HttpError(400, "enabled must be true or false");
     if (provider === "google" && !input.enabled) await requireLocalAdminSignIn(db);
@@ -915,7 +934,7 @@ async function startResendVerification(request: Request, env: Env): Promise<Resp
   if (!target || !validEmail(target)) throw new HttpError(400, "Enter a valid email address that you can open now");
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured"); const record = await integrationRecord(env, "resend"); if (!record) throw new HttpError(404, "Save Resend credentials before verification"); const secret = await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
   const digits = crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000; const code = digits.toString().padStart(6, "0"); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
-  const result = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${secret.apiKey}`, "content-type": "application/json", "idempotency-key": `lancerlogin-verify-${crypto.randomUUID()}` }, body: JSON.stringify({ from: secret.fromEmail, to: [target], subject: "Your LancerLogin verification code", text: `Your LancerLogin verification code is ${code}. It expires in 10 minutes.`, html: `<p>Your LancerLogin verification code is:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>It expires in 10 minutes.</p>` }) });
+  const result = await providerFetch(env)("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${secret.apiKey}`, "content-type": "application/json", "idempotency-key": `lancerlogin-verify-${crypto.randomUUID()}` }, body: JSON.stringify({ from: secret.fromEmail, to: [target], subject: "Your LancerLogin verification code", text: `Your LancerLogin verification code is ${code}. It expires in 10 minutes.`, html: `<p>Your LancerLogin verification code is:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>It expires in 10 minutes.</p>` }) });
   if (!result.ok) throw new HttpError(502, "Resend could not deliver the verification email"); const body = await result.json().catch(() => ({})) as { id?: string };
   await db.prepare("INSERT INTO integration_verification_challenges (installation_id, provider, challenge_hash, target, external_id, expires_at, created_by, created_at) VALUES ('primary', 'resend', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET challenge_hash = excluded.challenge_hash, target = excluded.target, external_id = excluded.external_id, expires_at = excluded.expires_at, created_by = excluded.created_by, created_at = excluded.created_at").bind(await sha256(code), target, body.id ?? null, expiresAt, principal.userId, now.toISOString()).run();
   await writeAudit(db, principal, "integration.verification_started", "integration", "resend", { target, deliveryId: body.id ?? null }); return response({ provider: "resend", verificationPending: true, expiresAt, target }, 202);
@@ -928,6 +947,7 @@ async function completeResendVerification(request: Request, env: Env): Promise<R
   const verifiedAt = await markIntegrationVerified(db, "resend", principal.userId, { target: challenge.target }); return response({ provider: "resend", configured: true, state: "configured", verifiedAt });
 }
 async function googleCredentials(env: Env): Promise<Record<string, string>> {
+  const shared=await activeGoogleConnection(env); if(shared) { if(!shared.loginEnabled) throw new HttpError(503,"Google sign-in is disabled"); return {clientId:shared.clientId,clientSecret:shared.clientSecret,generation:shared.generation}; }
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const record = await integrationRecord(env, "google"); if (!record || record.enabled === 0) throw new HttpError(503, "Google OAuth is not enabled");
   return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
@@ -945,6 +965,7 @@ async function googleStart(request: Request, env: Env): Promise<Response> {
   if (!installation || !["google", "both"].includes(installation.authMode)) throw new HttpError(404, "Google sign-in is not enabled");
   const credentials = await googleCredentials(env); const redirectUri = googleRedirectUri(env);
   const state = await createSessionCodec(env.SESSION_KEY).issue({ userId: crypto.randomUUID(), role: "operator" }, 10 * 60_000);
+  await rememberGoogleLogin(env,state,credentials);
   const target = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   target.search = new URLSearchParams({ client_id: credentials.clientId, redirect_uri: redirectUri, response_type: "code", scope: "openid email profile", state, prompt: "select_account" }).toString();
   const headers = new Headers({ location: target.toString(), "cache-control": "no-store" });
@@ -957,14 +978,15 @@ async function googleCallback(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_oauth_state");
   if (!code || !state || state !== savedState || !await createSessionCodec(env.SESSION_KEY).verify(state)) throw new HttpError(400, "Google sign-in state is invalid or expired");
   const credentials = await googleCredentials(env); const redirectUri = googleRedirectUri(env);
-  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: credentials.clientId, client_secret: credentials.clientSecret, redirect_uri: redirectUri, grant_type: "authorization_code" }) });
-  const tokens = await tokenResponse.json() as { id_token?: string }; if (!tokenResponse.ok || !tokens.id_token) throw new HttpError(401, "Google did not accept the sign-in response");
-  const validationResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokens.id_token)}`, { headers: { accept: "application/json" } });
-  const profile = await validationResponse.json() as { aud?: string; email?: string; email_verified?: string; iss?: string };
-  if (!validationResponse.ok || profile.aud !== credentials.clientId || profile.email_verified !== "true" || !profile.email || !["https://accounts.google.com", "accounts.google.com"].includes(profile.iss ?? "")) throw new HttpError(401, "Google identity validation failed");
+  await consumeGoogleLogin(env,state,credentials);
+  const tokenResponse = await providerFetch(env)("https://oauth2.googleapis.com/token", { method: "POST", signal: AbortSignal.timeout(10_000), redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: credentials.clientId, client_secret: credentials.clientSecret, redirect_uri: redirectUri, grant_type: "authorization_code" }) });
+  if (tokenResponse.status >= 300 && tokenResponse.status < 400) throw new HttpError(502, "Google returned an unexpected redirect");
+  const tokens = await readGoogleBody(tokenResponse) as { id_token?: string }; if (!tokenResponse.ok || !tokens.id_token) throw new HttpError(401, "Google did not accept the sign-in response");
+  const profile = await validateGoogleIdentity(tokens.id_token,credentials.clientId, env);
   const user = await requireDatabase(env).prepare("SELECT id, role FROM users WHERE installation_id = 'primary' AND email = ? AND active = 1").bind(profile.email.toLowerCase()).first<{ id: string; role: Role }>();
   if (!user) throw new HttpError(403, "This Google account is not an active LancerLogin user");
-  await markIntegrationVerified(requireDatabase(env), "google", user.id, { email: profile.email.toLowerCase() });
+  const currentCredentials=await googleCredentials(env); if(JSON.stringify(currentCredentials)!==JSON.stringify(credentials)) throw new HttpError(409,"Google sign-in settings changed; try again");
+  if(!await activeGoogleConnection(env)) await markIntegrationVerified(requireDatabase(env), "google", user.id);
   const session = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role });
   const verification = cookie(request, "lancerlogin_oauth_verify") === "1";
   const headers = new Headers({ location: verification ? `${env.ALLOWED_ORIGIN}/settings/integrations?verified=google` : env.ALLOWED_ORIGIN, "cache-control": "no-store" });
@@ -980,6 +1002,7 @@ function googleCalendarRedirectUri(env: Env): string {
   return `${origin.origin}/api/admin/integrations/google-calendar/callback`;
 }
 async function googleCalendarSecret(env: Env, requireVerified = false): Promise<{ record: GoogleCalendarAuthorizationRecord; secret: GoogleCalendarSecret }> {
+  const shared=await activeGoogleConnection(env);if(shared){if(!shared.calendarEnabled)throw new HttpError(409,"Google Calendar is disabled");if(requireVerified&&(!shared.calendarProof||shared.grantError==="revoked"||!googleScopes.calendar.every(scope=>shared.grant?.scopes.includes(scope))))throw new HttpError(409,"Renew Google Calendar consent and verify the attendance calendar");return {record:{enabled:1,verifiedAt:shared.calendarVerifiedAt},secret:{clientId:"",clientSecret:"",calendarId:shared.calendarId,calendarLabel:shared.calendarLabel}};}
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const record = await googleCalendarAuthorizationRecord(env);
   if (!record?.enabled) throw new HttpError(409, "Google Calendar is disabled");
@@ -991,9 +1014,11 @@ function googleCalendarRetryAfter(response: Response): number | undefined {
   const seconds = Number(response.headers.get("retry-after"));
   return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds * 1_000, 3_600_000) : undefined;
 }
-async function googleCalendarProviderRequest(accessToken: string, path: string, init: RequestInit = {}): Promise<{ response: Response; body: Record<string, unknown> }> {
-  const result = await fetch(`https://www.googleapis.com/calendar/v3${path}`, { ...init, headers: { authorization: `Bearer ${accessToken}`, accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
-  const body = await result.json().catch(() => ({})) as Record<string, unknown>;
+async function googleCalendarProviderRequest(accessToken: string, path: string, init: RequestInit = {}, budget?: SchedulerBudget, env?: Env): Promise<{ response: Response; body: Record<string, unknown> }> {
+  budget?.request();
+  const result = await providerFetch(env)(`https://www.googleapis.com/calendar/v3${path}`, { ...init, signal: init.signal ?? AbortSignal.timeout(10_000), redirect: "manual", headers: { authorization: `Bearer ${accessToken}`, accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
+  if (result.status >= 300 && result.status < 400) throw new GoogleCalendarProviderError(result.status, "Google Calendar returned an unexpected redirect.", false);
+  const body = result.ok ? await readGoogleBody(result,524288) : await readGoogleBody(result,524288).catch(()=>({}));
   if (result.ok) return { response: result, body };
   if (result.status === 401) throw new GoogleCalendarProviderError(401, "Google Calendar authorization needs to be renewed.", false);
   if (result.status === 403 || result.status === 429) throw new GoogleCalendarProviderError(result.status, "Google Calendar is rate limiting or denying this request. Check the selected calendar and try again.", true, googleCalendarRetryAfter(result));
@@ -1001,9 +1026,12 @@ async function googleCalendarProviderRequest(accessToken: string, path: string, 
   throw new GoogleCalendarProviderError(result.status, `Google Calendar rejected the request (${result.status}). Check the Calendar connection.`, false);
 }
 async function googleCalendarAccessToken(env: Env, requireVerified = false): Promise<{ accessToken: string; secret: GoogleCalendarSecret }> {
+  if(await activeGoogleConnection(env)) { const capability=await googleCapability(env,"calendar"); if(requireVerified&&!capability.calendarVerified) throw new HttpError(409,"Verify the Google attendance calendar first"); return {accessToken:await capability.accessToken(),secret:{clientId:"",clientSecret:"",calendarId:capability.calendarId,calendarLabel:capability.calendarLabel}}; }
   const { secret } = await googleCalendarSecret(env, requireVerified);
   if (!secret.refreshToken) throw new HttpError(409, "Authorize Google Calendar before selecting a calendar");
-  const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: secret.clientId, client_secret: secret.clientSecret, refresh_token: secret.refreshToken, grant_type: "refresh_token" }) });
+  env[schedulerBudgetKey]?.request();
+  const result = await providerFetch(env)("https://oauth2.googleapis.com/token", { method: "POST", signal: AbortSignal.timeout(10_000), redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: secret.clientId, client_secret: secret.clientSecret, refresh_token: secret.refreshToken, grant_type: "refresh_token" }) });
+  if (result.status >= 300 && result.status < 400) throw new GoogleCalendarProviderError(result.status, "Google authorization returned an unexpected redirect.", false);
   const body = await result.json().catch(() => ({})) as { access_token?: string };
   if (!result.ok || !body.access_token) {
     if (result.status >= 500 || result.status === 429) throw new GoogleCalendarProviderError(result.status, "Google authorization is temporarily unavailable. LancerLogin will retry automatically.", true, googleCalendarRetryAfter(result));
@@ -1012,7 +1040,9 @@ async function googleCalendarAccessToken(env: Env, requireVerified = false): Pro
   return { accessToken: body.access_token, secret };
 }
 async function googleCalendarConfiguration(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const principal = await requireRole(request, env, ["admin"]);
+  if(await sharedGoogleManaged(env)) throw new HttpError(409,"Manage the shared Google connection instead");
+  const db = requireDatabase(env);
   if (request.method === "PATCH") {
     const input = await parseJson<{ enabled?: boolean }>(request);
     if (typeof input.enabled !== "boolean") throw new HttpError(400, "enabled must be true or false");
@@ -1042,23 +1072,26 @@ async function googleCalendarConfiguration(request: Request, env: Env): Promise<
 }
 async function googleCalendarStart(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
-  const principal = await requireRole(request, env, ["admin"]); const { secret } = await googleCalendarSecret(env); const state = await createSessionCodec(env.SESSION_KEY).issue(principal, 10 * 60_000); const target = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  const principal = await requireRole(request, env, ["admin"]);
+  if(await sharedGoogleManaged(env)) throw new HttpError(409,"Manage the shared Google connection instead");
+  const { secret } = await googleCalendarSecret(env); const state = await createSessionCodec(env.SESSION_KEY).issue(principal, 10 * 60_000); const target = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   target.search = new URLSearchParams({ client_id: secret.clientId, redirect_uri: googleCalendarRedirectUri(env), response_type: "code", scope: "https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events", access_type: "offline", include_granted_scopes: "true", prompt: "consent select_account", state }).toString();
   const headers = new Headers({ location: target.toString(), "cache-control": "no-store" }); headers.append("set-cookie", `lancerlogin_calendar_oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`);
   return new Response(null, { status: 302, headers });
 }
 const writableCalendarRole = (value: unknown) => value === "writer" || value === "owner";
 async function googleCalendarCallback(request: Request, env: Env): Promise<Response> {
+  if(await sharedGoogleManaged(env)) throw new HttpError(409,"Manage the shared Google connection instead");
   if (!env.SESSION_KEY || !env.INTEGRATION_KEY) throw new HttpError(503, "Google Calendar authorization is not configured");
   const url = new URL(request.url); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_calendar_oauth_state"); const signed = state ? await createSessionCodec(env.SESSION_KEY).verify(state) : undefined;
   if (!code || !state || state !== savedState || !signed) throw new HttpError(400, "Google Calendar authorization state is invalid or expired");
   const principal = await requireDatabase(env).prepare("SELECT id AS userId, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND role = 'admin'").bind(signed.userId).first<{ userId: string; role: Role }>();
   if (!principal) throw new HttpError(403, "Only an active Admin can authorize Google Calendar");
-  const { secret } = await googleCalendarSecret(env); const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: secret.clientId, client_secret: secret.clientSecret, redirect_uri: googleCalendarRedirectUri(env), grant_type: "authorization_code" }) });
+  const { secret } = await googleCalendarSecret(env); const result = await providerFetch(env)("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: secret.clientId, client_secret: secret.clientSecret, redirect_uri: googleCalendarRedirectUri(env), grant_type: "authorization_code" }) });
   const tokens = await result.json().catch(() => ({})) as { access_token?: string; refresh_token?: string };
   if (!result.ok || !tokens.access_token || !(tokens.refresh_token || secret.refreshToken)) throw new HttpError(401, "Google did not return durable Calendar access. Try authorizing again and approve Calendar access.");
   const next: GoogleCalendarSecret = { ...secret, refreshToken: tokens.refresh_token ?? secret.refreshToken }; let verifiedAt: string | null = null;
-  if (next.calendarId) try { const { body } = await googleCalendarProviderRequest(tokens.access_token, `/users/me/calendarList/${encodeURIComponent(next.calendarId)}`); if (writableCalendarRole(body.accessRole)) { next.calendarLabel = String(body.summary ?? next.calendarLabel ?? "Selected calendar").slice(0, 200); verifiedAt = new Date().toISOString(); } } catch { /* The Admin can choose another writable calendar after return. */ }
+  if (next.calendarId) try { const { body } = await googleCalendarProviderRequest(tokens.access_token, `/users/me/calendarList/${encodeURIComponent(next.calendarId)}`, undefined, undefined, env); if (writableCalendarRole(body.accessRole)) { next.calendarLabel = String(body.summary ?? next.calendarLabel ?? "Selected calendar").slice(0, 200); verifiedAt = new Date().toISOString(); } } catch { /* The Admin can choose another writable calendar after return. */ }
   const encrypted = await encryptIntegration(next, env.INTEGRATION_KEY); const now = new Date().toISOString(); const db = requireDatabase(env);
   await db.batch([
     db.prepare("UPDATE google_calendar_authorizations SET ciphertext = ?, iv = ?, authorized_at = ?, verified_at = ?, updated_at = ? WHERE installation_id = 'primary'").bind(encrypted.ciphertext, encrypted.iv, now, verifiedAt, now),
@@ -1069,14 +1102,16 @@ async function googleCalendarCallback(request: Request, env: Env): Promise<Respo
   return new Response(null, { status: 302, headers });
 }
 async function listGoogleCalendars(request: Request, env: Env): Promise<Response> {
-  await requireRole(request, env, ["admin"]); const { accessToken } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, "/users/me/calendarList?minAccessRole=writer&showHidden=false&maxResults=250");
+  await requireRole(request, env, ["admin"]); const { accessToken } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, "/users/me/calendarList?minAccessRole=writer&showHidden=false&maxResults=250", undefined, undefined, env);
   const items = Array.isArray(body.items) ? body.items as Array<Record<string, unknown>> : [];
   return response({ calendars: items.filter((item) => writableCalendarRole(item.accessRole) && typeof item.id === "string").map((item) => ({ id: String(item.id), name: String(item.summary ?? "Writable calendar").slice(0, 200), primary: Boolean(item.primary), accessRole: item.accessRole })) });
 }
 async function selectGoogleCalendar(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ calendarId?: string }>(request); const calendarId = input.calendarId?.trim();
+  const principal = await requireRole(request, env, ["admin"]);
+  if(await sharedGoogleManaged(env)) throw new HttpError(409,"Manage the shared Google connection instead");
+  const input = await parseJson<{ calendarId?: string }>(request); const calendarId = input.calendarId?.trim();
   if (!calendarId || calendarId.length > 1_024) throw new HttpError(400, "Choose one writable Google Calendar");
-  const { accessToken, secret } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, `/users/me/calendarList/${encodeURIComponent(calendarId)}`);
+  const { accessToken, secret } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, `/users/me/calendarList/${encodeURIComponent(calendarId)}`, undefined, undefined, env);
   if (!writableCalendarRole(body.accessRole)) throw new HttpError(400, "Choose a Google Calendar where this account can edit events");
   const changed = Boolean(secret.calendarId && secret.calendarId !== calendarId); const next = { ...secret, calendarId, calendarLabel: String(body.summary ?? "Selected calendar").slice(0, 200) }; const encrypted = await encryptIntegration(next, env.INTEGRATION_KEY!); const now = new Date().toISOString(); const db = requireDatabase(env);
   await db.batch([
@@ -1149,7 +1184,7 @@ function googleCalendarRetryAt(attempts: number, error: GoogleCalendarProviderEr
   return new Date(Date.now() + backoff).toISOString();
 }
 async function markGoogleCalendarOperationFailure(db: D1Database, operation: GoogleCalendarOperation, error: unknown): Promise<void> {
-  const providerError = error instanceof GoogleCalendarProviderError ? error : new GoogleCalendarProviderError(503, "Google Calendar is temporarily unavailable. LancerLogin will retry automatically.", true); const now = new Date().toISOString(); const attempts = Number(operation.attempts ?? 0) + 1; const nextAttemptAt = googleCalendarRetryAt(attempts, providerError);
+  const providerError = error instanceof GoogleCalendarProviderError ? error : error instanceof GoogleConnectionError ? new GoogleCalendarProviderError(error.status, error.status===401||error.status===409?"Google authorization needs to be renewed.":"Google is temporarily unavailable. LancerLogin will retry automatically.",error.status!==401&&error.status!==409) : new GoogleCalendarProviderError(503, "Google Calendar is temporarily unavailable. LancerLogin will retry automatically.", true); const now = new Date().toISOString(); const attempts = Number(operation.attempts ?? 0) + 1; const nextAttemptAt = googleCalendarRetryAt(attempts, providerError);
   await db.batch([
     db.prepare("UPDATE google_calendar_operations SET status = 'failed', attempts = ?, next_attempt_at = ?, last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND event_id = ?").bind(attempts, nextAttemptAt, providerError.message.slice(0, 300), now, operation.eventId),
     db.prepare("UPDATE google_calendar_event_mappings SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND event_id = ?").bind(providerError.message.slice(0, 300), now, operation.meetingId, operation.eventId),
@@ -1164,10 +1199,10 @@ async function replaceMissingGoogleCalendarEvent(db: D1Database, operation: Goog
   ]);
   return eventId;
 }
-async function processGoogleCalendarOperations(env: Env, eventIds?: string[]): Promise<GoogleCalendarSyncSummary> {
+async function processGoogleCalendarOperations(env: Env, eventIds?: string[], batchLimit = 50): Promise<GoogleCalendarSyncSummary> {
   if (!await googleCalendarIsReady(env)) return googleCalendarEmptySummary();
   const db = requireDatabase(env); const now = new Date().toISOString(); const filter = eventIds?.length ? `AND o.event_id IN (${eventIds.map(() => "?").join(",")})` : "AND (o.status = 'pending' OR (o.status = 'failed' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ?))"; const values = eventIds?.length ? eventIds : [now];
-  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.event_id AS eventId, o.action, o.starts_at AS startsAt, o.ends_at AS endsAt, o.status, o.attempts, m.synced_at AS syncedAt, m.generation FROM google_calendar_operations o LEFT JOIN google_calendar_event_mappings m ON m.installation_id = o.installation_id AND m.meeting_id = o.meeting_id AND m.event_id = o.event_id WHERE o.installation_id = 'primary' ${filter} ORDER BY o.updated_at LIMIT 50`).bind(...values).all<GoogleCalendarOperation>();
+  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.event_id AS eventId, o.action, o.starts_at AS startsAt, o.ends_at AS endsAt, o.status, o.attempts, m.synced_at AS syncedAt, m.generation FROM google_calendar_operations o LEFT JOIN google_calendar_event_mappings m ON m.installation_id = o.installation_id AND m.meeting_id = o.meeting_id AND m.event_id = o.event_id WHERE o.installation_id = 'primary' ${filter} ORDER BY o.updated_at LIMIT ${batchLimit}`).bind(...values).all<GoogleCalendarOperation>();
   const operations = result.results ?? []; if (!operations.length) return googleCalendarEmptySummary();
   let accessToken: string; let secret: GoogleCalendarSecret;
   try { ({ accessToken, secret } = await googleCalendarAccessToken(env, true)); }
@@ -1177,16 +1212,16 @@ async function processGoogleCalendarOperations(env: Env, eventIds?: string[]): P
   for (const operation of operations) {
     try {
       if (operation.action === "delete") {
-        try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "DELETE" }); }
+        try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "DELETE" }, env[schedulerBudgetKey], env); }
         catch (error) { if (!(error instanceof GoogleCalendarProviderError) || ![404, 410].includes(error.providerStatus)) throw error; }
       } else {
         const timing = { start: { dateTime: operation.startsAt }, end: { dateTime: operation.endsAt } };
         if (operation.syncedAt) {
-          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }); }
+          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }, env[schedulerBudgetKey], env); }
           catch (error) { if (error instanceof GoogleCalendarProviderError && [404, 410].includes(error.providerStatus)) { await replaceMissingGoogleCalendarEvent(db, operation); queued += 1; continue; } throw error; }
         } else {
-          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId), { method: "POST", body: JSON.stringify({ id: operation.eventId, summary: "LancerLogin meeting", ...timing }) }); }
-          catch (error) { if (error instanceof GoogleCalendarProviderError && error.providerStatus === 409) await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }); else throw error; }
+          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId), { method: "POST", body: JSON.stringify({ id: operation.eventId, summary: "LancerLogin meeting", ...timing }) }, env[schedulerBudgetKey], env); }
+          catch (error) { if (error instanceof GoogleCalendarProviderError && error.providerStatus === 409) await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }, env[schedulerBudgetKey], env); else throw error; }
         }
       }
       const completedAt = new Date().toISOString(); await db.batch([
@@ -1234,18 +1269,19 @@ async function users(request: Request, env: Env): Promise<Response> {
   if (!email && !username) throw new HttpError(400, "An email or local username is required");
   if (email && !validEmail(email)) throw new HttpError(400, "Email is invalid");
   if (username && !/^[a-z0-9._-]{3,64}$/.test(username)) throw new HttpError(400, "Local username must be 3–64 letters, numbers, dots, underscores, or hyphens");
-  if (!input.role || !["admin", "operator"].includes(input.role)) throw new HttpError(400, "Role must be admin or operator");
+  if (!input.role || !["admin", "operator", "staff"].includes(input.role)) throw new HttpError(400, "Role must be admin, operator, or staff");
   if (username && (input.localPassword?.length ?? 0) < 12) throw new HttpError(400, "A local user needs a password of at least 12 characters");
   const memberId = input.memberId?.trim() || null;
   if (memberId && !await db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ?").bind(memberId).first()) throw new HttpError(400, "Linked roster member was not found");
   if (memberId && await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND member_id = ?").bind(memberId).first()) throw new HttpError(409, "That roster member already has dashboard access");
   const duplicate = await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND ((email IS NOT NULL AND email = ?) OR (local_username IS NOT NULL AND local_username = ?))").bind(email, username).first();
   if (duplicate) throw new HttpError(409, "That email or username is already in use");
-  const id = crypto.randomUUID(); const now = new Date().toISOString(); const passwordHash = username ? await hashPassword(input.localPassword!) : null;
-  await db.batch([
-    db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, member_id, role, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, email, username, passwordHash, memberId, input.role, now),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.created', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ role: input.role, hasGoogle: Boolean(email), hasLocal: Boolean(username), memberId }), now),
+  const id = crypto.randomUUID(); const now = new Date().toISOString(); const passwordHash = username ? await hashApiPassword(env, input.localPassword!, "user-create") : null;
+  const results = await db.batch([
+    db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, member_id, role, created_at) SELECT ?, 'primary', ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND role = 'admin')").bind(id, email, username, passwordHash, memberId, input.role, now, principal.userId),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, 'user.created', 'user', ?, ?, ? WHERE changes() = 1").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ role: input.role, hasGoogle: Boolean(email), hasLocal: Boolean(username), memberId }), now),
   ]);
+  if (results[0]?.meta?.changes === 0) throw new HttpError(409, "Your Admin access changed before the account could be created");
   return response({ user: { id, email, localUsername: username, memberId, role: input.role, active: true, createdAt: now } }, 201);
 }
 async function updateUser(request: Request, env: Env, userId: string): Promise<Response> {
@@ -1253,16 +1289,17 @@ async function updateUser(request: Request, env: Env, userId: string): Promise<R
   const target = await db.prepare("SELECT id, role, active, local_username AS localUsername FROM users WHERE installation_id = 'primary' AND id = ?").bind(userId).first<{ id: string; role: Role; active: number; localUsername?: string }>();
   if (!target) throw new HttpError(404, "User not found");
   if (userId === principal.userId && ((input.role && input.role !== "admin") || input.active === false)) throw new HttpError(409, "You cannot demote or deactivate your current Admin account");
-  if (input.role && !["admin", "operator"].includes(input.role)) throw new HttpError(400, "Role must be admin or operator");
+  if (input.role !== undefined && !["admin", "operator", "staff"].includes(input.role)) throw new HttpError(400, "Role must be admin, operator, or staff");
   if (input.localPassword && (!target.localUsername || input.localPassword.length < 12)) throw new HttpError(400, "Password reset requires a local username and at least 12 characters");
   if (input.memberId !== undefined && input.memberId !== null && (!input.memberId.trim() || !await db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ?").bind(input.memberId.trim()).first())) throw new HttpError(400, "Linked roster member was not found");
   if (input.memberId && await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND member_id = ? AND id <> ?").bind(input.memberId.trim(), userId).first()) throw new HttpError(409, "That roster member already has dashboard access");
   if (input.role === undefined && input.active === undefined && input.localPassword === undefined && input.memberId === undefined) throw new HttpError(400, "Provide a role, active status, roster link, or new local password");
-  const passwordHash = input.localPassword ? await hashPassword(input.localPassword) : null; const now = new Date().toISOString();
-  await db.batch([
-    db.prepare("UPDATE users SET role = COALESCE(?, role), active = COALESCE(?, active), password_hash = COALESCE(?, password_hash), member_id = CASE WHEN ? = 1 THEN ? ELSE member_id END WHERE installation_id = 'primary' AND id = ?").bind(input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0, passwordHash, input.memberId === undefined ? 0 : 1, input.memberId?.trim() || null, userId),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.updated', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, userId, JSON.stringify({ role: input.role, active: input.active, passwordReset: Boolean(input.localPassword), memberId: input.memberId }), now),
+  const passwordHash = input.localPassword ? await hashApiPassword(env, input.localPassword, "password-reset") : null; const now = new Date().toISOString();
+  const results = await db.batch([
+    db.prepare("UPDATE users SET role = COALESCE(?, role), active = COALESCE(?, active), password_hash = COALESCE(?, password_hash), member_id = CASE WHEN ? = 1 THEN ? ELSE member_id END WHERE installation_id = 'primary' AND id = ? AND EXISTS (SELECT 1 FROM users actor WHERE actor.installation_id = 'primary' AND actor.id = ? AND actor.active = 1 AND actor.role = 'admin') AND (role <> 'admin' OR active = 0 OR (COALESCE(?, role) = 'admin' AND COALESCE(?, active) = 1) OR (SELECT count(*) FROM users WHERE installation_id = 'primary' AND role = 'admin' AND active = 1) > 1)").bind(input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0, passwordHash, input.memberId === undefined ? 0 : 1, input.memberId?.trim() || null, userId, principal.userId, input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, 'user.updated', 'user', ?, ?, ? WHERE changes() = 1").bind(crypto.randomUUID(), principal.userId, userId, JSON.stringify({ role: input.role, active: input.active, passwordReset: Boolean(input.localPassword), memberId: input.memberId }), now),
   ]);
+  if (results[0]?.meta?.changes === 0) throw new HttpError(409, "Account access changed or this would remove the last active Admin");
   return response({ ok: true });
 }
 function html(value: unknown): string { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
@@ -1290,93 +1327,26 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
   if (await db.prepare("SELECT id FROM integration_deliveries WHERE installation_id = 'primary' AND provider = 'resend' AND delivery_key = ? AND status IN ('pending', 'delivered')").bind(deliveryKey).first()) throw new HttpError(409, "This email was already sent or is currently sending");
   const config = await resendConfiguration(env); const id = crypto.randomUUID(); const now = new Date().toISOString();
   await db.prepare("INSERT INTO integration_deliveries (id, installation_id, provider, delivery_key, status, created_at, updated_at) VALUES (?, 'primary', 'resend', ?, 'pending', ?, ?)").bind(id, deliveryKey, now, now).run();
-  const delivery = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", "idempotency-key": deliveryKey }, body: JSON.stringify({ from: config.fromEmail, to: [member.email], subject, html: content }) });
+  const delivery = await providerFetch(env)("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", "idempotency-key": deliveryKey }, body: JSON.stringify({ from: config.fromEmail, to: [member.email], subject, html: content }) });
   const deliveryBody = await delivery.json().catch(() => ({})) as { id?: string };
   await db.prepare("UPDATE integration_deliveries SET status = ?, external_id = ?, updated_at = ? WHERE id = ?").bind(delivery.ok ? "delivered" : "failed", deliveryBody.id ?? null, new Date().toISOString(), id).run();
   await writeAudit(db, principal, "resend.email_sent", "member", member.id, { kind: input.kind, ok: delivery.ok, meetingId: input.meetingId });
   if (!delivery.ok) throw new HttpError(502, "Resend rejected the email");
   return response({ sent: true, kind: input.kind, memberId: member.id }, 202);
 }
-async function discordConfiguration(env: Env, allowUnverified = false): Promise<Record<string, string>> {
-  if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
-  const record = await integrationRecord(env, "discord"); if (!record || record.enabled === 0) throw new HttpError(503, "Discord is not enabled");
-  if (!allowUnverified && !record.verifiedAt) throw new HttpError(503, "Discord verification is required before using attendance workflows");
-  return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
-}
-async function discordInteractionConfiguration(env: Env): Promise<{ config: Record<string, string>; record: IntegrationRecord }> {
-  if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
-  const record = await integrationRecord(env, "discord");
-  if (!record) throw new HttpError(503, "Discord credentials are not configured");
-  return { config: await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY), record };
-}
-const discordRetryDelay = (response: Response, body: Record<string, unknown>) => {
-  const bodyValue = body.retry_after;
-  const retryAfter = typeof bodyValue === "number" ? bodyValue : Number(response.headers.get("retry-after"));
-  return Number.isFinite(retryAfter) && retryAfter >= 0 ? Math.ceil(retryAfter * 1_000) : 1_000;
-};
-const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
-async function discordRequest<T = Record<string, unknown>>(config: Record<string, string>, path: string, init: RequestInit): Promise<{ response: globalThis.Response; body: T }> {
-  const managesCommands = path.includes("/commands");
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const result = await fetch(`https://discord.com/api/v10${path}`, { ...init, headers: { authorization: `Bot ${config.botToken}`, "content-type": "application/json", ...init.headers } });
-    const body = await result.json().catch(() => ({})) as T;
-    if (result.ok) return { response: result, body };
-    const errorBody = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
-    if (result.status === 401) throw new HttpError(502, "Discord rejected the saved bot token. Reset the token in Discord, replace the saved credentials, and try verification again.");
-    if (result.status === 403) throw new DiscordPermissionError(path.includes("/scheduled-events") ? "calendar" : path.includes("/messages/pins/") ? "pin" : managesCommands ? "commands" : "channel");
-    if (result.status === 429) {
-      const retryAfterMs = discordRetryDelay(result, errorBody);
-      if (attempt === 2) throw new DiscordRateLimitError(retryAfterMs, managesCommands ? "command setup" : path.includes("/scheduled-events") ? "calendar sync" : "this request");
-      await wait(retryAfterMs);
-      continue;
-    }
-    if (managesCommands && result.status === 404) throw new HttpError(502, "Discord could not find that application in the selected server. Confirm the Application ID and Server ID, reinstall the bot if needed, and try verification again.");
-    if (managesCommands && result.status === 400) throw new HttpError(502, "Discord rejected the managed command configuration. Confirm the Application ID and Server ID, then try verification again.");
-    const message = typeof errorBody.message === "string" ? errorBody.message.replace(/\s+/g, " ").slice(0, 180) : "";
-    const code = Number(errorBody.code);
-    throw new DiscordResponseError(result.status, message, Number.isFinite(code) ? code : undefined);
-  }
-  throw new HttpError(502, "Discord request did not complete");
-}
-type DiscordApplicationCommand = { id?: string; application_id?: string; guild_id?: string; name?: string; type?: number; description?: string; options?: { name?: string; description?: string; type?: number; required?: boolean }[] };
-const discordManagedCommands: DiscordApplicationCommand[] = [
-  { name: "pair", type: 1, description: "Link your Discord account to your LancerLogin member ID", options: [{ name: "member-id", description: "Your LancerLogin member ID", type: 3, required: true }] },
-  { name: "attendance-report", type: 1, description: "Privately view your current LancerLogin attendance report" },
-];
-function discordCommandMatches(actual: DiscordApplicationCommand, expected: DiscordApplicationCommand, config: Record<string, string>): boolean {
-  const optionShape = (option: NonNullable<DiscordApplicationCommand["options"]>[number]) => ({ name: option.name, description: option.description, type: option.type, required: Boolean(option.required) });
-  return actual.application_id === config.applicationId && actual.guild_id === config.guildId && actual.name === expected.name && actual.type === expected.type && actual.description === expected.description && JSON.stringify((actual.options ?? []).map(optionShape)) === JSON.stringify((expected.options ?? []).map(optionShape));
-}
-async function reconcileDiscordApplicationCommands(config: Record<string, string>): Promise<{ applicationId: string; commands: string[] }> {
-  const application = await discordRequest<{ id?: string }>(config, "/oauth2/applications/@me", { method: "GET" });
-  const applicationId = String(application.body.id ?? "");
-  if (!/^\d{10,24}$/.test(applicationId)) throw new HttpError(502, "Discord did not return the bot application's identity. Confirm the saved bot token and try command reconciliation again.");
-  if (config.applicationId && applicationId !== config.applicationId) throw new HttpError(400, "The saved Application ID does not belong to this bot token. Copy the Application ID from the same Discord application and replace the saved credentials.");
-  const resolvedConfig = { ...config, applicationId };
-  const guild = await discordRequest<{ id?: string }>(config, `/guilds/${encodeURIComponent(config.guildId)}`, { method: "GET" });
-  if (String(guild.body.id ?? "") !== config.guildId) throw new HttpError(400, "Discord returned a different server than the saved Server ID. Copy the intended server ID and replace the saved credentials.");
-  const channel = await discordRequest<{ guild_id?: string; type?: number }>(config, `/channels/${encodeURIComponent(config.channelId)}`, { method: "GET" });
-  if (String(channel.body.guild_id ?? "") !== config.guildId || Number(channel.body.type) !== 0) throw new HttpError(400, "The attendance channel must be a text channel in the saved Discord server. Copy the intended channel and server IDs, then replace the saved credentials.");
-  const path = `/applications/${encodeURIComponent(applicationId)}/guilds/${encodeURIComponent(config.guildId)}/commands`;
-  const result = await discordRequest<DiscordApplicationCommand[]>(config, path, { method: "PUT", body: JSON.stringify(discordManagedCommands) });
-  if (!Array.isArray(result.body) || result.body.length !== discordManagedCommands.length || discordManagedCommands.some((expected) => !result.body.some((actual) => discordCommandMatches(actual, expected, resolvedConfig)))) {
-    throw new HttpError(502, "Discord did not confirm both managed commands. Wait briefly and try command setup again.");
-  }
-  return { applicationId, commands: discordManagedCommands.map((command) => String(command.name)) };
-}
 const discordMessageMissing = (error: unknown): error is DiscordResponseError => error instanceof DiscordResponseError && error.discordStatus === 404 && error.discordCode === 10_008;
 type DiscordMessageComponents = { type: number; components: { type: number; style: number; label: string; custom_id: string }[] }[];
 const discordAttendanceReportComponents: DiscordMessageComponents = [{ type: 1, components: [{ type: 2, style: 1, label: "View my attendance report", custom_id: "lancerlogin-attendance-report" }] }];
-async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string, string>, stateKey: string, content: string, pin = false, components?: DiscordMessageComponents): Promise<{ changed: boolean; messageId: string }> {
+async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string, string>, stateKey: string, content: string, pin = false, components?: DiscordMessageComponents, env?: Env): Promise<{ changed: boolean; messageId: string }> {
   const payload = { content, allowed_mentions: { parse: [] }, ...(components ? { components } : {}) };
   const contentHash = await sha256(components ? JSON.stringify({ content, components }) : content); const messagesPath = `/channels/${encodeURIComponent(config.channelId)}/messages`;
   const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?").bind(stateKey).first<{ externalId?: string; contentHash?: string }>();
   let messageId = existing?.externalId ?? ""; let changed = false;
   if (messageId) {
     try {
-      if (existing?.contentHash === contentHash) await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "GET" });
+      if (existing?.contentHash === contentHash) await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "GET" }, undefined, env);
       else {
-        const { body } = await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "PATCH", body: JSON.stringify(payload) });
+        const { body } = await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "PATCH", body: JSON.stringify(payload) }, undefined, env);
         messageId = String(body.id ?? messageId); changed = true;
       }
     } catch (error) {
@@ -1385,23 +1355,23 @@ async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string
     }
   }
   if (!messageId) {
-    const { body } = await discordRequest(config, messagesPath, { method: "POST", body: JSON.stringify(payload) });
+    const { body } = await discordRequest(config, messagesPath, { method: "POST", body: JSON.stringify(payload) }, undefined, env);
     messageId = String(body.id ?? ""); changed = true;
     if (!messageId) throw new HttpError(502, "Discord did not return a managed message identifier");
   }
   const now = new Date().toISOString();
   await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', ?, ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(stateKey, messageId, contentHash, now).run();
-  if (pin) await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/pins/${encodeURIComponent(messageId)}`, { method: "PUT" });
+  if (pin) await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/pins/${encodeURIComponent(messageId)}`, { method: "PUT" }, undefined, env);
   return { changed, messageId };
 }
 async function startDiscordVerification(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env, true);
   await db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = 'discord'").run();
-  await discordRequest(config, "/users/@me", { method: "GET" });
-  await reconcileDiscordApplicationCommands(config);
+  await discordRequest(config, "/users/@me", { method: "GET" }, undefined, env);
+  await reconcileDiscordApplicationCommands(config,Boolean(await db.prepare("SELECT 1 FROM platform_module_configuration WHERE installation_id='primary' AND hours_enabled=1").first()),documentationAvailable&&env.ALLOWED_ORIGIN===attachmentDevelopmentOrigin,documentationAvailable&&Boolean(await db.prepare("SELECT 1 FROM platform_module_configuration WHERE installation_id='primary' AND hours_enabled=1 AND documentation_enabled=1").first()), env);
   const challenge = randomToken(24); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
   const payload = { content: "LancerLogin is ready to verify this server and attendance channel. An Admin should click the button below within 10 minutes.", allowed_mentions: { parse: [] }, components: [{ type: 1, components: [{ type: 2, style: 1, label: "Verify LancerLogin", custom_id: `lancerlogin-verify:${challenge}` }] }] };
-  const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }); const messageId = String(body.id ?? "");
+  const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }, undefined, env); const messageId = String(body.id ?? "");
   if (!messageId) throw new HttpError(502, "Discord did not return a verification message identifier");
   await db.prepare("INSERT INTO integration_verification_challenges (installation_id, provider, challenge_hash, target, external_id, expires_at, created_by, created_at) VALUES ('primary', 'discord', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET challenge_hash = excluded.challenge_hash, target = excluded.target, external_id = excluded.external_id, expires_at = excluded.expires_at, created_by = excluded.created_by, created_at = excluded.created_at").bind(await sha256(challenge), config.guildId, messageId, expiresAt, principal.userId, now.toISOString()).run();
   await writeAudit(db, principal, "integration.verification_started", "integration", "discord", { guildId: config.guildId, channelId: config.channelId, messageId });
@@ -1409,7 +1379,7 @@ async function startDiscordVerification(request: Request, env: Env): Promise<Res
 }
 async function reconcileDiscordCommands(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env);
-  const reconciled = await reconcileDiscordApplicationCommands(config);
+  const reconciled = await reconcileDiscordApplicationCommands(config,Boolean(await db.prepare("SELECT 1 FROM platform_module_configuration WHERE installation_id='primary' AND hours_enabled=1").first()),documentationAvailable&&env.ALLOWED_ORIGIN===attachmentDevelopmentOrigin,documentationAvailable&&Boolean(await db.prepare("SELECT 1 FROM platform_module_configuration WHERE installation_id='primary' AND hours_enabled=1 AND documentation_enabled=1").first()), env);
   await writeAudit(db, principal, "discord.commands_reconciled", "integration", "discord", { applicationId: reconciled.applicationId, guildId: config.guildId, commands: reconciled.commands });
   return response({ provider: "discord", reconciled: true, commands: reconciled.commands });
 }
@@ -1420,30 +1390,33 @@ async function linkDiscordMember(request: Request, env: Env): Promise<Response> 
   await writeAudit(db, principal, input.discordUserId ? "discord.member_linked" : "discord.member_unlinked", "member", input.memberId);
   return response({ linked: Boolean(input.discordUserId), memberId: input.memberId });
 }
-async function linkedAbsentMembers(db: D1Database, meetingId: string): Promise<{ id: string; discordUserId: string }[]> {
-  const missing = await db.prepare("SELECT m.id, m.discord_user_id AS discordUserId FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 AND m.discord_user_id IS NOT NULL AND COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AND EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') THEN 'present' ELSE 'absent' END) = 'absent'").bind(meetingId, meetingId, meetingId).all<{ id: string; discordUserId: string }>();
+async function linkedAbsentMembers(db: D1Database, meetingId: string, bounded = false): Promise<{ id: string; discordUserId: string }[]> {
+  const missing = await db.prepare(`SELECT m.id, m.discord_user_id AS discordUserId FROM members m WHERE m.installation_id = 'primary' AND m.active = 1 AND m.discord_user_id IS NOT NULL AND COALESCE((SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1), CASE WHEN EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AND EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') THEN 'present' ELSE 'absent' END) = 'absent' ${bounded ? "LIMIT 101" : ""}`).bind(meetingId, meetingId, meetingId).all<{ id: string; discordUserId: string }>();
   return missing.results ?? [];
 }
-async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string; title: string }, options: { force?: boolean; actor?: Principal } = {}): Promise<{ posted: boolean; duplicate?: boolean; linkedMissingCount: number; messageId?: string }> {
+async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string; title: string }, options: { force?: boolean; actor?: Principal; scheduled?: boolean } = {}): Promise<{ posted: boolean; duplicate?: boolean; linkedMissingCount: number; messageId?: string }> {
   const config = await discordConfiguration(env); const db = requireDatabase(env); const now = new Date().toISOString();
   const existing = await db.prepare("SELECT status, message_id AS messageId, attempts FROM discord_attendance_notifications WHERE installation_id = 'primary' AND meeting_id = ?").bind(meeting.id).first<{ status: string; messageId?: string; attempts: number }>();
   if (!options.force && ["delivered", "no_recipients"].includes(existing?.status ?? "")) return { posted: existing?.status === "delivered", duplicate: true, linkedMissingCount: 0, messageId: existing?.messageId };
   if (!existing) await db.prepare("INSERT INTO discord_attendance_notifications (installation_id, meeting_id, status, attempts, updated_at) VALUES ('primary', ?, 'pending', 1, ?)").bind(meeting.id, now).run();
   else await db.prepare("UPDATE discord_attendance_notifications SET status = 'pending', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, meeting.id).run();
-  const members = await linkedAbsentMembers(db, meeting.id);
+  const members = await linkedAbsentMembers(db, meeting.id, options.scheduled);
   if (!members.length) {
     await db.prepare("UPDATE discord_attendance_notifications SET status = 'no_recipients', processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, now, meeting.id).run();
     return { posted: false, linkedMissingCount: 0 };
   }
   try {
+    if (options.scheduled && members.length > 100) throw new HttpError(409, "Scheduled notice recipient limit exceeded");
     const userIds = members.map((member) => member.discordUserId); const mentions = userIds.map((id) => `<@${id}>`).join(" ");
-    const payload = { content: `Attendance has closed for **${meeting.title}**. The following members are marked absent: ${mentions}\nIf you attended, use the button below to request a private review. Your attendance will not change until an Operator or Admin approves it.`, allowed_mentions: { parse: [], users: userIds }, components: [{ type: 1, components: [{ type: 2, style: 2, label: "Contest absence", custom_id: `lancerlogin-attendance:${meeting.id}` }] }] };
-    const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }); const messageId = String(body.id ?? "");
+    const deliveryNonce = options.scheduled ? { nonce: (await sha256(`discord-attendance:primary:${meeting.id}`)).slice(0, 25), enforce_nonce: true } : {};
+    const payload = { ...deliveryNonce, content: `Attendance has closed for **${meeting.title}**. The following members are marked absent: ${mentions}\nIf you attended, use the button below to request a private review. Your attendance will not change until an Operator or Admin approves it.`, allowed_mentions: { parse: [], users: userIds }, components: [{ type: 1, components: [{ type: 2, style: 2, label: "Contest absence", custom_id: `lancerlogin-attendance:${meeting.id}` }] }] };
+    if (options.scheduled && (payload.content.length > 2000 || new TextEncoder().encode(JSON.stringify(members)).byteLength > 65536)) throw new HttpError(409, "Scheduled notice message limit exceeded");
+    const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }, undefined, env); const messageId = String(body.id ?? "");
     if (!messageId) throw new HttpError(502, "Discord did not return a message identifier");
     const contestWindow = await db.prepare("SELECT discord_contest_window_hours AS contestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ contestWindowHours?: number }>();
     const expiresAt = new Date(Date.parse(now) + (contestWindow?.contestWindowHours ?? 24) * 3_600_000).toISOString();
     await db.batch([
-      ...members.map((member) => db.prepare("INSERT OR IGNORE INTO discord_attendance_recipients (installation_id, meeting_id, member_id, discord_user_id, message_id, delivered_at) VALUES ('primary', ?, ?, ?, ?, ?)").bind(meeting.id, member.id, member.discordUserId, messageId, now)),
+      ...(options.scheduled ? [db.prepare("INSERT OR IGNORE INTO discord_attendance_recipients (installation_id, meeting_id, member_id, discord_user_id, message_id, delivered_at) SELECT 'primary', ?, json_extract(value, '$.id'), json_extract(value, '$.discordUserId'), ?, ? FROM json_each(?)").bind(meeting.id, messageId, now, JSON.stringify(members))] : members.map((member) => db.prepare("INSERT OR IGNORE INTO discord_attendance_recipients (installation_id, meeting_id, member_id, discord_user_id, message_id, delivered_at) VALUES ('primary', ?, ?, ?, ?, ?)").bind(meeting.id, member.id, member.discordUserId, messageId, now))),
       db.prepare("UPDATE discord_attendance_notifications SET status = 'delivered', message_id = ?, channel_id = ?, expires_at = ?, deleted_at = NULL, processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(messageId, config.channelId, expiresAt, now, now, meeting.id),
     ]);
     if (options.actor) await writeAudit(db, options.actor, "discord.missing_notified", "meeting", meeting.id, { linkedMissingCount: members.length, messageId, manual: true });
@@ -1453,14 +1426,14 @@ async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string
     throw error;
   }
 }
-async function expireDiscordAttendanceNotifications(env: Env, config: Record<string, string>, contestWindowHours: number, now: number): Promise<void> {
+async function expireDiscordAttendanceNotifications(env: Env, config: Record<string, string>, contestWindowHours: number, now: number, bounded = false): Promise<void> {
   const db = requireDatabase(env);
-  const delivered = await db.prepare("SELECT meeting_id AS meetingId, message_id AS messageId, channel_id AS channelId, processed_at AS processedAt, expires_at AS expiresAt FROM discord_attendance_notifications WHERE installation_id = 'primary' AND status = 'delivered' AND message_id IS NOT NULL AND deleted_at IS NULL").all<{ meetingId: string; messageId: string; channelId?: string; processedAt?: string; expiresAt?: string }>();
+  const delivered = await db.prepare(`SELECT meeting_id AS meetingId, message_id AS messageId, channel_id AS channelId, processed_at AS processedAt, expires_at AS expiresAt FROM discord_attendance_notifications WHERE installation_id = 'primary' AND status = 'delivered' AND message_id IS NOT NULL AND deleted_at IS NULL ${bounded ? "AND COALESCE(expires_at, strftime('%Y-%m-%dT%H:%M:%fZ', processed_at, '+' || ? || ' hours')) <= ? AND (channel_id IS NULL OR channel_id = ?) ORDER BY updated_at LIMIT 1" : ""}`).bind(...(bounded ? [contestWindowHours, new Date(now).toISOString(), config.channelId] : [])).all<{ meetingId: string; messageId: string; channelId?: string; processedAt?: string; expiresAt?: string }>();
   for (const notice of delivered.results ?? []) {
     const expiry = notice.expiresAt ? Date.parse(notice.expiresAt) : Date.parse(notice.processedAt ?? "") + contestWindowHours * 3_600_000;
     if (!Number.isFinite(expiry) || expiry > now || notice.channelId && notice.channelId !== config.channelId) continue;
     try {
-      await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/${encodeURIComponent(notice.messageId)}`, { method: "DELETE" });
+      await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/${encodeURIComponent(notice.messageId)}`, { method: "DELETE" }, undefined, env);
     } catch (error) {
       if (!discordMessageMissing(error)) {
         await db.prepare("UPDATE discord_attendance_notifications SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(error instanceof Error ? error.message.slice(0, 300) : "Discord deletion failed", new Date().toISOString(), notice.meetingId).run();
@@ -1471,14 +1444,14 @@ async function expireDiscordAttendanceNotifications(env: Env, config: Record<str
     await db.prepare("UPDATE discord_attendance_notifications SET deleted_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(deletedAt, deletedAt, notice.meetingId, notice.messageId).run();
   }
 }
-async function processDiscordAttendanceNotifications(env: Env, now = Date.now()): Promise<void> {
+async function processDiscordAttendanceNotifications(env: Env, now = Date.now(), bounded = false): Promise<void> {
   const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0 || !discord.verifiedAt) return;
   const db = requireDatabase(env); const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, discord_contest_window_hours AS contestWindowHours, discord_channel_manager_enabled AS channelManagerEnabled FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number; contestWindowHours?: number; channelManagerEnabled?: number }>();
-  if (settings?.channelManagerEnabled) await expireDiscordAttendanceNotifications(env, await discordConfiguration(env), settings.contestWindowHours ?? 24, now);
-  const meetings = await db.prepare("SELECT m.id, m.title, m.ends_at AS endsAt, n.status AS notificationStatus, n.updated_at AS notificationUpdatedAt FROM meetings m LEFT JOIN discord_attendance_notifications n ON n.installation_id = m.installation_id AND n.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.required = 1 AND m.is_test = 0 AND m.ends_at IS NOT NULL ORDER BY m.ends_at DESC LIMIT 100").all<{ id: string; title: string; endsAt: string; notificationStatus?: string; notificationUpdatedAt?: string }>();
+  if (!bounded && settings?.channelManagerEnabled) await expireDiscordAttendanceNotifications(env, await discordConfiguration(env), settings.contestWindowHours ?? 24, now);
+  const meetings = await db.prepare(`SELECT m.id, m.title, m.ends_at AS endsAt, n.status AS notificationStatus, n.updated_at AS notificationUpdatedAt FROM meetings m LEFT JOIN discord_attendance_notifications n ON n.installation_id = m.installation_id AND n.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.required = 1 AND m.is_test = 0 AND m.ends_at IS NOT NULL ${bounded ? "AND (n.status IS NULL OR n.status = 'failed' OR (n.status = 'pending' AND n.updated_at <= ?)) AND m.ends_at <= ? ORDER BY COALESCE(n.updated_at, m.ends_at) ASC" : "ORDER BY m.ends_at DESC"} LIMIT 100`).bind(...(bounded ? [new Date(now - 300_000).toISOString(), new Date(now - (settings?.lateScanMinutes ?? 30) * 60_000).toISOString()] : [])).all<{ id: string; title: string; endsAt: string; notificationStatus?: string; notificationUpdatedAt?: string }>();
   for (const meeting of meetings.results ?? []) {
-    const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30)); const newlyEligible = cutoff <= now; const retry = meeting.notificationStatus === "failed";
-    if ((!meeting.notificationStatus && newlyEligible) || retry) await sendDiscordAttendanceNotification(env, meeting);
+    const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30)); const newlyEligible = cutoff <= now; const retry = meeting.notificationStatus === "failed" || (bounded && meeting.notificationStatus === "pending" && Date.parse(meeting.notificationUpdatedAt ?? "") <= now - 300_000);
+    if ((!meeting.notificationStatus && newlyEligible) || retry) { await sendDiscordAttendanceNotification(env, meeting, { scheduled: bounded }); if (bounded) break; }
   }
 }
 type DiscordAnomalyRow = { memberId: string; firstName: string; lastName: string; checkedInAt?: string; checkedOutAt?: string; lateMinutes?: number; earlyMinutes?: number };
@@ -1498,14 +1471,18 @@ function discordAnomalyReportContent(meeting: { title: string; startsAt: string 
   const omitted = lines.length - included.length;
   return `${header}\n${included.join("\n")}${omitted ? `\n… ${omitted} more anomalous member${omitted === 1 ? "" : "s"} omitted.` : ""}`;
 }
-async function sendDiscordAnomalyReport(env: Env, config: Record<string, string>, channelId: string, meeting: { id: string; title: string; startsAt: string; endsAt: string }, thresholds: { late: number; early: number }): Promise<void> {
+async function sendDiscordAnomalyReport(env: Env, config: Record<string, string>, channelId: string, meeting: { id: string; title: string; startsAt: string; endsAt: string }, thresholds: { late: number; early: number }, bounded = false): Promise<void> {
   const db = requireDatabase(env); const now = new Date().toISOString();
   const existing = await db.prepare("SELECT status, nonce, message_id AS messageId, attempts FROM discord_anomaly_reports WHERE installation_id = 'primary' AND meeting_id = ?").bind(meeting.id).first<{ status: string; nonce?: string; messageId?: string; attempts: number }>();
   if (["delivered", "no_anomalies"].includes(existing?.status ?? "")) return;
   const nonce = existing?.nonce ?? (await sha256(`discord-anomaly-report:primary:${meeting.id}`)).slice(0, 25);
   if (!existing) await db.prepare("INSERT INTO discord_anomaly_reports (installation_id, meeting_id, channel_id, status, nonce, attempts, updated_at) VALUES ('primary', ?, ?, 'pending', ?, 1, ?)").bind(meeting.id, channelId, nonce, now).run();
   else await db.prepare("UPDATE discord_anomaly_reports SET channel_id = ?, status = 'pending', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(channelId, now, meeting.id).run();
-  const raw = await db.prepare("SELECT m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt FROM members m WHERE m.installation_id = 'primary' AND COALESCE(m.attendance_required_from, substr(m.created_at, 1, 10)) <= substr(?, 1, 10) AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ?) OR EXISTS (SELECT 1 FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ?)) ORDER BY m.last_name, m.first_name, m.external_id").bind(meeting.id, meeting.id, meeting.startsAt, meeting.id, meeting.id).all<Omit<DiscordAnomalyRow, "lateMinutes" | "earlyMinutes">>();
+  const raw = await db.prepare(`SELECT m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt FROM members m WHERE m.installation_id = 'primary' AND COALESCE(m.attendance_required_from, substr(m.created_at, 1, 10)) <= substr(?, 1, 10) AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ?) OR EXISTS (SELECT 1 FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ?)) ORDER BY m.last_name, m.first_name, m.external_id ${bounded ? "LIMIT 1001" : ""}`).bind(meeting.id, meeting.id, meeting.startsAt, meeting.id, meeting.id).all<Omit<DiscordAnomalyRow, "lateMinutes" | "earlyMinutes">>();
+  if (bounded && (raw.results?.length ?? 0) > 1000) {
+    await db.prepare("UPDATE discord_anomaly_reports SET status = 'failed', last_error = 'Scheduled report row limit exceeded', updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, meeting.id).run();
+    throw new HttpError(409, "Scheduled report row limit exceeded");
+  }
   const anomalies = (raw.results ?? []).flatMap((row) => {
     const values = attendanceAnomalyMinutes({ ...meeting, ...row }, thresholds.late, thresholds.early);
     return values.lateMinutes === undefined && values.earlyMinutes === undefined ? [] : [{ ...row, ...values }];
@@ -1516,7 +1493,7 @@ async function sendDiscordAnomalyReport(env: Env, config: Record<string, string>
   }
   try {
     const payload = { content: discordAnomalyReportContent(meeting, anomalies), allowed_mentions: { parse: [] }, nonce, enforce_nonce: true };
-    const { body } = await discordRequest(config, `/channels/${encodeURIComponent(channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) });
+    const { body } = await discordRequest(config, `/channels/${encodeURIComponent(channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }, undefined, env);
     const messageId = String(body.id ?? "");
     if (!messageId) throw new HttpError(502, "Discord did not return an anomaly-report message identifier");
     const processedAt = new Date().toISOString();
@@ -1526,7 +1503,7 @@ async function sendDiscordAnomalyReport(env: Env, config: Record<string, string>
     throw error;
   }
 }
-async function processDiscordAnomalyReports(env: Env, now = Date.now()): Promise<void> {
+async function processDiscordAnomalyReports(env: Env, now = Date.now(), bounded = false): Promise<void> {
   const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0 || !discord.verifiedAt) return;
   const db = requireDatabase(env);
   const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes, discord_anomaly_reports_enabled AS enabled, discord_anomaly_report_channel_id AS channelId, discord_anomaly_reports_enabled_at AS enabledAt FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes?: number; anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number; enabled?: number; channelId?: string; enabledAt?: string }>();
@@ -1534,12 +1511,13 @@ async function processDiscordAnomalyReports(env: Env, now = Date.now()): Promise
   const lateScanMinutes = settings.lateScanMinutes ?? 30; const enabledAt = Date.parse(settings.enabledAt);
   if (!Number.isFinite(enabledAt)) return;
   const earliestEnd = new Date(enabledAt - lateScanMinutes * 60_000).toISOString();
-  const meetings = await db.prepare("SELECT m.id, m.title, m.starts_at AS startsAt, m.ends_at AS endsAt, r.status AS reportStatus FROM meetings m LEFT JOIN discord_anomaly_reports r ON r.installation_id = m.installation_id AND r.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.is_test = 0 AND m.ends_at IS NOT NULL AND m.ends_at >= ? AND (r.status IS NULL OR r.status IN ('pending', 'failed')) ORDER BY m.ends_at ASC LIMIT 100").bind(earliestEnd).all<{ id: string; title: string; startsAt: string; endsAt: string; reportStatus?: string }>();
+  const meetings = await db.prepare(`SELECT m.id, m.title, m.starts_at AS startsAt, m.ends_at AS endsAt, r.status AS reportStatus FROM meetings m LEFT JOIN discord_anomaly_reports r ON r.installation_id = m.installation_id AND r.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.is_test = 0 AND m.ends_at IS NOT NULL AND m.ends_at >= ? AND (r.status IS NULL OR r.status IN ('pending', 'failed')) ${bounded ? "AND m.ends_at <= ? ORDER BY COALESCE(r.updated_at, m.ends_at) ASC" : "ORDER BY m.ends_at ASC"} LIMIT 100`).bind(earliestEnd, ...(bounded ? [new Date(now - lateScanMinutes * 60_000).toISOString()] : [])).all<{ id: string; title: string; startsAt: string; endsAt: string; reportStatus?: string }>();
   const config = await discordConfiguration(env);
   for (const meeting of meetings.results ?? []) {
     const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, lateScanMinutes));
     if (cutoff < enabledAt || cutoff > now) continue;
-    try { await sendDiscordAnomalyReport(env, config, settings.channelId, meeting, { late: settings.anomalyLateThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES, early: settings.anomalyEarlyThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES }); } catch { /* One failed report must not delay other eligible meetings. */ }
+    try { await sendDiscordAnomalyReport(env, config, settings.channelId, meeting, { late: settings.anomalyLateThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES, early: settings.anomalyEarlyThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES }, bounded); } catch { /* One failed report must not delay other eligible meetings. */ }
+    if (bounded) break;
   }
 }
 async function discordMissing(request: Request, env: Env): Promise<Response> {
@@ -1572,16 +1550,6 @@ async function resolveDiscordContest(request: Request, env: Env): Promise<Respon
   const results = await db.batch(statements); const result = results.at(-1)!;
   if ((result.meta?.changes ?? 1) < 1) throw new HttpError(404, "Open contest not found");
   await writeAudit(db, principal, "discord.contest_resolved", "member", input.memberId, { meetingId: input.meetingId, resolution: input.resolution, reviewNote: input.reviewNote.trim() }); return response({ resolved: true, attendanceChanged: input.resolution === "approved" });
-}
-function hexBytes(value: string): Uint8Array { if (!/^[0-9a-f]+$/i.test(value) || value.length % 2) throw new Error("Invalid hexadecimal value"); return Uint8Array.from(value.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16)); }
-const byteBuffer = (value: Uint8Array): ArrayBuffer => Uint8Array.from(value).buffer;
-async function verifyDiscordInteraction(request: Request, config: Record<string, string>, body: string): Promise<boolean> {
-  const signature = request.headers.get("x-signature-ed25519"); const timestamp = request.headers.get("x-signature-timestamp");
-  if (!signature || !timestamp || !/^\d+$/.test(timestamp) || Math.abs(Date.now() - Number(timestamp) * 1000) > 5 * 60_000) return false;
-  try {
-    const key = await crypto.subtle.importKey("raw", byteBuffer(hexBytes(config.publicKey)), { name: "Ed25519" }, false, ["verify"]);
-    return crypto.subtle.verify({ name: "Ed25519" }, key, byteBuffer(hexBytes(signature)), byteBuffer(new TextEncoder().encode(timestamp + body)));
-  } catch { return false; }
 }
 const discordEphemeral = (content: string) => response({ type: 4, data: { content, flags: 64, allowed_mentions: { parse: [] } } });
 type DiscordReportRow = { title: string; startsAt: string; endsAt: string; attendanceWeight?: number; correction?: "present" | "absent" | "excused"; checkedInAt?: string; checkedOutAt?: string };
@@ -1624,9 +1592,10 @@ async function discordAttendanceReport(db: D1Database, discordUserId: string): P
   const result = await db.prepare("SELECT mt.title, mt.starts_at AS startsAt, mt.ends_at AS endsAt, mt.attendance_weight AS attendanceWeight, (SELECT c.disposition FROM attendance_corrections c WHERE c.installation_id = mt.installation_id AND c.member_id = ? AND c.meeting_id = mt.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = mt.installation_id AND e.member_id = ? AND e.meeting_id = mt.id AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = mt.installation_id AND e.member_id = ? AND e.meeting_id = mt.id AND e.action = 'check_out') AS checkedOutAt FROM meetings mt WHERE mt.installation_id = 'primary' AND mt.deleted_at IS NULL AND mt.is_test = 0 AND mt.ends_at <= ? AND substr(mt.starts_at, 1, 10) >= ? AND substr(mt.starts_at, 1, 10) >= ? ORDER BY mt.starts_at DESC").bind(member.id, member.id, member.id, now, participationStartsOn, reportingStartsOn).all<DiscordReportRow>();
   return discordReportContent(result.results ?? [], settings?.lateScanMinutes ?? 30);
 }
-async function discordInteraction(request: Request, env: Env): Promise<Response> {
-  const { config, record } = await discordInteractionConfiguration(env); const raw = await request.text();
-  if (!await verifyDiscordInteraction(request, config, raw)) throw new HttpError(401, "Discord interaction signature is invalid");
+async function discordInteraction(request: Request, env: Env, execution?:WorkerContext): Promise<Response> {
+  const receivedAt=Date.now();
+  const [{config,record},raw]=await discordReadDeadline(Promise.all([discordInteractionConfiguration(env),readDiscordBody(request)]),receivedAt+2200);
+  if (!await discordReadDeadline(verifyDiscordInteraction(request, config, raw),receivedAt+2400)) throw new HttpError(401, "Discord interaction signature is invalid");
   let parsed: unknown;
   try { parsed = JSON.parse(raw); } catch { return discordEphemeral("This Discord request is malformed. Try the command again, or ask an Operator for help."); }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return discordEphemeral("This Discord request is malformed. Try the command again, or ask an Operator for help.");
@@ -1642,6 +1611,12 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
     return discordEphemeral("LancerLogin is verified. You can return to the dashboard.");
   }
   if (!record?.verifiedAt) return discordEphemeral("This LancerLogin Discord integration has not been verified by an Admin.");
+  if(!documentationAvailable&&isAttachmentProof(interaction))return Response.json({type:4,data:{content:'Activity Documentation is unavailable in this release.',flags:64}});
+  if(isAttachmentProof(interaction))return attachmentInteraction(env,interaction,config,record.iv,execution,receivedAt);
+  if(!documentationAvailable&&(isDocumentationFileDiscord(interaction)||isDocumentationDiscord(interaction)))return Response.json({type:4,data:{content:'Activity Documentation is unavailable in this release.',flags:64}});
+  if(isDocumentationFileDiscord(interaction))return documentationFileDiscordInteraction(env,interaction,config,record.iv,execution,receivedAt);
+  if(isDocumentationDiscord(interaction))return documentationDiscordInteraction(env,interaction,config,record.iv,execution,receivedAt);
+  if(isHourDiscord(interaction))return hourDiscordInteraction(env,interaction,config,record.iv,execution,receivedAt);
   if (interaction.type === 2 && interaction.data?.name === "attendance-report") {
     if (interaction.guild_id !== config.guildId) return discordEphemeral("Use this command in the Discord server configured for this LancerLogin installation.");
     if (!discordUserId || interaction.data.options !== undefined && (!Array.isArray(interaction.data.options) || interaction.data.options.length > 0)) return discordEphemeral("This attendance-report request is malformed. Try /attendance-report again, or ask an Operator for help.");
@@ -1757,15 +1732,15 @@ async function enqueueDiscordCalendarRestore(db: D1Database, env: Env, principal
 function addDiscordCalendarSummaries(...summaries: DiscordCalendarSyncSummary[]): DiscordCalendarSyncSummary { return summaries.reduce((total, item) => ({ synced: total.synced + item.synced, queued: total.queued + item.queued, skipped: total.skipped + item.skipped, failed: total.failed + item.failed, outcomes: [...total.outcomes, ...item.outcomes] }), discordCalendarEmptySummary()); }
 type DiscordScheduledEvent = { id?: string; entity_metadata?: { location?: string } };
 async function discordCalendarCorrelationLocation(meetingId: string, generation: number): Promise<string> { return `LancerLogin · ${(await sha256(`discord-calendar:primary:${meetingId}:${generation}`)).slice(0, 24)}`; }
-async function reconcileDiscordCalendarEvent(config: Record<string, string>, correlationLocation: string): Promise<string | undefined> {
-  const listed = await discordRequest<DiscordScheduledEvent[]>(config, `/guilds/${config.guildId}/scheduled-events`, { method: "GET" });
+async function reconcileDiscordCalendarEvent(config: Record<string, string>, correlationLocation: string, env?: Env): Promise<string | undefined> {
+  const listed = await discordRequest<DiscordScheduledEvent[]>(config, `/guilds/${config.guildId}/scheduled-events`, { method: "GET" }, undefined, env);
   if (!Array.isArray(listed.body)) throw new DiscordResponseError(502, "Discord did not return a scheduled event list");
   return listed.body.find((event) => event.entity_metadata?.location === correlationLocation && typeof event.id === "string" && event.id.length > 0)?.id;
 }
-async function processDiscordCalendarOperations(env: Env, meetingIds?: string[]): Promise<DiscordCalendarSyncSummary> {
+async function processDiscordCalendarOperations(env: Env, meetingIds?: string[], batchLimit = DISCORD_CALENDAR_OPERATION_BATCH_LIMIT): Promise<DiscordCalendarSyncSummary> {
   if (!await discordCalendarIsReady(env)) return discordCalendarEmptySummary();
   const db = requireDatabase(env); const now = new Date().toISOString(); const filter = meetingIds?.length ? `AND o.meeting_id IN (${meetingIds.map(() => "?").join(",")}) AND (o.status IN ('pending', 'failed') OR (o.status = 'processing' AND o.lease_expires_at <= ?))` : "AND (o.status = 'pending' OR (o.status = 'failed' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ?) OR (o.status = 'processing' AND o.lease_expires_at <= ?))"; const values = meetingIds?.length ? [...meetingIds, now] : [now, now];
-  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.generation, o.action, o.event_id AS eventId, o.status, o.attempts, o.revision, o.actor_user_id AS actorUserId FROM discord_calendar_operations o WHERE o.installation_id = 'primary' ${filter} ORDER BY o.generation, CASE o.action WHEN 'delete' THEN 0 ELSE 1 END, o.updated_at LIMIT ${DISCORD_CALENDAR_OPERATION_BATCH_LIMIT}`).bind(...values).all<DiscordCalendarOperation>();
+  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.generation, o.action, o.event_id AS eventId, o.status, o.attempts, o.revision, o.actor_user_id AS actorUserId FROM discord_calendar_operations o WHERE o.installation_id = 'primary' ${filter} ORDER BY o.generation, CASE o.action WHEN 'delete' THEN 0 ELSE 1 END, o.updated_at LIMIT ${batchLimit}`).bind(...values).all<DiscordCalendarOperation>();
   const operations = result.results ?? []; if (!operations.length) return discordCalendarEmptySummary();
   let config: Record<string, string>; try { config = await discordConfiguration(env); } catch { return { ...discordCalendarEmptySummary(), queued: operations.length }; }
   const summary = discordCalendarEmptySummary();
@@ -1777,7 +1752,7 @@ async function processDiscordCalendarOperations(env: Env, meetingIds?: string[])
     let title = "Meeting";
     try {
       if (operation.action === "delete") {
-        try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${operation.eventId}`, { method: "DELETE" }); }
+        try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${operation.eventId}`, { method: "DELETE" }, undefined, env); }
         catch (error) { if (!(error instanceof DiscordResponseError) || error.discordStatus !== 404) throw error; }
         const completedAt = new Date().toISOString(); await db.batch([
           db.prepare("UPDATE discord_calendar_event_mappings SET event_id = NULL, synced_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND active = 0 AND EXISTS (SELECT 1 FROM discord_calendar_operations WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'delete' AND lease_token = ?)").bind(completedAt, completedAt, operation.meetingId, operation.generation, operation.meetingId, operation.generation, operation.leaseToken),
@@ -1796,10 +1771,10 @@ async function processDiscordCalendarOperations(env: Env, meetingIds?: string[])
         const payload = { name: meeting.title, description: meeting.notes || "LancerLogin meeting", privacy_level: 2, entity_type: 3, scheduled_start_time: meeting.startsAt, scheduled_end_time: meeting.endsAt, entity_metadata: { location: correlationLocation } };
         let eventId = mapping.eventId ?? undefined;
         let needsReconciliation = operation.status === "processing" || Number(operation.attempts) > 0;
-        if (eventId) try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }); } catch (error) { if (error instanceof DiscordResponseError && error.discordStatus === 404) { eventId = undefined; needsReconciliation = true; } else throw error; }
-        if (!eventId && needsReconciliation) eventId = await reconcileDiscordCalendarEvent(config, correlationLocation);
-        if (eventId && needsReconciliation) await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) });
-        if (!eventId) { const created = await discordRequest(config, `/guilds/${config.guildId}/scheduled-events`, { method: "POST", body: JSON.stringify(payload) }); eventId = String(created.body.id ?? ""); if (!eventId) throw new DiscordResponseError(502, "Discord did not return a scheduled event ID"); }
+        if (eventId) try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }, undefined, env); } catch (error) { if (error instanceof DiscordResponseError && error.discordStatus === 404) { eventId = undefined; needsReconciliation = true; } else throw error; }
+        if (!eventId && needsReconciliation) eventId = await reconcileDiscordCalendarEvent(config, correlationLocation, env);
+        if (eventId && needsReconciliation) await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }, undefined, env);
+        if (!eventId) { const created = await discordRequest(config, `/guilds/${config.guildId}/scheduled-events`, { method: "POST", body: JSON.stringify(payload) }, undefined, env); eventId = String(created.body.id ?? ""); if (!eventId) throw new DiscordResponseError(502, "Discord did not return a scheduled event ID"); }
         const completedAt = new Date().toISOString(); const completion = await db.batch([
           db.prepare("UPDATE discord_calendar_event_mappings SET event_id = ?, synced_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND active = 1 AND EXISTS (SELECT 1 FROM discord_calendar_operations WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert' AND lease_token = ?)").bind(eventId, completedAt, completedAt, operation.meetingId, operation.generation, operation.meetingId, operation.generation, operation.leaseToken),
           db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, updated_at) SELECT 'primary', 'discord', ?, ?, ? WHERE EXISTS (SELECT 1 FROM discord_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND active = 1) AND EXISTS (SELECT 1 FROM discord_calendar_operations WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert' AND lease_token = ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, updated_at = excluded.updated_at").bind(`calendar:${operation.meetingId}`, eventId, completedAt, operation.meetingId, operation.generation, operation.meetingId, operation.generation, operation.leaseToken),
@@ -1878,7 +1853,7 @@ async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ change
     ? `**${kiosk.name}** · ${online ? "online" : "offline"} · reader ${kiosk.readerOnline ? "online" : "offline"} · release ${kiosk.releaseVersion ?? "unknown"}${online ? "" : ` · last seen ${kiosk.lastSeenAt ?? "never"}`}`
     : "No kiosk is paired.";
   if (pin) {
-    const tracked = await upsertTrackedDiscordMessage(db, config, "kiosk-status", content, true);
+    const tracked = await upsertTrackedDiscordMessage(db, config, "kiosk-status", content, true, undefined, env);
     return { changed: tracked.changed, messageId: tracked.messageId, online, kioskId: kiosk?.id };
   }
   const contentHash = await sha256(content);
@@ -1888,11 +1863,11 @@ async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ change
   const payload = { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) };
   let messageId: string;
   try {
-    const { body } = await discordRequest(config, existing?.externalId ? `${messagesPath}/${encodeURIComponent(existing.externalId)}` : messagesPath, payload);
+    const { body } = await discordRequest(config, existing?.externalId ? `${messagesPath}/${encodeURIComponent(existing.externalId)}` : messagesPath, payload, undefined, env);
     messageId = String(body.id ?? existing?.externalId ?? "");
   } catch (error) {
     if (!(error instanceof DiscordResponseError) || error.discordStatus !== 404 || error.discordCode !== 10_008 || !existing?.externalId) throw error;
-    const { body } = await discordRequest(config, messagesPath, { ...payload, method: "POST" });
+    const { body } = await discordRequest(config, messagesPath, { ...payload, method: "POST" }, undefined, env);
     messageId = String(body.id ?? "");
   }
   if (!messageId) throw new HttpError(502, "Discord did not return a kiosk-status message identifier");
@@ -1907,7 +1882,7 @@ async function syncDiscordManagedSurface(env: Env): Promise<void> {
   const config = await discordConfiguration(env);
   await syncDiscordKioskStatus(env, true);
   const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. Use **View my attendance report** below or `/attendance-report` to receive your private report. After an absence notice appears, only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
-  await upsertTrackedDiscordMessage(db, config, "channel-manager-howto", guidance, false, discordAttendanceReportComponents);
+  await upsertTrackedDiscordMessage(db, config, "channel-manager-howto", guidance, false, discordAttendanceReportComponents, env);
 }
 async function discordKioskStatus(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]);
@@ -1925,8 +1900,22 @@ async function privacySettings(request: Request, env: Env): Promise<Response> {
 
 type BackupScope = "meetings" | "roster" | "installation";
 const tableColumns = {
+  ...documentationColumns,
+  ...initiativeColumns,
+  ...metricColumns,
+  ...artifactColumns,
+  ...uploadColumns,
+  ...driveCopyColumns,
+  ...claimColumns,
+  ...storageColumns,
+  ...publicationColumns,
+  ...hoursColumns,
+  ...accountingColumns,
+  ...reviewColumns,
   installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id", "google_enabled", "resend_enabled", "discord_enabled", "google_calendar_enabled"],
   organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at"],
+  platform_module_configuration: ["installation_id", "hours_enabled", "documentation_enabled", "revision"],
+  platform_module_grants: ["installation_id", "user_id", "hours_manage", "documentation_manage"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at"],
   meeting_weight_categories: ["id", "installation_id", "name", "weight", "minimum_duration_minutes", "position", "active", "created_by", "created_at", "updated_at"],
@@ -1939,6 +1928,7 @@ const tableColumns = {
   kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version", "pending_events", "last_sync_at", "error_category"],
   simulated_kiosk_sessions: ["installation_id", "pairing_code_id", "name", "active", "online", "last_seen_at", "created_by", "created_at"],
   encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at", "verified_at"],
+  google_connections: ["installation_id", "revision", "active_ciphertext", "active_iv", "candidate_ciphertext", "candidate_iv", "updated_at", "grant_error", "shared_mode", "grant_proof_id"],
   google_calendar_authorizations: ["installation_id", "ciphertext", "iv", "key_version", "authorized_at", "verified_at", "updated_at"],
   google_calendar_event_mappings: ["installation_id", "meeting_id", "event_id", "generation", "active", "synced_at", "last_error", "updated_at"],
   google_calendar_operations: ["installation_id", "meeting_id", "event_id", "action", "starts_at", "ends_at", "status", "attempts", "next_attempt_at", "last_error", "updated_at"],
@@ -1956,11 +1946,20 @@ const tableColumns = {
 type BackupTable = keyof typeof tableColumns;
 // Restore parents before children so SQLite's immediate foreign-key checks remain valid.
 const installationTables: BackupTable[] = [
-  "installations", "organization_settings", "members", "users", "meeting_weight_categories", "meetings", "meeting_templates",
+  "installations", "organization_settings", "members", "users", "platform_module_configuration", "platform_module_grants", "meeting_weight_categories", "meetings", "meeting_templates",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
-  "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "integration_deliveries",
+  "kiosks", "simulated_kiosk_sessions", "google_connections", "encrypted_integrations", "google_calendar_authorizations", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
   "google_calendar_event_mappings", "google_calendar_operations", "discord_calendar_event_mappings", "discord_calendar_operations",
+  "hours_categories", "hours_teams", "hours_activities", "hours_activity_staff", "hours_activity_teams",
+  "hours_entry_settings", "hours_reopen_windows", "hours_entries", "hours_entry_revisions", "hours_submission_keys",
+  "hours_correction_requests", "hours_correction_resolutions",
+  "hours_publication_intents", "hours_publication_generations", "hours_publication_operations",
+  "documentation_sections", "documentation_notes", "documentation_note_revisions", "documentation_note_submission_keys",
+  "documentation_initiatives", "documentation_initiative_activities", "documentation_initiative_revisions", "documentation_initiative_revision_activities",
+  "documentation_metrics", "documentation_metric_revisions", "documentation_metric_activities", "documentation_metric_revision_activities", "documentation_metric_initiatives", "documentation_metric_revision_initiatives",
+  "documentation_definitions", "documentation_definition_revisions", "documentation_claims", "documentation_claim_revisions", "documentation_claim_revision_activities", "documentation_claim_revision_teams", "documentation_claim_revision_initiatives", "documentation_claim_revision_artifacts", "documentation_claim_revision_metrics", "documentation_claim_reviews",
+  "google_drive_storage", "documentation_artifacts", "documentation_artifact_revisions", "documentation_artifact_activities", "documentation_artifact_revision_activities", "documentation_artifact_initiatives", "documentation_artifact_revision_initiatives", "documentation_artifact_reviews", "documentation_upload_operations", "documentation_drive_copy_operations",
 ];
 const meetingTables: BackupTable[] = ["meeting_weight_categories", "meetings", "meeting_templates", "attendance_events", "attendance_corrections", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports"];
 const rosterTables: BackupTable[] = ["members"];
@@ -1971,20 +1970,20 @@ const safeBackupValue = (value: unknown) => value === null || ["string", "number
 async function backupData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const scope = new URL(request.url).searchParams.get("scope") as BackupScope;
   if (!["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Backup scope must be meetings, roster, or installation");
-  const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
-    const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
+  const selected = tablesForScope(scope);
+  // A single D1 read batch keeps entry, revision and receipt tables at one snapshot.
+  const snapshot = await db.batch(selected.map(table => {
+    const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'";
+    return db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`);
   }));
-  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 13, scope, exportedAt, tables: Object.fromEntries(entries) };
-  const updateRequestId = new URL(request.url).searchParams.get("updateRequestId");
-  if (updateRequestId) {
-    if (scope !== "installation") throw new HttpError(400, "Web updates require an entire-installation backup");
-    await recordUpdateBackup(env, updateRequestId);
-  }
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 13 });
+  if (snapshot.length !== selected.length || snapshot.some(result => !result || result.success === false || !Array.isArray(result.results))) throw new HttpError(503,"Backup snapshot is unavailable; retry without using a partial file");
+  const entries = selected.map((table,index) => [table,table==='documentation_drive_copy_operations'?(snapshot[index]?.results??[]).map(r=>({...r as Record<string,unknown>,resource_ciphertext:null,resource_iv:null,lease_token:null,lease_expires_ms:0})):table==='documentation_upload_operations'?(snapshot[index]?.results??[]).map(r=>({...r as Record<string,unknown>,ticket_hash:null,session_ciphertext:null,session_iv:null,lease_token:null,lease_expires_ms:0})):(snapshot[index]?.results ?? [])] as const);
+  const exportedAt = new Date().toISOString(); const backup = { product: "LancerLogin", schemaVersion: 28, scope, exportedAt, tables: Object.fromEntries(entries) };
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 28 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28; scope: BackupScope; exportedAt: string; tables: Record<BackupTable, Record<string, unknown>[]> };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
   organization_settings: tableColumns.organization_settings.slice(0, -9),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
@@ -1995,14 +1994,15 @@ const legacyMeetingTables = meetingTables.filter((table) => table !== "meeting_w
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
-  const schemaVersion = Number(value.schemaVersion) as 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  const schemaVersion = Number(value.schemaVersion) as NormalizedBackup['schemaVersion'];
   const sourceTables = value.tables;
-  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)));
+  if (scope === "installation" && Array.isArray(sourceTables.users) && sourceTables.users.some((row: unknown) => !isObject(row) || typeof row.role !== "string" || !["admin", "operator", "staff"].includes(row.role))) throw new HttpError(400, "Backup contains an invalid user role");
+  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 28 && Object.hasOwn(driveCopyColumns,table)) && !(schemaVersion < 27 && Object.hasOwn(uploadColumns,table)) && !(schemaVersion < 26 && table === "documentation_note_submission_keys") && !(schemaVersion < 25 && Object.hasOwn(claimColumns,table)) && !(schemaVersion < 24 && (Object.hasOwn(artifactColumns,table)||Object.hasOwn(storageColumns,table))) && !(schemaVersion < 23 && Object.hasOwn(metricColumns,table)) && !(schemaVersion < 22 && Object.hasOwn(initiativeColumns,table)) && !(schemaVersion < 21 && Object.hasOwn(documentationColumns,table)) && !(schemaVersion < 20 && Object.hasOwn(publicationColumns,table)) && !(schemaVersion < 19 && Object.hasOwn(reviewColumns,table)) && !(schemaVersion < 18 && Object.hasOwn(accountingColumns,table)) && !(schemaVersion < 17 && table.startsWith("hours_")) && !(schemaVersion < 16 && table === "google_connections") && !(schemaVersion < 14 && ["platform_module_configuration", "platform_module_grants"].includes(table)) && !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)));
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -8) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -8) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -3) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -3) : tableColumns[table];
+    const columns = schemaVersion < 27 && (table === 'documentation_artifacts' || table === 'documentation_artifact_revisions') ? tableColumns[table].filter(c=>!['kind','file_id','file_root_id','file_generation','file_sha256','file_size','file_mime','validation_outcome','author_member_id','actor_member_id','source',...artifactPreservedColumns].includes(c)) : schemaVersion === 27 && (table === 'documentation_artifacts' || table === 'documentation_artifact_revisions') ? tableColumns[table].filter(c=>!artifactPreservedColumns.includes(c)) : schemaVersion < 26 && table === "documentation_notes" ? tableColumns.documentation_notes.slice(0,9) : schemaVersion < 26 && table === "documentation_note_revisions" ? tableColumns.documentation_note_revisions.slice(0,7) : schemaVersion < 24 && table === "documentation_sections" ? tableColumns.documentation_sections.slice(0,-1) : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -8) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -8) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -3) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -3) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
@@ -2032,6 +2032,27 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
     for (const row of latest.values()) tables.attendance_events.push({ ...row, id: `legacy-restore-checkout:${row.member_id}:${row.meeting_id}`, source: "manual", kiosk_event_id: null, action: "check_out" });
   }
   if (tables.discord_attendance_contests) tables.discord_attendance_contests = tables.discord_attendance_contests.map((row) => ({ submitted_by_discord_user_id: null, review_note: null, ...row }));
+  if (scope === "installation") {
+    if (tables.installations.length && !tables.users.some(row => row.installation_id === "primary" && row.role === "admin" && row.active === 1)) throw new HttpError(400, "Installation backup must retain an active Admin");
+    if (schemaVersion < 17) tables.hours_categories = [["event","Event","event"],["team-support","Team Support","team"],["other-service","Other Service","task"]].map(([id,name,mode]) => ({ installation_id: "primary",id,name,mode,impact_default:0,archived:0,revision:0,created_at:value.exportedAt,updated_at:value.exportedAt }));
+    validateModuleBackup(tables);
+    validateHoursBackup(tables);
+    if(schemaVersion<24)tables.documentation_sections=tables.documentation_sections.map(r=>({...r,files_enabled:1}));
+    if(schemaVersion<26){tables.documentation_notes=tables.documentation_notes.map(r=>({...r,author_member_id:null,source:'staff',review_decision:null,reviewed_revision:null,reviewer_user_id:null,reviewed_at:null}));tables.documentation_note_revisions=tables.documentation_note_revisions.map(r=>({...r,actor_member_id:null,source:'staff',review_decision:null,reviewed_revision:null,reviewer_user_id:null,reviewed_at:null}));}
+    validateDocumentationBackup(tables);
+    if(schemaVersion<27){for(const name of ['documentation_artifacts','documentation_artifact_revisions'] as const)tables[name]=tables[name].map(r=>({...r,kind:'external-link',file_id:null,file_root_id:null,file_generation:null,file_sha256:null,file_size:null,file_mime:null,validation_outcome:null,...(name==='documentation_artifacts'?{author_member_id:null,source:'staff'}:{actor_member_id:null})}));}
+    if(schemaVersion<28)for(const name of ['documentation_artifacts','documentation_artifact_revisions'] as const)tables[name]=tables[name].map(r=>({...r,file_source_id:null,file_source_version:null,file_copied_at:null,file_version:null}));
+    validateArtifactBackup(tables);
+    prepareDriveCopyRestore(tables);
+    prepareUploadRestore(tables);
+    prepareStorageRestore(tables);
+    validateInitiativeBackup(tables);
+    validateMetricBackup(tables);
+    validateClaimBackup(tables);
+    if (schemaVersion < 18) tables.hours_entry_settings = [{installation_id:"primary",reporting_days:7,reopen_hours:24,revision:0}];
+    try { validateAccountingBackup(tables,value.exportedAt); validateReviewBackup(tables,value.exportedAt); preparePublicationRestore(tables); } catch { throw new HttpError(400,"Invalid hour accounting backup"); }
+  }
+  validateGoogleConnectionBackup(tables.google_connections ?? []);
   return { product: "LancerLogin", schemaVersion, scope, exportedAt: value.exportedAt, tables };
 }
 
@@ -2043,6 +2064,7 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: BackupScope; confirmation?: string; backup?: unknown }>(request, 10_485_760); const scope = input.scope;
   if (!scope || !["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Restore scope must be meetings, roster, or installation");
   const expected = `RESTORE ${scope.toUpperCase()}`; if (input.confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`); const backup = normalizeBackup(input.backup, scope); const tables = backup.tables;
+  await prepareGoogleConnectionRestore(env,tables.google_connections,tables.installations,tables.users);
   let statements: D1Statement[];
   if (scope === "meetings") statements = [
     db.prepare("DELETE FROM discord_anomaly_reports WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_weight_categories WHERE installation_id = 'primary'"),
@@ -2053,11 +2075,14 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
     ...tables.members.map((row) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = excluded.active").bind(row.id, row.external_id, row.first_name, row.last_name, row.email, row.discord_user_id, row.active, row.created_at)),
   ];
   else {
-    statements = [db.prepare("DELETE FROM installations WHERE id = 'primary'")];
+    statements = [db.prepare("INSERT INTO documentation_drive_copy_restore_guard(installation_id,operations_json) VALUES('primary',?)").bind(JSON.stringify(tables.documentation_drive_copy_operations)),db.prepare("INSERT INTO documentation_upload_restore_guard(installation_id,operations_json) VALUES('primary',?)").bind(JSON.stringify(tables.documentation_upload_operations)),db.prepare("INSERT INTO hours_publication_restore_guard(installation_id,generations_json) VALUES('primary',?)").bind(JSON.stringify(tables.hours_publication_generations)),db.prepare("DELETE FROM installations WHERE id = 'primary'")];
     for (const table of installationTables) statements.push(...insertBackupRows(db, table, tables[table]));
+    statements.push(db.prepare("DELETE FROM documentation_drive_copy_restore_guard WHERE installation_id='primary'"));
+    statements.push(db.prepare("DELETE FROM documentation_upload_restore_guard WHERE installation_id='primary'"));
+    statements.push(db.prepare("DELETE FROM hours_publication_restore_guard WHERE installation_id='primary'"));
   }
   const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: backup.schemaVersion, exportedAt: backup.exportedAt }), now));
-  await db.batch(statements); return response({ restored: true, scope });
+  try { await db.batch(statements); } catch(error) { if(String(error).includes('documentation_drive_copy_'))throw new HttpError(409,'Reconcile uncertain Drive copies and retain their current ownership inventory before restoration'); if(String(error).includes('documentation_upload_'))throw new HttpError(409,'Reconcile uncertain uploads and retain the current file inventory before restoration'); if(String(error).includes('Synthetic attachment transfer is active'))throw new HttpError(409,'Reconcile the active or uncertain synthetic attachment before installation restore'); if(String(error).includes('hours_publication_in_flight'))throw new HttpError(409,'Resolve in-flight or uncertain Hours publication before installation restore'); if(String(error).includes('hours_publication_restore_identity'))throw new HttpError(409,'Backup omits current Hours publication ownership; complete provider cleanup or use a current backup'); throw error; } return response({ restored: true, scope });
 }
 
 async function resetOnboarding(request: Request, env: Env): Promise<Response> {
@@ -2075,27 +2100,102 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.attendance_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString()),
   ]);
   else if (input.scope === "roster") {
-    const references = await db.prepare("SELECT COUNT(*) AS count FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id) OR EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.member_id = m.id) OR EXISTS (SELECT 1 FROM discord_attendance_contests d WHERE d.member_id = m.id))").first<{ count: number }>();
-    if (Number(references?.count ?? 0) > 0) throw new HttpError(409, "Delete meetings and attendance first so historical records do not lose their roster references");
-    await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id IS NOT NULL"), db.prepare("DELETE FROM members WHERE installation_id = 'primary'"), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.roster_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString())]);
+    const references = await db.prepare("SELECT COUNT(*) AS count FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id) OR EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.member_id = m.id) OR EXISTS (SELECT 1 FROM discord_attendance_contests d WHERE d.member_id = m.id) OR EXISTS(SELECT 1 FROM hours_entries h WHERE h.installation_id=m.installation_id AND h.member_id=m.id) OR EXISTS(SELECT 1 FROM hours_entry_revisions h WHERE h.installation_id=m.installation_id AND h.member_id=m.id) OR EXISTS(SELECT 1 FROM hours_correction_requests h WHERE h.installation_id=m.installation_id AND h.requester_member_id=m.id) OR EXISTS(SELECT 1 FROM documentation_notes n WHERE n.installation_id=m.installation_id AND n.author_member_id=m.id))").first<{ count: number }>();
+    if (Number(references?.count ?? 0) > 0) throw new HttpError(409, "Roster has recorded history. Deactivate members instead to preserve contributions");
+    try { await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id IS NOT NULL"), db.prepare("DELETE FROM members WHERE installation_id = 'primary'"), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.roster_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString())]); } catch(error) { if (/FOREIGN KEY/.test(String(error))) throw new HttpError(409,"Roster acquired recorded history. Deactivate members instead."); throw error; }
   }
-  else await db.prepare("DELETE FROM installations WHERE id = 'primary'").run();
+  else { try { await db.prepare("DELETE FROM installations WHERE id = 'primary'").run(); } catch(error) { if(String(error).includes('documentation_drive_copy_'))throw new HttpError(409,'Reconcile uncertain Drive copies and retain their current ownership inventory before restoration'); if(String(error).includes('documentation_upload_'))throw new HttpError(409,'Reconcile uncertain uploads and retain the current file inventory before restoration'); if(String(error).includes('Synthetic attachment transfer is active'))throw new HttpError(409,'Reconcile the active or uncertain synthetic attachment before installation restore'); if(String(error).includes('hours_publication_in_flight'))throw new HttpError(409,'Resolve in-flight or uncertain Hours publication before installation deletion'); throw error; } }
   return response({ deleted: true, scope: input.scope });
 }
 
-const worker = { async fetch(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
+function schedulerEnvironment(env: Env): Env {
+  const budget = new SchedulerBudget(); const db = requireDatabase(env);
+  const wrap = (statement: D1Statement): D1Statement => ({
+    bind(...values) { return wrap(statement.bind(...values)); },
+    async first<T>() { budget.query(); return statement.first<T>(); },
+    async all<T>() { budget.query(); return statement.all<T>(); },
+    async run() { budget.query(); return statement.run(); },
+  });
+  // Batch executes through the original database, so keep a reverse mapping rather
+  // than passing wrapper statements into D1's native batch implementation.
+  const originals = new WeakMap<D1Statement, D1Statement>();
+  const track = (statement: D1Statement): D1Statement => {
+    const wrapped = wrap(statement);
+    wrapped.bind = (...values) => track(statement.bind(...values));
+    originals.set(wrapped, statement); return wrapped;
+  };
+  return { ...env, [schedulerBudgetKey]: budget, DB: {
+    prepare(sql) { return track(db.prepare(sql)); },
+    async batch(statements) { budget.query(statements.length); return db.batch(statements.map(s => originals.get(s) ?? s)); },
+  } };
+}
+
+export const PlatformScheduler = schedulerClass<Env>([
+  {id:'hours.google-calendar',interval:300_000,enabled:publicationModuleEnabled,run:(env:Env)=>processHoursPublication(env,'google')},
+  {id:'hours.discord-calendar',interval:300_000,enabled:publicationModuleEnabled,run:(env:Env)=>processHoursPublication(env,'discord')},
+  { id: 'attendance.google-calendar', interval: 300_000, run: (env: Env) => processGoogleCalendarOperations(env, undefined, 1) },
+  { id: 'attendance.discord-calendar', interval: 300_000, run: (env: Env) => processDiscordCalendarOperations(env, undefined, 1) },
+  { id: 'attendance.discord-channel', interval: 300_000, run: async (env: Env) => {
+    // An inactive connection is an intentional no-op pass, not a provider failure.
+    // Keep these reads inside the family budget and leave explicit manual errors intact.
+    if (!await integrationIsEnabled(env, 'discord')) return;
+    const configured = await requireDatabase(env).prepare("SELECT verified_at AS verifiedAt FROM encrypted_integrations WHERE installation_id='primary' AND provider='discord'").first<{ verifiedAt?: string | null }>();
+    if (!configured?.verifiedAt) return;
+    await syncDiscordManagedSurface(env);
+  } },
+  { id: 'attendance.discord-notices', interval: 300_000, run: (env: Env) => processDiscordAttendanceNotifications(env, Date.now(), true) },
+  { id: 'attendance.discord-expiry', interval: 300_000, run: async (env: Env) => {
+    const settings = await requireDatabase(env).prepare("SELECT discord_channel_manager_enabled AS enabled, discord_contest_window_hours AS hours FROM organization_settings WHERE installation_id='primary'").first<{ enabled: number; hours: number }>();
+    if (settings?.enabled) await expireDiscordAttendanceNotifications(env, await discordConfiguration(env), settings.hours ?? 24, Date.now(), true);
+  } },
+  { id: 'attendance.discord-anomalies', interval: 300_000, run: (env: Env) => processDiscordAnomalyReports(env, Date.now(), true) },
+], async (request, env) => { try { await requireRole(request, env, ['admin']); return true; } catch { return false; } }, env => env.PLATFORM_SCHEDULER_MODE === 'durable',schedulerEnvironment,(env,work)=>runApplication(env,undefined,scoped=>work(scoped)));
+
+async function platformScheduler(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ['admin']);
+  if (env.PLATFORM_SCHEDULER_MODE !== 'durable' || !env.PLATFORM_SCHEDULER) throw new HttpError(503, 'Durable scheduler is not configured');
+  const action = request.method === 'GET' ? 'status' : new URL(request.url).pathname.split('/').at(-1);
+  if (request.method === 'POST') {
+    const input = await parseJson<Record<string, unknown>>(request, 128);
+    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length) throw new HttpError(400, 'Provide an empty JSON object');
+  }
+  const stub = env.PLATFORM_SCHEDULER.get(env.PLATFORM_SCHEDULER.idFromName('primary'));
+  const result = await stub.fetch(new Request(`https://scheduler.internal/${action}`, { method: request.method, headers: { cookie: request.headers.get('cookie') ?? '' } }));
+  if (result.ok && request.method === 'POST') await writeAudit(requireDatabase(env), principal, `scheduler.${action}`, 'platform_scheduler', 'primary');
+  return result;
+}
+
+const applicationWorker = { async fetch(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const url = new URL(request.url); let result: Response;
   try {
-    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !["/auth/local", "/auth/logout", "/auth/google/callback"].includes(url.pathname) && await webUpdateMaintenance(env)) return withCors(response({ error: "An installation update requires temporary write suspension. Retry after recovery or completion.", code: "update_maintenance" }, 503, { "retry-after": "30" }), request, env);
-    if (request.method === "OPTIONS") result = new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "authorization, content-type", "access-control-allow-credentials": "true" } });
+    if (request.method === "OPTIONS") result = new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "authorization, content-type", "access-control-allow-credentials": "true" } });
+    else if (!documentationAvailable && (/^\/(admin|public)\/documentation(?:\/|$)/.test(url.pathname)||url.pathname.startsWith("/admin/document-compute/proofs/")||url.pathname.startsWith("/admin/integrations/discord/attachment-proofs/")||url.pathname==="/admin/connections/google/storage"||url.pathname.startsWith("/admin/connections/google/drive/"))) result=response({error:"Activity Documentation is unavailable in this release"},404);
+    else if (url.pathname === "/public/documentation/uploads" || url.pathname.startsWith("/public/documentation/uploads/")) result = await uploadRoute(request,env);
+    else if (url.pathname.startsWith("/public/documentation/")) result = await publicDocumentation(request, env);
+    else if (url.pathname.startsWith("/public/hours/")) result = await publicHours(request, env);
     else if (url.pathname === "/health" && request.method === "GET") result = response({ ok: true, service: "lancerlogin-api", mode: env.DB ? "ready" : "unconfigured", releaseVersion: env.RELEASE_VERSION ?? "development" });
     else if (url.pathname === "/setup/status" && request.method === "GET") result = await setupStatus(env);
     else if (url.pathname === "/setup/bootstrap" && request.method === "POST") result = await bootstrap(request, env);
+    else if (url.pathname.startsWith("/admin/updater/")) { const actor = await requireRole(request, env, ["admin"]); result = await updaterRoute(request, env, actor); }
     else if (url.pathname === "/admin/update-info" && request.method === "GET") result = await updateInfo(request, env);
-    else if (url.pathname === "/admin/web-updates/status" && request.method === "GET" || ["/admin/web-updates/prepare", "/admin/web-updates/start"].includes(url.pathname) && request.method === "POST") result = await webUpdates(request, env);
     else if (url.pathname === "/auth/local" && request.method === "POST") result = await localLogin(request, env);
     else if (url.pathname === "/auth/session" && request.method === "GET") result = await authSession(request, env);
-    else if (url.pathname === "/auth/logout" && request.method === "POST") result = response({ ok: true }, 200, { "set-cookie": "lancerlogin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" });
+    else if (url.pathname === "/auth/logout" && request.method === "POST") { await clearPickerSession(env,request); await invalidateGoogleSession(env,request); result = response({ ok: true }, 200, { "set-cookie": "lancerlogin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" }); }
+    else if (url.pathname === "/admin/connections/google/callback" && request.method === "GET") {
+      try { result = isPickerCallback(request) ? (!documentationAvailable ? response({error:"Activity Documentation is unavailable in this release"},404) : await drivePickerCallback(request, env)) : await googleConnectionCallback(request, env); }
+      catch {
+        // Fixed destination and marker only: never reflect OAuth parameters or provider errors.
+        result = new Response(null, { status: 302, headers: {
+          location: env.ALLOWED_ORIGIN + "/settings/integrations?googleConnection=failed",
+          "cache-control": "no-store",
+          "set-cookie": "lancerlogin_connection_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0",
+        } });
+      }
+    }
+    else if (url.pathname === "/admin/connections/google/storage") { const actor=await requireRole(request,env,["admin"]); result=response(await storageRoute(env,request,actor,request.method==='PUT'?await parseJson(request,4096):undefined)); }
+    else if (url.pathname === "/admin/documentation/drive-copies" || url.pathname.startsWith("/admin/documentation/drive-copies/")) {const actor=await requireRole(request,env,["admin","staff"]);result=await driveCopyRoute(request,env,actor);}
+    else if (url.pathname.startsWith("/admin/connections/google/drive/")) { const actor=await requireRole(request,env,["admin","staff"]); result=await drivePickerRoute(request,env,actor); }
+    else if (url.pathname === "/admin/connections/google" || url.pathname.startsWith("/admin/connections/google/")) { const actor=await requireRole(request,env,["admin"]); result=await googleConnectionRoute(request,env,actor); }
     else if (url.pathname === "/auth/google/start" && request.method === "GET") result = await googleStart(request, env);
     else if (url.pathname === "/auth/google/callback" && request.method === "GET") result = await googleCallback(request, env);
     else if (url.pathname === "/admin/branding" && ["GET", "PATCH"].includes(request.method)) result = await branding(request, env);
@@ -2142,11 +2242,13 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/integrations/resend/verify/start" && request.method === "POST") result = await startResendVerification(request, env);
     else if (url.pathname === "/admin/integrations/resend/verify/complete" && request.method === "POST") result = await completeResendVerification(request, env);
     else if (url.pathname === "/admin/integrations/discord/verify/start" && request.method === "POST") result = await startDiscordVerification(request, env);
+    else if (url.pathname.startsWith("/admin/document-compute/proofs/")) { const actor=await requireRole(request,env,["admin"]); result=await documentComputeProof(request,env,actor); }
+    else if (url.pathname.startsWith("/admin/integrations/discord/attachment-proofs/")) { const actor=await requireRole(request,env,["admin"]); result=await attachmentAdmin(request,env,actor); }
     else if (url.pathname === "/admin/integrations/discord/commands/reconcile" && request.method === "POST") result = await reconcileDiscordCommands(request, env);
     else if (url.pathname === "/admin/users" && ["GET", "POST"].includes(request.method)) result = await users(request, env);
     else if (/^\/admin\/users\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateUser(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/communications/email" && request.method === "POST") result = await sendAttendanceEmail(request, env);
-    else if (url.pathname === "/discord/interactions" && request.method === "POST") result = await discordInteraction(request, env);
+    else if (url.pathname === "/discord/interactions" && request.method === "POST") result = await discordInteraction(request, env,context);
     else if (url.pathname === "/discord/link" && request.method === "POST") result = await linkDiscordMember(request, env);
     else if (url.pathname === "/discord/missing" && request.method === "POST") result = await discordMissing(request, env);
     else if (url.pathname === "/discord/contests" && request.method === "GET") result = await discordContests(request, env);
@@ -2156,6 +2258,21 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/discord/kiosk-status" && request.method === "POST") result = await discordKioskStatus(request, env);
     else if (url.pathname === "/admin/privacy" && ["GET", "PATCH"].includes(request.method)) result = await privacySettings(request, env);
     else if (url.pathname === "/admin/roster/history" && request.method === "GET") result = await rosterHistory(request, env);
+    else if (url.pathname === "/platform/modules" && request.method === "GET") { const principal = await principalFor(request, env); result = response(await moduleSnapshot(requireDatabase(env), "primary", principal.userId)); }
+    else if ((url.pathname === "/admin/scheduler" && request.method === "GET") || (["/admin/scheduler/start", "/admin/scheduler/stop"].includes(url.pathname) && request.method === "POST")) result = await platformScheduler(request, env);
+    else if (isPublicationPath(url.pathname)) { const principal=await requireRole(request,env,["admin","operator","staff"]); result=response(await hoursPublicationRoute(env,principal.userId,request,['POST','PUT'].includes(request.method)?await parseJson(request,8192):undefined)); }
+    else if (isHourReviewPath(url.pathname)) { const principal = await requireRole(request,env,["admin","operator","staff"]); const value = await hourReviewRoute(requireDatabase(env),"primary",principal.userId,request,["POST","PUT","PATCH"].includes(request.method)?await parseJson(request,16_384):undefined); result=response(value.body,value.status); }
+    else if (isAccountingPath(url.pathname)) { const principal = await requireRole(request,env,["admin","operator","staff"]); const value = await accountingRoute(requireDatabase(env),"primary",principal.userId,request,["POST","PUT","PATCH"].includes(request.method)?await parseJson(request,16_384):undefined); result=response(value.body,value.status); }
+    else if (/^\/admin\/documentation\/(?:definitions|claims)(?:\/|$)/.test(url.pathname)||url.pathname==='/admin/documentation/teams') { const principal=await requireRole(request,env,["admin","operator","staff"]); const handled=await claimRoute(requireDatabase(env),"primary",principal.userId,request,["POST","PATCH"].includes(request.method)?await parseJson(request,120_000):undefined); result=response(handled.body,handled.status); }
+    else if (url.pathname === "/admin/documentation/uploads" || url.pathname.startsWith("/admin/documentation/uploads/")) { const principal=await requireRole(request,env,["admin","operator","staff"]); result=await uploadRoute(request,env,principal); }
+    else if (url.pathname === "/admin/documentation/artifacts" || url.pathname.startsWith("/admin/documentation/artifacts/")) { const principal=await requireRole(request,env,["admin","operator","staff"]); const handled=await artifactRoute(requireDatabase(env),"primary",principal.userId,request,["POST","PATCH"].includes(request.method)?await parseJson(request,60_000):undefined); result=response(handled.body,handled.status); }
+    else if (url.pathname === "/admin/documentation/metrics" || url.pathname.startsWith("/admin/documentation/metrics/")) { const principal=await requireRole(request,env,["admin","operator","staff"]); const handled=await metricRoute(requireDatabase(env),"primary",principal.userId,request,["POST","PATCH"].includes(request.method)?await parseJson(request,60_000):undefined); result=response(handled.body,handled.status); }
+    else if (url.pathname === "/admin/documentation/initiatives" || url.pathname.startsWith("/admin/documentation/initiatives/")) { const principal=await requireRole(request,env,["admin","operator","staff"]); const handled=await initiativeRoute(requireDatabase(env),"primary",principal.userId,request,["POST","PATCH"].includes(request.method)?await parseJson(request,60_000):undefined); result=response(handled.body,handled.status); }
+    else if (url.pathname.startsWith("/admin/documentation/")) { const principal=await requireRole(request,env,["admin","operator","staff"]); const handled=await documentationRoute(requireDatabase(env),"primary",principal.userId,request,["POST","PATCH","PUT"].includes(request.method)?await parseJson(request,40_000):undefined); result=response(handled.body,handled.status); }
+    else if (url.pathname.startsWith("/admin/hours/")) { const principal = await requireRole(request, env, ["admin","operator","staff"]); const resultValue = await hoursCatalogRoute(requireDatabase(env), "primary", principal.userId, request, ["POST","PATCH"].includes(request.method) ? await parseJson(request, 16_384) : undefined); result = response(resultValue.body,resultValue.status); }
+    else if (url.pathname === "/admin/modules" && request.method === "PUT") { const principal = await requireRole(request, env, ["admin"]); result = response(await configureModules(requireDatabase(env), "primary", principal.userId, await parseJson(request, 4096))); }
+    else if (/^\/admin\/modules\/grants\/[^/]+$/.test(url.pathname) && request.method === "GET") { const principal = await requireRole(request, env, ["admin"]); result = response(await getModuleGrants(requireDatabase(env), "primary", principal.userId, decodeURIComponent(url.pathname.split("/")[4]))); }
+    else if (/^\/admin\/modules\/grants\/[^/]+$/.test(url.pathname) && request.method === "PUT") { const principal = await requireRole(request, env, ["admin"]); result = response(await setModuleGrants(requireDatabase(env), "primary", principal.userId, decodeURIComponent(url.pathname.split("/")[4]), await parseJson(request, 4096))); }
     else if (url.pathname === "/admin/data/backup" && request.method === "GET") result = await backupData(request, env);
     else if (url.pathname === "/admin/data/restore" && request.method === "POST") result = await restoreData(request, env);
     else if (url.pathname === "/admin/setup/reset" && request.method === "POST") result = await resetOnboarding(request, env);
@@ -2169,13 +2286,14 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);
     else result = response({ error: "Not found" }, 404);
   } catch (error) {
-    const status = error instanceof HttpError || error instanceof WebUpdateError ? error.status : 500;
-    const detail = error instanceof HttpError ? error.details : env.APP_MODE === "unconfigured" && error instanceof Error ? [error.message] : undefined;
-    result = response({ error: error instanceof HttpError || error instanceof WebUpdateError ? error.message : "Request failed", details: detail, ...(error instanceof WebUpdateError ? { code: error.code } : {}) }, status);
+    const databaseUnavailable=isDailyD1ReadQuota(error);
+    const status = databaseUnavailable ? 503 : (error instanceof HttpError || error instanceof ModuleError || error instanceof GoogleConnectionError) ? error.status : 500;
+    const detail = databaseUnavailable ? undefined : error instanceof HttpError ? error.details : env.APP_MODE === "unconfigured" && error instanceof Error ? [error.message] : undefined;
+    result = databaseUnavailable ? response({error:"The service is temporarily unavailable. Please try again later.",code:"database_temporarily_unavailable"},503) : response({ error: (error instanceof HttpError || error instanceof ModuleError || error instanceof GoogleConnectionError) ? error.message : "Request failed", details: detail }, status);
   }
   return withCors(result, request, env);
 }, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-  if (await webUpdateMaintenance(env)) return;
+  if (env.PLATFORM_SCHEDULER_MODE === "durable") return;
   if (controller.cron === "*/5 * * * *") {
     try { await processGoogleCalendarOperations(env); } catch { /* Google Calendar delivery retries safely on the next scheduled pass. */ }
     try { await processDiscordCalendarOperations(env); } catch { /* Discord Calendar delivery retries safely on the next scheduled pass. */ }
@@ -2184,4 +2302,13 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     try { await processDiscordAnomalyReports(env); } catch { /* Discord anomaly reports retry safely on the next scheduled pass. */ }
   } else try { await syncDiscordManagedSurface(env); } catch { /* Discord status is best-effort and cannot affect kiosk operation. */ }
 } };
+const worker = {
+  async fetch(request:Request,env:Env,context?:WorkerContext):Promise<Response>{
+    const path=new URL(request.url).pathname;
+    if(request.method==='OPTIONS'||path==='/health')return applicationWorker.fetch(request,env,context);
+    try{return await runApplication(env,context,(scoped,execution)=>applicationWorker.fetch(request,scoped,execution));}
+    catch{return withCors(response({error:'Application maintenance is in progress or unavailable.'},503),request,env);}
+  },
+  async scheduled(controller:ScheduledController,env:Env):Promise<void>{await runApplication(env,undefined,scoped=>applicationWorker.scheduled(controller,scoped));},
+};
 export default worker;

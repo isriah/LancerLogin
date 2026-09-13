@@ -1,0 +1,48 @@
+# External-link artifact foundation
+
+Dependencies: Documentation authority and existing activity/initiative identities. This WU151 backend creates real external-link artifacts and durable shared Drive root configuration. Binary upload/copy, general file validation, member intake, claims, packet selection and publication remain required subsequent work. No provider file write or empty transfer-operation framework is introduced.
+
+## Artifact API
+
+`/admin/documentation/artifacts` requires both modules and current Documentation management or active Admin. Links can be standalone staff evidence candidates. Files-section disable preserves reads/history but prevents every mutation. Notes and summary toggles are independent.
+
+- GET prefix returns `{artifacts,next}` with after-ID pagination, limit1-50 (default25), archival=true to include archived artifacts.
+- POST prefix accepts `{title,caption?,url,sectionRevision,activities?,initiatives?}` and returns201 `{artifact}`.
+- GET `/:id` returns `{artifact,activities,initiatives,filesEnabled,sectionRevision,readOnly}`. Association labels/revisions/eligible flags are current metadata; only actual scoped associations authorize their lookup. No roster or Hours description is exposed.
+- PATCH `/:id` accepts current revision, sectionRevision and changed title/caption/url/activities/initiatives/archived. Each supplied association array replaces that type; omission preserves it. Archived artifacts accept only revision, sectionRevision and archived:false before a separate edit.
+- POST `/:id/review` accepts `{revision,sectionRevision,decision:reviewed|rejected}`. It advances the artifact revision and appends a complete immutable snapshot. A dedicated immutable review row pins the pre-review revision; competing reviewers at the same revision cannot both succeed.
+- GET `/:id/history` returns `{artifactId,authorUserId,createdAt,revisions,next}` with integer after-revision pagination. Each revision includes title, caption, URL, originalUrl, archive state, review, actor/time and immutable association membership with current context titles/eligibility. Current labels are not historical title snapshots.
+
+Artifact DTO: `{id,kind:external-link,title,caption,url,originalUrl,archived,revision,authorUserId,createdAt,updatedAt,review}`. Review is null for unreviewed or `{decision,reviewedRevision,reviewerUserId,reviewedAt}`. Any later metadata, association, archive or unarchive write conservatively clears current review. Previous review decisions remain exactly in history. This is a technical concurrency default. Review does not publish anything, prove URL accessibility, substantiate an award claim or freeze remote website contents.
+
+Technical bounds: title1-200 and optional caption0-4000 UTF-16 units, plain text; HTTPS URL up to2048 characters, rejecting whitespace, controls and embedded credentials; max60000 UTF-8 request bytes. The URL is stored as supplied without fetching, redirects, link preview or remote permission changes. Clients render text safely and must not implement automatic server previews. Original source URL, author and creation time are immutable. Current URL changes produce a new revision; this records provenance, not a copy of remote content.
+
+Up to100 combined activity/initiative links, no duplicates within a type. Inputs use activityId/initiativeId plus current revision. New activity links require active impact relevance; new initiative links require active state. Retained ineligible links remain readable/removable. All writes atomically fence account, modules/grant, artifact and section revision, files enablement and new-context eligibility. Request-specific audit admission gates all batch history/membership writes. Audit metadata excludes private text and actor details. Failures use400/401/403/404/405/409 through the existing safe error boundary; stale/uncertain callers reload rather than retry automatically.
+
+## Shared Drive root configuration
+
+Admin GET `/admin/connections/google/storage` returns configured, revision, rootId/rootName, verifiedAt and verifiedForConnection. This is historical verification tied to the current central connection, not a fresh privacy guarantee. It is shared installation configuration, independent of module toggles and without duplicated OAuth credentials.
+
+Admin PUT accepts `{revision,pickerIntentId,connectionRevision}`. Obtain a selected root intent through the existing isolated Picker flow: narrow browser grant, organizational-account identity verification, current same-session Admin and unexpired root-purpose selection. The storage route does not copy the transient feasibility root row or accept an arbitrary pasted root ID. It decrypts the actual selected intent, re-reads the owned, untrashed My Drive writable folder and exactly owner-only permissions using the central server token, then consumes the intent and commits configuration/audit atomically. Connection revision/IV/grant, selected intent identity/session/expiry, current Admin/session lifetime and storage revision remain fenced after provider reads. Lost responses require GET; consumed selections are not replayed as writes.
+
+This unit reuses existing Picker authorization/configuration to establish selection. Public Picker key/project settings and authorization intents remain transient; after portable restore an Admin must configure/select again through that flow. Durable root identity is retained separately, without falsely promoting transient proofs. Provider metadata and permission reads cannot make Google-owner changes atomic; later file operations must revalidate the current root and permissions immediately before dispatch. PUT performs read-only Google API calls and no file creation/sharing/deletion.
+
+## Sections and recovery
+
+Migration0043 extends version1 built-in sections with files_enabled defaulttrue and typed photos-files registry entry. GET adds filesEnabled. Existing version1 PUT clients that omit filesEnabled preserve its stored value; new clients may set it explicitly. Every artifact mutation includes sectionRevision. No dashboard change is part of this candidate.
+
+Portable backup24 includes durable root identity plus artifact headers, full revision memberships and reviews. Validation checks cross-installation/reference/provenance/URL/duplicate/history/review invariants before deletion. Reviews must match the pinned prior snapshot and current review fields exactly. Older versions initialize empty artifacts/storage and files enabled. Restoring durable storage always clears verified IV/time: it is inventory-only until a fresh explicit Picker selection is verified. Attendance-only restore preserves artifact and storage records. Raw recovery pins43 migrations/78 tables with a reviewed synthetic link. Local graph success does not upgrade hosted recovery evidence. Database restore never changes remote URLs or Drive files; transient external-effect guards remain in force.
+
+Focused tests: artifact/storage D1 suites, recovery/foundation, verify:api and verify:migrations. Provider reads are mocked locally; external-link operations are tested with fetch forbidden. No hosted schema43 or provider acceptance is claimed by this implementation.
+
+## Dashboard workspace (WU153)
+
+Dependencies: WU151 API/schema43. Documentation now includes an Artifacts view for staff external links: create/edit, optional activity and initiative associations, cursor paging, retained ineligible memberships, archive/pure unarchive and immutable history. Review and rejection explicitly act on a saved revision. Dirty drafts must be saved or discarded before review or archive. Later edits clear the current review; review never publishes or substantiates a claim. URLs remain text without automatic fetching or previews. Raw author/reviewer IDs are not exposed as user-facing labels; provenance remains in the API/history records.
+
+The Admin built-in sections controls include files and external-link artifacts. Disabling this section preserves readable records/history and disables mutation controls. Other section flags retain their values. Stale or uncertain writes lock further mutation until an explicit reload; drafts and full membership choices are preserved for comparison, while lost authority clears private state.
+
+Google settings show durable shared Drive storage even when Drive capability is unavailable. Saved inventory and historical verification are distinct from a fresh provider privacy check. An Admin opens shared folder selection, configures the existing restricted Picker if needed, authorizes the organizational account, selects a private folder, then explicitly verifies and saves shared storage. Returning from authorization requires opening shared folder selection again. A root selection alone is not durable storage. After a lost save response, reload shared storage; consumed selections are never retried automatically. Portable restore requires new Picker configuration/selection and verification.
+
+Development feasibility controls remain a separate explicit view in shared storage settings; they retain synthetic source/proof operations. They never supply durable storage status. The shared folder selection view does not offer synthetic source or proof actions. Binary intake, member submissions, claims and packet publication remain subsequent work.
+
+UI reuses Documentation/Google cards, native inputs/checkboxes and semantic color, spacing, typography and control tokens. No visual-standard exception is intended. Focused browser evidence covers 1280x900 and 390x844, light/dark themes and representative adopter colors, keyboard focus, state/race handling and mocked Picker responses; this is local verification, not hosted provider acceptance.

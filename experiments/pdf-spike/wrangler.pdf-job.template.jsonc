@@ -1,0 +1,12 @@
+{
+  // Proposed destination only; coordinator must resolve account and authorization.
+  "name": "lancerlogin-v2-example-pdf-spike",
+  "main": "job-worker.mjs",
+  "compatibility_date": "2026-09-04",
+  "workers_dev": true,
+  "durable_objects": { "bindings": [{ "name": "PDF_SPIKE_JOBS", "class_name": "PdfSpikeJob" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PdfSpikeJob"] }],
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+  // SPIKE_TOKEN is required as a secure Worker secret; never add a value here.
+  // No account IDs, paid-plan selection, or CPU-limit override.
+}

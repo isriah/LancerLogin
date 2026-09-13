@@ -1,6 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
-import { expectDashboardTypography } from "./dashboard-typography";
 
 type Role = "admin" | "operator";
 
@@ -60,20 +59,15 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.locator("main h1")).toHaveCount(1);
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
       await expect(page.getByRole("region", { name: "Meeting calendar" })).toBeVisible();
-      await expectDashboardTypography(page);
       await expect(page.locator(".dashboard-meeting-status")).toHaveCount(0);
       await expect(page.getByText("Dashboard data is current.")).toHaveCount(0);
       await expectContained(page);
-
-      await page.screenshot({ path: test.info().outputPath("dashboard.png") });
-      await test.info().attach("Dashboard typography", { path: test.info().outputPath("dashboard.png"), contentType: "image/png" });
 
       const tableChoice = page.getByRole("radio", { name: "Table" });
       await tableChoice.focus();
       await page.keyboard.press("Space");
       await expect(tableChoice).toBeChecked();
       await expect(page.getByRole("table")).toBeVisible();
-      await expectDashboardTypography(page);
       await expect(page.getByRole("button", { name: "Delete selected (0)" })).toBeDisabled();
       await expect(page.locator(".meeting-directory-heading")).toContainText("5 of 5 shown");
       await expectContained(page);
@@ -83,7 +77,6 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       const dialog = page.getByRole("dialog", { name: "Create meeting" });
       await expect(dialog).toHaveAttribute("aria-describedby", "meeting-create-description");
       await expect(dialog.getByLabel("Title", { exact: true })).toBeFocused();
-      await expectDashboardTypography(page);
       await expectContained(page);
       await page.keyboard.press("Escape");
       await expect(add).toBeFocused();
@@ -132,7 +125,6 @@ for (const context of dashboardConformanceReferences.viewports.flatMap((viewport
     await page.goto("/meetings/active-meeting");
     await expect(page.locator("main h1")).toHaveCount(1);
     await expect(page.getByRole("heading", { level: 1, name: "Build session" })).toBeVisible();
-    await expectDashboardTypography(page);
     await expect(page.locator('[aria-label="Meeting summary"]')).not.toContainText("Attendance closes");
     await expect(page.getByRole("table", { name: "Meeting attendance" })).toBeVisible();
     await expect(page.locator('[role="columnheader"]')).toHaveCount(4);
@@ -149,15 +141,12 @@ for (const context of dashboardConformanceReferences.viewports.flatMap((viewport
     await expect(page.locator(".attendance-state.present")).toContainText("present");
     await expect(page.locator(".attendance-state.absent")).toContainText("absent");
     await expectContained(page);
-    await page.screenshot({ path: test.info().outputPath("meeting.png") });
-    await test.info().attach("Meeting typography", { path: test.info().outputPath("meeting.png"), contentType: "image/png" });
 
     const edit = page.getByRole("button", { name: "Edit" });
     await edit.click();
     const dialog = page.getByRole("dialog", { name: "Edit meeting" });
     await expect(dialog).toHaveAttribute("aria-describedby", "edit-meeting-title-description");
     await expect(dialog.getByLabel("Title", { exact: true })).toBeFocused();
-    await expectDashboardTypography(page);
     await page.keyboard.press("Escape");
     await expect(edit).toBeFocused();
   });

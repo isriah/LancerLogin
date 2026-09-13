@@ -4,8 +4,7 @@ import { hardwarePairingKey, kioskInstallerUrl } from "./hardware-pairing-key";
 import { useModalFocus } from "./modal-focus";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
 import { formatVersion, isNewerRelease } from "./update-indicator";
-import { hasComparableStableVersions } from "./update-release";
-import { useReleaseCheck } from "./use-release-check";
+import { fetchLatestRelease } from "./update-release";
 
 type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string; pendingEvents?: number; lastSyncAt?: string; errorCategory?: string; pairedAt: string };
 type Simulator = { name: string; active: number; online: number; lastSeenAt?: string; readerOnline: false; releaseVersion: string };
@@ -60,8 +59,7 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
   const [maintenanceHelp, setMaintenanceHelp] = useState(false);
   const [discordBusy, setDiscordBusy] = useState(false);
   const [name, setName] = useState("");
-  const release = useReleaseCheck();
-  const latestRelease = formatVersion(release.release?.tag_name);
+  const [latestRelease, setLatestRelease] = useState("");
 
   async function load({ preserveNotice = false }: { preserveNotice?: boolean } = {}) {
     const [hardware, simulated] = await Promise.all([api<{ kiosks: Kiosk[] }>("/admin/kiosks"), role === "admin" ? api<{ simulator: Simulator | null }>("/admin/simulator") : Promise.resolve({ simulator: null })]);
@@ -69,6 +67,7 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
   }
   useEffect(() => {
     void load().catch((error: Error) => setNotice({ message: error.message, tone: "error" }));
+    void fetchLatestRelease().then((release) => setLatestRelease(formatVersion(release.tag_name))).catch(() => undefined);
     const timer = window.setInterval(() => void load().catch((error: Error) => setNotice({ message: error.message, tone: "error" })), 30_000);
     return () => window.clearInterval(timer);
   }, [role]);
@@ -78,11 +77,11 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
   const healthy = Boolean(active && online && active.readerOnline && active.networkType !== "offline" && (active.pendingEvents ?? 0) === 0 && !active.errorCategory);
   const health = !active ? "unpaired" : !online ? "offline" : healthy ? "healthy" : "degraded";
   const healthLabel = health === "unpaired" ? "Not paired" : health[0].toUpperCase() + health.slice(1);
-  const releaseCurrent = Boolean(release.fresh && hasComparableStableVersions(release.release, active?.releaseVersion ?? "") && !isNewerRelease(latestRelease, active!.releaseVersion!));
+  const releaseCurrent = Boolean(active?.releaseVersion && latestRelease && !isNewerRelease(latestRelease, active.releaseVersion));
 
   async function rename() { if (!active) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "PATCH", body: JSON.stringify({ name }) }); setEditing(false); setNotice({ message: "Kiosk renamed.", tone: "success" }); await load({ preserveNotice: true }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
   async function retire() { if (!active || !window.confirm(`Retire ${active.name}? Its credential will stop working, but its history will remain.`)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "DELETE", body: JSON.stringify({ confirmation: "RETIRE KIOSK" }) }); setNotice({ message: "Kiosk retired. You can pair another device now.", tone: "success" }); await load({ preserveNotice: true }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
-  async function command(type: KioskCommand, label: string, confirmation?: string) { if (!active || type === "install_latest" && (!release.fresh || release.checking || !hasComparableStableVersions(release.release, active.releaseVersion ?? "")) || confirmation && !window.confirm(confirmation)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}/commands`, { method: "POST", body: JSON.stringify({ command: type }) }); setNotice({ message: `${label} queued. The kiosk normally receives it within five seconds.`, tone: "success" }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
+  async function command(type: KioskCommand, label: string, confirmation?: string) { if (!active || confirmation && !window.confirm(confirmation)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}/commands`, { method: "POST", body: JSON.stringify({ command: type }) }); setNotice({ message: `${label} queued. The kiosk normally receives it within five seconds.`, tone: "success" }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
   async function stopSimulator() { try { await api("/admin/simulator", { method: "POST", body: JSON.stringify({ action: "stop" }) }); setNotice({ message: "Browser simulator stopped.", tone: "success" }); await load({ preserveNotice: true }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
   async function syncDiscordStatus() {
     setDiscordBusy(true); setNotice({ message: "Syncing physical kiosk health to Discord…", tone: "neutral" });
@@ -101,7 +100,7 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
         <div className="kiosk-card-heading"><h2>Physical kiosk</h2>{role === "admin" && <button className="primary-button" type="button" onClick={() => setPairing(true)}>{active ? "Replace kiosk" : "Add kiosk"}</button>}</div>
         <div className={`kiosk-state kiosk-state-${health}`}><strong>{active?.name ?? "No kiosk paired"}</strong><span className="status-pill kiosk-health-pill ui-status" data-tone={health === "healthy" ? "success" : health === "degraded" ? "warning" : health === "offline" ? "error" : "neutral"}>{healthLabel}</span></div>
         {active ? <>
-          <dl className="kiosk-diagnostics"><div><dt>Fingerprint reader</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div><div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Installed release</dt><dd>{active.releaseVersion ?? "Unknown"}</dd></div><div><dt>Latest stable</dt><dd>{latestRelease || "Unavailable"}{!release.fresh && latestRelease ? <small>Previously checked; confirmation required</small> : release.fresh && hasComparableStableVersions(release.release, active.releaseVersion ?? "") ? <small>{releaseCurrent ? "Current" : "Update available"}</small> : null}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div>{active.errorCategory && <div className="kiosk-diagnostic-error"><dt>Reported issue</dt><dd>{active.errorCategory.replaceAll("_", " ")}</dd></div>}</dl>
+          <dl className="kiosk-diagnostics"><div><dt>Fingerprint reader</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div><div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Installed release</dt><dd>{active.releaseVersion ?? "Unknown"}</dd></div><div><dt>Latest stable</dt><dd>{latestRelease || "Unavailable"}{latestRelease && active.releaseVersion ? <small>{releaseCurrent ? "Current" : "Update available"}</small> : null}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div>{active.errorCategory && <div className="kiosk-diagnostic-error"><dt>Reported issue</dt><dd>{active.errorCategory.replaceAll("_", " ")}</dd></div>}</dl>
           {role === "admin" && <>
             <div className="kiosk-actions">
               {editing ? <><label>Device name<input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="primary-button" type="button" onClick={() => void rename()}>Save name</button><button type="button" onClick={() => setEditing(false)}>Cancel</button></> : <button type="button" onClick={() => { setName(active.name); setEditing(true); }}>Rename</button>}
@@ -110,7 +109,7 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
               <button type="button" onClick={() => void command("restart_service", "Software restart")}>Restart software</button>
               <button type="button" onClick={() => void command("reboot", "Device reboot", `Reboot ${active.name}? Attendance scanning will pause while the Pi restarts.`)}>Reboot Pi</button>
               <button type="button" onClick={() => void command("reset_network_pin", "Network PIN reset", `Reset the local settings PIN on ${active.name}? Anyone at the kiosk can then create a new PIN.`)}>Reset network PIN</button>
-              <button className="primary-button" type="button" disabled={!online || release.checking || !release.fresh || !hasComparableStableVersions(release.release, active.releaseVersion ?? "")} onClick={() => void command("install_latest", "Latest stable kiosk update")}>Update to latest stable</button>
+              <button className="primary-button" type="button" disabled={!online} onClick={() => void command("install_latest", "Latest stable kiosk update")}>Update to latest stable</button>
               <button className="danger-button" type="button" onClick={() => void retire()}>Retire kiosk</button>
             </div>
             {maintenanceHelp && <div className="settings-callout kiosk-maintenance"><div><strong>Open maintenance on the physical kiosk</strong><p>Press and hold the organization name or logo for three seconds, then enter the local settings PIN. Enrollment, reader tests, slot suggestions, replacement warnings, and mapping removal are available there so fingerprint templates never leave the sensor.</p></div></div>}

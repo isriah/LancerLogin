@@ -31,16 +31,7 @@ test("roster columns stay vertically centered with actions at the desktop right 
   const header = page.locator(".roster-row.header");
   const row = page.locator(".roster-row:not(.header)").first();
   const cells = row.locator(":scope > *");
-  const columnHeaders = header.getByRole("columnheader");
-  await expect(columnHeaders).toHaveText(["Name", "Member ID", "Discord ID", "Attendance rate", "Actions"]);
-  await expect(cells).toHaveCount(5);
-  const columnNames = await columnHeaders.allTextContents();
-  const actionsIndex = columnNames.indexOf("Actions");
-  const attendanceIndex = columnNames.indexOf("Attendance rate");
-  expect(actionsIndex).toBe(columnNames.length - 1);
-  expect(attendanceIndex).toBe(actionsIndex - 1);
-  await expect(cells.nth(actionsIndex)).toHaveClass(/roster-action-cell/);
-  await expect(cells.nth(attendanceIndex)).toHaveClass(/roster-attendance-rate/);
+  await expect(cells).toHaveCount(4);
   await expect(row.getByRole("button", { name: "Edit" })).toBeVisible();
 
   await page.evaluate(() => document.fonts.ready);
@@ -60,7 +51,7 @@ test("roster columns stay vertically centered with actions at the desktop right 
   }));
   for (const cell of rowGeometry.cells) expect(Math.abs(cell.centerY - rowGeometry.centerY)).toBeLessThanOrEqual(1);
   for (const center of headerCenters) expect(Math.abs(center - headerCenters[0])).toBeLessThanOrEqual(1);
-  expect(rowGeometry.cells[actionsIndex].x).toBeGreaterThan(rowGeometry.cells[attendanceIndex].right);
+  expect(rowGeometry.cells[3].x).toBeGreaterThan(rowGeometry.cells[2].right);
 });
 
 test("member links share route state across Roster, Reports, direct loads, and browser history", async ({ page }) => {
@@ -159,16 +150,22 @@ test("half-width dashboard does not overflow", async ({ page }) => {
 });
 
 test("integration enablement is accessible, sorted, and compact when disabled", async ({ page }) => {
+  await page.route('**/admin/connections/google/storage', route => route.fulfill({ json: { configured: false, revision: 0, rootId: null, rootName: null, verifiedAt: null, verifiedForConnection: false } }));
   await page.setViewportSize({ width: 700, height: 900 });
   await page.goto("/settings/integrations");
   const cards = page.locator(".integration-card");
-  await expect(cards).toHaveCount(4);
-  await expect(cards.nth(0)).toContainText("Google OAuth");
-  await expect(cards.nth(1)).toContainText("Google Calendar");
-  await expect(cards.nth(2)).toContainText("Resend email");
-  await expect(cards.nth(3)).toContainText("Discord bot");
+  await expect(cards).toHaveCount(5);
+  await expect(cards.nth(0)).toContainText("Google connection");
+  await expect(cards.nth(1)).toContainText("Shared Drive storage");
+  await expect(cards.nth(1)).toContainText("Saved folder: Not configured");
+  await expect(cards.nth(1).getByRole("button", { name: "Reload shared storage" })).toBeEnabled();
+  await expect(cards.nth(1).getByRole("button", { name: "Verify and save shared folder" })).toBeDisabled();
+  await expect(cards.nth(1).getByRole("alert")).toHaveCount(0);
+  await expect(cards.nth(2)).toContainText("Google OAuth");
+  await expect(cards.nth(3)).toContainText("Resend email");
+  await expect(cards.nth(4)).toContainText("Discord bot");
   await expect(page.getByRole("switch", { name: "Enable Discord bot" })).not.toBeChecked();
-  await expect(cards.nth(3).locator(".integration-details")).toHaveCount(0);
+  await expect(cards.nth(4).locator(".integration-details")).toHaveCount(0);
   const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
   expect(widths.scroll).toBeLessThanOrEqual(widths.client);
 });

@@ -20,7 +20,7 @@ export interface OrganizationBranding {
 
 export interface Principal {
   userId: Id;
-  role: "admin" | "operator";
+  role: "admin" | "operator" | "staff";
 }
 
 export interface Meeting {

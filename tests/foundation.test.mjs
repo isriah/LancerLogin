@@ -8,10 +8,13 @@ test("foundation documents state standalone constraints", async () => {
   const readme = await readFile("README.md", "utf8");
   assert.match(readme, /standalone/i);
   assert.match(readme, /sensor/i);
-  const security = await readFile("docs/SECURITY.md", "utf8");
-  assert.match(security, /signed interactions/i);
-  const privacy = await readFile("docs/PRIVACY.md", "utf8");
-  assert.match(privacy, /reporting/i);
+  const checklist = await readFile("docs/RELEASE-CHECKLIST.md", "utf8");
+  assert.match(checklist, /release and deployment automation is disabled/);
+  assert.match(checklist, /physical acceptance pending/);
+  const status = await readFile("docs/V2-STATUS.md", "utf8");
+  assert.match(status, /V2 is not ready for production/);
+  assert.match(status, /0029_web_updates\.sql/);
+  assert.match(status, /Community telemetry is retired/);
   const license = await readFile("LICENSE", "utf8");
   assert.match(license, /Apache License\s+Version 2\.0/);
   assert.match(license, /You may add Your own copyright statement to Your modifications/);
@@ -82,7 +85,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES/);
@@ -212,13 +215,13 @@ test("entire-installation restore inserts roster members before linked dashboard
 });
 
 test("provisioning workflow is adopter-gated and account-neutral", async () => {
-  const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
+  const workflow = await readFile(".github/disabled-workflows/provision-template.yml", "utf8");
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /Require a private deployment repository/);
   assert.match(workflow, /release:\s+[\s\S]*type: choice[\s\S]*- latest stable[\s\S]*- original template release/);
   assert.doesNotMatch(workflow, /release_tag:\s/);
   assert.match(workflow, /gh api repos\/isriah\/LancerLogin\/releases\/latest --jq \.tag_name/);
-  assert.match(workflow, /ref: \$\{\{ steps\.release\.outputs\.sha \}\}/);
+  assert.match(workflow, /ref: \$\{\{ steps\.release\.outputs\.tag \}\}/);
   assert.match(workflow, /REPOSITORY_PRIVATE/);
   assert.match(workflow, /repository: isriah\/LancerLogin/);
   assert.match(workflow, /CLOUDFLARE_API_TOKEN/);
@@ -292,14 +295,14 @@ test("CI isolates browser runs and applies the selective release audit policy", 
   assert.match(ciWorkflow, /timeout-minutes: 20/);
   assert.match(ciWorkflow, /rhysd\/actionlint:1\.7\.12/);
   assert.match(ciWorkflow, /npm run test:browser/);
-  assert.equal(packageDocument.scripts["test:browser"], "node scripts/run-browser-tests.mjs");
+  assert.equal(packageDocument.scripts["test:browser"], "node scripts/run-browser-tests.mjs && node scripts/run-browser-tests.mjs --config tests-release/playwright.config.ts");
   const browserRunner = await readFile("scripts/run-browser-tests.mjs", "utf8");
   assert.match(browserRunner, /PWTEST_CACHE_DIR/);
   assert.match(browserRunner, /LANCERLOGIN_BROWSER_PORT_BASE/);
   const playwrightConfig = await readFile("playwright.config.ts", "utf8");
   assert.match(playwrightConfig, /LANCERLOGIN_BROWSER_PORT_BASE/);
   assert.doesNotMatch(playwrightConfig, /reuseExistingServer: true|reuseExistingServer: !process\.env\.CI/);
-  const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
+  const releaseWorkflow = await readFile(".github/disabled-workflows/release.yml", "utf8");
   assert.match(releaseWorkflow, /actions: read/);
   assert.match(releaseWorkflow, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$commit&status=success/);
   assert.match(releaseWorkflow, /\.event == "push"/);

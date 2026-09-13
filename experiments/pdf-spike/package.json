@@ -1,0 +1,1 @@
+{"name":"lancerlogin-pdf-spike","private":true,"type":"module","scripts":{"test":"node --test spike.test.mjs job.test.mjs","test:input":"node --test input-runtime.test.mjs","measure":"node measure.mjs","test:compute":"cd ../.. && node --test experiments/pdf-spike/compute.test.mjs"},"dependencies":{"pdf-lib":"1.17.1"}}

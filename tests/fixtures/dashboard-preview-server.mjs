@@ -37,8 +37,10 @@ const server = createServer((request, response) => {
     : path === "/admin/members" ? request.method === "POST" ? { imported: 1, deactivated: 0, warnings: [] } : { members }
     : path === "/admin/users" ? { users: [{ id: "user-1", localUsername: "admin", role: "admin", active: 1, memberId: "member-1", memberExternalId: "A-101", memberFirstName: "Avery", memberLastName: "Stone", createdAt: iso(-30 * 24 * 60) }] }
     : path === "/admin/kiosks" ? { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.8.0", pairedAt: iso(-1440) }] }
-    : path === "/admin/web-updates/status" ? { releaseVersion: "0.23.2", workflowUrl: "https://github.example.test/private/actions/workflows/upgrade-web.yml", request: null }
     : path === "/admin/simulator" ? { simulator: { name: "Browser test", active: 1, online: 1, lastSeenAt: iso(0), readerOnline: false, releaseVersion: "browser simulator" } }
+    : path === "/admin/connections/google" ? { revision: 0, mode: "legacy", active: null, candidate: null, callbackUri: "https://fixture.test/api/admin/connections/google/callback", loginCallbackUri: "https://fixture.test/api/auth/google/callback" }
+    : path === "/admin/integrations/discord/channel-manager" ? { enabled: false, contestWindowHours: 24 }
+    : path === "/admin/integrations/discord/anomaly-reports" ? { enabled: false, channelId: "" }
     : path === "/admin/integrations" ? { integrations: [{ provider: "google", enabled: true, saved: true, configured: true, state: "configured", verifiedAt: iso(-60) }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled", pendingOperations: 0, failedOperations: 0 }, { provider: "resend", enabled: true, saved: true, configured: false, state: "verification_required" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] }
     : { error: "Preview route not implemented" };
   response.statusCode = payload.error ? 404 : 200; response.end(JSON.stringify(payload));

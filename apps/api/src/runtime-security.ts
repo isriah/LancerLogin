@@ -35,7 +35,7 @@ export async function verifyPassword(password: string, encoded: string): Promise
   return constantTimeEqual(actual, expected);
 }
 
-export type SessionPrincipal = { userId: string; role: "admin" | "operator"; expiresAt: number };
+export type SessionPrincipal = { userId: string; role: "admin" | "operator" | "staff"; expiresAt: number };
 
 export function createSessionCodec(secret: string, now = () => Date.now()) {
   const keyBytes = decodeBase64Url(secret);
@@ -43,6 +43,7 @@ export function createSessionCodec(secret: string, now = () => Date.now()) {
   const importKey = () => crypto.subtle.importKey("raw", asArrayBuffer(keyBytes), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
   return {
     async issue(principal: Omit<SessionPrincipal, "expiresAt">, ttlMs = 8 * 60 * 60_000): Promise<string> {
+      if (!principal.userId || !["admin", "operator", "staff"].includes(principal.role)) throw new Error("Invalid session principal");
       const payload = encodeBase64Url(encoder.encode(JSON.stringify({ ...principal, expiresAt: now() + ttlMs })));
       const signature = new Uint8Array(await crypto.subtle.sign("HMAC", await importKey(), encoder.encode(payload)));
       return `${payload}.${encodeBase64Url(signature)}`;
@@ -54,7 +55,7 @@ export function createSessionCodec(secret: string, now = () => Date.now()) {
       if (!valid) return undefined;
       try {
         const principal = JSON.parse(new TextDecoder().decode(decodeBase64Url(payload))) as SessionPrincipal;
-        return principal.expiresAt > now() && ["admin", "operator"].includes(principal.role) && principal.userId ? principal : undefined;
+        return principal.expiresAt > now() && ["admin", "operator", "staff"].includes(principal.role) && principal.userId ? principal : undefined;
       } catch { return undefined; }
     },
   };

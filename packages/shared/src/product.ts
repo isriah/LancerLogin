@@ -5,7 +5,7 @@ export const product = {
   defaultTheme: { primary: "#7c3aed", secondary: "#0f766e" },
 } as const;
 
-export type Role = "admin" | "operator";
+export type Role = "admin" | "operator" | "staff";
 
 export const operatorForbiddenCapabilities = [
   "manage-users", "manage-security", "manage-integrations", "manage-branding", "destructive-configuration",

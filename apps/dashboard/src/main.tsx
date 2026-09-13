@@ -1,3 +1,4 @@
+import { documentationAvailable } from '../../../packages/shared/src/release-capabilities';
 import { FormEvent, StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource/bebas-neue/latin-400.css";
@@ -9,6 +10,8 @@ import type { Branding } from "./setup-workspace";
 import { AppShell } from "./app-shell";
 import { AdaptiveBrandLogo } from "./adaptive-brand-logo";
 import { brandTheme } from "./theme";
+import { PublicDocumentationForm } from './public-documentation-form';
+import { PublicHourForm } from './public-hour-form';
 
 type CloudflareStep = { id: string; title: string; detail: string; action?: { label: string; href: string } };
 
@@ -46,7 +49,7 @@ function App() {
   const [completed, setCompleted] = useState<string[]>([]);
   const [slug, setSlug] = useState("my-organization");
   const [theme, setTheme] = useState<"light" | "dark">(savedTheme);
-  const [remoteStatus, setRemoteStatus] = useState<SetupStatus | "loading" | "unavailable">(apiBaseUrl ? "loading" : "unavailable");
+  const [remoteStatus, setRemoteStatus] = useState<SetupStatus | "loading" | "unavailable" | "temporary-unavailable">(apiBaseUrl ? "loading" : "unavailable");
   const validSlug = /^[a-z][a-z0-9-]{2,40}$/.test(slug);
   const plannedResources = useMemo(() => validSlug ? [`${slug}-api`, `${slug}-data`, `${slug}-dashboard`] : [], [slug, validSlug]);
   const toggle = (id: string) => setCompleted((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -54,7 +57,7 @@ function App() {
   useEffect(() => {
     if (!apiBaseUrl) return;
     fetch(`${apiBaseUrl}/setup/status`, { credentials: "include" })
-      .then(async (result) => result.ok ? result.json() as Promise<SetupStatus> : Promise.reject(new Error("Setup API unavailable")))
+      .then(async (result): Promise<SetupStatus | "temporary-unavailable"> => result.status === 503 ? "temporary-unavailable" : result.ok ? result.json() as Promise<SetupStatus> : Promise.reject(new Error("Setup API unavailable")))
       .then(setRemoteStatus)
       .catch(() => setRemoteStatus("unavailable"));
   }, []);
@@ -120,12 +123,13 @@ function App() {
   </div>;
 }
 
-function ProvisionedEntry({ status, onConfigured, theme, onTheme }: { status: SetupStatus | "loading" | "unavailable"; onConfigured: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
+function ProvisionedEntry({ status, onConfigured, theme, onTheme }: { status: SetupStatus | "loading" | "unavailable" | "temporary-unavailable"; onConfigured: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
   if (status === "loading") return <CenteredState theme={theme} title="Checking your installation…" detail="LancerLogin is securely reading setup status." />;
+  if (status === "temporary-unavailable") return <CenteredState theme={theme} title="Service temporarily unavailable" detail="The service cannot process requests right now. Please wait and reload this page later." />;
   if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
   const branding = status.configured ? status.settings : undefined;
   const style = branding ? brandTheme(branding.primaryColor, branding.secondaryColor) : undefined;
-  return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to main content</a><div className="provisioned-main"><header className="setup-header"><a className="brand-home-link" href="/dashboard" aria-label="Go to Dashboard">{branding?.logoData ? <AdaptiveBrandLogo src={branding.logoData} alt="" backdrop={branding.logoBackdrop} className="header-logo" /> : <div className="brand-mark" aria-hidden="true">L</div>}<span className="brand-heading"><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></span></a><ThemeToggle theme={theme} onTheme={onTheme} /></header>{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} theme={theme} onTheme={onTheme} /> : <FirstAdminSetup onConfigured={onConfigured} />}</div></div>;
+  return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to main content</a><div className="provisioned-main"><header className="setup-header"><a className="brand-home-link" href="/dashboard" aria-label="Go to Dashboard">{branding?.logoData ? <AdaptiveBrandLogo src={branding.logoData} alt="" backdrop={branding.logoBackdrop} className="header-logo" /> : <div className="brand-mark" aria-hidden="true">L</div>}<span className="brand-heading"><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></span></a><ThemeToggle theme={theme} onTheme={onTheme} /></header>{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} /> : <FirstAdminSetup onConfigured={onConfigured} />}</div></div>;
 }
 
 function CenteredState({ theme, title, detail }: { theme: "light" | "dark"; title: string; detail: string }) {
@@ -167,21 +171,25 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
   </form></main>;
 }
 
-function ConfiguredInstallation({ status, onStatusChange, theme, onTheme }: { status: SetupStatus; onStatusChange: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
-  const [session, setSession] = useState<{ role: "admin" | "operator" }>();
+function ConfiguredInstallation({ status, onStatusChange }: { status: SetupStatus; onStatusChange: (status: SetupStatus) => void }) {
+  const [session, setSession] = useState<{ role: "admin" | "operator" | "staff" }>();
   const [checking, setChecking] = useState(true);
-  useEffect(() => { fetch(`${apiBaseUrl}/auth/session`, { credentials: "include" }).then(async (result) => { if (result.ok) setSession((await result.json() as { user: { role: "admin" | "operator" } }).user); }).finally(() => setChecking(false)); }, []);
+  useEffect(() => {
+    const refresh = () => { void fetch(`${apiBaseUrl}/auth/session`, { credentials: "include" }).then(async (result) => { if (result.ok) setSession((await result.json() as { user: { role: "admin" | "operator" | "staff" } }).user); else if (result.status === 401) setSession(undefined); }).catch(() => {}).finally(() => setChecking(false)); };
+    refresh(); window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, []);
   if (checking) return <section className="centered-state auth-check" aria-live="polite" aria-busy="true"><p className="kicker">Secure sign-in</p><h1>Checking your session…</h1><p>Confirming whether this browser already has an active dashboard session.</p></section>;
   if (session) return <AppShell role={session.role} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => setSession(undefined)); }} />;
   return <LocalLogin status={status} onSignedIn={(role) => setSession({ role })} />;
 }
 
-function LocalLogin({ status, onSignedIn }: { status: SetupStatus; onSignedIn: (role: "admin" | "operator") => void }) {
+function LocalLogin({ status, onSignedIn }: { status: SetupStatus; onSignedIn: (role: "admin" | "operator" | "staff") => void }) {
   const mode = status.installation?.authMode ?? "local";
-  const [username, setUsername] = useState(""); const [password, setPassword] = useState(""); const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent) { event.preventDefault(); setMessage(""); setBusy(true); try { const response = await fetch(`${apiBaseUrl}/auth/local`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ username, password }) }); if (response.ok) onSignedIn((await response.json() as { user: { role: "admin" | "operator" } }).user.role); else setMessage("Invalid username or password. Check your details or wait before trying again."); } catch { setMessage("Sign-in service unavailable. Check your connection and try again."); } finally { setBusy(false); } }
+  const [username, setUsername] = useState(""); const [password, setPassword] = useState(""); const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false); const [serviceUnavailable,setServiceUnavailable]=useState(false);
+  async function submit(event: FormEvent) { event.preventDefault(); setMessage(""); setServiceUnavailable(false); setBusy(true); try { const response = await fetch(`${apiBaseUrl}/auth/local`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ username, password }) }); if (response.ok) onSignedIn((await response.json() as { user: { role: "admin" | "operator" | "staff" } }).user.role); else { setServiceUnavailable(response.status === 503); setMessage(response.status === 503 ? "The sign-in service is temporarily unavailable. Please try again later." : "Invalid username or password. Check your details or wait before trying again."); } } catch { setMessage("Sign-in service unavailable. Check your connection and try again."); } finally { setBusy(false); } }
   const messageId = message ? "sign-in-message" : undefined;
-  return <main id="dashboard-content" className="login-card ui-card" aria-labelledby="sign-in-title"><div className="form-intro"><p className="kicker">{status.settings?.organizationName ?? "LancerLogin"}</p><h1 id="sign-in-title">Welcome back</h1><p>Sign in to manage attendance and finish setup.</p></div>{mode !== "google" && <form className="ui-form" onSubmit={submit} aria-describedby={messageId}><label htmlFor="sign-in-username">Username<input id="sign-in-username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><label htmlFor="sign-in-password">Password<input id="sign-in-password" required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><button className="primary-button" disabled={busy} type="submit">{busy ? "Signing in…" : "Sign in"}</button></form>}{mode === "both" && <div className="auth-divider" aria-hidden="true"><span>or</span></div>}{mode !== "local" && <a className="google-button action-link" href={`${apiBaseUrl}/auth/google/start`}>Continue with Google</a>}{message && <p id="sign-in-message" className="ui-status auth-message" data-tone="error" role="alert" tabIndex={-1}>{message}</p>}</main>;
+  return <main id="dashboard-content" className="login-card ui-card" aria-labelledby="sign-in-title"><div className="form-intro"><p className="kicker">{status.settings?.organizationName ?? "LancerLogin"}</p><h1 id="sign-in-title">Welcome back</h1><p>Sign in to open your workspace.</p></div>{mode !== "google" && <form className="ui-form" onSubmit={submit} aria-describedby={messageId}><label htmlFor="sign-in-username">Username<input id="sign-in-username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} aria-invalid={Boolean(message)&&!serviceUnavailable} aria-describedby={messageId} /></label><label htmlFor="sign-in-password">Password<input id="sign-in-password" required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(message)&&!serviceUnavailable} aria-describedby={messageId} /></label><button className="primary-button" disabled={busy} type="submit">{busy ? "Signing in…" : "Sign in"}</button></form>}{mode === "both" && <div className="auth-divider" aria-hidden="true"><span>or</span></div>}{mode !== "local" && <a className="google-button action-link" href={`${apiBaseUrl}/auth/google/start`}>Continue with Google</a>}{message && <p id="sign-in-message" className="ui-status auth-message" data-tone={serviceUnavailable?"warning":"error"} role="alert" tabIndex={-1}>{message}</p>}</main>;
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode>{window.location.pathname==='/submit-hours'?<PublicHourForm/>:window.location.pathname==='/submit-documentation'?(documentationAvailable ? <PublicDocumentationForm/> : <main className="public-hours-page"><h1>Page unavailable</h1><p>This feature is unavailable in this release.</p><a href="/submit-hours">Submit hours</a></main>):<App />}</StrictMode>);

@@ -22,7 +22,7 @@ export default defineConfig({
   use: { baseURL: dashboardUrl, trace: "retain-on-failure", ...devices["Desktop Chrome"] },
   webServer: [
     { command: "node tests/fixtures/dashboard-preview-server.mjs", url: `${mockApiUrl}/setup/status`, env: { LANCERLOGIN_MOCK_PORT: String(mockApiPort) }, reuseExistingServer: false },
-    { command: `npm --workspace @lancerlogin/dashboard run dev -- --host 127.0.0.1 --port ${dashboardPort} --strictPort`, url: dashboardUrl, env: { VITE_API_BASE_URL: mockApiUrl }, reuseExistingServer: false },
+    { command: `npm --workspace @lancerlogin/dashboard run dev -- --config ../../tests/fixtures/vite-full-feature.config.ts --host 127.0.0.1 --port ${dashboardPort} --strictPort`, url: dashboardUrl, env: { VITE_API_BASE_URL: mockApiUrl }, reuseExistingServer: false },
     { command: "node tests/fixtures/kiosk-preview-server.mjs", url: `${kioskUrl}/health`, env: { LANCERLOGIN_KIOSK_PREVIEW_PORT: String(kioskPort) }, reuseExistingServer: false },
   ],
 });

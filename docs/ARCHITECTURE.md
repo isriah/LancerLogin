@@ -13,7 +13,7 @@ Raspberry Pi kiosk ── local service ── R503 fingerprint sensor
        └── pairing code / HTTPS┴── Worker API
 ```
 
-The dashboard is a static Pages application with an advanced-mode `_worker.js` proxy for `/api/*`. Browser sessions therefore remain first-party on the adopter's Pages origin while API work is forwarded to the separate Worker. The Worker owns authorization, onboarding state, non-overlapping meeting-window validation, scan-time meeting resolution, data validation, encrypted secret handling, exports, and integration calls. Optional Google Calendar and Discord scheduled-event delivery each keep installation-scoped meeting mappings and durable retry operations in D1. Google Calendar keeps separate encrypted authorization and its generic timing-only event policy; Discord keeps its verified bot configuration and provider-specific event fields. LancerLogin remains authoritative and never imports provider changes. D1 contains all organization-level data but no fingerprint templates. The Pi service owns sensor I/O, owner-only local pairing material, local slot-to-member mappings, offline scan queue, kiosk display state, and PIN-protected local network/fingerprint tools.
+The dashboard is a static Pages application with an advanced-mode `_worker.js` proxy for `/api/*`. Browser sessions therefore remain first-party on the adopter's Pages origin while API work is forwarded to the separate Worker. The Worker owns authorization, onboarding state, non-overlapping meeting-window validation, scan-time meeting resolution, data validation, encrypted secret handling, exports, and integration calls. Optional Google Calendar and Discord scheduled-event delivery each keep installation-scoped meeting mappings and durable retry operations in D1. The shared Google connection owns one client and a distinct organizational Calendar/Drive grant, with encrypted verified staging for legacy reconnection; Calendar retains its generic timing-only event policy; Discord keeps its verified bot configuration and provider-specific event fields. LancerLogin remains authoritative and never imports provider changes. D1 contains all organization-level data but no fingerprint templates. The Pi service owns sensor I/O, owner-only local pairing material, local slot-to-member mappings, offline scan queue, kiosk display state, and PIN-protected local network/fingerprint tools.
 
 Community telemetry has been retired. Historical database columns remain inert for backup compatibility.
 
@@ -22,8 +22,6 @@ Worker persistence adapters scope every query and write to an installation ID. T
 The Worker request boundary allows unauthenticated health and CORS preflight only. Every administrative route authenticates a principal and maps the request to an approved role capability before it invokes a repository or integration.
 
 ## Data boundaries
-
-Web updates use Admin-only prepare/start/status control and an installation-scoped D1 request/executor lock. A fixed private GitHub Actions controller owns exact-release deployment, preserved-resource checks and recovery checkpoints. Worker dispatch credentials are secrets, excluded from D1/API/backups. Maintenance returns retryable kiosk errors while queued scans remain local. See [WEB-UPDATES.md](WEB-UPDATES.md).
 
 | Location | May store | Must not store |
 | --- | --- | --- |
@@ -42,3 +40,5 @@ Web updates use Admin-only prepare/start/status control and an installation-scop
 - Secret encryption uses AES-GCM with per-record random IVs and an installation-specific Worker secret.
 - Integration test actions use least-privilege operations and do not reveal credentials.
 - CSV export neutralizes leading spreadsheet formula markers before quoting cells.
+
+The central Google backend and staged legacy migration are specified in [GOOGLE-CONNECTION.md](GOOGLE-CONNECTION.md). Staff login and organizational access share the client but never their authorization purpose or refresh-token ownership.

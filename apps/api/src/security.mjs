@@ -50,7 +50,7 @@ export function createSessionSigner(key, { now = () => Date.now(), ttlMs = 8 * 6
   const sign = (payload) => createHmac("sha256", key).update(payload).digest("base64url");
   return {
     issue({ userId, role }) {
-      if (!userId || !["admin", "operator"].includes(role)) throw new Error("Invalid session principal");
+      if (!userId || !["admin", "operator", "staff"].includes(role)) throw new Error("Invalid session principal");
       const payload = Buffer.from(JSON.stringify({ userId, role, expiresAt: now() + ttlMs })).toString("base64url");
       return `${payload}.${sign(payload)}`;
     },
@@ -59,7 +59,7 @@ export function createSessionSigner(key, { now = () => Date.now(), ttlMs = 8 * 6
       if (!payload || !signature) return undefined;
       const expected = Buffer.from(sign(payload)); const actual = Buffer.from(signature);
       if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return undefined;
-      try { const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")); return session.expiresAt > now() ? { userId: session.userId, role: session.role } : undefined; }
+      try { const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")); return session.expiresAt > now() && session.userId && ["admin", "operator", "staff"].includes(session.role) ? { userId: session.userId, role: session.role } : undefined; }
       catch { return undefined; }
     },
   };

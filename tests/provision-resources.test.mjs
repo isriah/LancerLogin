@@ -47,14 +47,3 @@ test("Pages project discovery is resumable", () => {
   assert.equal(resourceExists("pages", "example-club-dashboard", [{ name: "example-club-dashboard" }]), true);
   assert.equal(resourceExists("pages", "other-dashboard", [{ name: "example-club-dashboard" }]), false);
 });
-
-test("renamed installation retains its independently fixed database identity", () => {
-  const database = { name: "original-data", uuid: "11111111-1111-1111-1111-111111111111" };
-  const result = buildProvisionConfig("renamed", [database], "1.0.3", "original-data");
-  assert.equal(result.state, "exists");
-  assert.equal(result.config.name, "renamed-api");
-  assert.equal(result.config.d1_databases[0].database_name, "original-data");
-  assert.equal(result.config.d1_databases[0].database_id, database.uuid);
-  assert.equal(buildProvisionConfig("renamed", [{ ...database, name: "renamed-data" }], "1.0.3", "original-data").state, "missing");
-  assert.throws(() => buildProvisionConfig("renamed", [database], "1.0.3", "../original-data"), /fixed_database_name_invalid/);
-});

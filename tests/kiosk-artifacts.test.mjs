@@ -7,39 +7,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { kioskArchitectures, packageKioskArtifacts, smokeKioskDirectory, verifyKioskArtifacts } from "../scripts/package-kiosk.mjs";
 
-test("Linux installer replaces an older root helper with verified packaged bytes and permissions", { skip: process.platform !== "linux" || process.getuid?.() !== 0 }, async () => {
-  const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-installed-helper-"));
-  try {
-    const version = "0.24.0";
-    const artifacts = await packageKioskArtifacts({ output: join(scratch, "artifacts"), version });
-    const extracted = join(scratch, "opt/lancerlogin");
-    const installed = join(scratch, "usr/local/sbin/lancerlogin-install-release");
-    await mkdir(extracted, { recursive: true });
-    await mkdir(join(scratch, "usr/local/sbin"), { recursive: true });
-    execFileSync("tar", ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-arm64.tar.gz`), "-C", extracted]);
-    await writeFile(installed, "#!/bin/bash\n# older v0-only installed helper\n", { mode: 0o700 });
-    const installer = await readFile(join(artifacts, "install-lancerlogin.sh"), "utf8");
-    const start = installer.indexOf("install -m 0755 /opt/lancerlogin/scripts/lancerlogin-install-release.sh");
-    const end = installer.indexOf("install -d -m 0755 /etc/polkit-1/rules.d", start);
-    assert.ok(start > 0 && end > start);
-    // Execute the actual packaged installer block, changing only filesystem
-    // roots to an isolated directory. Real install/cmp/stat prove replacement.
-    const block = installer.slice(start, end).replaceAll("/opt/lancerlogin", extracted).replaceAll("/usr/local/sbin/lancerlogin-install-release", installed);
-    execFileSync("/usr/bin/bash", ["-euc", block]);
-    assert.equal(await readFile(installed, "utf8"), await readFile(join(extracted, "scripts/lancerlogin-install-release.sh"), "utf8"));
-    assert.equal(execFileSync("stat", ["-c", "%U:%G:%a", installed], { encoding: "utf8" }).trim(), "root:root:755");
-    assert.throws(() => execFileSync("/usr/bin/bash", [installed, "v9.9.9"], { stdio: "pipe" }), error => {
-      assert.equal(error.status, 2);
-      assert.match(String(error.stderr), /accepts no arguments/);
-      return true;
-    });
-    // Corrupting the installed helper after copy must fail verification.
-    const verification = block.slice(block.indexOf("cmp --silent"));
-    await writeFile(installed, "corrupted");
-    assert.throws(() => execFileSync("/usr/bin/bash", ["-euc", verification], { stdio: "pipe" }));
-  } finally { await rm(scratch, { recursive: true, force: true }); }
-});
-
 test("both shipped archives load and serve their isolated runtime; missing imports fail closed", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-artifact-test-"));
   const version = JSON.parse(await readFile("package.json", "utf8")).version;
@@ -87,7 +54,8 @@ test("both shipped archives load and serve their isolated runtime; missing impor
 });
 
 test("release publication requires shared artifact validation after exact-commit CI", async () => {
-  const workflow = await readFile(".github/workflows/release.yml", "utf8");
+  const workflow = await readFile(".github/disabled-workflows/release.yml", "utf8");
+  assert.match(workflow, /if: \$\{\{ false \}\}/);
   const gate = workflow.indexOf('run: sudo "$(command -v node)" scripts/package-kiosk.mjs release/artifacts --require-unprivileged');
   assert.ok(gate > workflow.indexOf("successful_runs="));
   assert.ok(gate < workflow.indexOf("gh release create"));

@@ -39,7 +39,7 @@ fi
 [[ "$MODE" == "--install" ]] || { echo "Use --dry-run to preview or --install to proceed." >&2; exit 2; }
 [[ "${EUID}" -eq 0 ]] || { echo "Run the installer as root with sudo." >&2; exit 2; }
 check_hardware
-for command in curl sha256sum tar systemctl runuser ss nmcli cmp stat; do command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 2; }; done
+for command in curl sha256sum tar systemctl runuser ss nmcli; do command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 2; }; done
 [[ -x /usr/bin/node ]] || { echo "Node.js 18 or newer must be installed at /usr/bin/node." >&2; exit 2; }
 node_major="$(/usr/bin/node -p 'process.versions.node.split(".")[0]')"
 [[ "$node_major" -ge 18 ]] || { echo "Node.js 18 or newer is required." >&2; exit 2; }
@@ -72,8 +72,6 @@ chmod 0755 /opt/lancerlogin
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-kiosk.service /etc/systemd/system/lancerlogin-kiosk.service
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-update.service /etc/systemd/system/lancerlogin-update.service
 install -m 0755 /opt/lancerlogin/scripts/lancerlogin-install-release.sh /usr/local/sbin/lancerlogin-install-release
-cmp --silent /opt/lancerlogin/scripts/lancerlogin-install-release.sh /usr/local/sbin/lancerlogin-install-release || { echo "Installed official update helper verification failed." >&2; exit 1; }
-[[ "$(stat -c '%U:%G:%a' /usr/local/sbin/lancerlogin-install-release)" == "root:root:755" ]] || { echo "Installed official update helper ownership/mode verification failed." >&2; exit 1; }
 install -d -m 0755 /etc/polkit-1/rules.d
 install -m 0644 /opt/lancerlogin/polkit/49-lancerlogin-network.rules /etc/polkit-1/rules.d/49-lancerlogin-network.rules
 install -m 0644 /opt/lancerlogin/polkit/49-lancerlogin-recovery.rules /etc/polkit-1/rules.d/49-lancerlogin-recovery.rules

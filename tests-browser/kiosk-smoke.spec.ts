@@ -1,45 +1,13 @@
 import { expect, test } from "@playwright/test";
-import { kioskDisplayForQueuedScan } from "../apps/kiosk/src/kiosk-presentation.mjs";
 
 const kioskBaseUrl = process.env.LANCERLOGIN_KIOSK_BASE_URL ?? "http://127.0.0.1:8792";
-
-for (const reducedMotion of ["no-preference", "reduce"] as const) {
-  test(`queued kiosk Welcome and Goodbye retain exact copy and cues with ${reducedMotion} motion`, async ({ page }) => {
-    await page.emulateMedia({ reducedMotion });
-    await page.setViewportSize({ width: 800, height: 480 });
-    let pending: { memberId: string }[] = [];
-    await page.route(`${kioskBaseUrl}/display-state`, async (route) => {
-      const response = await route.fetch();
-      const state = await response.json();
-      await route.fulfill({ response, json: { ...state, cloudOnline: false, pendingEvents: pending.length + 1, display: kioskDisplayForQueuedScan("synthetic-member", pending) } });
-    });
-    await page.goto(`${kioskBaseUrl}/`);
-    const shell = page.locator("#kiosk"); const network = page.locator("#network-status");
-    for (const headline of ["Welcome", "Goodbye"]) {
-      if (headline === "Goodbye") pending = [{ memberId: "synthetic-member" }];
-      await expect(page.getByRole("heading", { name: headline, exact: true })).toBeVisible();
-      await expect(page.locator("#display-detail")).toHaveText(`Saved for sync | ${headline}`);
-      await expect(shell).toHaveClass(new RegExp(`kiosk-shell-${headline.toLowerCase()}`));
-      await expect(network).toHaveClass(/offline/);
-      expect(await shell.evaluate((element) => getComputedStyle(element).animationName)).toBe(reducedMotion === "reduce" ? "none" : "success-pulse");
-      expect(await network.evaluate((element) => getComputedStyle(element).animationName)).toBe(reducedMotion === "reduce" ? "none" : "network-offline-pulse");
-      if (reducedMotion === "reduce") expect(await shell.evaluate((element) => getComputedStyle(element).boxShadow)).not.toBe("none");
-      const detail = await page.locator("#display-detail").boundingBox();
-      expect(detail).not.toBeNull();
-      expect(detail!.x).toBeGreaterThanOrEqual(0);
-      expect(detail!.x + detail!.width).toBeLessThanOrEqual(800);
-      expect(detail!.y + detail!.height).toBeLessThanOrEqual(480);
-      expect(await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }))).toEqual({ width: 800, height: 480 });
-    }
-  });
-}
 
 test("physical kiosk screen fits the supported 800 by 480 display", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 480 });
   await page.goto(`${kioskBaseUrl}/`);
   await expect(page.getByRole("heading", { name: "Place finger on reader" })).toBeVisible();
   await expect(page.getByText("Example Arts Club")).toBeVisible();
-  await expect(page.getByText("LancerLogin 1.0.2")).toBeVisible();
+  await expect(page.getByText("LancerLogin 0.17.0")).toBeVisible();
   await expect(page.getByText("No scans waiting")).toBeVisible();
   const dimensions = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
   expect(dimensions).toEqual({ width: 800, height: 480 });

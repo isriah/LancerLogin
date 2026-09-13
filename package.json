@@ -2,7 +2,7 @@
   "name": "lancerlogin",
   "private": true,
   "type": "module",
-  "version": "1.0.3",
+  "version": "0.22.2",
   "description": "Self-hosted single-kiosk attendance",
   "license": "Apache-2.0",
   "workspaces": [
@@ -10,14 +10,13 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node --test tests/**/*.test.mjs && node --experimental-strip-types --test tests-ts/**/*.test.ts",
-    "test:api": "node --test tests/attendance-service.test.mjs tests/d1-repository.test.mjs tests/integration-workflows.test.mjs tests/pairing-service.test.mjs tests/roster-import.test.mjs tests/security.test.mjs tests/setup-progress.test.mjs tests/web-updates-workerd.test.mjs tests/worker.test.mjs && node --experimental-strip-types --test tests-ts/attendance-lifecycle.test.ts tests-ts/integration-runtime.test.ts tests-ts/runtime-security.test.ts tests-ts/worker-runtime.test.ts tests-ts/web-updates.test.ts",
+    "test": "node --import ./tests/helpers/full-feature-profile.mjs --test tests/**/*.test.mjs && node --test tests-release/*.test.mjs && node --experimental-strip-types --test tests-ts/**/*.test.ts",
+    "test:api": "node --test tests-release/*.test.mjs && node --import ./tests/helpers/full-feature-profile.mjs --test tests/documentation-discord-file-d1.test.mjs tests/documentation-drive-source.test.mjs tests/documentation-drive-copy.test.mjs tests/documentation-drive-intake-d1.test.mjs tests/member-documentation-d1.test.mjs tests/documentation-discord-d1.test.mjs tests/documentation-proxy.test.mjs tests/upload-proxy.test.mjs tests/document-compute.test.mjs tests/civil-time.test.mjs tests/attendance-service.test.mjs tests/d1-repository.test.mjs tests/database-unavailable.test.mjs tests/integration-workflows.test.mjs tests/pairing-service.test.mjs tests/platform-modules.test.mjs tests/platform-modules-d1.test.mjs tests/hours-catalogs-d1.test.mjs tests/hours-publication-d1.test.mjs tests/publication-trigger-results-d1.test.mjs tests/hour-accounting-d1.test.mjs tests/hour-entry-choices-d1.test.mjs tests/hour-review-reports-d1.test.mjs tests/hour-discord-d1.test.mjs tests/discord-attachment-feasibility.test.mjs tests/documentation-foundation-d1.test.mjs tests/documentation-initiatives-d1.test.mjs tests/documentation-metrics-d1.test.mjs tests/documentation-artifacts-d1.test.mjs tests/documentation-upload-d1.test.mjs tests/documentation-claims-d1.test.mjs tests/google-drive-storage-d1.test.mjs tests/public-hours-d1.test.mjs tests/staff-identity-d1.test.mjs tests/google-connection-d1.test.mjs tests/google-drive-picker-d1.test.mjs tests/google-drive-proof-d1.test.mjs tests/platform-scheduler.test.mjs tests/platform-scheduler-delivery.test.mjs tests/platform-scheduler-workerd.test.mjs tests/roster-import.test.mjs tests/security.test.mjs tests/password-computation.test.mjs tests/setup-progress.test.mjs tests/worker.test.mjs && node --experimental-strip-types --test tests-ts/attendance-lifecycle.test.ts tests-ts/integration-runtime.test.ts tests-ts/runtime-security.test.ts tests-ts/worker-runtime.test.ts",
     "test:dashboard": "node --test tests/dashboard-shell.test.mjs && node --experimental-strip-types --test tests-ts/dashboard-update.test.ts tests-ts/dashboard-conformance.test.ts",
-    "test:browser": "node scripts/run-browser-tests.mjs",
+    "test:browser": "node scripts/run-browser-tests.mjs && node scripts/run-browser-tests.mjs --config tests-release/playwright.config.ts",
     "test:docs": "node --test tests/docs-site.test.mjs",
-    "test:kiosk": "node --test tests/kiosk-runtime.test.mjs tests/kiosk-artifacts.test.mjs",
-    "test:provisioning": "node --test tests/cloudflare-setup.test.mjs tests/d1-maintenance.test.mjs tests/foundation.test.mjs tests/pages-proxy.test.mjs tests/provision-plan.test.mjs tests/provision-resources.test.mjs tests/web-upgrade.test.mjs",
-    "rehearse:web-upgrade": "node scripts/rehearse-web-upgrade.mjs",
+    "test:kiosk": "node --test tests/kiosk-runtime.test.mjs tests/kiosk-artifacts.test.mjs tests/kiosk-release.test.mjs",
+    "test:provisioning": "node --test tests/cloudflare-setup.test.mjs tests/d1-maintenance.test.mjs tests/development-bundle.test.mjs tests/development-isolation.test.mjs tests/development-preflight.test.mjs tests/foundation.test.mjs tests/pages-proxy.test.mjs tests/provision-plan.test.mjs tests/provision-resources.test.mjs",
     "verify:migrations": "node scripts/verify-d1-migrations.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspaces --if-present && node scripts/verify-template-config.mjs",
@@ -38,12 +37,14 @@
     "backup-d1": "node scripts/d1-maintenance.mjs backup",
     "restore-d1": "node scripts/d1-maintenance.mjs restore"
   },
-  "overrides": {
-    "sharp": "0.35.4"
-  },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "typescript": "^5.7.3",
     "wrangler": "4.127.1"
+  },
+  "overrides": {
+    "miniflare@5.20260828.0-alpha": {
+      "sharp": "0.35.4"
+    }
   }
 }

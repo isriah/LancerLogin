@@ -1,6 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
-import { expectDashboardTypography } from "./dashboard-typography";
 
 const settings = {
   organizationName: "Reference Arts Collective",
@@ -96,12 +95,7 @@ test("Admin can save independent attendance anomaly limits", async ({ page }) =>
   expect(saved?.anomalyEarlyThresholdMinutes).toBe(18);
 });
 
-for (const viewport of dashboardConformanceReferences.viewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
-test(`Admin can add, edit, reorder, retire, and restore meeting-weight categories at ${viewport.width}x${viewport.height} ${theme}`, async ({ page }) => {
-  await page.setViewportSize(viewport);
-  await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
-  await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+test("Admin can add, edit, reorder, retire, and restore meeting-weight categories", async ({ page }) => {
   await useSettingsContext(page);
   await page.addInitScript(() => localStorage.setItem("lancerlogin-update-dismissed:0.19.0", "true"));
   let categories = [
@@ -121,7 +115,6 @@ test(`Admin can add, edit, reorder, retire, and restore meeting-weight categorie
 
   await page.goto("/settings/organization");
   const card = page.locator(".meeting-weight-settings");
-  await card.locator(".meeting-weight-disclosure > summary").click();
   const add = card.locator(".meeting-weight-add");
   await add.getByLabel("Name").fill("Major event");
   await add.getByLabel("Weight").fill("3");
@@ -133,29 +126,13 @@ test(`Admin can add, edit, reorder, retire, and restore meeting-weight categorie
   await standard.getByLabel("Weight").fill("1.5");
   await standard.getByRole("button", { name: "Save" }).click();
   await expect(card.getByText("Standard saved. Existing meetings keep their saved weight.")).toBeVisible();
-  await card.getByRole("button", { name: "Move Extended up" }).focus();
-  await page.keyboard.press("Enter");
+  await card.getByRole("button", { name: "Move Extended up" }).click();
   await expect(card.getByText("Automatic rule priority updated.")).toBeVisible();
-  await card.getByRole("button", { name: "Move Extended down" }).click();
-  await expect(card.locator(".meeting-weight-list > li").first().getByLabel("Name")).toHaveValue("Standard");
-  await card.getByRole("button", { name: "Move Standard down" }).click();
-  await expect(card.locator(".meeting-weight-list > li").first().getByLabel("Name")).toHaveValue("Extended");
-  await expect(card.getByRole("button", { name: "Move Extended up", exact: true })).toBeDisabled();
-  await expect(card.getByRole("button", { name: "Move Major event down", exact: true })).toBeDisabled();
-  await card.locator(".meeting-weight-disclosure > summary").click();
-  await expect(card.getByText("Automatic rule priority updated.")).toBeVisible();
-  await card.locator(".meeting-weight-disclosure > summary").click();
   await standard.getByRole("button", { name: "Retire" }).click();
   await expect(card.getByText("Standard retired. Existing meetings are unchanged.")).toBeVisible();
   await card.getByText("Retired categories (1)").click();
   await card.getByRole("button", { name: "Restore" }).click();
   await expect(card.getByText("Standard restored. Existing meetings are unchanged.")).toBeVisible();
-  await expect(card.locator(".meeting-weight-disclosure > summary")).toContainText("3 active");
-  await page.reload();
-  await expect(card.locator(".meeting-weight-disclosure")).not.toHaveAttribute("open");
-  await card.locator(".meeting-weight-disclosure > summary").click();
-  await expect(card.locator(".meeting-weight-list > li").first().getByLabel("Name")).toHaveValue("Extended");
-  await expect(card.locator('li:has(input[value="Standard"])').getByLabel("Weight")).toHaveValue("1.5");
   expect(requests).toEqual(expect.arrayContaining([
     expect.objectContaining({ method: "POST", body: { name: "Major event", weight: 3, minimumDurationMinutes: 180 } }),
     expect.objectContaining({ path: "/admin/meeting-weight-categories/order", method: "PATCH", body: { orderedIds: ["extended", "standard", "major"] } }),
@@ -163,8 +140,6 @@ test(`Admin can add, edit, reorder, retire, and restore meeting-weight categorie
     expect.objectContaining({ path: "/admin/meeting-weight-categories/standard", method: "PATCH", body: { active: true } }),
   ]));
 });
-  }
-}
 
 async function expectResponsiveFit(page: Page) {
   const geometry = await page.evaluate(() => ({
@@ -191,17 +166,6 @@ for (const viewport of dashboardConformanceReferences.viewports) {
         await page.goto(path);
         await expect(page.locator("main h1")).toHaveCount(1);
         await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
-        await expectDashboardTypography(page);
-        if (path === "/settings/organization") {
-          const name = page.getByRole("textbox", { name: "Organization name", exact: true });
-          await page.getByText("Organization name", { exact: true }).click();
-          await expect(name).toBeFocused();
-          await page.keyboard.press("Tab");
-          await expect(page.getByRole("textbox", { name: "Subtitle (optional)", exact: true })).toBeFocused();
-          await expect(page.locator(".settings-form > label").filter({ hasText: "Subtitle" }).locator("span")).toHaveCSS("font-weight", "500");
-          await page.screenshot({ path: test.info().outputPath("organization.png") });
-          await test.info().attach("Organization typography", { path: test.info().outputPath("organization.png"), contentType: "image/png" });
-        }
         await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
         await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
         await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);

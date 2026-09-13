@@ -24,7 +24,7 @@ class FakeDatabase {
   lists = new Map<string, unknown[]>();
   runChangeHandler?: (sql: string, values: unknown[]) => number;
   prepare(sql: string) { return new FakeStatement(sql, this); }
-  async batch(statements: FakeStatement[]) { this.batches.push(statements); return statements.map(() => ({ success: true })); }
+  async batch(statements: FakeStatement[]) { this.batches.push(statements); return statements.map(statement => /^\s*SELECT\b/i.test(statement.sql) ? {success:true,results:this.allResult(statement.sql,statement.values)??[]} : ({ success: true, meta: { changes: this.runChanges(statement.sql, statement.values) } })); }
   firstResult(sql: string, values: unknown[]) {
     for (const [fragment, value] of this.rows) if (sql.includes(fragment)) return typeof value === "function" ? (value as (sql: string, values: unknown[]) => unknown)(sql, values) : value;
     if (sql.includes("SELECT id, role FROM users") && sql.includes("active = 1")) {
@@ -83,18 +83,16 @@ test("first setup rejects simple cross-origin media types before any D1 write", 
   assert.equal(database.batches.length, 0);
 });
 
-test("local Worker bootstrap creates a salted Admin and ignores legacy telemetry consent", async () => {
+test("local Worker bootstrap creates the first Admin with a salted password hash", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Arts Club", timeZone: "America/New_York", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple", telemetryAccepted: true }), env);
+  const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Arts Club", timeZone: "America/New_York", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple", telemetryAccepted: false }), env);
   assert.equal(result.status, 201);
   assert.equal(database.batches.length, 1);
-  assert.equal(database.batches[0].length, 4);
+  assert.equal(database.batches[0].length, 8);
+  assert.equal(database.batches[0].filter(statement => statement.sql.includes("INSERT INTO hours_categories")).length, 3);
   const userInsert = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO users"));
   assert.match(String(userInsert?.values[4]), /^scrypt\$/);
-  const installationInsert = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO installations"));
-  assert.equal(installationInsert?.values[3], null);
-  assert.equal(installationInsert?.values[4], null);
   assert.equal((await result.json() as { telemetryAccepted: boolean }).telemetryAccepted, false);
 });
 
@@ -174,7 +172,7 @@ test("only an Admin can discover the private deployment updater", async () => {
   assert.equal((await worker.fetch(request("/admin/update-info", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
   const result = await worker.fetch(request("/admin/update-info", undefined, { cookie: await sessionCookie("admin") }), env);
   assert.equal(result.status, 200);
-  assert.deepEqual(await result.json(), { releaseVersion: "development", workflowUrl });
+  assert.deepEqual(await result.json(), { releaseVersion: "development", updaterConfigured: false });
 });
 
 test("only an Admin can change settings, dashboard access, or queue kiosk updates", async () => {
@@ -396,9 +394,8 @@ test("Admin queues only fixed recovery and latest-stable update commands", async
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     assert.equal(String(input), "https://api.github.com/repos/isriah/LancerLogin/releases/latest");
-    // GitHub rejects requests without an application User-Agent before returning releases.
-    if (!new Headers(init?.headers).get("user-agent")) return new Response("User-Agent required", { status: 403 });
-    return new Response(JSON.stringify({ tag_name: "v0.22.0", draft: false, prerelease: false, assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", "lancerlogin-kiosk-0.22.0-linux-arm64.tar.gz", "lancerlogin-kiosk-0.22.0-linux-arm64.tar.gz.sha256", "lancerlogin-kiosk-0.22.0-linux-armv7.tar.gz", "lancerlogin-kiosk-0.22.0-linux-armv7.tar.gz.sha256"].map(name => ({ name })) }), { headers: { "content-type": "application/json" } });
+    assert.equal(new Headers(init?.headers).get("user-agent"), "LancerLogin");
+    return new Response(JSON.stringify({ tag_name: "v0.22.0" }), { headers: { "content-type": "application/json" } });
   };
   try {
     const update = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest", targetVersion: "v9.9.9", shell: "must-not-store" }, { cookie: await sessionCookie("admin") }), env);
@@ -419,52 +416,86 @@ test("Admin queues only fixed recovery and latest-stable update commands", async
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosk_commands SET completed_at") && call.values.includes("kiosk-1") && call.values.includes("command-1")));
 });
 
-test("latest kiosk update accepts strict stable majors and rejects incomplete releases without fallback", async () => {
-  const cookie = await sessionCookie("admin");
-  const originalFetch = globalThis.fetch;
-  const release = (tag: string) => ({ tag_name: tag, draft: false, prerelease: false, assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap(arch => {
-    const archive = `lancerlogin-kiosk-${tag.slice(1)}-linux-${arch}.tar.gz`;
-    return [archive, `${archive}.sha256`];
-  })].map(name => ({ name })) });
-  const cases = [
-    ...["v0.24.0", "v1.0.0", "v12.3.45"].map(tag => ({ payload: release(tag), status: 202 })),
-    ...["v01.0.0", "v1.00.0", "v1.0.00", "v1.0", "1.0.0", "v1.0.0-beta", "v1.0.0+build", "v1.0.0\n", "v1.0.0/evil"].map(tag => ({ payload: release(tag), status: 503 })),
-    { payload: { ...release("v1.0.0"), draft: true }, status: 503 },
-    { payload: { ...release("v1.0.0"), prerelease: true }, status: 503 },
-    { payload: { ...release("v1.0.0"), draft: undefined }, status: 503 },
-    { payload: { ...release("v1.0.0"), prerelease: "false" }, status: 503 },
-    { payload: { ...release("v1.0.0"), assets: [] }, status: 503 },
-    ...release("v1.0.0").assets.map(missing => ({ payload: { ...release("v1.0.0"), assets: release("v1.0.0").assets.filter(asset => asset.name !== missing.name) }, status: 503 })),
-  ];
+test("latest kiosk update uses the official User-Agent and a bounded stable-compatible fallback", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Synthetic kiosk", active: 1, releaseVersion: "0.21.0" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("admin"), originalFetch = globalThis.fetch;
   try {
-    for (const item of cases) {
-      const database = new FakeDatabase();
-      database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1, releaseVersion: "0.23.2" });
-      const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-      let calls = 0;
-      globalThis.fetch = async (input) => { calls++; assert.equal(String(input), "https://api.github.com/repos/isriah/LancerLogin/releases/latest"); return Response.json(item.payload); };
-      const result = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest", targetVersion: "v9.9.9", url: "https://evil.test" }, { cookie }), env);
-      assert.equal(result.status, item.status, JSON.stringify(item.payload));
-      assert.equal(calls, 1);
-      const insert = database.batches.at(-1)?.find(call => call.sql.includes("INSERT INTO kiosk_commands"));
-      if (item.status === 202) assert.ok(insert?.values.includes(item.payload.tag_name));
-      else assert.equal(insert, undefined);
+    for (const latest of [{ tag_name: "v1.0.0", draft: false, prerelease: false }, { tag_name: "v0.24.0", draft: true }, { tag_name: "v0.24.0", prerelease: true }]) {
+      const calls: string[] = [], signals: (AbortSignal | null | undefined)[] = [];
+      globalThis.fetch = async (input, init) => {
+        calls.push(String(input)); signals.push(init?.signal);
+        assert.equal(new Headers(init?.headers).get("user-agent"), "LancerLogin");
+        assert.equal(new Headers(init?.headers).get("accept"), "application/vnd.github+json");
+        assert.equal(init?.redirect, "manual");
+        return Response.json(calls.length === 1 ? latest : [
+          { tag_name: "v0.25.0", draft: true }, { tag_name: "v0.24.0", prerelease: true },
+          { tag_name: "v1.0.0" }, { tag_name: "v0.23.0-beta.1" },
+          { tag_name: "v0.22.2", draft: false, prerelease: false, url: "https://foreign.test/untrusted" },
+          { tag_name: "v0.22.1", draft: false, prerelease: false },
+        ]);
+      };
+      const result = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie }), env);
+      assert.equal(result.status, 202);
+      assert.deepEqual(calls, ["https://api.github.com/repos/isriah/LancerLogin/releases/latest", "https://api.github.com/repos/isriah/LancerLogin/releases?per_page=20"]);
+      assert.equal(signals[0], signals[1]);
+      assert.ok(database.batches.at(-1)?.find(call => call.sql.includes("INSERT INTO kiosk_commands"))?.values.includes("v0.22.2"));
     }
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("latest kiosk update keeps malformed or rate-limited release feeds unavailable", async () => {
-  const database = new FakeDatabase();
-  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1, releaseVersion: "0.21.0" });
-  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const cookie = await sessionCookie("admin");
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response("not-json", { status: 200 });
+test("latest kiosk update refuses malformed, rate-limited and over-limit feeds without queuing", async () => {
+  const cookie = await sessionCookie("admin"), originalFetch = globalThis.fetch;
+  const failures = [
+    { latest: () => new Response("rate limited", { status: 429 }), calls: 1 },
+    { latest: () => new Response("rate limited", { status: 403 }), calls: 1 },
+    { latest: () => new Response("not-json"), calls: 1 },
+    { latest: () => Response.json({ tag_name: 42 }), calls: 1 },
+    { latest: () => Response.json({ tag_name: "v0.22.2", draft: "false" }), calls: 1 },
+    { latest: () => new Response(null, { status: 302, headers: { location: "https://foreign.test" } }), calls: 1 },
+    { fallback: () => new Response("rate limited", { status: 429 }), calls: 2 },
+    { fallback: () => new Response("not-json"), calls: 2 },
+    { fallback: () => Response.json({ releases: [] }), calls: 2 },
+    { fallback: () => Response.json([{ tag_name: "v0.22.2", prerelease: "false" }]), calls: 2 },
+    { fallback: () => Response.json([{ tag_name: "v0.22.2", draft: true }, { tag_name: "v0.22.1", prerelease: true }]), calls: 2 },
+    { fallback: () => Response.json([...Array.from({ length: 20 }, () => ({ tag_name: "v1.0.0" })), { tag_name: "v0.22.2" }]), calls: 2 },
+  ];
   try {
-    const result = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie }), env);
-    assert.equal(result.status, 503);
-    assert.match(await result.text(), /No compatible official kiosk release/);
+    for (const scenario of failures) {
+      const database = new FakeDatabase(); database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Synthetic kiosk", active: 1 });
+      const env = { APP_MODE: "configured", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+      let calls = 0;
+      globalThis.fetch = async () => { calls++; return calls === 1 ? scenario.latest?.() ?? Response.json({ tag_name: "v1.0.0" }) : scenario.fallback!(); };
+      const result = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie }), env);
+      assert.equal(result.status, 503); assert.match(await result.text(), /No compatible official kiosk release/);
+      assert.equal(calls, scenario.calls); assert.equal(database.batches.length, 0);
+    }
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("kiosk lookup has one four-second deadline across latest, fallback and response bodies", async () => {
+  const cookie = await sessionCookie("admin"), originalFetch = globalThis.fetch, originalTimer = globalThis.setTimeout;
+  try {
+    for (const blocked of ["latest", "fallback", "body"]) {
+      const database = new FakeDatabase(); database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Synthetic kiosk", active: 1 });
+      const env = { APP_MODE: "configured", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+      let expire: (() => void) | undefined, deadlines = 0, calls = 0, arrived!: () => void;
+      const ready = new Promise<void>(resolve => { arrived = resolve; }), signals: AbortSignal[] = [];
+      globalThis.setTimeout = ((callback: () => void, milliseconds?: number) => { if (milliseconds === 4000) { deadlines++; expire = callback; return 0; } return originalTimer(callback, milliseconds); }) as typeof setTimeout;
+      globalThis.fetch = async (_input, init) => {
+        calls++; signals.push(init!.signal!);
+        if (calls === 1 && blocked !== "latest") return Response.json({ tag_name: "v1.0.0" });
+        arrived();
+        if (blocked === "body") return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("[")); } }));
+        return new Promise<Response>(() => {});
+      };
+      const pending = worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie }), env);
+      await ready; assert.equal(deadlines, 1); expire!();
+      const result = await pending; assert.equal(result.status, 503); assert.equal(database.batches.length, 0);
+      assert.equal(calls, blocked === "latest" ? 1 : 2); assert.ok(signals.every(signal => signal === signals[0] && signal.aborted));
+    }
+  } finally { globalThis.fetch = originalFetch; globalThis.setTimeout = originalTimer; }
 });
 
 test("kiosk heartbeats durably reconcile requested update releases", async () => {
@@ -990,6 +1021,17 @@ test("saved but unverified Resend credentials cannot send attendance email", asy
   assert.equal(result.status, 503); assert.match((await result.json() as { error: string }).error, /verification is required/);
 });
 
+function mockManagedCommands(applicationId: string, guildId: string) {
+  const commands: Record<string, unknown>[] = [];
+  return (init?: RequestInit) => {
+    if (init?.method === "GET") return Response.json(commands);
+    assert.equal(init?.method, "POST", "initial command creation never replaces the collection");
+    const command = JSON.parse(String(init?.body));
+    commands.push({ ...command, ...(Array.isArray(command.options) ? { options: command.options.map((option: Record<string, unknown>) => ({ ...option, name_localizations: null, description_localizations: null, autocomplete: false })) } : {}), id: String(423456789012345678n + BigInt(commands.length)), application_id: applicationId, guild_id: guildId });
+    return Response.json(commands.at(-1));
+  };
+}
+
 test("Discord verification reconciles the two managed guild commands before its signed user click", async () => {
   const database = new FakeDatabase(); const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
@@ -997,22 +1039,23 @@ test("Discord verification reconciles the two managed guild commands before its 
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: null });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; const outbound: Array<{ input: string; init?: RequestInit }> = [];
+  const commandMock = mockManagedCommands("103456789012345678", "123456789012345678");
   globalThis.fetch = async (input, init) => {
     const url = String(input); outbound.push({ input: url, init });
     if (url.endsWith("/users/@me")) return Response.json({ id: "bot-1" });
     if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: "103456789012345678" });
     if (url.endsWith("/guilds/123456789012345678")) return Response.json({ id: "123456789012345678" });
     if (url.endsWith("/channels/223456789012345678")) return Response.json({ guild_id: "123456789012345678", type: 0 });
-    if (url.endsWith("/commands")) return Response.json((JSON.parse(String(init?.body)) as Record<string, unknown>[]).map((command, index) => ({ ...command, id: `command-${index + 1}`, application_id: "103456789012345678", guild_id: "123456789012345678", options: Array.isArray(command.options) ? command.options.map((option) => ({ ...option, name_localizations: null, description_localizations: null, autocomplete: false })) : undefined })));
+    if (url.endsWith("/commands")) return commandMock(init);
     if (url.endsWith("/channels/223456789012345678/messages")) return Response.json({ id: "verification-message-1" });
     throw new Error(`Unexpected live request: ${url}`);
   };
   try {
     const started = await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env);
-    assert.equal(started.status, 202); assert.match(outbound[0].input, /users\/@me$/); assert.match(outbound[1].input, /oauth2\/applications\/@me$/); assert.match(outbound[2].input, /guilds\/123456789012345678$/); assert.match(outbound[3].input, /channels\/223456789012345678$/); assert.match(outbound[4].input, /applications\/103456789012345678\/guilds\/123456789012345678\/commands$/); assert.equal(outbound[4].init?.method, "PUT"); assert.match(outbound[5].input, /channels\/223456789012345678\/messages$/);
+    assert.equal(started.status, 202); assert.match(outbound[0].input, /users\/@me$/); assert.match(outbound[1].input, /oauth2\/applications\/@me$/); assert.match(outbound[2].input, /guilds\/123456789012345678$/); assert.match(outbound[3].input, /channels\/223456789012345678$/); assert.match(outbound[4].input, /applications\/103456789012345678\/guilds\/123456789012345678\/commands$/); assert.equal(outbound[4].init?.method, "GET"); assert.match(outbound[8].input, /channels\/223456789012345678\/messages$/);
     assert.equal(outbound.every(({ input }) => input.startsWith("https://discord.com/api/v10/")), true); assert.equal(outbound.some(({ input }) => /\/applications\/103456789012345678\/commands$/.test(input)), false);
-    assert.deepEqual(JSON.parse(String(outbound[4].init?.body)), [{ name: "pair", type: 1, description: "Link your Discord account to your LancerLogin member ID", options: [{ name: "member-id", description: "Your LancerLogin member ID", type: 3, required: true }] }, { name: "attendance-report", type: 1, description: "Privately view your current LancerLogin attendance report" }]);
-    const payload = JSON.parse(String(outbound[5].init?.body)); const customId = payload.components[0].components[0].custom_id as string; const token = customId.slice("lancerlogin-verify:".length);
+    assert.deepEqual(outbound.filter(item => item.input.endsWith("/commands") && item.init?.method === "POST").map(item => { const command = JSON.parse(String(item.init?.body)); if (!command.options?.length) delete command.options; return command; }), [{ name: "pair", type: 1, description: "Link your Discord account to your LancerLogin member ID", options: [{ name: "member-id", description: "Your LancerLogin member ID", type: 3, required: true }] }, { name: "attendance-report", type: 1, description: "Privately view your current LancerLogin attendance report" }]);
+    const payload = JSON.parse(String(outbound[8].init?.body)); const customId = payload.components[0].components[0].custom_id as string; const token = customId.slice("lancerlogin-verify:".length);
     const challengeWrite = database.calls.find((call) => call.sql.includes("INSERT INTO integration_verification_challenges")); assert.ok(challengeWrite); assert.equal(challengeWrite.values[0], createHash("sha256").update(token).digest("base64url")); assert.equal(challengeWrite.values.includes(token), false);
     database.rows.set("FROM integration_verification_challenges", { challengeHash: challengeWrite.values[0], target: "123456789012345678", externalId: "verification-message-1", expiresAt: new Date(Date.now() + 60_000).toISOString() });
     const body = JSON.stringify({ type: 3, guild_id: "123456789012345678", data: { custom_id: customId }, member: { user: { id: "323456789012345678" } }, message: { id: "verification-message-1" } }); const timestamp = String(Math.floor(Date.now() / 1000)); const signature = sign(null, Buffer.from(timestamp + body), privateKey).toString("hex");
@@ -1035,14 +1078,14 @@ test("Discord command setup is repeat-safe across reruns and credential rotation
   const database = new FakeDatabase(); const config = { botToken: "discord-secret", applicationId: "103456789012345678", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) };
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration(config, sessionSecret), verifiedAt: null });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const originalFetch = globalThis.fetch; const commandBodies: unknown[] = []; const authorizations: string[] = [];
-  globalThis.fetch = async (input, init) => { const url = String(input); authorizations.push(String((init?.headers as Record<string, string>).authorization)); if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: config.applicationId }); if (url.endsWith(`/guilds/${config.guildId}`)) return Response.json({ id: config.guildId }); if (url.endsWith(`/channels/${config.channelId}`)) return Response.json({ guild_id: config.guildId, type: 0 }); if (url.endsWith("/commands")) { const body = JSON.parse(String(init?.body)) as Record<string, unknown>[]; commandBodies.push(body); return Response.json(body.map((item, index) => ({ ...item, id: `command-${index}`, application_id: config.applicationId, guild_id: config.guildId }))); } if (url.includes("/channels/")) return Response.json({ id: crypto.randomUUID() }); return Response.json({ id: "bot-1" }); };
+  const originalFetch = globalThis.fetch; const commandBodies: unknown[] = []; const authorizations: string[] = []; const commandMock = mockManagedCommands(config.applicationId, config.guildId);
+  globalThis.fetch = async (input, init) => { const url = String(input); authorizations.push(String((init?.headers as Record<string, string>).authorization)); if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: config.applicationId }); if (url.endsWith(`/guilds/${config.guildId}`)) return Response.json({ id: config.guildId }); if (url.endsWith(`/channels/${config.channelId}`)) return Response.json({ guild_id: config.guildId, type: 0 }); if (url.endsWith("/commands")) { if (init?.method !== "GET") commandBodies.push(JSON.parse(String(init?.body))); return commandMock(init); } if (url.includes("/channels/")) return Response.json({ id: crypto.randomUUID() }); return Response.json({ id: "bot-1" }); };
   try {
     assert.equal((await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env)).status, 202);
     assert.equal((await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env)).status, 202);
     const rotated = { ...config, botToken: "rotated-discord-secret" }; database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration(rotated, sessionSecret), verifiedAt: null });
     assert.equal((await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env)).status, 202);
-    assert.equal(commandBodies.length, 3); assert.deepEqual(commandBodies[0], commandBodies[1]); assert.deepEqual(commandBodies[1], commandBodies[2]); assert.ok(authorizations.includes("Bot rotated-discord-secret"));
+    assert.equal(commandBodies.length, 2); assert.deepEqual(commandBodies.map((item) => (item as { name: string }).name), ["pair", "attendance-report"]); assert.ok(authorizations.includes("Bot rotated-discord-secret"));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1052,13 +1095,13 @@ test("configured Discord integrations reconcile commands without resetting legac
     const database = new FakeDatabase(); const config = { botToken: "discord-secret", guildId, channelId, publicKey: "a".repeat(64), ...(savedApplicationId ? { applicationId: savedApplicationId } : {}) };
     database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration(config, sessionSecret), verifiedAt: "2026-09-04T00:01:00Z", enabled: 1 });
     const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-    const originalFetch = globalThis.fetch; const outbound: Array<{ input: string; init?: RequestInit }> = [];
+    const originalFetch = globalThis.fetch; const outbound: Array<{ input: string; init?: RequestInit }> = []; const commandMock = mockManagedCommands(applicationId, guildId);
     globalThis.fetch = async (input, init) => {
       const url = String(input); outbound.push({ input: url, init });
       if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: applicationId });
       if (url.endsWith(`/guilds/${guildId}`)) return Response.json({ id: guildId });
       if (url.endsWith(`/channels/${channelId}`)) return Response.json({ guild_id: guildId, type: 0 });
-      if (url.endsWith("/commands")) { const commands = JSON.parse(String(init?.body)) as Record<string, unknown>[]; return Response.json(commands.map((command, index) => ({ ...command, id: `command-${index}`, application_id: applicationId, guild_id: guildId }))); }
+      if (url.endsWith("/commands")) return commandMock(init);
       throw new Error(`Unexpected live request: ${url}`);
     };
     try {
@@ -1067,7 +1110,7 @@ test("configured Discord integrations reconcile commands without resetting legac
         const result = await worker.fetch(request("/admin/integrations/discord/commands/reconcile", {}, { method: "POST", cookie: await sessionCookie("admin") }), env);
         assert.equal(result.status, 200); assert.deepEqual(await result.json(), { provider: "discord", reconciled: true, commands: ["pair", "attendance-report"] });
       }
-      assert.equal(outbound.filter(({ input }) => input.endsWith("/commands")).length, 2);
+      assert.equal(outbound.filter(({ input }) => input.endsWith("/commands")).length, 6);
       assert.ok(outbound.filter(({ input }) => input.endsWith("/commands")).every(({ input }) => input.endsWith(`/applications/${applicationId}/guilds/${guildId}/commands`)));
       assert.equal(database.batches.length, 0);
       assert.equal(database.calls.some((call) => /UPDATE encrypted_integrations|integration_verification_challenges|discord_calendar_|UPDATE organization_settings|DELETE FROM integration_state/.test(call.sql)), false);
@@ -1105,7 +1148,8 @@ test("Discord command setup reports identity, credential, permission, rate-limit
   const run = async (failure: "application" | "guild" | "channel" | "credential" | "permission" | "rate" | "validation" | "partial" | "message") => {
     const database = new FakeDatabase(); database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration(base, sessionSecret), verifiedAt: null }); const calls: string[] = [];
     const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-    const originalFetch = globalThis.fetch; globalThis.fetch = async (input, init) => { const url = String(input); calls.push(url); if (failure === "credential" && url.endsWith("/users/@me")) return Response.json({ message: "401: Unauthorized" }, { status: 401 }); if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: failure === "application" ? "999999999999999999" : base.applicationId }); if (url.endsWith(`/guilds/${base.guildId}`)) return Response.json({ id: failure === "guild" ? "999999999999999999" : base.guildId }); if (url.endsWith(`/channels/${base.channelId}`)) return Response.json({ guild_id: failure === "channel" ? "999999999999999999" : base.guildId, type: 0 }); if (url.endsWith("/commands")) { if (failure === "permission") return Response.json({ message: "Missing Access" }, { status: 403 }); if (failure === "rate") return Response.json({ message: "rate limited", retry_after: 0 }, { status: 429 }); if (failure === "validation") return Response.json({ message: "Invalid Form Body" }, { status: 400 }); const body = JSON.parse(String(init?.body)) as Record<string, unknown>[]; const confirmed = body.map((item, index) => ({ ...item, id: `command-${index}`, application_id: base.applicationId, guild_id: base.guildId })); return Response.json(failure === "partial" ? confirmed.slice(0, 1) : confirmed); } if (url.endsWith(`/channels/${base.channelId}/messages`) && failure === "message") return Response.json({ message: "Missing Access" }, { status: 403 }); if (url.includes("/channels/")) return Response.json({ id: "verification-message-1" }); return Response.json({ id: "bot-1" }); };
+    const commandMock = mockManagedCommands(base.applicationId, base.guildId); let commandReads = 0;
+    const originalFetch = globalThis.fetch; globalThis.fetch = async (input, init) => { const url = String(input); calls.push(url); if (failure === "credential" && url.endsWith("/users/@me")) return Response.json({ message: "401: Unauthorized" }, { status: 401 }); if (url.endsWith("/oauth2/applications/@me")) return Response.json({ id: failure === "application" ? "999999999999999999" : base.applicationId }); if (url.endsWith(`/guilds/${base.guildId}`)) return Response.json({ id: failure === "guild" ? "999999999999999999" : base.guildId }); if (url.endsWith(`/channels/${base.channelId}`)) return Response.json({ guild_id: failure === "channel" ? "999999999999999999" : base.guildId, type: 0 }); if (url.endsWith("/commands")) { if (failure === "permission") return Response.json({ message: "Missing Access" }, { status: 403 }); if (failure === "rate") return Response.json({ message: "rate limited", retry_after: 0 }, { status: 429 }); if (failure === "validation") return Response.json({ message: "Invalid Form Body" }, { status: 400 }); if (init?.method === "GET" && ++commandReads > 1 && failure === "partial") return Response.json([]); return commandMock(init); } if (url.endsWith(`/channels/${base.channelId}/messages`) && failure === "message") return Response.json({ message: "Missing Access" }, { status: 403 }); if (url.includes("/channels/")) return Response.json({ id: "verification-message-1" }); return Response.json({ id: "bot-1" }); };
     try { const result = await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env); return { result, database, calls }; } finally { globalThis.fetch = originalFetch; }
   };
   const expectations = { application: /does not belong to this bot token/, guild: /different server/, channel: /attendance channel must be a text channel/, credential: /rejected the saved bot token/, permission: /denied command management/, rate: /rate limiting command setup/, validation: /rejected the managed command configuration/, partial: /did not confirm both managed commands/, message: /missing a required permission/ } as const;
@@ -1269,7 +1313,7 @@ test("Google OAuth uses signed state and validates identity before issuing a ses
   globalThis.fetch = async (_input, init) => {
     calls += 1;
     if (calls === 1) { tokenRequestBody = String(init?.body); return new Response(JSON.stringify({ id_token: "google-token" }), { headers: { "content-type": "application/json" } }); }
-    return new Response(JSON.stringify({ aud: "client-id", email: "admin@example.test", email_verified: "true", iss: "https://accounts.google.com" }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ aud: "client-id", email: "admin@example.test", email_verified: "true", sub: "synthetic-subject", exp: Math.floor(Date.now()/1000)+3600, iss: "https://accounts.google.com" }), { headers: { "content-type": "application/json" } });
   };
   try {
     const callback = await worker.fetch(request(`/auth/google/callback?code=one-time&state=${encodeURIComponent(state)}`, undefined, { cookie: oauthCookie }), env);
@@ -1756,7 +1800,9 @@ test("Discord calendar sync retries a rate limit only after Discord's retry dela
   database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, actorUserId: "operator-1" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; const originalSetTimeout = globalThis.setTimeout; let calls = 0; let waited: number | undefined;
-  globalThis.setTimeout = ((callback: () => void, milliseconds?: number) => { waited = milliseconds; callback(); return 0; }) as typeof setTimeout;
+  // Advance only the provider retry delay; response-body admission now also owns
+  // a cancellable 10-second deadline which must retain real timer semantics.
+  globalThis.setTimeout = ((callback: () => void, milliseconds?: number) => { if(milliseconds===1_250){waited=milliseconds;callback();return 0;} return originalSetTimeout(callback,milliseconds); }) as typeof setTimeout;
   globalThis.fetch = async () => {
     calls += 1;
     return calls === 1
@@ -2082,4 +2128,40 @@ test("onboarding reset clears progress without deleting organization data", asyn
   const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const admin = await sessionCookie("admin");
   assert.equal((await worker.fetch(request("/admin/setup/reset", { confirmation: "reset onboarding" }, { cookie: admin }), env)).status, 400);
   assert.equal((await worker.fetch(request("/admin/setup/reset", { confirmation: "RESET ONBOARDING" }, { cookie: admin }), env)).status, 200); const statements = database.batches.at(-1) ?? []; assert.ok(statements.some((call) => call.sql.includes("DELETE FROM setup_progress"))); assert.equal(statements.some((call) => /DELETE FROM members|DELETE FROM meetings|DELETE FROM installations/.test(call.sql)), false);
+});
+
+test("Google OAuth issues a true staff session after provider identity verification", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ clientId: "client-id", clientSecret: "client-secret" }, sessionSecret);
+  database.rows.set("FROM installations", { authMode: "google" });
+  database.rows.set("FROM encrypted_integrations", { id: "google-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z" });
+  database.rows.set("SELECT id, role FROM users", { id: "staff-1", role: "staff" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const started = await worker.fetch(request("/auth/google/start"), env);
+  assert.equal(started.status, 302);
+  const location = new URL(started.headers.get("location")!);
+  const state = location.searchParams.get("state")!;
+  assert.equal(location.searchParams.get("client_id"), "client-id");
+  assert.equal(location.searchParams.get("redirect_uri"), "https://dashboard.example.test/api/auth/google/callback");
+  assert.equal(location.toString().includes("client-secret"), false);
+  assert.match(started.headers.get("set-cookie") ?? "", /Path=\/;/);
+  const oauthCookie = started.headers.get("set-cookie")!.split(";")[0];
+  assert.ok(await createSessionCodec(sessionSecret).verify(state));
+
+  const originalFetch = globalThis.fetch;
+  let calls = 0; let tokenRequestBody = "";
+  globalThis.fetch = async (_input, init) => {
+    calls += 1;
+    if (calls === 1) { tokenRequestBody = String(init?.body); return new Response(JSON.stringify({ id_token: "google-token" }), { headers: { "content-type": "application/json" } }); }
+    return new Response(JSON.stringify({ aud: "client-id", email: "admin@example.test", email_verified: "true", sub: "synthetic-subject", exp: Math.floor(Date.now()/1000)+3600, iss: "https://accounts.google.com" }), { headers: { "content-type": "application/json" } });
+  };
+  try {
+    const callback = await worker.fetch(request(`/auth/google/callback?code=one-time&state=${encodeURIComponent(state)}`, undefined, { cookie: oauthCookie }), env);
+    assert.equal(callback.status, 302);
+    assert.equal(callback.headers.get("location"), "https://dashboard.example.test");
+    const sessionToken = callback.headers.get("set-cookie")!.split("lancerlogin_session=")[1].split(";")[0];
+    assert.equal((await createSessionCodec(sessionSecret).verify(sessionToken))?.role, "staff");
+    assert.equal(new URLSearchParams(tokenRequestBody).get("redirect_uri"), "https://dashboard.example.test/api/auth/google/callback");
+    assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("UPDATE encrypted_integrations SET verified_at")));
+  } finally { globalThis.fetch = originalFetch; }
 });

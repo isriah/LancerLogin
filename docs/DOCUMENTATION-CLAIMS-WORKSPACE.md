@@ -1,0 +1,13 @@
+# Private claims workspace
+
+Dependencies: WU155 private claims/definitions API and immutable artifact/metric history; existing Documentation current-access shell. This UI adds no provider requests, schema, publication, compliance classification or inferred totals.
+
+Claims and Definitions are views within Activity Documentation for current Admin and Documentation-only Staff. Definitions and claims support paginated lists, creation, editing, archive, explicit unarchive and immutable history. Editors preserve drafts during uncertain/stale outcomes and require explicit reload/readback before another write. Close/discard actions identify draft loss; archive and saved-revision review are unavailable while dirty. Access refresh hides private content; revoked access clears it. A separate mutation guard keeps delayed writes serialized across generation changes.
+
+Claims explicitly select a definition revision and up to 100 total activity, team, initiative, artifact and metric associations. Evidence revision selectors load immutable history alongside the current parent revision; the selected pin and current admission fence remain separate. Reload does not advance a selected historical pin. Existing ineligible pins remain editable/removable; new unavailable context selections must be removed or explicitly reselected. Empty rationale, contexts and evidence are advisory omissions, not review prerequisites. Claim review and the selected artifact revision's review are independent. Dependency changes describe comparison with current records and never erase historical review.
+
+Metric value and scale remain strings, accompanied by unit, kind, period, basis, source and method. No metric arithmetic occurs. Historical claim evidence expansion fetches exactly its pinned revision (including revision zero), checking the returned revision before display. Context names reflect current names. Text and URLs render as plain text without fetches or previews; raw actor/member identifiers are not displayed.
+
+The UI uses the existing single page h1, nested headings, Roboto/Bebas token roles, semantic colors, spacing/radius tokens and 44px controls. Revision selection moves keyboard focus to its heading and returns it to the initiating button. No UI-standard exceptions are intended. Required reference coverage is 1280×900 and 390×844 in light/dark with the existing representative purple/teal custom brand. Existing shell skip-link styling is outside this work unit.
+
+Candidate checks: `npm run verify:dashboard` and `node scripts/run-browser-tests.mjs tests-browser/claims-workspace.spec.ts --workers=2`. Browser fixtures are local/synthetic and do not establish hosted acceptance. The maintainer runs combined browser verification after integration.

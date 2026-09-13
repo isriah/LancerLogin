@@ -2,7 +2,7 @@ name: Verify
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, codex/v2]
   schedule:
     - cron: "23 10 * * 1"
   workflow_dispatch:
@@ -22,7 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
-        with: { node-version: 22, cache: npm }
+        # Recovery SQL validation requires node:sqlite setAuthorizer (24.10+).
+        with: { node-version: 24, cache: npm }
       - run: npm ci --no-audit
       - name: Verify root-owned kiosk artifacts as an unprivileged service account
         run: sudo "$(command -v node)" --test tests/kiosk-artifacts.test.mjs
@@ -82,7 +83,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
-        with: { node-version: 22, cache: npm }
+        with: { node-version: 24, cache: npm }
       - run: npm ci --no-audit
+      - name: Exclude unrelated runner Chrome apt index
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS "$(command -v node)" scripts/prepare-browser-ci-apt.mjs
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser

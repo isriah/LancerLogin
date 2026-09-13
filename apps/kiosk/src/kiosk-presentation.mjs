@@ -27,11 +27,3 @@ export function kioskDisplayForAttendance(result) {
   if (result?.duplicate) return kioskState("duplicate");
   return kioskState(result?.action === "check_out" ? "goodbye" : "welcome");
 }
-
-// Pending events are the only local direction history. Replay/removal resets that
-// history conservatively; the estimate never becomes part of an attendance event.
-export function kioskDisplayForQueuedScan(memberId, pending) {
-  const count = pending.filter((event) => event.memberId === memberId).length;
-  const headline = count % 2 === 0 ? "Welcome" : "Goodbye";
-  return kioskState(headline === "Welcome" ? "welcome" : "goodbye", { detail: `Saved for sync | ${headline}` });
-}

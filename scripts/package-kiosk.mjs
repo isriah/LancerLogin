@@ -91,7 +91,7 @@ export async function verifyKioskArtifacts({ artifacts, version, requireUnprivil
     try {
       execFileSync("tar", ["-xzf", join(artifacts, name), "-C", extracted], { stdio: "pipe" });
       await checkPackageModes(extracted);
-      for (const path of ["scripts/lancerlogin-install-release.sh", "systemd/lancerlogin-kiosk.service", "systemd/lancerlogin-update.service", "polkit/49-lancerlogin-network.rules", "polkit/49-lancerlogin-recovery.rules", "polkit/49-lancerlogin-update.rules"]) await readFile(join(extracted, path));
+      for (const path of ["src/kiosk-release.mjs", "scripts/lancerlogin-install-release.sh", "systemd/lancerlogin-kiosk.service", "systemd/lancerlogin-update.service", "polkit/49-lancerlogin-network.rules", "polkit/49-lancerlogin-recovery.rules", "polkit/49-lancerlogin-update.rules"]) await readFile(join(extracted, path));
       await smokeKioskDirectory(extracted, { requireUnprivileged });
     } finally {
       await rm(extracted, { recursive: true, force: true });

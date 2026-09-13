@@ -198,7 +198,7 @@ test("dashboard consolidates meeting navigation and keeps roster accounts togeth
   assert.match(roster, /RosterImportPanel members=\{members\}/);
   assert.doesNotMatch(roster, /importOpen/);
   assert.match(users, /Roster link <span>\(optional\)<\/span>/);
-  assert.match(users, /Non-rostered Admin or Operator/);
+  assert.match(users, /Non-rostered account/);
   assert.doesNotMatch(shell, /\["\/setup", "Setup"\]/);
   assert.match(shell, /setupStepIds\.every/);
 });
@@ -273,7 +273,7 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(meetings, /useEffect\(\(\) => \{ if \(error\) errorAlert\.current\?\.focus\(\); \}, \[error\]\)/);
   assert.match(meetings, /ref=\{errorAlert\} id="meeting-create-error"/);
   assert.doesNotMatch(meetings, /requestAnimationFrame\(\(\) => document\.getElementById\("meeting-create-error"\)/);
-  assert.match(meetings, /onCreated\(result\.meetings\.length, result\.calendarSync, result\.calendarDelivery, result\.meetings\.map\(/);
+  assert.match(meetings, /onCreated\(result\.meetings\.length, result\.calendarSync, result\.calendarDelivery\)/);
   assert.match(meetings, /Duplicate an existing meeting/);
   assert.match(home, /previousMonth/);
   assert.match(home, /previous-month/);
@@ -292,15 +292,25 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(router, /search: window\.location\.search/);
 });
 
-test("update assistant uses backup-confirmed durable web updates and separate kiosk commands", async () => {
+test("cloud updater uses authenticated service actions while the kiosk keeps its existing command", async () => {
   const source = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
-  const card = await readFile("apps/dashboard/src/web-update-card.tsx", "utf8");
-  assert.match(source, /<WebUpdateCard/);
-  assert.match(card, /updateRequestId=/);
-  assert.match(card, /requestId: id, backupSaved: true/);
-  assert.match(card, /canReloadWebUpdate/);
-  assert.doesNotMatch(card, /window\.open|workflow_dispatch|token|localStorage/);
+  const indicator = await readFile("apps/dashboard/src/update-indicator.tsx", "utf8");
+  const kioskStatus = await readFile("apps/dashboard/src/kiosk-update-status.ts", "utf8");
+  assert.match(indicator, /\/admin\/updater\/status/);
+  assert.match(source, /updaterPolling\.subscribe/);
+  assert.match(indicator, /formatVersion/);
+  assert.match(source, /Install verified release/);
+  assert.match(source, /Retry same update request/);
+  assert.match(source, /RESTORE APPLICATION DATABASE/);
+  assert.doesNotMatch(source, /workflowUrl|window\.open/);
+  assert.match(source, /Update to latest stable/);
   assert.match(source, /command: "install_latest"/);
+  assert.match(kioskStatus, /Waiting for the kiosk to receive the request/);
+  assert.match(kioskStatus, /Installed successfully\. This kiosk now reports/);
+  assert.match(kioskStatus, /has not returned online/);
+  assert.match(source, /\/commands`\)/);
+  assert.doesNotMatch(source, /about:blank|window\.location\.href/);
+  assert.doesNotMatch(source, /workflow_dispatch|api\.github\.com\/repos\/.*\/actions\/workflows/);
 });
 
 test("attendance actions preserve their layout and mute unavailable choices", async () => {
@@ -579,7 +589,7 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /Authorized redirect URI/);
   assert.match(source, /<code>openid<\/code>, <code>email<\/code>, and <code>profile<\/code>/);
   assert.match(source, /role="switch" aria-label=\{`Enable/);
-  assert.match(source, /const ordered = \[\.\.\.providers\]\.sort/);
+  assert.match(source, /const ordered = \[\.\.\.providers\]\.filter\(provider => \(legacyAllowed[\s\S]*?\.sort/);
   assert.match(source, /integration-card\$\{enabled \? "" : " disabled"\}/);
   assert.match(source, /enabled && <details className="integration-details"/);
   assert.match(source, /method: "PATCH"/);
@@ -642,7 +652,7 @@ test("Settings routes share semantic page, form, status, and destructive-action 
   assert.match(integrations, /integration-state ui-status/);
   assert.match(integrations, /className="danger-button"[\s\S]*?Remove integration/);
   assert.match(updates, /data-tone=\{updateTone\}/);
-  assert.match(styles, /\/\* Settings workspace conformance\. \*\//);
+  assert.match(styles, /\/\* WU-059: Settings workspace conformance\. \*\//);
   assert.match(styles, /\.settings-page select,.settings-integrations select \{ appearance: none; padding-right: var\(--space-12\)/);
   assert.match(styles, /\.settings-page \.danger-button,.settings-integrations \.danger-button/);
   assert.match(styles, /@media \(max-width: 430px\) \{[\s\S]*\.settings-navigation \{ grid-template-columns: 1fr; \}/);

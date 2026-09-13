@@ -652,7 +652,7 @@ test("Settings routes share semantic page, form, status, and destructive-action 
   assert.match(integrations, /integration-state ui-status/);
   assert.match(integrations, /className="danger-button"[\s\S]*?Remove integration/);
   assert.match(updates, /data-tone=\{updateTone\}/);
-  assert.match(styles, /\/\* WU-059: Settings workspace conformance\. \*\//);
+  assert.match(styles, /\/\* Settings workspace conformance\. \*\//);
   assert.match(styles, /\.settings-page select,.settings-integrations select \{ appearance: none; padding-right: var\(--space-12\)/);
   assert.match(styles, /\.settings-page \.danger-button,.settings-integrations \.danger-button/);
   assert.match(styles, /@media \(max-width: 430px\) \{[\s\S]*\.settings-navigation \{ grid-template-columns: 1fr; \}/);

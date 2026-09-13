@@ -804,7 +804,7 @@ label { font-size: .9rem; }
 }
 @media (max-width: 760px) { .member-history-row { grid-template-columns: 1fr; }.member-history-row.header { display: none !important; } }
 
-/* WU-056: Dashboard meeting browser and meeting-workspace conformance. */
+/* Dashboard meeting browser and meeting-workspace conformance. */
 .dashboard-home { gap: var(--space-4); }
 .dashboard-meeting-status { margin: 0; border-color: var(--ui-border); color: var(--ui-text-muted); background: var(--ui-surface); border-radius: var(--radius-card); }
 .meeting-browser-controls { grid-template-columns: minmax(15rem,.75fr) minmax(18rem,1fr) auto; gap: var(--space-4); align-items: end; padding: var(--space-4); border-color: var(--ui-border); background: var(--ui-surface); border-radius: var(--radius-panel); }
@@ -930,7 +930,7 @@ label { font-size: .9rem; }
   .meeting-create-dialog > .dialog-heading { padding-bottom: 0; }
   .dialog-actions { grid-template-columns: 1fr; }
 }
-/* WU-055: authentication and guided-setup conformance. */
+/* authentication and guided-setup conformance. */
 .first-admin-card,.login-card { border-color: var(--ui-border); color: var(--ui-text); background: var(--ui-surface); border-radius: var(--radius-panel); }
 .first-admin-card { display: grid; gap: var(--space-5); padding: clamp(var(--space-5),4vw,var(--space-12)); }
 .login-card { display: grid; gap: var(--space-4); padding: var(--space-8); }
@@ -1010,7 +1010,7 @@ label { font-size: .9rem; }
 }
 @media (prefers-reduced-motion: reduce) { .setup-progress-fill { transition: none; } }
 
-/* WU-057: roster and reporting conformance. */
+/* roster and reporting conformance. */
 .reports-page,.roster-page,.member-detail-page { gap: var(--space-4); }
 .reports-page .page-intro,.roster-page .page-intro,.member-detail-page .page-intro { display: grid; gap: var(--space-2); }
 .reports-page .page-intro > *,.roster-page .page-intro > *,.member-detail-page .page-intro > * { margin: 0; }
@@ -1126,7 +1126,7 @@ label { font-size: .9rem; }
 }
 @media (prefers-reduced-motion: reduce) { .trend-chart span { transition: none; } }
 
-/* WU-058: dashboard-owned kiosk health and management conformance. */
+/* dashboard-owned kiosk health and management conformance. */
 .page-stack[aria-labelledby="kiosks-title"] h1 { font-size: var(--text-page-heading); }
 .page-stack[aria-labelledby="kiosks-title"] h2,.kiosk-pairing-dialog h2 { font-size: var(--text-section-heading); }
 .page-stack[aria-labelledby="kiosks-title"] button:hover,.page-stack[aria-labelledby="kiosks-title"] a:hover,.kiosk-pairing-dialog button:hover,.kiosk-pairing-dialog a:hover { filter: brightness(.96); }
@@ -1145,7 +1145,7 @@ label { font-size: .9rem; }
   .kiosk-pairing-dialog .dialog-actions button { width: 100%; }
 }
 
-/* WU-059: Settings workspace conformance. */
+/* Settings workspace conformance. */
 .settings-page,.settings-integrations { gap: var(--space-4); }
 .settings-page .page-intro,.settings-integrations .page-intro { display: grid; gap: var(--space-2); }
 .settings-page .page-intro > *,.settings-integrations .page-intro > * { margin: 0; }

@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { dashboardConformanceMatrix, dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance.ts";
 
-test("dashboard conformance inventory assigns every governed surface to WU-055 through WU-060", () => {
+test("dashboard conformance inventory assigns every governed surface to a stable design area", () => {
   const owners = new Set(dashboardConformanceMatrix.map(({ owner }) => owner));
-  assert.deepEqual([...owners].sort(), ["WU-055", "WU-056", "WU-057", "WU-058", "WU-059", "WU-060"]);
+  assert.deepEqual([...owners].sort(), ["01-authentication", "02-meetings", "03-reporting", "04-kiosks", "05-settings", "06-convergence"]);
   assert.equal(dashboardConformanceMatrix.every(({ routes, overlays, states }) => routes.length && overlays.length && states.length), true);
 
   const routes = dashboardConformanceMatrix.flatMap(({ routes }) => routes);

@@ -11,7 +11,6 @@ D1's Free daily allowance counts rows read and rows written across the account, 
 
 Close task-owned hosted test pages when their acceptance work ends. Avoid unattended browser polling and background fixture schedules; changing deployed schedules still needs explicit authorization. Audit local query plans/indexes and polling cadence before deployment. Do not add blanket caching that bypasses current authorization or stale-state checks. Account-wide growth can come from other databases; production changes require separate authority.
 
-On September11, metadata-only attribution found approximately4.03million reads in frc-attendance versus31,432 in modular-development. The current updater implementation tests made no hosted D1 calls. This historical measurement is not a current quota reading. See [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) and [metrics](https://developers.cloudflare.com/d1/observability/metrics-analytics/).
 
 ## Recovery verification runtime
 

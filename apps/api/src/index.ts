@@ -714,9 +714,10 @@ async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
     if (!simulator.online) throw new HttpError(409, "Bring the simulated kiosk online before checking in");
     const meeting = input.meetingId ? await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first() : null;
     if (!meeting) throw new HttpError(400, "Choose an active meeting for the simulator scan");
-    if (input.action === "scan" && !["check_in", "check_out"].includes(input.scanAction ?? "")) throw new HttpError(400, "Simulator scanAction must be check_in or check_out");
+    if (input.action === "scan" && input.scanAction !== undefined && !["check_in", "check_out"].includes(input.scanAction)) throw new HttpError(400, "Simulator scanAction must be check_in or check_out");
     const result = await recordAttendance(db, { eventId: input.eventId ?? `simulator-${crypto.randomUUID()}`, memberId: input.memberId, meetingId: input.meetingId, occurredAt: new Date().toISOString(), desiredAction: input.action === "scan" ? input.scanAction : undefined }, "simulator", principal.userId);
-    await writeAudit(db, principal, input.scanAction === "check_out" ? "simulator.check_out" : "simulator.check_in", "meeting", input.meetingId!, { memberId: input.memberId, origin: "browser_simulator" }); return result;
+    const outcome = await result.clone().json() as { action: AttendanceAction; duplicate?: boolean };
+    await writeAudit(db, principal, outcome.action === "check_out" ? "simulator.check_out" : "simulator.check_in", "meeting", input.meetingId!, { memberId: input.memberId, origin: "browser_simulator", duplicate: Boolean(outcome.duplicate) }); return result;
   }
   throw new HttpError(400, "Simulator action must be pair, heartbeat, scan, or stop");
 }
@@ -1187,12 +1188,14 @@ async function processGoogleCalendarOperations(env: Env, eventIds?: string[]): P
         try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "DELETE" }); }
         catch (error) { if (!(error instanceof GoogleCalendarProviderError) || ![404, 410].includes(error.providerStatus)) throw error; }
       } else {
-        const timing = { start: { dateTime: operation.startsAt }, end: { dateTime: operation.endsAt } };
+        const meeting = await db.prepare("SELECT title, notes FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(operation.meetingId).first<{ title: string; notes: string | null }>();
+        if (!meeting) throw new GoogleCalendarProviderError(409, "The meeting is no longer available for calendar sync", false);
+        const timing = { summary: meeting.title, description: meeting.notes || "", start: { dateTime: operation.startsAt }, end: { dateTime: operation.endsAt } };
         if (operation.syncedAt) {
           try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }); }
           catch (error) { if (error instanceof GoogleCalendarProviderError && [404, 410].includes(error.providerStatus)) { await replaceMissingGoogleCalendarEvent(db, operation); queued += 1; continue; } throw error; }
         } else {
-          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId), { method: "POST", body: JSON.stringify({ id: operation.eventId, summary: "LancerLogin meeting", ...timing }) }); }
+          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId), { method: "POST", body: JSON.stringify({ id: operation.eventId, ...timing }) }); }
           catch (error) { if (error instanceof GoogleCalendarProviderError && error.providerStatus === 409) await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }); else throw error; }
         }
       }
@@ -1800,12 +1803,17 @@ async function processDiscordCalendarOperations(env: Env, meetingIds?: string[])
         if (meeting.title.length > 100) throw new DiscordResponseError(400, "Discord event names are limited to 100 characters");
         if ((meeting.notes?.length ?? 0) > 1_000) throw new DiscordResponseError(400, "Discord event descriptions are limited to 1,000 characters");
         const correlationLocation = await discordCalendarCorrelationLocation(operation.meetingId, operation.generation);
-        const payload = { name: meeting.title, description: meeting.notes || "LancerLogin meeting", privacy_level: 2, entity_type: 3, scheduled_start_time: meeting.startsAt, scheduled_end_time: meeting.endsAt, entity_metadata: { location: correlationLocation } };
+        const started = Date.parse(meeting.startsAt) <= Date.now();
+        const payload = { name: meeting.title, description: meeting.notes || "LancerLogin meeting", privacy_level: 2, entity_type: 3, ...(started ? {} : { scheduled_start_time: meeting.startsAt }), scheduled_end_time: meeting.endsAt, entity_metadata: { location: correlationLocation } };
         let eventId = mapping.eventId ?? undefined;
-        let needsReconciliation = operation.status === "processing" || Number(operation.attempts) > 0;
-        if (eventId) try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }); } catch (error) { if (error instanceof DiscordResponseError && error.discordStatus === 404) { eventId = undefined; needsReconciliation = true; } else throw error; }
+        let needsReconciliation = started || operation.status === "processing" || Number(operation.attempts) > 0;
+        if (eventId) try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }); needsReconciliation = false; } catch (error) { if (error instanceof DiscordResponseError && error.discordStatus === 404) { eventId = undefined; needsReconciliation = true; } else throw error; }
         if (!eventId && needsReconciliation) eventId = await reconcileDiscordCalendarEvent(config, correlationLocation);
         if (eventId && needsReconciliation) await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) });
+        if (!eventId && started) {
+          await db.prepare("UPDATE discord_calendar_operations SET status = CASE WHEN revision = ? THEN 'delivered' ELSE 'pending' END, next_attempt_at = CASE WHEN revision = ? THEN NULL ELSE ? END, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert' AND lease_token = ?").bind(operation.revision, operation.revision, now, now, operation.meetingId, operation.generation, operation.leaseToken).run();
+          summary.skipped += 1; summary.outcomes.push({ meetingId: operation.meetingId, title, status: "skipped", reason: "Meeting has already started and has no Discord event. Sync upcoming meetings before their start time." }); continue;
+        }
         if (!eventId) { const created = await discordRequest(config, `/guilds/${config.guildId}/scheduled-events`, { method: "POST", body: JSON.stringify(payload) }); eventId = String(created.body.id ?? ""); if (!eventId) throw new DiscordResponseError(502, "Discord did not return a scheduled event ID"); }
         const completedAt = new Date().toISOString(); const completion = await db.batch([
           db.prepare("UPDATE discord_calendar_event_mappings SET event_id = ?, synced_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND active = 1 AND EXISTS (SELECT 1 FROM discord_calendar_operations WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert' AND lease_token = ?)").bind(eventId, completedAt, completedAt, operation.meetingId, operation.generation, operation.meetingId, operation.generation, operation.leaseToken),
@@ -1890,7 +1898,12 @@ async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ change
   }
   const contentHash = await sha256(content);
   const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'kiosk-status'").first<{ externalId?: string; contentHash?: string }>();
-  if (existing?.externalId && existing.contentHash === contentHash) return { changed: false, messageId: existing.externalId, online, kioskId: kiosk?.id };
+  if (existing?.externalId && existing.contentHash === contentHash) {
+    try {
+      await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/${encodeURIComponent(existing.externalId)}`, { method: "GET" });
+      return { changed: false, messageId: existing.externalId, online, kioskId: kiosk?.id };
+    } catch (error) { if (!discordMessageMissing(error)) throw error; existing.externalId = undefined; }
+  }
   const messagesPath = `/channels/${encodeURIComponent(config.channelId)}/messages`;
   const payload = { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) };
   let messageId: string;
@@ -1920,7 +1933,9 @@ async function discordKioskStatus(request: Request, env: Env): Promise<Response>
   const principal = await requireRole(request, env, ["admin", "operator"]);
   const result = await syncDiscordKioskStatus(env);
   await writeAudit(requireDatabase(env), principal, "discord.kiosk_status_updated", "kiosk", result.kioskId ?? null, { online: result.online, messageId: result.messageId, changed: result.changed });
-  return response({ changed: result.changed, messageId: result.messageId, online: result.online });
+  const config = await discordConfiguration(env);
+  const messageUrl = result.messageId ? `https://discord.com/channels/${config.guildId}/${config.channelId}/${result.messageId}` : undefined;
+  return response({ changed: result.changed, messageId: result.messageId, online: result.online, messageUrl });
 }
 
 // Compatibility endpoint for older authenticated clients. No consent writes or reports.

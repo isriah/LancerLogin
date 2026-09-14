@@ -55,7 +55,7 @@ test("browser emulator uses the shared kiosk display contract and labels its inp
   assert.match(simulator, /kioskDisplayForAttendance/);
   assert.match(simulator, /BrowserMemberInput/);
   assert.match(simulator, /SIMULATED · BROWSER INPUT/);
-  assert.match(simulator, /Not a physical kiosk/);
+  assert.match(await readFile("apps/dashboard/src/kiosk-preview.tsx", "utf8"), /Not a physical kiosk/);
   assert.match(contract, /kioskDisplayForAttendance/);
 });
 
@@ -573,7 +573,7 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /Retry failed delivery/);
   assert.match(source, /syncAllCalendars\("google_calendar"\)/);
   assert.match(source, /syncAllCalendars\("discord"\)/);
-  assert.match(source, /It does not send meeting titles, notes, roster data, or attendance/);
+  assert.match(source, /copies meeting titles, notes as event descriptions/);
   assert.match(source, /provider !== "google_calendar"/);
   assert.match(source, /setup\.html#google-oauth/);
   assert.match(source, /Authorized redirect URI/);

@@ -47,6 +47,8 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
       expect(geometry.clipped).toEqual([]);
 
+      await expect(page.getByRole("switch", { name: "Dark mode" })).toHaveCount(0);
+      await page.goto("/settings/session");
       const themeSwitch = page.getByRole("switch", { name: "Dark mode" });
       await themeSwitch.focus();
       await expect(themeSwitch).toBeFocused();

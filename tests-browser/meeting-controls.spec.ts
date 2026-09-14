@@ -1,3 +1,4 @@
+import { setDashboardTheme } from "./dashboard-theme";
 import { expect, test, type Locator } from "@playwright/test";
 
 async function expectControl(control: Locator, select = false) {
@@ -69,8 +70,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
           return route.fulfill({ json: { meeting } });
         });
         await page.goto("/meetings/active-meeting");
-        const theme = page.getByRole("switch", { name: "Dark mode" });
-        if (await theme.getAttribute("aria-checked") !== String(appearance === "dark")) await theme.click();
+        await setDashboardTheme(page, appearance);
         await expect(page.locator(".app")).toHaveAttribute("data-theme", appearance);
         const colors = await page.locator(".app").evaluate((element) => ({ primary: getComputedStyle(element).getPropertyValue("--primary").trim(), secondary: getComputedStyle(element).getPropertyValue("--secondary").trim() }));
         expect(colors).toEqual({ primary: brand.primaryColor, secondary: brand.secondaryColor });

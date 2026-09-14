@@ -1,3 +1,4 @@
+import { setDashboardTheme } from "./dashboard-theme";
 import { expect, test } from "@playwright/test";
 
 test("roster stays primary and Admin actions open focused dialogs", async ({ page }) => {
@@ -130,7 +131,7 @@ test("branding controls and dark surfaces are themed", async ({ page }) => {
 });
 
 test("theme switch supports keyboard, pointer, and saved state", async ({ page }) => {
-  await page.goto("/dashboard");
+  await page.goto("/settings/organization");
   const toggle = page.getByRole("switch", { name: "Dark mode" });
   await expect(toggle).toBeChecked();
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
@@ -252,14 +253,13 @@ test("global contest review distinguishes partial, missing, and complete raw sca
     expect(widths.scrollWidth).toBeLessThanOrEqual(widths.clientWidth);
     await page.keyboard.press("Escape");
     await expect(indicator).toBeFocused();
-    const theme = page.getByRole("switch", { name: "Dark mode" });
-    if (!await theme.isChecked()) await theme.click();
+    await setDashboardTheme(page, "dark");
     await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
     await indicator.click();
     await expect(page.getByRole("dialog", { name: "Contests awaiting review" }).getByText("Partial — checked in, no check-out", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(indicator).toBeFocused();
-    await theme.click();
+    await setDashboardTheme(page, "light");
     await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
   }
 });

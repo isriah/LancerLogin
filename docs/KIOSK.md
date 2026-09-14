@@ -133,7 +133,7 @@ If checksum, helper, or health verification fails, stop and keep the checkpoint.
 
 ### Historical V1 migration context
 
-v1.0.5 is the stable public release. The earlier v0.24.0 bridge and its exact-release bootstrap were historical migration procedures, not current update instructions. A dashboard release lookup can be unavailable, so treat a missing completion status as unconfirmed and use an approved recovery procedure rather than guessing the cause.
+v1.0.6 is the stable public release. The earlier v0.24.0 bridge and its exact-release bootstrap were historical migration procedures, not current update instructions. A dashboard release lookup can be unavailable, so treat a missing completion status as unconfirmed and use an approved recovery procedure rather than guessing the cause.
 
 An isolated rehearsal can retain a stale reload card after a manual version change. Simulator, source, and rehearsal results do not establish physical kiosk acceptance for an installation.
 
@@ -141,4 +141,4 @@ An isolated rehearsal can retain a stale reload card after a manual version chan
 
 The existing guided-setup simulator is Admin-only and credential-separated. It can submit simulated attendance to an Admin-selected active meeting without claiming fingerprint, UART, Pi, Chromium, or physical queue acceptance.
 
-The expanded 1:1 browser simulator is deferred. When implemented, it must render the same kiosk screen and reuse the same state transitions and attendance behavior, replacing only R503 input with a browser member-event adapter and marking resulting events as simulated.
+The browser simulator reuses the physical kiosk display styles and state transitions in a scaled 800 by 480 preview, including organization branding, scan feedback and the footer. It omits physical network and maintenance controls. The themed member and meeting selectors replace reader input, and resulting attendance remains marked as simulated.

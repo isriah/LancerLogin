@@ -7,4 +7,9 @@
   .roster-page .roster-attendance-rate { grid-column: 1 / -1; display: grid; gap: var(--space-1); }
   .roster-page .roster-attendance-rate::before { content: "Attendance rate"; color: var(--ui-text-muted); font-size: var(--text-caption); }
 }
-.roster-page .roster-identity .member-link { display: inline-flex; align-items: center; min-height: var(--control-min-block-size); }
+.roster-page .roster-identity .member-link { display: grid; align-content: center; gap: var(--space-0); min-height: var(--control-min-block-size); }
+
+.roster-page .roster-row { column-gap: var(--space-4); }
+.roster-page .roster-identity { min-width: 0; display: grid; gap: var(--space-0); overflow-wrap: anywhere; }
+.roster-page .roster-identity .member-link { min-width: 0; max-width: 100%; }
+.roster-page .roster-member-id { min-width: 0; overflow-wrap: anywhere; }

@@ -542,16 +542,16 @@ test("kiosk heartbeats maintain one idempotent Discord status message and schedu
     database.rows.set("FROM integration_state", { externalId: "message-1", contentHash: stateWrite.values[1] });
     const manual = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
     assert.equal(manual.status, 200);
-    assert.deepEqual(await manual.json(), { changed: false, messageId: "message-1", online: true });
+    assert.deepEqual(await manual.json(), { changed: false, messageId: "message-1", online: true, messageUrl: "https://discord.com/channels/123456789012345678/223456789012345678/message-1" });
     assert.ok(database.calls.some((call) => call.values.includes("discord.kiosk_status_updated")));
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
-    assert.equal(outbound.length, 1, "unchanged online state should not edit Discord");
+    assert.equal(outbound.filter(call => call.init?.method !== "GET").length, 1, "unchanged online state should not edit Discord");
 
     database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: "2026-08-29T00:00:00Z", readerOnline: 1, releaseVersion: "0.1.3" });
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
-    assert.equal(outbound.length, 2);
-    assert.equal(outbound[1].init?.method, "PATCH");
-    assert.match(String(outbound[1].init?.body), /Front desk.*offline.*last seen 2026-08-29/);
+    assert.equal(outbound.filter(call => call.init?.method !== "GET").length, 2);
+    assert.equal(outbound.at(-1)?.init?.method, "PATCH");
+    assert.match(String(outbound.at(-1)?.init?.body), /Front desk.*offline.*last seen 2026-08-29/);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -565,6 +565,7 @@ test("missing tracked Discord kiosk status messages are replaced and the new map
   const originalFetch = globalThis.fetch; const outbound: Array<{ input: string; init?: RequestInit }> = []; let replacements = 0;
   globalThis.fetch = async (input, init) => {
     outbound.push({ input: String(input), init });
+    if (init?.method === "GET") return new Response(JSON.stringify({ id: "replacement-message-1" }), { headers: { "content-type": "application/json" } });
     if (init?.method === "PATCH") return new Response(JSON.stringify({ code: 10_008, message: "Unknown Message" }), { status: 404, headers: { "content-type": "application/json" } });
     replacements += 1;
     return new Response(JSON.stringify({ id: `replacement-message-${replacements}` }), { headers: { "content-type": "application/json" } });
@@ -572,7 +573,7 @@ test("missing tracked Discord kiosk status messages are replaced and the new map
   try {
     const recovered = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
     assert.equal(recovered.status, 200);
-    assert.deepEqual(await recovered.json(), { changed: true, messageId: "replacement-message-1", online: false });
+    assert.deepEqual(await recovered.json(), { changed: true, messageId: "replacement-message-1", online: false, messageUrl: "https://discord.com/channels/123456789012345678/223456789012345678/replacement-message-1" });
     assert.equal(outbound.length, 2);
     assert.match(outbound[0].input, /channels\/223456789012345678\/messages\/deleted-message$/);
     assert.equal(outbound[0].init?.method, "PATCH");
@@ -585,14 +586,15 @@ test("missing tracked Discord kiosk status messages are replaced and the new map
     database.rows.set("FROM integration_state", { externalId: "replacement-message-1", contentHash: replacementWrite.values[1] });
     const unchanged = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
     assert.equal(unchanged.status, 200);
-    assert.deepEqual(await unchanged.json(), { changed: false, messageId: "replacement-message-1", online: false });
-    assert.equal(outbound.length, 2, "the persisted replacement mapping should prevent a follow-up Discord request");
+    assert.deepEqual(await unchanged.json(), { changed: false, messageId: "replacement-message-1", online: false, messageUrl: "https://discord.com/channels/123456789012345678/223456789012345678/replacement-message-1" });
+    assert.equal(outbound.length, 3, "the persisted replacement should be verified without another write");
+    assert.equal(outbound[2].init?.method, "GET");
 
     database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: new Date().toISOString(), readerOnline: 1, releaseVersion: "0.1.3" });
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
-    assert.equal(outbound.length, 4, "scheduled reconciliation should also replace one missing tracked message");
-    assert.equal(outbound[2].init?.method, "PATCH");
-    assert.equal(outbound[3].init?.method, "POST");
+    assert.equal(outbound.length, 5, "scheduled reconciliation should also replace one missing tracked message");
+    assert.equal(outbound[3].init?.method, "PATCH");
+    assert.equal(outbound[4].init?.method, "POST");
     assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO integration_state") && call.values.includes("replacement-message-2")));
   } finally { globalThis.fetch = originalFetch; }
 });
@@ -1404,11 +1406,12 @@ test("Google Calendar enablement is independently audited", async () => {
   assert.ok(database.calls.some((call) => call.values.includes("google_calendar.enabled")));
 });
 
-test("meeting creation sends only stable generic Google Calendar event data", async () => {
+test("meeting creation sends dashboard titles and notes to Google Calendar", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ clientId: "calendar-client", clientSecret: "calendar-secret", refreshToken: "calendar-refresh", calendarId: "calendar@example.test", calendarLabel: "Operations" }, sessionSecret);
   database.rows.set("google_calendar_enabled AS enabled", { ...encrypted, enabled: 1, authorizedAt: "2026-09-05T00:00:00.000Z", verifiedAt: "2026-09-05T00:00:00.000Z" });
   database.rows.set("SELECT id, starts_at AS startsAt", (_sql, values) => ({ id: String(values[0]), startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z" }));
+  database.rows.set("SELECT title, notes FROM meetings", { title: "Build planning", notes: "Bring supplies" });
   database.lists.set("FROM google_calendar_operations o", ((_sql: string, values: unknown[]) => [{ meetingId: String(database.batches[0].find((call) => call.sql.includes("INSERT INTO meetings"))?.values[0]), eventId: String(values[0]), action: "upsert", startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z", status: "pending", attempts: 0, generation: 1 }]) as unknown as unknown[]);
   const providerCalls: Array<{ url: string; body?: Record<string, unknown> }> = [];
   const originalFetch = globalThis.fetch;
@@ -1419,16 +1422,16 @@ test("meeting creation sends only stable generic Google Calendar event data", as
   }) as typeof fetch;
   try {
     const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-    const result = await worker.fetch(request("/meetings", { title: "Private planning title", notes: "Sensitive roster details", startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z", required: true }, { cookie: await sessionCookie("operator") }), env);
+    const result = await worker.fetch(request("/meetings", { title: "Build planning", notes: "Bring supplies", startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z", required: true }, { cookie: await sessionCookie("operator") }), env);
     assert.equal(result.status, 201);
     assert.deepEqual((await result.json() as { calendarSync: unknown }).calendarSync, { synced: 1, queued: 0, failed: 0 });
     const calendarCall = providerCalls.find((call) => call.url.startsWith("https://www.googleapis.com/calendar/v3/calendars/"));
     assert.ok(calendarCall);
-    assert.deepEqual(Object.keys(calendarCall.body ?? {}).sort(), ["end", "id", "start", "summary"]);
-    assert.equal(calendarCall.body?.summary, "LancerLogin meeting");
+    assert.deepEqual(Object.keys(calendarCall.body ?? {}).sort(), ["description", "end", "id", "start", "summary"]);
+    assert.equal(calendarCall.body?.summary, "Build planning");
+    assert.equal(calendarCall.body?.description, "Bring supplies");
     assert.match(String(calendarCall.body?.id), /^ll[0-9a-f]{48}$/);
-    assert.equal(JSON.stringify(calendarCall.body).includes("Private planning title"), false);
-    assert.equal(JSON.stringify(calendarCall.body).includes("Sensitive roster details"), false);
+
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -2082,4 +2085,109 @@ test("onboarding reset clears progress without deleting organization data", asyn
   const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const admin = await sessionCookie("admin");
   assert.equal((await worker.fetch(request("/admin/setup/reset", { confirmation: "reset onboarding" }, { cookie: admin }), env)).status, 400);
   assert.equal((await worker.fetch(request("/admin/setup/reset", { confirmation: "RESET ONBOARDING" }, { cookie: admin }), env)).status, 200); const statements = database.batches.at(-1) ?? []; assert.ok(statements.some((call) => call.sql.includes("DELETE FROM setup_progress"))); assert.equal(statements.some((call) => /DELETE FROM members|DELETE FROM meetings|DELETE FROM installations/.test(call.sql)), false);
+});
+
+for (const scenario of ["update", "conflict", "retry"] as const) {
+  test(`Google Calendar ${scenario} sends current title and clears removed notes`, async () => {
+    const database = new FakeDatabase();
+    const encrypted = await encryptIntegration({ clientId: "calendar-client", clientSecret: "calendar-secret", refreshToken: "calendar-refresh", calendarId: "calendar@example.test" }, sessionSecret);
+    database.rows.set("google_calendar_enabled AS enabled", { ...encrypted, enabled: 1, authorizedAt: "2026-09-05", verifiedAt: "2026-09-05" });
+    database.rows.set("SELECT title, notes FROM meetings", { title: "Renamed build meeting", notes: null });
+    database.lists.set("FROM google_calendar_operations o", [{ meetingId: "meeting-1", eventId: "ll1234", action: "upsert", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", status: "failed", attempts: 1, generation: 1, syncedAt: scenario === "update" ? "2026-09-05" : null }]);
+    const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      if (String(input) === "https://oauth2.googleapis.com/token") return new Response(JSON.stringify({ access_token: "short-access-token" }));
+      calls.push({ method: init?.method ?? "GET", body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ id: "ll1234" }), { status: scenario === "conflict" && init?.method === "POST" ? 409 : 200 });
+    }) as typeof fetch;
+    try {
+      const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+      const result = await worker.fetch(request("/admin/integrations/google-calendar/retry", {}, { cookie: await sessionCookie("admin") }), env);
+      assert.equal(result.status, 200);
+      assert.equal((await result.json() as { synced: number }).synced, 1);
+      assert.deepEqual(calls.map(call => call.method), scenario === "conflict" ? ["POST", "PATCH"] : [scenario === "update" ? "PATCH" : "POST"]);
+      for (const call of calls) {
+        assert.equal(call.body.summary, "Renamed build meeting");
+        assert.equal(call.body.description, "");
+        assert.deepEqual(call.body.start, { dateTime: "2026-10-01T20:00:00Z" });
+        assert.equal("attendees" in call.body, false);
+      }
+    } finally { globalThis.fetch = original; }
+  });
+}
+
+test("normal simulator scans use kiosk attendance sequencing and audit the actual result", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM simulated_kiosk_sessions", { name: "Browser test", active: 1, online: 1 });
+  database.rows.set("FROM members", { id: "member-1", firstName: "Avery", lastName: "Stone" });
+  database.rows.set("FROM meetings", { id: "meeting-1", startsAt: new Date(Date.now() - 600_000).toISOString(), endsAt: new Date(Date.now() + 600_000).toISOString() });
+  database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
+  database.lists.set("FROM attendance_events", []);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("admin");
+  const body = { action: "scan", memberId: "member-1", meetingId: "meeting-1" };
+  const arrival = await worker.fetch(request("/admin/simulator", body, { cookie }), env);
+  assert.equal(arrival.status, 202); assert.equal((await arrival.json() as { action: string }).action, "check_in");
+  database.lists.set("FROM attendance_events", [{ action: "check_in", occurredAt: new Date(Date.now() - 1_000).toISOString() }]);
+  const debounce = await worker.fetch(request("/admin/simulator", body, { cookie }), env);
+  assert.equal(debounce.status, 200); assert.equal((await debounce.json() as { duplicate: boolean }).duplicate, true);
+  database.lists.set("FROM attendance_events", [{ action: "check_in", occurredAt: new Date(Date.now() - 120_000).toISOString() }]);
+  const departure = await worker.fetch(request("/admin/simulator", body, { cookie }), env);
+  assert.equal(departure.status, 202); assert.equal((await departure.json() as { action: string }).action, "check_out");
+  assert.ok(database.calls.some(call => call.values.includes("simulator.check_out")));
+  const invalid = await worker.fetch(request("/admin/simulator", { ...body, scanAction: "invalid" }, { cookie }), env);
+  assert.equal(invalid.status, 400);
+  assert.equal((await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("operator") }), env)).status, 403);
+});
+
+test("unchanged but deleted Discord status is recreated only after verifying its tracked ID", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("FROM integration_state", { externalId: "deleted-status", contentHash: createHash("sha256").update("No kiosk is paired.").digest("base64url") });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const methods: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    methods.push(String(init?.method));
+    if (init?.method === "GET") {
+      assert.match(String(input), /\/messages\/deleted-status$/);
+      return new Response(JSON.stringify({ code: 10_008, message: "Unknown Message" }), { status: 404 });
+    }
+    assert.equal(init?.method, "POST"); assert.match(String(input), /\/channels\/223456789012345678\/messages$/);
+    return new Response(JSON.stringify({ id: "replacement-status" }));
+  };
+  try {
+    const result = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(result.status, 200); const body = await result.json() as { changed: boolean; messageUrl: string };
+    assert.equal(body.changed, true); assert.match(body.messageUrl, /\/replacement-status$/); assert.deepEqual(methods, ["GET", "POST"]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Discord calendar explains an unsynced started meeting and updates a tracked active event without changing its start", async () => {
+  for (const eventId of [null, "event-1"]) {
+    const database = new FakeDatabase();
+    const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+    database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+    database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Current studio", startsAt: new Date(Date.now() - 600_000).toISOString(), endsAt: new Date(Date.now() + 600_000).toISOString(), notes: "Bring tools" });
+    database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId, active: 1 });
+    database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", status: "failed", attempts: 1, actorUserId: "operator-1" }]);
+    const originalFetch = globalThis.fetch; const methods: string[] = [];
+    globalThis.fetch = async (_input, init) => {
+      methods.push(String(init?.method));
+      if (init?.method === "GET") return new Response(JSON.stringify([]));
+      assert.equal(init?.method, "PATCH"); const payload = JSON.parse(String(init?.body));
+      assert.equal(payload.scheduled_start_time, undefined); assert.equal(payload.name, "Current studio"); assert.equal(payload.description, "Bring tools");
+      return new Response(JSON.stringify({ id: eventId }));
+    };
+    try {
+      const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+      const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
+      const body = await result.json() as { synced: number; skipped: number; failed: number; outcomes: Array<{ reason?: string }> };
+      assert.equal(result.status, 200); assert.equal(body.failed, 0);
+      if (eventId) { assert.equal(body.synced, 1); assert.deepEqual(methods, ["PATCH"]); }
+      else { assert.equal(body.skipped, 1); assert.match(body.outcomes[0].reason ?? "", /already started.*Sync upcoming meetings/); assert.deepEqual(methods, ["GET"]); }
+      assert.ok(database.calls.some(call => call.sql.includes("last_error = NULL")) || database.batches.some(batch => batch.some(call => call.sql.includes("last_error = NULL"))));
+    } finally { globalThis.fetch = originalFetch; }
+  }
 });

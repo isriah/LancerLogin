@@ -59,6 +59,7 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
   const [editing, setEditing] = useState(false);
   const [maintenanceHelp, setMaintenanceHelp] = useState(false);
   const [discordBusy, setDiscordBusy] = useState(false);
+  const [discordMessageUrl, setDiscordMessageUrl] = useState<string>();
   const [name, setName] = useState("");
   const release = useReleaseCheck();
   const latestRelease = formatVersion(release.release?.tag_name);
@@ -87,7 +88,8 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
   async function syncDiscordStatus() {
     setDiscordBusy(true); setNotice({ message: "Syncing physical kiosk health to Discord…", tone: "neutral" });
     try {
-      const result = await api<{ changed: boolean }>("/discord/kiosk-status", { method: "POST", body: JSON.stringify({}) });
+      const result = await api<{ changed: boolean; messageUrl?: string }>("/discord/kiosk-status", { method: "POST", body: JSON.stringify({}) });
+      setDiscordMessageUrl(result.messageUrl);
       setNotice({ message: result.changed ? "Persistent Discord kiosk status updated." : "Persistent Discord kiosk status is already current.", tone: "success" });
     } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); }
     finally { setDiscordBusy(false); }
@@ -116,7 +118,7 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
             {maintenanceHelp && <div className="settings-callout kiosk-maintenance"><div><strong>Open maintenance on the physical kiosk</strong><p>Press and hold the organization name or logo for three seconds, then enter the local settings PIN. Enrollment, reader tests, slot suggestions, replacement warnings, and mapping removal are available there so fingerprint templates never leave the sensor.</p></div></div>}
           </>}
         </> : <p>Pair a Raspberry Pi to begin unattended fingerprint attendance. Pairing and replacement are managed here after onboarding.</p>}
-        <section className={`kiosk-discord-status${discordConfigured ? "" : " unavailable"}`} aria-labelledby="discord-kiosk-status-title"><div><h3 id="discord-kiosk-status-title">Discord kiosk status</h3><p>{discordConfigured ? "Keep the persistent attendance-channel message aligned with this physical kiosk’s current health." : "Unavailable until the Discord integration is enabled, saved, and verified."}</p></div>{discordConfigured && <button type="button" disabled={discordBusy} onClick={() => void syncDiscordStatus()}>{discordBusy ? "Syncing…" : "Sync Discord status"}</button>}</section>
+        <section className={`kiosk-discord-status${discordConfigured ? "" : " unavailable"}`} aria-labelledby="discord-kiosk-status-title"><div><h3 id="discord-kiosk-status-title">Discord kiosk status</h3><p>{discordConfigured ? "Keep the persistent attendance-channel message aligned with this physical kiosk’s current health." : "Unavailable until the Discord integration is enabled, saved, and verified."}</p></div>{discordConfigured && <div className="kiosk-actions"><button type="button" disabled={discordBusy} onClick={() => void syncDiscordStatus()}>{discordBusy ? "Syncing…" : "Sync Discord status"}</button>{discordMessageUrl && <a className="secondary-button action-link" href={discordMessageUrl} target="_blank" rel="noreferrer">View Discord status message</a>}</div>}</section>
       </article>
       {role === "admin" && <article className="task-card kiosk-simulator-card"><h2>Browser simulator</h2><div className="kiosk-state"><strong>{simulator?.name ?? "Not configured"}</strong><span className="status-pill ui-status" data-tone={simulator?.active && simulator.online ? "success" : simulator?.active ? "error" : "neutral"}>{simulator?.active ? simulator.online ? "Online" : "Offline" : "Not paired"}</span></div><p>Uses the kiosk scan surface with browser-selected simulated reads. Events are audited and do not count as physical kiosk activity.</p>{simulator?.active === 1 && <div className="kiosk-actions"><a className="primary-button action-link" href="/simulator">Open simulator</a><button type="button" onClick={() => void stopSimulator()}>Stop simulator</button></div>}</article>}
     </div>

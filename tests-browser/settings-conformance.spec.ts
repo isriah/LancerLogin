@@ -120,7 +120,7 @@ test(`Admin can add, edit, reorder, retire, and restore meeting-weight categorie
     await route.fulfill({ status: method === "POST" ? 201 : 200, contentType: "application/json", body: "{}" });
   });
 
-  await page.goto("/settings/organization");
+  await page.goto("/settings/configuration");
   const card = page.locator(".meeting-weight-settings");
   await card.locator(".meeting-weight-disclosure > summary").click();
   const add = card.locator(".meeting-weight-add");
@@ -412,7 +412,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
   }
 }
 
-test("Operator role cannot open any Settings route", async ({ page }) => {
+test("Operator role cannot open administrative Settings routes", async ({ page }) => {
   await useSettingsContext(page, "operator");
   for (const [path] of routes) {
     await page.goto(path);

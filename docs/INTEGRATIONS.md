@@ -12,7 +12,7 @@ An active Admin must be able to use a local password before Google sign-in can b
 
 ## Google Calendar
 
-Enable Google Calendar separately, save its OAuth web client, authorize one Google account, and select a calendar where that account can write. LancerLogin sends only the generic event name **LancerLogin meeting** and meeting start and end times. It does not send roster, attendance, notes, organization name, attendee, reminder, or description data.
+Enable Google Calendar separately, save its OAuth web client, authorize one Google account, and select a calendar where that account can write. Google Calendar and Discord scheduled events use the dashboard meeting title and notes as the event description, together with meeting start and end times. Clearing notes clears the Google event description on the next sync. Restrict provider destinations to the intended audience. LancerLogin does not add roster, attendance, attendees, or reminders to Google events.
 
 Meeting delivery is asynchronous. A provider failure does not undo a meeting change. The integration card reports waiting or failed work and offers retry and **Sync all meetings**. Removing the connection clears LancerLogin's authorization and mappings; it does not promise to remove events already delivered to Google.
 
@@ -27,6 +27,10 @@ Discord can provide member linking, attendance notices, calendar delivery, conte
 Verification checks the saved application and server, reconciles the LancerLogin `/pair` and `/attendance-report` commands, sends a message to the selected attendance channel, and requires the signed button proof. **Reconcile Discord commands** repairs those two commands without replacing credentials or clearing existing mappings.
 
 The optional attendance-channel manager operates only on LancerLogin-tracked messages. The optional anomaly report requires a different text channel in the verified server. Administrators must restrict that channel to intended attendance staff. Provider failures never block kiosk scans or an attendance record.
+
+Sync upcoming meetings before their start time. A meeting already in progress without a Discord event is skipped with an explanation; existing active events retain their provider start time when updated. Ended meetings are skipped.
+
+The Kiosks page verifies the tracked status message before reporting it current and provides **View Discord status message** after syncing. If the message was deleted, sync recreates it. Enable the attendance-channel manager to keep it pinned.
 
 ## Safe changes
 

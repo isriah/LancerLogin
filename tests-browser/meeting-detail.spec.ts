@@ -1,3 +1,4 @@
+import { setDashboardTheme } from "./dashboard-theme";
 import { expect, test } from "@playwright/test";
 
 test("canonical meeting routes, legacy redirects, switching, and browser history stay synchronized", async ({ page }) => {
@@ -191,10 +192,9 @@ test("meeting contest review distinguishes partial, missing, and complete raw sc
     const firstReason = review.getByLabel("Review reason").first();
     await firstReason.focus();
     await expect(firstReason).toBeFocused();
-    const theme = page.getByRole("switch", { name: "Dark mode" });
-    if (!await theme.isChecked()) await theme.click();
+    await setDashboardTheme(page, "dark");
     await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
-    await theme.click();
+    await setDashboardTheme(page, "light");
     await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
   }
 });
@@ -211,15 +211,14 @@ test("meeting operations preserve the custom brand in light and dark desktop lay
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/meetings/active-meeting");
   const app = page.locator(".app");
-  const theme = page.getByRole("switch", { name: "Dark mode" });
-  await expect(theme).toHaveAttribute("aria-checked", "true");
+  await expect(app).toHaveAttribute("data-theme", "dark");
   const tokens = await app.evaluate((element) => { const style = getComputedStyle(element); return { primary: style.getPropertyValue("--primary").trim(), secondary: style.getPropertyValue("--secondary").trim() }; });
   expect(tokens).toEqual({ primary: "#8b2f72", secondary: "#e9b949" });
   const operations = await page.locator(".meeting-discord-operations").boundingBox();
   const contests = await page.locator(".meeting-contests").boundingBox();
   expect(operations && contests && operations.x < contests.x).toBe(true);
-  await theme.click();
-  await expect(theme).toHaveAttribute("aria-checked", "false");
+  await setDashboardTheme(page, "light");
+
   await expect(app).toHaveAttribute("data-theme", "light");
   const dimensions = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
@@ -295,8 +294,7 @@ test("meeting attendance shows authoritative scan times for complete, partial, m
     for (const theme of ["light", "dark"] as const) {
       await page.setViewportSize(viewport);
       await page.goto("/meetings/active-meeting");
-      const themeSwitch = page.getByRole("switch", { name: "Dark mode" });
-      if ((await themeSwitch.getAttribute("aria-checked")) !== String(theme === "dark")) await themeSwitch.click();
+      await setDashboardTheme(page, theme);
       await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
 
       const table = page.getByRole("table", { name: "Meeting attendance" });
@@ -329,7 +327,7 @@ test("meeting detail remains operable and contained at a compact mobile width", 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/meetings/active-meeting");
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
-  await page.getByRole("switch", { name: "Dark mode" }).click();
+  await setDashboardTheme(page, "light");
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
   await page.getByRole("button", { name: "Duplicate" }).click();
   const dialog = page.getByRole("dialog", { name: "Duplicate meeting" });

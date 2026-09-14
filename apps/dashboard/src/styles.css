@@ -421,7 +421,7 @@ main[aria-busy="true"] .setup-progress { display: none; }
 .ui-card,.empty-page { min-width: 0; padding: var(--card-padding); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface); border-radius: var(--radius-panel); }
 .ui-form { display: grid; gap: var(--space-3); }
 .ui-form > label { min-width: 0; margin: 0; }
-.ui-control,.ui-form input,.ui-form select,.ui-form textarea { width: 100%; min-height: var(--control-min-block-size); padding: var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); }
+.ui-control,.ui-form input,.ui-form select,.ui-form textarea { width: 100%; min-height: var(--control-min-block-size); padding: var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background-color: var(--ui-surface-subtle); border-radius: var(--radius-control); }
 .ui-native-select { appearance: none; padding-right: var(--space-12); background-image: linear-gradient(45deg,transparent 50%,var(--ui-text-muted) 50%),linear-gradient(135deg,var(--ui-text-muted) 50%,transparent 50%); background-position: calc(100% - 1.5rem) calc(50% + .1rem),calc(100% - 1.12rem) calc(50% + .1rem); background-size: .38rem .38rem,.38rem .38rem; background-repeat: no-repeat; cursor: pointer; }
 .ui-native-select:hover:not(:disabled) { border-color: color-mix(in srgb,var(--primary) 55%,var(--ui-border)); }
 .ui-native-select:focus-visible { border-color: var(--primary); outline: 3px solid var(--ui-focus); outline-offset: 2px; }
@@ -486,6 +486,7 @@ main[aria-busy="true"] .setup-progress { display: none; }
 .kiosk-discord-status h3,.kiosk-discord-status p { margin: 0; }
 .kiosk-discord-status p { margin-top: var(--space-1); color: var(--ui-text-muted); font-size: var(--text-small); }
 .kiosk-discord-status button { flex: 0 0 auto; min-height: var(--control-min-block-size); padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface); border-radius: var(--radius-control); cursor: pointer; }
+.kiosk-discord-status .kiosk-actions { margin-top: var(--space-0); align-items: center; }
 .kiosk-discord-status button:disabled { cursor: wait; opacity: .65; }
 .kiosk-discord-status.unavailable { border-style: dashed; }
 .kiosk-card-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-1); }
@@ -746,7 +747,6 @@ label { font-size: .9rem; }
 .member-discord-identity { margin: 1rem 0 0; }.member-discord-identity > div { display: flex; align-items: center; gap: .65rem; }.member-discord-identity dt { color: var(--muted); font-size: .72rem; font-weight: 800; text-transform: uppercase; }.member-discord-identity dd { margin: 0; }.member-discord-unlinked { display: inline-block; padding: .28rem .65rem; color: var(--muted); background: var(--surface-soft); border-radius: 2rem; font-size: .72rem; font-weight: 800; }
 @media (max-width: 1050px) { .report-filters { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 760px) { .configuration-grid,.roster-filters,.report-grid,.report-filters { grid-template-columns: 1fr; }.leaderboard-card { grid-row: auto; }.attendance-utilities,.report-grid .panel-heading,.roster-directory .panel-heading { align-items: start; flex-direction: column; }.report-grid .panel-heading label,.report-grid .panel-heading select { width: 100%; }.roster-directory .roster-actions { width: 100%; justify-content: space-between; }.release-comparisons .panel-heading { align-items: start; flex-direction: column; } }
-.simulator-page { display: grid; gap: 1rem; max-width: 62rem; margin: 0 auto; }.simulator-page > header { display: flex; justify-content: space-between; align-items: center; color: var(--muted); }.simulator-screen { min-height: 28rem; display: grid; place-items: center; align-content: center; gap: 1rem; padding: 2rem; color: #fff; background: #424a53; text-align: center; }.simulator-screen.success { background: #178f4f; }.simulator-screen p { margin: 0; color: #f2c14e; font-size: .8rem; font-weight: 900; letter-spacing: .08em; }.simulator-screen h1 { max-width: 42rem; margin: 0; font-size: clamp(2rem,5vw,3.5rem); }.simulator-screen small { color: #d3d8df; }.simulator-controls { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .8rem; padding: 1rem; border: 1px solid var(--line); background: var(--surface); border-radius: .7rem; }.simulator-controls button { min-height: 2.75rem; border: 1px solid var(--line); border-radius: .55rem; color: var(--ink); background: var(--surface-soft); font-weight: 800; cursor: pointer; }.simulator-controls .primary-button { color: var(--on-primary); background: var(--primary); border-color: var(--primary); }.simulator-sheet { grid-column: 1 / -1; margin: 0; padding: .7rem; background: var(--surface-soft); border-radius: .5rem; color: var(--muted); }@media(max-width:760px){.simulator-controls{grid-template-columns:1fr}.simulator-screen{min-height:22rem}}
 
 /* Phone layouts use the available screen instead of nesting horizontal scrollers. */
 @media (max-width: 760px) {
@@ -1325,7 +1325,6 @@ label { font-size: .9rem; }
 }
 
 :root { --simulator-surface: #424a53; }
-.simulator-kiosk { min-height: 480px; position: relative; grid-template-rows: auto 1fr auto; padding: 28px 32px 20px; color: #fff; background: var(--simulator-surface); text-align: center; overflow: hidden; }.simulator-origin { position: absolute; top: 14px; right: 18px; margin: 0; color: #f2c14e; font-size: .7rem; font-weight: 900; letter-spacing: .08em; }.simulator-kiosk .scan-panel { min-height: 320px; display: grid; justify-items: center; align-content: center; gap: 18px; }.simulator-kiosk .reader-mark { width: 132px; height: 132px; border-radius: 50%; border: 14px solid color-mix(in srgb,var(--simulator-surface),#000 34%); box-shadow: inset 0 0 0 18px var(--secondary); }.simulator-kiosk .scan-panel-processing .reader-mark { border-color: color-mix(in srgb,var(--secondary),#000 38%); }.simulator-kiosk .scan-panel-welcome .reader-mark,.simulator-kiosk .scan-panel-goodbye .reader-mark { border-color: color-mix(in srgb,var(--primary),#000 26%); }.simulator-kiosk .scan-panel-rejected .reader-mark { border-color: #b80100; }.simulator-kiosk h1 { max-width: 42rem; margin: 0; font-size: clamp(2rem,5vw,3.5rem); line-height: 1.08; }.simulator-kiosk .simulator-kicker,.simulator-kiosk .simulator-member { margin: 0; color: #fff; font-weight: 800; }.simulator-kiosk .simulator-kicker { color: #f2c14e; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }.simulator-kiosk .debug-status { width: min(720px,100%); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0; color: #d3d8df; font-size: .85rem; }.simulator-boundary { margin: 0; padding: .75rem 1rem; border: 1px solid var(--line); border-radius: .6rem; background: var(--surface-soft); color: var(--muted); }.simulator-controls button:disabled { cursor: wait; opacity: .65; }@media(max-width:760px){.simulator-kiosk{min-height:360px;padding:38px 20px 16px}.simulator-kiosk .scan-panel{min-height:250px}.simulator-kiosk .reader-mark{width:104px;height:104px;border-width:12px;box-shadow:inset 0 0 0 15px var(--secondary)}}
 
 /* Shared authenticated-dashboard heading and field-label roles.
    Keep the simulator's physical-kiosk display typography independent. */
@@ -1341,3 +1340,40 @@ label { font-size: .9rem; }
 .updates-header { gap: var(--space-4); align-items: center; }
 .updates-header > button { flex-shrink: 0; }
 @media (max-width: 600px) { .updates-header { flex-direction: column; align-items: stretch; } }
+
+/* Compact dashboard header and browser preferences. */
+.dashboard-toolbar { grid-template-columns: minmax(0,1fr) auto auto; }
+.dashboard-brand { min-width: 0; }
+.dashboard-brand .brand-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-display); font-size: var(--text-section-heading); font-weight: 400; }
+.dashboard-brand .brand-heading > span { color: var(--ui-text-muted); font-size: var(--text-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-brand .brand-mark { flex: 0 0 auto; }
+.dashboard-brand .header-logo { height: var(--control-min-block-size); }
+.settings-session-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-4); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-4); }
+.user-list article .account-identifier { text-transform: none; }
+@media (max-width: 760px) {
+  .dashboard-toolbar { grid-template-columns: minmax(0,1fr) auto auto; }
+  .dashboard-brand { grid-column: 1; grid-row: 1; }
+  .dashboard-toolbar .mobile-menu-toggle { grid-column: 2; grid-row: 1; }
+  .dashboard-toolbar .toolbar-end { grid-column: 3; grid-row: 1; }
+  .dashboard-brand .brand-mark { width: var(--control-min-block-size); height: var(--control-min-block-size); }
+  .dashboard-brand .brand-heading strong { font-size: var(--text-card-heading); }
+}
+/* The preview uses physical-kiosk CSS in its own shadow root. */
+.simulator-page { display: grid; gap: var(--space-4); max-width: 50rem; margin: 0 auto; }
+.simulator-page > header { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); color: var(--ui-text-muted); }
+.simulator-origin { margin: 0; color: var(--ui-text-muted); font-size: var(--text-caption); text-align: center; }
+.simulator-kiosk { display: block; width: 100%; aspect-ratio: 5 / 3; overflow: hidden; }
+.simulator-boundary { margin: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--ui-border); border-radius: var(--radius-card); background: var(--ui-surface-subtle); color: var(--ui-text-muted); font-size: var(--text-small); }
+.simulator-controls { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-4); padding: var(--space-4); border: 1px solid var(--ui-border); border-radius: var(--radius-card); background: var(--ui-surface); }
+.simulator-controls label { min-width: 0; margin: 0; }
+.simulator-field { display: grid; align-content: start; gap: var(--space-2); min-width: 0; }
+.simulator-controls .primary-button { grid-column: 1 / -1; justify-self: center; width: auto; max-width: 100%; }
+@media (max-width: 760px) { .simulator-controls { grid-template-columns: 1fr; } }
+
+@media (max-width: 760px) {
+  .dashboard-toolbar .toolbar-end { flex-wrap: nowrap; gap: var(--space-2); }
+  .dashboard-toolbar .contest-indicator,.dashboard-toolbar .update-indicator { justify-content: center; min-width: var(--control-min-block-size); font-size: 0; gap: var(--space-1); padding: var(--space-2); }
+  .dashboard-toolbar .contest-indicator > span,.dashboard-toolbar .update-indicator > span { font-size: var(--text-small); }
+  .dashboard-toolbar .contest-indicator::after { content: attr(data-count); font-size: var(--text-small); }
+  .dashboard-toolbar .update-indicator strong { display: none; }
+}

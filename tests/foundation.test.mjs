@@ -93,7 +93,7 @@ test("dashboard restore accepts and normalizes earlier backup schemas", async ()
   assert.match(source, /google_calendar_enabled: 0/);
 });
 
-test("Google Calendar migration and worker keep delivery minimal and retryable", async () => {
+test("Google Calendar migration and worker keep delivery scoped and retryable", async () => {
   const migration = await readFile("apps/api/migrations/0026_google_calendar_sync.sql", "utf8");
   const source = await readFile("apps/api/src/index.ts", "utf8");
   assert.match(migration, /google_calendar_authorizations/);
@@ -108,7 +108,7 @@ test("Google Calendar migration and worker keep delivery minimal and retryable",
   assert.match(discordCalendarMigration, /lease_expires_at TEXT/);
   assert.match(discordCalendarMigration, /revision INTEGER NOT NULL DEFAULT 1/);
   assert.match(migration, /action IN \('upsert', 'delete'\)/);
-  assert.match(source, /summary: "LancerLogin meeting"/);
+  assert.match(source, /summary: meeting.title, description: meeting.notes/);
   assert.match(source, /Google Calendar delivery retries safely on the next scheduled pass/);
   assert.match(source, /enqueueGoogleCalendarDelete/);
   assert.match(source, /enqueueGoogleCalendarRestore/);

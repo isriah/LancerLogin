@@ -1,10 +1,10 @@
 # Dashboard guide
 
-This guide is for Administrators and Operators. An Administrator configures the installation and manages access. An Operator manages permitted attendance work but cannot open Settings.
+This guide is for Administrators and Operators. An Administrator configures the installation and manages access. An Operator manages permitted attendance work but cannot open administrative settings.
 
 ## Navigation and access
 
-After sign-in, the primary navigation contains **Dashboard**, **Reports**, **Roster**, and **Kiosks**. Administrators also see **Settings**. Settings has separate **Organization**, **Configuration**, **Access**, **Integrations**, **Data**, **Guided Setup**, and **Updates** pages.
+After sign-in, the primary navigation contains **Dashboard**, **Roster**, **Reports**, and **Kiosks**. **Settings** gives both roles theme and sign-out controls. Administrators have separate **Organization**, **Configuration**, **Access**, **Integrations**, **Data**, **Guided Setup**, and **Updates** pages.
 
 An unfinished installation opens Guided Setup instead of the normal dashboard for Administrators. Any Administrator can resume its shared progress. Operators do not complete or reset Guided Setup.
 
@@ -13,7 +13,7 @@ An unfinished installation opens Guided Setup instead of the normal dashboard fo
 | Dashboard and meeting details | Create, edit, duplicate, and delete meetings; manage attendance | Create, edit, duplicate, and delete meetings; manage attendance |
 | Reports and roster | Manage roster and export reports | View roster and export reports |
 | Kiosks | Pair, replace, name, retire, and manage maintenance actions | View status and use permitted attendance operations |
-| Settings | Full access | No access |
+| Settings | Full access | Theme and sign-out only |
 
 Roster membership does not grant dashboard access. An Administrator creates, links, deactivates, or changes dashboard roles in **Settings → Access**.
 
@@ -24,7 +24,7 @@ Roster membership does not grant dashboard access. An Administrator creates, lin
 3. During an eligible meeting, the kiosk resolves the meeting from the scan time. A single arrival is **Active · not checked out**. A completed arrival and departure is **Present**. After the meeting end plus the organization-wide late scan allowance, an incomplete pair is **Absent** unless a correction or excuse overrides it.
 4. In the meeting workspace, choose **Present**, **Excuse**, or **Absent** when a correction is needed. **Excuse** and **Absent** require a reason; **Present** accepts an optional note. An Administrator can also choose **Clear** to remove recorded attendance for one attendee and meeting. Source scans and correction history remain available for auditability.
 
-Use **Configuration** to set the organization-wide late scan allowance, late-arrival and early-departure limits, and optional reporting baseline. Those limits do not change a recorded attendance outcome.
+Use **Configuration** to set the organization-wide late scan allowance, late-arrival and early-departure limits, optional reporting baseline, and reusable meeting-weight categories. Those limits do not change a recorded attendance outcome.
 
 ## Roster and reports
 
@@ -36,12 +36,14 @@ In **Reports**, choose filters, save a browser-local view, or select **Download 
 
 Open **Kiosks** to review the physical kiosk's pairing, reader, network, pending scans, last successful sync, installed release, and heartbeat. Administrators can choose **Add kiosk** or **Replace kiosk**, download the guided Pi installer, and create a time-limited pairing key. Paste that key into the Pi's local pairing page.
 
-The **Browser simulator** is available to Administrators. It uses browser-selected simulated reads and does not count as physical kiosk activity. Do not use simulator results as evidence that a reader, network, or physical kiosk update succeeded.
+The roster table keeps names and emails together, with member IDs in a separate column. **Edit** shows the attendance-required date without adding it to the directory table.
+
+The **Browser simulator** is available to Administrators. Normal reads follow physical-kiosk check-in, duplicate-scan and check-out rules. It uses browser-selected simulated reads and does not count as physical kiosk activity. Do not use simulator results as evidence that a reader, network, or physical kiosk update succeeded.
 
 ## Settings tasks
 
-- **Organization** controls name, subtitle, logo, colors, appearance, and meeting-weight categories.
-- **Configuration** controls attendance timing and the reporting baseline.
+- **Organization** controls name, subtitle, logo, colors, and appearance.
+- **Configuration** controls attendance timing, the reporting baseline, and meeting-weight categories.
 - **Access** controls authenticated Administrator and Operator accounts.
 - **Integrations** controls optional Google, Resend, and Discord connections.
 - **Data** downloads or restores category-specific backups and performs typed-confirmation deletion.

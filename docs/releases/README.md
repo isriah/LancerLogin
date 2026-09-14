@@ -2,8 +2,9 @@
 
 Every Git tag must have a matching `vX.Y.Z.md` file in this directory. The release workflow fails if the file is missing and publishes it as the GitHub Release body. Notes must describe user-visible changes, data migrations, configuration changes, known limits, and manual verification steps.
 
-> Historical index. [v1.0.4](v1.0.4.md) is the stable public release. Release notes record what was true when a version shipped. For a current procedure, use the linked guide rather than applying an older transition step out of context.
+> Historical index. [v1.0.5](v1.0.5.md) is the stable public release. Release notes record what was true when a version shipped. For a current procedure, use the linked guide rather than applying an older transition step out of context.
 
+- [v1.0.5](v1.0.5.md) - Reliable dashboard release discovery
 - [v1.0.4](v1.0.4.md) - Stable Community source baseline
 - [v1.0.3](v1.0.3.md) - Community telemetry retirement
 - [v1.0.2](v1.0.2.md) - Reliable Community Edition updates

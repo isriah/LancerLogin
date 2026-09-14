@@ -9,15 +9,17 @@ const sha = "b".repeat(40);
 const release = { tag_name: "v1.0.0", draft: false, prerelease: false, body: "Synthetic notes", assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => [`lancerlogin-kiosk-1.0.0-linux-${arch}.tar.gz`, `lancerlogin-kiosk-1.0.0-linux-${arch}.tar.gz.sha256`])].map((name) => ({ name })) };
 // Run the actual updater module inside workerd; only its outbound provider is synthetic.
 const updater = (await transform(await readFile("apps/api/src/web-updates.ts", "utf8"), { loader: "ts", format: "esm" })).code.replace(/\nexport \{[\s\S]*?\};\s*$/, "");
-const script = `${updater}
+const discovery = (await transform(await readFile("apps/api/src/release-discovery.ts", "utf8"), { loader: "ts", format: "esm" })).code.replace(/^import .*web-updates\.ts.*;\n/m, "").replace(/\nexport \{[\s\S]*?\};\s*$/, "");
+const script = `${updater}\n${discovery}
 export default { async fetch(request, env) {
   const path = new URL(request.url).pathname;
   if (path === '/runtime') return Response.json({ manual: new Request('https://example.invalid', { redirect: 'manual' }).redirect, timeout: typeof AbortSignal.timeout });
+  if (path === '/discover') return Response.json(await releaseDiscovery.check());
   try { const result = path === '/prepare' ? await prepareWebUpdate(env, 'synthetic-admin') : path === '/start' ? await startWebUpdate(env, await request.json(), 'synthetic-admin') : await webUpdateStatus(env); return Response.json(result); }
   catch(error) { return Response.json({ code: error.code, error: error.message }, { status: error.status || 500 }); }
 } };`;
 
-async function runtime({ redirectPath, redirectStatus = 302, statusRunId = "123" } = {}) {
+async function runtime({ redirectPath, redirectStatus = 302, statusRunId = "123", discoveryStatus = 200 } = {}) {
   const calls = [];
   const worker = new Miniflare(convertV4MiniflareOptions({
     modules: true, script, compatibilityDate: "2026-08-01", d1Databases: ["DB"],
@@ -27,7 +29,7 @@ async function runtime({ redirectPath, redirectStatus = 302, statusRunId = "123"
       assert.equal(url.origin, "https://api.github.com", "No provider redirect may be followed");
       if (path === redirectPath) return new Response(null, { status: redirectStatus, headers: { location: "https://redirect-target.invalid/credential-sink" } });
       if (path.endsWith("/dispatches")) return Response.json({ workflow_run_id: 123 });
-      if (path.endsWith("/releases/latest")) return Response.json(release);
+      if (path.endsWith("/releases/latest")) return discoveryStatus === 200 ? Response.json(release) : Response.json({}, { status: discoveryStatus, headers: { "retry-after": "120" } });
       if (path.includes("/commits/")) return Response.json({ sha });
       if (path.endsWith("/runs")) return Response.json({ workflow_runs: [{ id: Number(statusRunId), display_title: `LancerLogin web update ${requestId}`, path: ".github/workflows/upgrade-web.yml" }] });
       if (path.includes("/actions/runs/")) return Response.json({ event: "workflow_dispatch", status: "waiting", display_title: `LancerLogin web update ${requestId}`, path: ".github/workflows/upgrade-web.yml" });
@@ -55,6 +57,24 @@ test("actual workerd updater prepare performs supported fixed manual GETs", asyn
     assert.equal(instance.calls.slice(0, 2).every((call) => call.authorization === "Bearer synthetic-runtime-token"), true);
     assert.equal(instance.calls.slice(2).every((call) => call.authorization === null), true);
   } finally { await instance.worker.dispose(); }
+});
+
+test("actual workerd discovery caches success and provider cooldown without credentials or dispatch", async () => {
+  for (const discoveryStatus of [200, 429, 503]) {
+    const instance = await runtime({ discoveryStatus });
+    try {
+      const [left, right] = await Promise.all([instance.fetch("/discover"), instance.fetch("/discover")]);
+      const result = await left.json(); assert.deepEqual(await right.json(), result);
+      assert.equal(result.fresh, discoveryStatus === 200);
+      assert.equal(result.code, discoveryStatus === 200 ? undefined : discoveryStatus === 429 ? "rate_limited" : "provider_unavailable");
+      assert.ok(result.attemptedAt);
+      if (discoveryStatus === 200) assert.equal(result.release.tag_name, "v1.0.0");
+      else assert.ok(result.retryAt >= result.attemptedAt + 120_000);
+      assert.deepEqual(await (await instance.fetch("/discover")).json(), result);
+      assert.equal(instance.calls.length, 1); assert.equal(instance.calls[0].authorization, null);
+      assert.equal(instance.calls[0].path, "/repos/isriah/LancerLogin/releases/latest");
+    } finally { await instance.worker.dispose(); }
+  }
 });
 
 test("actual workerd prepare rejects 3xx before persistence on authenticated and public GETs", async () => {

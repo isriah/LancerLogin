@@ -9,22 +9,27 @@ export function hasComparableStableVersions(release: Release | undefined, instal
     && valid(release.tag_name) && valid(installed));
 }
 
-export const latestReleaseUrl = "https://api.github.com/repos/isriah/LancerLogin/releases/latest";
-export const latestReleaseTimeoutMs = 4_000;
+export const latestReleaseUrl = `${(import.meta.env?.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/api"}/admin/releases/latest`;
+export const latestReleaseTimeoutMs = 6_000;
+type CheckedRelease = Release & { checkedAt?: number; attemptedAt?: number };
+type Discovery = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; fresh?: boolean; code?: string; error?: string };
 
 export async function fetchLatestRelease(
   fetcher: typeof fetch = fetch,
   timeoutMs = latestReleaseTimeoutMs,
-): Promise<Release> {
+): Promise<CheckedRelease> {
   const controller = new AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetcher(latestReleaseUrl, {
-      headers: { accept: "application/vnd.github+json" },
+      headers: { accept: "application/json" }, credentials: "include", cache: "no-store",
       signal: controller.signal,
     });
-    if (!response.ok) throw new ReleaseCheckError("Latest release is temporarily unavailable.", response);
-    return await response.json() as Release;
+    const result = await response.json().catch(() => ({})) as Discovery;
+    if (!response.ok || result.fresh !== true || !result.release || typeof result.checkedAt !== "number") {
+      throw new ReleaseCheckError(discoveryMessage(result.code), response, result);
+    }
+    return { ...result.release, checkedAt: result.checkedAt, attemptedAt: result.attemptedAt };
   } catch (error) {
     if (controller.signal.aborted) throw new Error("Latest release check timed out.");
     throw error;
@@ -46,13 +51,24 @@ export function createSingleFlight<T>(load: () => Promise<T>) {
   };
 }
 
-export const releaseCacheKey = "lancerlogin-release-cache-v1";
+// The old direct-browser cache cannot confirm same-origin discovery or block it.
+export const releaseCacheKey = "lancerlogin-release-cache-v2";
 export const releaseCacheTtlMs = 15 * 60_000;
-export type ReleaseSnapshot = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; error?: string; checking: boolean; fresh: boolean };
-type Stored = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; failures: number; error?: string };
+export type ReleaseSnapshot = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; error?: string; code?: string; checking: boolean; fresh: boolean };
+type Stored = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; failures: number; error?: string; code?: string };
+function discoveryMessage(code?: string) {
+  switch (code) {
+    case "rate_limited": return "GitHub release discovery is rate limited.";
+    case "timeout": return "Latest release check timed out.";
+    case "network": return "The server could not reach GitHub release discovery.";
+    case "invalid_release": return "A compatible stable release could not be confirmed.";
+    default: return "Latest release is temporarily unavailable.";
+  }
+}
 export class ReleaseCheckError extends Error {
   response: Response;
-  constructor(message: string, response: Response) { super(message); this.response = response; }
+  discovery?: Discovery;
+  constructor(message: string, response: Response, discovery?: Discovery) { super(message); this.response = response; this.discovery = discovery; }
 }
 function safeRelease(value: unknown): Release | undefined {
   if (!value || typeof value !== "object") return;
@@ -66,12 +82,12 @@ function safeRelease(value: unknown): Release | undefined {
   return result;
 }
 export function createReleaseCache({ load = () => fetchLatestRelease(), now = Date.now, storage = () => globalThis.localStorage }: {
-  load?: () => Promise<Release>; now?: () => number; storage?: () => Pick<Storage, "getItem" | "setItem">;
+  load?: () => Promise<CheckedRelease>; now?: () => number; storage?: () => Pick<Storage, "getItem" | "setItem">;
 } = {}) {
   let data: Stored = { failures: 0 };
   let inFlight: Promise<Release> | undefined;
   const listeners = new Set<() => void>();
-  const timestamp = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 8_640_000_000_000_000;
+  const timestamp = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 8_640_000_000_000_000;
   let lastSaved: string | null | undefined;
   function sync() {
     try {
@@ -87,7 +103,7 @@ export function createReleaseCache({ load = () => fetchLatestRelease(), now = Da
           const release = safeRelease(saved.release);
           data = { failures: saved.failures, attemptedAt: saved.attemptedAt, retryAt: saved.retryAt,
             ...(release && saved.checkedAt ? { release, checkedAt: saved.checkedAt } : {}),
-            ...(saved.failures ? { error: "Latest release is temporarily unavailable." } : {}) };
+            ...(saved.failures ? { code: saved.code, error: discoveryMessage(saved.code) } : {}) };
         }
       }
     } catch { /* In-memory checks work when storage is unavailable or malformed. */ }
@@ -105,7 +121,9 @@ export function createReleaseCache({ load = () => fetchLatestRelease(), now = Da
     const request = Promise.resolve().then(load).then((value) => {
       const release = safeRelease(value);
       if (!release) throw new Error("A compatible stable release could not be confirmed.");
-      data = { release, checkedAt: now(), attemptedAt: data.attemptedAt, failures: 0 };
+      const checkedAt = value.checkedAt ?? now();
+      if (!timestamp(checkedAt) || checkedAt > now() || now() - checkedAt >= releaseCacheTtlMs) throw new Error("A compatible stable release could not be confirmed.");
+      data = { release, checkedAt, attemptedAt: value.attemptedAt ?? data.attemptedAt, failures: 0 };
       persist(); return release;
     }).catch((error: unknown) => {
       const failures = Math.min(data.failures + 1, 10);
@@ -118,7 +136,15 @@ export function createReleaseCache({ load = () => fetchLatestRelease(), now = Da
         const reset = Number(headers.get("x-ratelimit-reset")) * 1000;
         if (headers.get("x-ratelimit-remaining") === "0" && Number.isSafeInteger(reset) && reset > now()) retryAt = Math.max(retryAt, reset);
       }
-      data = { ...data, failures, retryAt, error: error instanceof Error ? error.message : "Latest release is temporarily unavailable." };
+      const discovery = error instanceof ReleaseCheckError ? error.discovery : undefined;
+      if (timestamp(discovery?.retryAt) && discovery!.retryAt! > now()) retryAt = discovery!.retryAt!;
+      data = { ...data, failures, retryAt, code: discovery?.code, error: error instanceof Error ? error.message : "Latest release is temporarily unavailable." };
+      // Preserve the server's last successful check separately from its failed attempt.
+      if (discovery && timestamp(discovery.attemptedAt) && discovery.attemptedAt <= now()) data.attemptedAt = discovery.attemptedAt;
+      const previousRelease = safeRelease(discovery?.release);
+      if (previousRelease && timestamp(discovery?.checkedAt) && discovery!.checkedAt! <= now()) {
+        data.release = previousRelease; data.checkedAt = discovery!.checkedAt;
+      }
       persist(); throw error;
     });
     const tracked = request.finally(() => { inFlight = undefined; publish(); });

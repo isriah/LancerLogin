@@ -10,6 +10,7 @@ import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { officialWebRelease, newerRelease, prepareWebUpdate, startWebUpdate, recordUpdateBackup, webUpdateStatus, latestUpdate, fixedWorkflowPath } from "../apps/api/src/web-updates.ts";
 import { sendAttendance } from "../apps/kiosk/src/cloud-client.mjs";
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
+import { createReleaseDiscovery, discoveryTtlMs, officialReleaseUrl } from "../apps/api/src/release-discovery.ts";
 
 class D1 {
   sqlite = new DatabaseSync(":memory:");
@@ -70,6 +71,112 @@ test("web release contract accepts strict stable majors and requires complete as
   assert.equal(newerRelease("v1.0.0", "2.0.0"), false);
   assert.equal(fixedWorkflowPath(".github/workflows/upgrade-web.yml@main"), true);
   assert.equal(fixedWorkflowPath(".github/workflows/upgrade-web.yml@hostile"), false);
+});
+
+test("discovery coalesces a fixed credential-free feed and expires without extending successful time", async () => {
+  let now = 100_000; let calls = 0; let finish!: (response: Response) => void;
+  const discovery = createReleaseDiscovery({ now: () => now, fetcher: async (url, init) => {
+    calls++; assert.equal(url, officialReleaseUrl); assert.equal(init?.redirect, "manual");
+    assert.equal(new Headers(init?.headers).has("authorization"), false);
+    assert.equal(new Headers(init?.headers).get("user-agent"), "LancerLogin");
+    return new Promise<Response>((resolve) => { finish = resolve; });
+  } });
+  const first = discovery.check(); assert.equal(discovery.check(), first); assert.equal(calls, 1);
+  finish(Response.json({ ...release("v1.0.4"), html_url: "https://evil.test/notes" }));
+  const result = await first;
+  assert.equal(result.release?.html_url, "https://github.com/isriah/LancerLogin/releases/tag/v1.0.4");
+  now += discoveryTtlMs - 1;
+  assert.equal((await discovery.check()).checkedAt, 100_000); assert.equal(calls, 1);
+  now++;
+  const expired = discovery.check(); assert.equal(calls, 2); finish(Response.json(release("v1.0.5")));
+  assert.equal((await expired).release?.tag_name, "v1.0.5");
+});
+
+test("discovery honors provider seconds/date/reset cooldowns and distinguishes unrelated403", async () => {
+  for (const [status, headers, delay, code] of [
+    [429, { "retry-after": "120" }, 120_000, "rate_limited"],
+    [429, {}, 60_000, "rate_limited"],
+    [429, { "retry-after": new Date(280_000).toUTCString() }, 180_000, "rate_limited"],
+    [403, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "3700" }, 3_600_000, "rate_limited"],
+    [403, { "x-ratelimit-remaining": "1", "x-ratelimit-reset": "3700" }, 30_000, "provider_unavailable"],
+    [503, { "retry-after": "120" }, 120_000, "provider_unavailable"],
+  ] as const) {
+    let now = 100_000; let calls = 0;
+    const discovery = createReleaseDiscovery({ now: () => now, fetcher: async () => {
+      calls++; return calls === 1 ? new Response("{}", { status, headers }) : Response.json(release("v1.0.4"));
+    } });
+    const failed = await discovery.check(); assert.equal(failed.code, code); assert.equal(failed.retryAt, now + delay);
+    assert.equal(failed.fresh, false); now += delay - 1; await discovery.check(); assert.equal(calls, 1);
+    now++; assert.equal((await discovery.check()).fresh, true); assert.equal(calls, 2);
+  }
+});
+
+test("discovery retains successful metadata as stale during bounded transient backoff", async () => {
+  let now = 100_000; let failing = false; let calls = 0;
+  const discovery = createReleaseDiscovery({ now: () => now, fetcher: async () => { calls++; if (failing) throw new TypeError("sensitive network details"); return Response.json(release("v1.0.4")); } });
+  await discovery.check(); now += discoveryTtlMs; failing = true;
+  for (const delay of [30_000, 60_000, 120_000, 240_000, 480_000, 900_000, 900_000]) {
+    const result = await discovery.check(); assert.equal(result.retryAt, now + delay); assert.equal(result.code, "network");
+    assert.equal(result.checkedAt, 100_000); assert.equal(result.attemptedAt, now); assert.equal(result.fresh, false);
+    assert.equal(result.release?.tag_name, "v1.0.4"); assert.equal(JSON.stringify(result).includes("sensitive"), false);
+    await discovery.check(); now += delay;
+  }
+  assert.equal(calls, 8); failing = false; assert.equal((await discovery.check()).fresh, true);
+});
+
+test("discovery aborts timeouts and rejects redirects, malformedJSON and incomplete releases", async () => {
+  const stalled = createReleaseDiscovery({ timeoutMs: 10, fetcher: async (_url, init) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(new Error("abort")), { once: true });
+  }) });
+  assert.equal((await stalled.check()).code, "timeout");
+  for (const result of [Response.json(release(), { status: 302, headers: { location: "https://evil.test" } }), new Response("{"), Response.json({ ...release(), assets: [] }), Response.json({ ...release(), prerelease: true })]) {
+    let calls = 0;
+    const discovery = createReleaseDiscovery({ fetcher: async () => { calls++; return result; } });
+    const checked = await discovery.check(); assert.equal(checked.fresh, false); assert.equal(calls, 1);
+    assert.equal(checked.code, result.status === 302 ? "provider_unavailable" : "invalid_release");
+  }
+});
+
+test("release discovery route authenticates before provider access and cannot authorize stale preparation", async () => {
+  const env = environment(); env.RELEASE_VERSION = "1.0.3";
+  await withGitHub(async (calls) => {
+    const url = "https://api.test/admin/releases/latest?url=https://evil.test";
+    assert.equal((await worker.fetch(new Request(url), env)).status, 401);
+    const codec = createSessionCodec(secret);
+    const operator = `lancerlogin_session=${await codec.issue({ userId: "operator", role: "operator" })}`;
+    assert.equal((await worker.fetch(new Request(url, { headers: { cookie: operator } }), env)).status, 403);
+    assert.equal(calls.length, 0);
+    const cookie = `lancerlogin_session=${await codec.issue({ userId: "admin", role: "admin" })}`;
+    const response = await worker.fetch(new Request(url, { headers: { cookie } }), env);
+    assert.equal(response.status, 200); assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal((await response.json()).fresh, true); assert.equal(calls.length, 1);
+    // Discovery's display cache must not be used by preparation. The current feed here is older than installed.
+    await assert.rejects(prepareWebUpdate(env), { code: "already_current" });
+    assert.equal(calls.filter((call) => call.url === officialReleaseUrl).length, 2);
+    assert.equal(await latestUpdate(env), null);
+  });
+});
+
+test("v1.0.4 preparation still pins a commit, requires its backup and dispatches exactly once", async () => {
+  const env = environment(); env.RELEASE_VERSION = "1.0.3";
+  const previous = globalThis.fetch; let dispatches = 0;
+  globalThis.fetch = async (url, init) => {
+    const path = String(url);
+    if (path.endsWith("/releases/latest")) return Response.json(release("v1.0.4"));
+    if (path.endsWith("/commits/v1.0.4")) return Response.json({ sha });
+    if (path.endsWith("/dispatches")) { dispatches++; assert.equal(JSON.parse(String(init?.body)).inputs.release_sha, sha); return Response.json({ workflow_run_id: 123 }); }
+    if (path.includes("/workflows/")) return Response.json({ state: "active", path: ".github/workflows/upgrade-web.yml" });
+    return Response.json({ private: true });
+  };
+  try {
+    const view = await prepareWebUpdate(env, "admin"); const id = view.request!.requestId;
+    assert.equal(view.request!.targetTag, "v1.0.4"); assert.equal(view.request!.targetCommit, sha);
+    await assert.rejects(startWebUpdate(env, { requestId: id, backupSaved: true }), { code: "backup_required" });
+    await recordUpdateBackup(env, id);
+    await assert.rejects(startWebUpdate(env, { requestId: id, backupSaved: false }), { code: "backup_required" });
+    await Promise.all([startWebUpdate(env, { requestId: id, backupSaved: true }), startWebUpdate(env, { requestId: id, backupSaved: true })]);
+    assert.equal(dispatches, 1);
+  } finally { globalThis.fetch = previous; }
 });
 test("simultaneous prepare/start and replay dispatch only one fixed request", async () => {
   const database = new D1(); const env = environment(database);

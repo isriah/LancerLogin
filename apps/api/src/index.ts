@@ -1,6 +1,7 @@
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
 import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance } from "./web-updates.ts";
+import { releaseDiscovery } from "./release-discovery.ts";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 
 type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
@@ -195,6 +196,12 @@ async function updateInfo(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
   if (!env.UPDATE_WORKFLOW_URL) throw new HttpError(503, "The private deployment workflow is not configured");
   return response({ releaseVersion: env.RELEASE_VERSION ?? "development", workflowUrl: env.UPDATE_WORKFLOW_URL });
+}
+async function discoverRelease(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin"]);
+  const result = await releaseDiscovery.check();
+  return response(result, result.fresh ? 200 : result.code === "rate_limited" ? 429 : 503,
+    result.retryAt ? { "retry-after": String(Math.max(1, Math.ceil((result.retryAt - Date.now()) / 1000))) } : undefined);
 }
 async function webUpdates(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]);
@@ -2092,6 +2099,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/setup/status" && request.method === "GET") result = await setupStatus(env);
     else if (url.pathname === "/setup/bootstrap" && request.method === "POST") result = await bootstrap(request, env);
     else if (url.pathname === "/admin/update-info" && request.method === "GET") result = await updateInfo(request, env);
+    else if (url.pathname === "/admin/releases/latest" && request.method === "GET") result = await discoverRelease(request, env);
     else if (url.pathname === "/admin/web-updates/status" && request.method === "GET" || ["/admin/web-updates/prepare", "/admin/web-updates/start"].includes(url.pathname) && request.method === "POST") result = await webUpdates(request, env);
     else if (url.pathname === "/auth/local" && request.method === "POST") result = await localLogin(request, env);
     else if (url.pathname === "/auth/session" && request.method === "GET") result = await authSession(request, env);

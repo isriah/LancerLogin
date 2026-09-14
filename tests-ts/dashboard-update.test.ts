@@ -31,8 +31,8 @@ test("latest release lookup reports unavailable responses and accepts recovery",
   const unavailable = (async () => new Response("{}", { status: 503 })) as typeof fetch;
   await assert.rejects(fetchLatestRelease(unavailable, 50), /temporarily unavailable/);
 
-  const recovered = (async () => new Response(JSON.stringify({ tag_name: "v0.15.0", html_url: "https://example.test/release" }), { status: 200 })) as typeof fetch;
-  assert.deepEqual(await fetchLatestRelease(recovered, 50), { tag_name: "v0.15.0", html_url: "https://example.test/release" });
+  const recovered = (async () => Response.json({ fresh: true, checkedAt: 100_000, attemptedAt: 99_000, release: { tag_name: "v0.15.0", html_url: "https://example.test/release" } })) as typeof fetch;
+  assert.deepEqual(await fetchLatestRelease(recovered, 50), { tag_name: "v0.15.0", html_url: "https://example.test/release", checkedAt: 100_000, attemptedAt: 99_000 });
 });
 
 test("single-flight refreshes do not overlap and allow a later retry", async () => {
@@ -155,4 +155,35 @@ test("existing cache instances adopt another view's persisted success and cooldo
   failing = true; await assert.rejects(first.check(true));
   second.sync(); assert.equal(second.snapshot().fresh, false); await assert.rejects(second.check(true)); assert.equal(calls, 2);
   now += 120_000; failing = false; await second.check(); first.sync(); assert.equal(first.snapshot().fresh, true);
+});
+
+test("server cache timestamps do not gain another15minutes and stale envelopes cannot confirm", async () => {
+  const cache = createReleaseCache({ now: () => 1_000_000, storage: () => memoryStorage(), load: async () => ({ tag_name: "v1.0.4", checkedAt: 900_000 }) });
+  await cache.check(); assert.equal(cache.snapshot().checkedAt, 900_000);
+  const stale = createReleaseCache({ now: () => 1_000_000, storage: () => memoryStorage(), load: async () => ({ tag_name: "v1.0.4", checkedAt: 100_000 }) });
+  await assert.rejects(stale.check(), /could not be confirmed/); assert.equal(stale.snapshot().fresh, false);
+  await assert.rejects(fetchLatestRelease(async () => Response.json({ fresh: false, checkedAt: 900_000, release: { tag_name: "v1.0.4" } })), /temporarily unavailable/);
+});
+
+test("failed discovery retains server success/attempt times, diagnostic code and exact cooldown on reload", async () => {
+  let now = 1_000_000; let calls = 0; const storage = memoryStorage();
+  const load = async () => {
+    calls++;
+    return fetchLatestRelease(async () => Response.json({ fresh: false, release: { tag_name: "v1.0.4" }, checkedAt: 100_000, attemptedAt: 900_000, retryAt: 1_120_000, code: "rate_limited" }, { status: 429, headers: { "retry-after": "120" } }));
+  };
+  const cache = createReleaseCache({ now: () => now, storage: () => storage, load });
+  await assert.rejects(cache.check());
+  assert.equal(cache.snapshot().checkedAt, 100_000); assert.equal(cache.snapshot().attemptedAt, 900_000);
+  assert.equal(cache.snapshot().retryAt, 1_120_000); assert.equal(cache.snapshot().code, "rate_limited"); assert.equal(cache.snapshot().fresh, false);
+  const reloaded = createReleaseCache({ now: () => now, storage: () => storage, load });
+  assert.match(reloaded.snapshot().error!, /rate limited/); await assert.rejects(reloaded.check(true)); assert.equal(calls, 1);
+  now = 1_120_000;
+  await assert.rejects(reloaded.check()); assert.equal(calls, 2);
+});
+
+test("old direct-browser cooldown cannot prevent same-origin discovery", async () => {
+  const storage = memoryStorage(); let calls = 0;
+  storage.setItem("lancerlogin-release-cache-v1", JSON.stringify({ failures: 1, checkedAt: 90_000, attemptedAt: 95_000, retryAt: 3_700_000, release: { tag_name: "v1.0.3" } }));
+  const cache = createReleaseCache({ now: () => 100_000, storage: () => storage, load: async () => { calls++; return { tag_name: "v1.0.4" }; } });
+  assert.equal((await cache.check()).tag_name, "v1.0.4"); assert.equal(calls, 1);
 });

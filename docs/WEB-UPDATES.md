@@ -24,6 +24,7 @@ These Worker routes are called under the dashboard's same-origin `/api` prefix. 
 
 | Method and route | Input | Result |
 | --- | --- | --- |
+| GET `/admin/releases/latest` | None | Complete official stable release metadata, last successful `checkedAt`, last provider `attemptedAt`, `fresh`, and optional failure diagnostics / `retryAt`. Admin-only discovery does not prepare or dispatch. |
 | POST `/admin/web-updates/prepare` | `{}` | Active request or new latest-stable pinned request; thirty-minute expiry. Repeated prepare reuses it. |
 | GET `/admin/data/backup?scope=installation&updateRequestId=<requestId>` | None | Schema-13 entire-installation JSON attachment; records backup export against the prepared request. |
 | POST `/admin/web-updates/start` | `{ "requestId": "<prepared UUID>", "backupSaved": true }` | HTTP 202 with durable request. Requires associated export and explicit saved-file confirmation. Replay never redispatches. |
@@ -38,6 +39,12 @@ Settings keeps **Dashboard** and **Physical kiosk** updates separate. Preparing 
 Errors use `{ error, code }` plus existing authorization errors. Safe codes: `not_configured`, `credential_required`, `credential_expired`, `not_private`, `workflow_required`, `cooldown`, `already_current`, `release_unavailable`, `invalid_request`, `request_missing`, `request_expired`, `backup_required`, `provider_unavailable`, `run_mismatch`. Definite dispatch credential/cooldown rejection is retained as `request.errorCode`; uncertain outcomes use `dispatch_ambiguous`. Both retain the one-way claim and return 202/current request. Inspect state/error instead of treating 202 as success. Reconcile the exact request run-name and workflow path; multiple/unresolved runs become `dispatch_unresolved` recovery after fifteen minutes. Never blind redispatch. Completed failure before executor claim is `failed/preflight_failed`; a completed claimed executor without verified finalization requires recovery.
 
 The partial unique installation index and permanent executor claim prevent concurrent dispatch, duplicate-run mutation and same-run rerun mutation. Database audit triggers record the server-authenticated Admin once on prepare/start. Polling cannot overwrite terminal workflow finalization. Reads and sign-in/logout remain available during maintenance; domain mutations, kiosk attendance and scheduled provider writes pause. Kiosks receive retryable HTTP 503/Retry-After and retain disk queues through restart/replay.
+
+Release discovery uses the same-origin API, not direct browser access to GitHub. The Worker caches successful checks for at most fifteen minutes and coalesces concurrent discovery requests within its isolate. Manual checks still respect this bounded cache and provider cooldowns. Failed responses keep previous metadata unconfirmed, distinguish rate limits, timeouts, network failures, invalid releases and other provider errors, and report a retry time. Provider `Retry-After` (seconds or date) and exhausted rate-limit reset times are respected. Isolate restarts and multiple Workers may perform independent checks; this is not a global GitHub quota lock.
+
+The dashboard persists useful discovery status in a separate same-origin cache namespace, so an old direct-browser failure cannot block the new route. It displays successful and failed check times separately. Previously checked metadata never authorizes preparation, and browser metadata is only a display hint: preparation independently resolves the complete official release and pins its public commit before the associated backup and single-dispatch flow.
+
+An already installed dashboard uses the updater shipped with that version. Publishing a discovery fix does not change that running bundle. If its direct-browser lookup is blocked, installing the fixed version first requires a separately authorized exact-release deployment through the private controller. Do not bypass backup, pinned-release, resource-identity, or dispatch checks.
 
 ## Maintainer controls
 

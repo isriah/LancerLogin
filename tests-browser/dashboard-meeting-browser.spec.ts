@@ -274,6 +274,8 @@ test("meeting creation shows the first automatic weight rule and permits a manua
   await page.goto("/dashboard");
   await page.getByRole("button", { name: "Add meeting" }).click();
   let dialog = page.getByRole("dialog", { name: "Create meeting" });
+  // Use a known 150-minute same-day meeting, even when the host runs near midnight.
+  await dialog.getByLabel("Start time", { exact: true }).fill("14:00");
   await expect(dialog.getByLabel("Attendance weight")).toHaveValue("automatic");
   await expect(dialog.getByLabel("Attendance weight").getByRole("option").first()).toHaveText("Automatic (Standard (2×))");
   await dialog.getByLabel("Title", { exact: true }).fill("Automatic weight");

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
+import { discovered } from "./release-discovery";
 import type { WebUpdateRequest } from "../apps/dashboard/src/web-update";
 
 // Match the actual JavaScript bundle at every release, including future majors.
@@ -14,7 +15,7 @@ async function setup(page: Page, initial: WebUpdateRequest | null = null) {
   let statusFailure = false; let prepareError = ""; let startError = "";
   await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: bundledVersion, workflowUrl } }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
-  await page.route("https://api.github.com/repos/isriah/LancerLogin/releases/latest", (route) => route.fulfill({ json: { tag_name: targetTag } }));
+  await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: targetTag }) }));
   const result = () => ({ releaseVersion: bundledVersion, workflowUrl, request });
   await page.route("**/admin/web-updates/status", (route) => statusFailure ? route.fulfill({ status: 503, json: { code: "provider_unavailable" } }) : route.fulfill({ json: result() }));
   await page.route("**/admin/web-updates/prepare", (route) => {

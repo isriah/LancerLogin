@@ -13,3 +13,24 @@ test-results/
 .provision/
 .collector/
 .d1-migration-verify-*/
+
+# Private local assistant material
+AGENTS.md
+AGENTS.override.md
+.codex/
+.agents/
+.codex-private/
+.codex-log/
+.local/
+
+# Installation secrets and private operations
+.env.*
+.dev.vars.*
+!.env.example
+!.env.*.example
+!.dev.vars.example
+!.dev.vars.*.example
+.secrets/
+*.clixml
+/private/
+/.github/workflows/deploy-community-dev.yml

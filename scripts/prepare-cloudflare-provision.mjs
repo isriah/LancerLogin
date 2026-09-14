@@ -1,0 +1,35 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+
+import { resolveDatabaseName } from "./database-identity.mjs";
+
+const slugPattern = /^[a-z][a-z0-9-]{2,40}$/;
+
+export function buildProvisionConfig(slug, databases = [], releaseVersion = "0.1.0", fixedDatabaseName) {
+  if (!slugPattern.test(slug)) throw new Error("Invalid installation slug");
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(releaseVersion)) throw new Error("Invalid release version");
+  const databaseName = resolveDatabaseName(slug, fixedDatabaseName);
+  const database = databases.find((entry) => entry.name === databaseName);
+  const databaseId = database?.uuid ?? database?.database_id ?? database?.id;
+  const updateWorkflowUrl = process.env.LANCERLOGIN_UPDATE_WORKFLOW_URL;
+  const updateRepository = process.env.LANCERLOGIN_UPDATE_REPOSITORY;
+  if (updateRepository && (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(updateRepository) || updateRepository.toLowerCase() === "isriah/lancerlogin")) throw new Error("Invalid private deployment repository");
+  if (updateWorkflowUrl && !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/workflows\/[A-Za-z0-9_.-]+$/.test(updateWorkflowUrl)) throw new Error("Invalid private deployment workflow URL");
+  const config = { name: `${slug}-api`, main: "../apps/api/src/index.ts", compatibility_date: "2026-08-01", workers_dev: true, vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `https://${slug}-dashboard.pages.dev`, RELEASE_VERSION: releaseVersion, ...(updateWorkflowUrl ? { UPDATE_WORKFLOW_URL: updateWorkflowUrl } : {}) }, triggers: { crons: ["*/5 * * * *"] } };
+  if (updateRepository) Object.assign(config.vars, { UPDATE_REPOSITORY: updateRepository, UPDATE_WORKFLOW_URL: `https://github.com/${updateRepository}/actions/workflows/upgrade-web.yml` });
+  if (databaseId) config.d1_databases = [{ binding: "DB", database_name: databaseName, database_id: databaseId, migrations_dir: "../apps/api/migrations" }];
+  return { state: databaseId ? "exists" : "missing", config };
+}
+
+async function main() {
+  const [slug, listPath] = process.argv.slice(2);
+  if (!slug) throw new Error("Usage: prepare-cloudflare-provision.mjs <slug> [d1-list.json]");
+  let databases = [];
+  if (listPath) { const parsed = JSON.parse(await readFile(listPath, "utf8")); databases = Array.isArray(parsed) ? parsed : parsed.result ?? []; }
+  const packageDocument = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const result = buildProvisionConfig(slug, databases, packageDocument.version, process.env.DATABASE_NAME);
+  await mkdir(".provision", { recursive: true });
+  await writeFile(".provision/wrangler.json", `${JSON.stringify(result.config, null, 2)}\n`, { mode: 0o600 });
+  process.stdout.write(result.state);
+}
+
+if (process.argv[1]?.endsWith("prepare-cloudflare-provision.mjs")) main().catch((error) => { console.error(error.message); process.exitCode = 1; });

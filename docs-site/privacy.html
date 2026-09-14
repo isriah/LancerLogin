@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>LancerLogin privacy</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html">Releases</a><a href="technical.html">Technical</a></nav></header>
+<header class="page-header"><div><p class="eyebrow">Plain-language notice</p><h1>Privacy boundaries</h1></div></header>
+<main id="main" class="page">
+  <h2>Stored by your installation</h2>
+  <ul class="privacy-list good">
+    <li>Organization configuration, users, roster, meetings, attendance, corrections, and audit records in your D1 database</li>
+    <li>Encrypted integration credentials in D1; saved values are never displayed</li>
+    <li>Sensor slot-to-member mapping, queued events, and pairing material locally on the Pi</li>
+    <li>Fingerprint templates exclusively inside the R503 sensor</li>
+  </ul>
+  <h2>Private installation data</h2>
+  <ul class="privacy-list never">
+    <li>Organization name</li>
+    <li>Roster or personal names</li>
+    <li>Attendance records</li>
+    <li>Fingerprint templates or raw scans</li>
+    <li>Raw IP address</li>
+  </ul>
+  <h2>Community telemetry retirement</h2>
+  <p>LancerLogin does not collect or transmit Community telemetry. Historical database fields remain inert for backup compatibility.</p>
+  <h2>Deletion and incident contact</h2>
+  <p>Data remains in the adopter-owned installation until an Admin deletes it. Exporting creates a copy and does not remove stored records. Use the Data settings page for backup and deletion controls.</p>
+  <p>Send privacy and security questions to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. Community support is best-effort without an SLA.</p>
+</main>
+<footer><div><a href="index.html">Documentation home</a> · Privacy questions: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
+</body>
+</html>

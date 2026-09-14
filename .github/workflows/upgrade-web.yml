@@ -1,0 +1,72 @@
+name: Upgrade LancerLogin web
+run-name: LancerLogin web update ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Durable request created by the application
+        required: true
+        type: string
+      release_tag:
+        description: Official stable release pinned by the application
+        required: true
+        type: string
+      release_sha:
+        description: Exact official source commit pinned by the application
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lancerlogin-production-installation
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    if: github.event.repository.private == true && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      UPDATE_REPOSITORY: ${{ github.repository }}
+      REQUEST_ID: ${{ inputs.request_id }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      EXECUTOR_RUN_ID: ${{ github.run_id }}
+      INSTALLATION_SLUG: ${{ vars.LANCERLOGIN_INSTALLATION_SLUG }}
+      DATABASE_NAME: ${{ vars.LANCERLOGIN_DATABASE_NAME }}
+      DATABASE_ID: ${{ vars.LANCERLOGIN_DATABASE_ID }}
+      API_URL: ${{ vars.LANCERLOGIN_API_URL }}
+      WEB_UPDATE_TOKEN_EXPIRES_AT: ${{ vars.WEB_UPDATE_TOKEN_EXPIRES_AT }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WRANGLER_SEND_METRICS: "false"
+      WRANGLER_WRITE_LOGS: "false"
+      WRANGLER_LOG_SANITIZE: "true"
+    steps:
+      - name: Check out the trusted private deployment controller
+        uses: actions/checkout@v7
+        with:
+          path: deployment-control
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Validate fixed resources and official release before checkout
+        run: node deployment-control/scripts/run-web-upgrade.mjs --validate
+      - name: Check out the exact official release commit
+        uses: actions/checkout@v7
+        with:
+          repository: isriah/LancerLogin
+          ref: ${{ inputs.release_sha }}
+          path: lancerlogin-source
+          persist-credentials: false
+      - name: Install exact source dependencies
+        working-directory: lancerlogin-source
+        run: npm ci --no-audit
+      - name: Claim, checkpoint, upgrade and verify retained installation
+        run: node deployment-control/scripts/run-web-upgrade.mjs

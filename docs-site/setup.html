@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Set up LancerLogin</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html" aria-current="page">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html">Releases</a><a href="technical.html">Technical</a></nav></header>
+<header class="page-header"><div><p class="eyebrow">Task 1</p><h1>Create your installation</h1><p>Nothing in this flow uses or discovers another LancerLogin installation.</p></div></header>
+<main id="main" class="page">
+  <div class="notice"><strong>Public source, private deployment.</strong> Start at the <a href="https://github.com/isriah/LancerLogin">public LancerLogin repository</a>, select <strong>Use this template</strong>, and create a <strong>private</strong> repository in your own GitHub account. Your private repository holds deployment history and secrets; the public repository continues to provide reviewed releases. Do not fork the public repository for a private installation.</div>
+
+  <h2>1. Create the private deployment environment</h2>
+  <ol class="steps">
+    <li>In the private repository, open <span class="ui-path">Settings <span>›</span> Environments</span>.</li>
+    <li>Select <strong>New environment</strong>, enter the exact name <code>production</code>, and select <strong>Configure environment</strong>.</li>
+    <li>You may add a required reviewer if your GitHub plan supports it. This is optional; do not change branch restrictions during initial setup.</li>
+  </ol>
+  <figure class="annotated compact-shot"><img src="assets/github-environment-create.png" alt="Real GitHub environment creation screen with an empty Name field and Configure environment button."><figcaption class="callouts two"><div class="callout"><span>1</span><h3>Use the exact name</h3><p>Enter <code>production</code>. The installer workflow looks for this environment.</p></div><div class="callout"><span>2</span><h3>Keep the repository private</h3><p>The workflow refuses to deploy from a public repository, even if secrets are present.</p></div></figcaption></figure>
+
+  <h2>2. Create a narrowly scoped Cloudflare token</h2>
+  <ol class="steps">
+    <li><a href="https://dash.cloudflare.com/">Create or sign in to Cloudflare</a>, then select the account that will own this LancerLogin installation. You must be a Super Administrator of that account to create an account-owned token.</li>
+    <li>Open <span class="ui-path">Manage account <span>›</span> Account API tokens <span>›</span> Create Token</span>. If you cannot find this page, use Cloudflare's <a href="https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/">account API token guide</a>.</li>
+    <li>For <strong>Token name</strong>, enter a descriptive label such as <code>LancerLogin deployment</code>. This Cloudflare label is only for your reference; it is not the GitHub secret name.</li>
+    <li>Do not choose <strong>Read all resources</strong>, <strong>Write all resources</strong>, <strong>Edit Cloudflare Workers</strong>, or a template under <strong>View all templates</strong>. None has the exact least-privilege combination LancerLogin needs. Select <strong>Start from scratch</strong>.</li>
+  </ol>
+  <figure class="annotated"><img src="assets/cloudflare-token-chooser.png" alt="Real Cloudflare account token creation screen showing broad templates and the Start from scratch custom-policy option."><figcaption class="callouts two"><div class="callout"><span>1</span><h3>Name it for humans</h3><p><code>LancerLogin deployment</code> makes the credential easy to identify later; any descriptive label works.</p></div><div class="callout"><span>2</span><h3>Start from scratch</h3><p>The visible templates are broader or incomplete. Build the four-permission policy below.</p></div></figcaption></figure>
+
+  <h3>Add four account permissions</h3>
+  <p>Keep the resource selector on the selected account, then enable only these permissions:</p>
+  <table class="credential-table">
+    <thead><tr><th scope="col">Cloudflare permission</th><th scope="col">Access</th><th scope="col">Why it is needed</th></tr></thead>
+    <tbody>
+      <tr><td>Workers Scripts</td><td>Edit</td><td>Deploy and update the API Worker.</td></tr>
+      <tr><td>D1</td><td>Edit</td><td>Create the database and apply schema migrations.</td></tr>
+      <tr><td>Pages</td><td>Edit</td><td>Create and update the dashboard project.</td></tr>
+      <tr><td>Account Settings</td><td>Read</td><td>Verify that the token belongs to the exact selected account.</td></tr>
+    </tbody>
+  </table>
+  <p class="notice"><strong>Do not add zone or DNS access.</strong> LancerLogin uses the default Pages and Workers URLs. It does not need billing, member, user-management, or domain permissions.</p>
+  <ol class="steps" start="5">
+    <li>Choose an expiration appropriate for your organization. If the token expires, replace the GitHub secret before the next update. Leave IP filtering empty unless your GitHub-hosted Actions traffic has a stable approved range.</li>
+    <li>Select <strong>Review token</strong> and compare the summary with the four lines below. Do not continue if any additional permission appears.</li>
+    <li>Select <strong>Create token</strong>, copy the token value immediately, and keep the page open until you have stored it in GitHub. Cloudflare displays the value only once.</li>
+  </ol>
+  <figure class="annotated"><img src="assets/cloudflare-token-review.png" alt="Account-redacted Cloudflare token review screen illustrating the four required LancerLogin permissions. The token value is not visible."><figcaption class="callouts two"><div class="callout"><span>1</span><h3>Compare all four lines</h3><p>The policy must grant Workers Scripts Edit, D1 Edit, Pages Edit, and Account Settings Read.</p></div><div class="callout"><span>2</span><h3>Copy only after review</h3><p>The next screen reveals the credential once. Never capture it in a screenshot or commit it to Git.</p></div></figcaption></figure>
+
+  <h2>3. Copy the Cloudflare Account ID</h2>
+  <ol class="steps">
+    <li>From any Cloudflare dashboard page, open <strong>Quick search</strong> or press <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>Command</kbd>+<kbd>K</kbd> on macOS).</li>
+    <li>Enter <code>Copy account ID</code> and select the command with that exact name. This copies the selected account's 32-character ID; it is not a zone ID.</li>
+  </ol>
+  <figure class="annotated compact-shot"><img src="assets/cloudflare-account-id.png" alt="Real Cloudflare quick-search dialog showing the Copy account ID command without revealing the copied identifier."><figcaption class="callouts two"><div class="callout"><span>1</span><h3>Use the command</h3><p>This avoids hunting through account pages whose layout can change.</p></div><div class="callout"><span>2</span><h3>Do not copy a zone ID</h3><p>The installer validates a 32-character account ID against the token before creating anything.</p></div></figcaption></figure>
+
+  <h2>4. Store GitHub environment secrets</h2>
+  <p>Return to the private repository's <code>production</code> environment. Under <strong>Environment secrets</strong>, select <strong>Add environment secret</strong> once for each row:</p>
+  <table class="credential-table">
+    <thead><tr><th scope="col">Exact GitHub secret name</th><th scope="col">Value to paste</th></tr></thead>
+    <tbody>
+      <tr><td><code>CLOUDFLARE_API_TOKEN</code></td><td>The one-time token value Cloudflare just displayed—not its descriptive name.</td></tr>
+      <tr><td><code>CLOUDFLARE_ACCOUNT_ID</code></td><td>The 32-character value copied by Cloudflare's <strong>Copy account ID</strong> command.</td></tr>
+      <tr><td><code>LANCERLOGIN_SETUP_CODE</code></td><td>A new, unique value of at least 16 characters generated and saved in your password manager.</td></tr>
+    </tbody>
+  </table>
+  <p class="notice"><strong>Use secrets, not variables.</strong> Do not paste these values into a repository file, issue, workflow input, dashboard form, or chat. The setup code protects first-Admin creation; it is separate from the Admin password you will create later.</p>
+  <figure class="annotated compact-shot"><img src="assets/github-environment-secret.png" alt="Real GitHub production environment screen with the Add secret dialog and empty Name and Value fields."><figcaption class="callouts two"><div class="callout"><span>1</span><h3>Name must match exactly</h3><p>GitHub secret names are case-sensitive. Add the names from the table; use the separate web-update credential instructions below.</p></div><div class="callout"><span>2</span><h3>Values remain masked</h3><p>GitHub lets you replace a saved secret later but never displays its stored value.</p></div></figcaption></figure>
+
+  <section class="notice"><strong>Configure the separate web-update credential before provisioning.</strong> In GitHub’s secure token settings, create a fine-grained token scoped only to this private deployment repository, with Actions write and Metadata read; default to ninety-day expiry where policy permits. Store its value as production environment secret <code>LANCERLOGIN_WEB_UPDATE_TOKEN</code> and its ISO UTC expiry as variable <code>WEB_UPDATE_TOKEN_EXPIRES_AT</code>. Never paste secrets into chat, source or logs. The empty-fields screenshots above illustrate the provider controls, not the complete current field inventory. After Create succeeds, confirm exact existing resource IDs and set production variables <code>LANCERLOGIN_INSTALLATION_SLUG</code>, <code>LANCERLOGIN_DATABASE_ID</code> and <code>LANCERLOGIN_API_URL</code> for future fixed upgrades and renewal. Read <a href="https://github.com/isriah/LancerLogin/blob/main/docs/WEB-UPDATES.md">the secure provisioning guide</a>.</section>
+  <h2>5. Run the private installation workflow</h2>
+  <ol class="steps">
+    <li>In the private repository, open <span class="ui-path">Actions <span>›</span> Install or upgrade LancerLogin <span>›</span> Run workflow</span>.</li>
+    <li>For <strong>operation</strong>, choose <strong>create</strong>; for <strong>release</strong>, keep <strong>latest stable</strong> selected. The workflow resolves the newest <a href="https://github.com/isriah/LancerLogin/releases">public LancerLogin release</a> automatically.</li>
+    <li>For <strong>installation_slug</strong>, enter a lowercase slug using letters, numbers, and hyphens, such as <code>northside-art-club</code>. It creates exactly <code>&lt;slug&gt;-api</code>, <code>&lt;slug&gt;-data</code>, and <code>&lt;slug&gt;-dashboard</code>.</li>
+    <li>Review those three inputs and select <strong>Run workflow</strong>. Review and approve the pending <code>production</code> environment deployment if a required reviewer is configured. Use <strong>resume</strong> with the same slug only after an interrupted setup.</li>
+    <li>The workflow verifies the account-token pair and refuses name collisions before creating anything. When it succeeds, open the Pages dashboard URL from the workflow summary.</li>
+  </ol>
+  <figure class="annotated"><img src="assets/dashboard-cloudflare-setup.png" alt="LancerLogin setup preview showing adopter-owned Cloudflare linking and the three resource names generated from an installation slug."><span class="pin one" aria-hidden="true">1</span><span class="pin two" aria-hidden="true">2</span><span class="pin three" aria-hidden="true">3</span><figcaption class="callouts"><div class="callout"><span>1</span><h3>Adopter-owned account</h3><p>The workflow verifies the account-owned token against the exact Account ID saved in GitHub.</p></div><div class="callout"><span>2</span><h3>Values stay in GitHub</h3><p>The dashboard never asks for or displays the Cloudflare Account ID or API token.</p></div><div class="callout"><span>3</span><h3>Preview names first</h3><p>The slug deterministically names the new Worker, D1 database, and Pages project.</p></div></figcaption></figure>
+  <h2 id="google-oauth">6. Create the first Admin</h2>
+  <p>Choose local username/password, Google OAuth, or both. Local passwords require at least 12 characters and matching password confirmation; they are stored as salted scrypt hashes. The dashboard and API use one Pages origin through a generated proxy, so strict session cookies are not third-party cookies.</p>
+  <p>For Google, keep LancerLogin open so you can copy its installation-specific redirect URI. Google calls the configuration area <strong>Google Auth Platform</strong>; its current sections are Branding, Audience, Clients, Data Access, and Verification Center. Google's <a href="https://support.google.com/cloud/answer/15544987">Google Auth Platform overview</a> defines the same flow.</p>
+
+  <h3>Choose the project, branding, and audience</h3>
+  <ol class="steps">
+    <li>Open <a href="https://console.cloud.google.com/auth/overview">Google Auth Platform</a>. Select an organization-owned project, or create one and choose <strong>Get started</strong>.</li>
+    <li>Under <strong>Branding</strong>, use a recognizable app name such as <code>Your Organization LancerLogin</code>, select a support email, and add a monitored developer contact email. Google's <a href="https://support.google.com/cloud/answer/15549049">branding guide</a> explains when a logo, homepage, privacy policy, verified domain, or brand verification is required.</li>
+    <li>Under <strong>Audience</strong>, choose <strong>Internal</strong> only when the project belongs to a Google Workspace or Cloud Identity organization and every intended dashboard user belongs to that organization. Internal apps do not require Google verification. Choose <strong>External</strong> when users may have personal Google accounts or belong to more than one organization.</li>
+    <li>For an External audience, <strong>Testing</strong> is available for a trial and <strong>In production</strong> publishes the app for ongoing use. LancerLogin requests only basic identity scopes, so Google's documented Testing exception does not require a test-user allowlist and does not impose seven-day authorization expiry. Workspace administrator policy or Advanced Protection can still block access. Review Google's current <a href="https://support.google.com/cloud/answer/15549945">Audience and publishing-status choices</a> before deciding.</li>
+  </ol>
+
+  <h3>Keep Data Access limited to sign-in</h3>
+  <p>Under <strong>Data Access</strong>, add or retain only <code>openid</code>, <code>email</code>, and <code>profile</code>. These let LancerLogin validate identity, verified email, and basic profile information. Do not add Drive, Calendar, Gmail, or another API scope for dashboard sign-in. Google's <a href="https://support.google.com/cloud/answer/15549135">Data Access guide</a> explains scope management, and its <a href="https://developers.google.com/identity/openid-connect/openid-connect">OpenID Connect guide</a> documents this exact basic-identity scope set.</p>
+
+  <h3>Create the Web application client</h3>
+  <ol class="steps">
+    <li>Under <strong>Clients</strong>, choose <strong>Create client</strong>, select <strong>Web application</strong>, and give it a recognizable name. LancerLogin's Worker completes a server-side authorization-code flow; do not create a Desktop app and do not add an Authorized JavaScript origin.</li>
+    <li>Copy the exact value shown by your LancerLogin form into <strong>Authorized redirect URIs</strong>. Google compares the scheme, host, path, case, and trailing slash exactly.</li>
+    <li>Create the client, then immediately save the client ID and client secret in your organization's password manager. Google displays a newly created secret only once. Paste both into LancerLogin; never put either value in source code, documentation, screenshots, an issue, or chat. Google's <a href="https://support.google.com/cloud/answer/15549257">Clients guide</a> covers creation and later secret rotation.</li>
+  </ol>
+  <p class="ui-path">Exact Pages callback pattern <span>›</span> <code>https://&lt;slug&gt;-dashboard.pages.dev/api/auth/google/callback</code></p>
+  <p>Replace only <code>&lt;slug&gt;</code> with the installation slug. The first-Admin form and <strong>Settings → Integrations</strong> already show the complete installation-specific value and provide a Copy button.</p>
+
+  <h3>Finish the appropriate verification</h3>
+  <p>Google's Verification Center and LancerLogin's integration verification are separate. An External app published In production may need Google brand verification before its chosen name or logo appears; sensitive- or restricted-scope review is not required for LancerLogin's basic sign-in scopes unless you add other scopes. After saving credentials in Settings, use <strong>Verify with Google</strong> and sign in as an active LancerLogin Admin. LancerLogin marks the integration configured only after Google returns a valid identity for that active Admin.</p>
+  <p>When Google or both methods are selected during first-Admin setup, enter the first Admin's Google email plus the client ID and secret there. This avoids a first-login dependency. The secret is encrypted before storage and is never displayed again. An Admin can later rotate or remove it under <strong>Settings → Integrations</strong>; Google cannot be disabled or removed unless an active Admin has a usable local password.</p>
+  <figure class="annotated"><img src="assets/google-oauth-setup.png" alt="Sanitized Google OAuth client setup showing a web application and the exact LancerLogin Pages callback URI."><figcaption class="callouts"><div class="callout"><span>1</span><h3>Choose a web client</h3><p>Create a Web application client for the dashboard rather than a desktop client.</p></div><div class="callout"><span>2</span><h3>Copy the exact callback</h3><p>Use the HTTPS Pages origin followed by <code>/api/auth/google/callback</code>.</p></div><div class="callout"><span>3</span><h3>Enter credentials once</h3><p>The first-Admin form encrypts both values; saved secrets are never shown again.</p></div></figcaption></figure>
+  <h2>7. Create the installation</h2>
+  <p>Community telemetry is disabled. Complete the first-Admin form to continue.</p>
+  <h2>8. Finish Guided Setup</h2>
+  <ol><li><strong>Organization</strong> - enter the organization name and appearance.</li><li><strong>Roster</strong> - import or add the people who can attend.</li><li><strong>Kiosk</strong> - pair a Raspberry Pi kiosk or the browser simulator.</li><li><strong>Kiosk input test</strong> - test the reader on hardware or send a browser-selected simulated read.</li><li><strong>Attendance confirmation</strong> - confirm a completed test attendance record.</li></ol>
+  <p>The wizard temporarily replaces dashboard content and focuses on one task at a time. Progress is shared across Administrators. Optional integrations do not block completion. The browser simulator is a software-only check, not evidence of physical kiosk behavior. Confirming the final attendance check opens the completion dialog; select <strong>Go to Dashboard</strong>. Reopen the checklist later from <strong>Settings → Guided Setup</strong> without deleting data.</p>
+  <h2>9. Upgrade an existing installation</h2>
+  <p>Open <strong>Settings → Updates</strong>, select <strong>Back up and begin update</strong>, and review the pinned release notes. Download the entire-installation backup, save it securely, then confirm the saved file before selecting <strong>Start update</strong> once. Refresh restores durable progress and does not start another update. Follow the GitHub link when an environment approval is required. Select <strong>Reload updated dashboard</strong> only after verified completion. Physical kiosk updates remain separate. The completed 1.0.2 migration used the terminal updater through Raspberry Pi Connect remote shell; dashboard-driven kiosk release lookup acceptance remains unproven. <a href="https://github.com/isriah/LancerLogin/blob/main/docs/WEB-UPDATES.md">Read the complete credential, approval and recovery guide</a>.</p>
+</main>
+<footer><div><a href="index.html">Documentation home</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
+</body>
+</html>

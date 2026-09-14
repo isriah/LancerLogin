@@ -1,0 +1,37 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+
+export function buildPagesProxy(apiUrl, releaseVersion) {
+  const upstream = new URL(apiUrl);
+  if (upstream.protocol !== "https:" || upstream.username || upstream.password || upstream.search || upstream.hash || upstream.pathname !== "/") throw new Error("Worker API URL must be an HTTPS origin");
+  const origin = upstream.origin;
+  if (releaseVersion !== undefined && !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?![\s\S])/.test(releaseVersion)) throw new Error("Invalid release version");
+  return `const API_ORIGIN = ${JSON.stringify(origin)};
+const RELEASE_VERSION = ${JSON.stringify(releaseVersion ?? "development")};
+export default {
+  async fetch(request, env) {
+    const incoming = new URL(request.url);
+    if (incoming.pathname === "/__lancerlogin-release" && request.method === "GET") return Response.json({ releaseVersion: RELEASE_VERSION }, { headers: { "cache-control": "no-store" } });
+    if (incoming.pathname === "/api" || incoming.pathname.startsWith("/api/")) {
+      const target = new URL(incoming.pathname.slice(4) || "/", API_ORIGIN);
+      target.search = incoming.search;
+      return fetch(new Request(target, request));
+    }
+    const asset = await env.ASSETS.fetch(request);
+    if (asset.status !== 404 || request.method !== "GET" || !request.headers.get("accept")?.includes("text/html")) return asset;
+    const shell = new URL("/index.html", incoming.origin);
+    return env.ASSETS.fetch(new Request(shell, request));
+  },
+};
+`;
+}
+
+async function main() {
+  const [apiUrl, output = "apps/dashboard/dist/_worker.js"] = process.argv.slice(2);
+  if (!apiUrl) throw new Error("Usage: prepare-pages-proxy.mjs <worker-api-origin> [output]");
+  await mkdir(dirname(output), { recursive: true });
+  const packageVersion = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version;
+  await writeFile(output, buildPagesProxy(apiUrl, packageVersion), { mode: 0o600 });
+}
+
+if (process.argv[1]?.endsWith("prepare-pages-proxy.mjs")) main().catch((error) => { console.error(error.message); process.exitCode = 1; });

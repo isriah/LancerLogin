@@ -1,0 +1,287 @@
+import { expect, test, type Page } from "@playwright/test";
+import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
+
+const referenceSettings = {
+  organizationName: "Reference Arts Collective",
+  subtitle: "Shared operations",
+  logoData: "",
+  primaryColor: dashboardConformanceReferences.brand.primary,
+  secondaryColor: dashboardConformanceReferences.brand.secondary,
+  appearance: "dark",
+  logoBackdrop: "auto",
+  lateScanMinutes: 30,
+  discordContestWindowHours: 24,
+};
+
+async function configureSignIn(page: Page, authMode: "local" | "google" | "both") {
+  await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: true, installation: { authMode }, settings: referenceSettings }) }));
+  await page.route("**/auth/session", (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Authentication required" }) }));
+}
+
+async function expectResponsiveFit(page: Page) {
+  const geometry = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+    clipped: Array.from(document.querySelectorAll<HTMLElement>("button, a[href], input, select, textarea")).flatMap((element) => {
+      const style = getComputedStyle(element); const bounds = element.getBoundingClientRect();
+      if (style.display === "none" || style.visibility === "hidden" || bounds.width === 0 || element.closest(".table-scroll")) return [];
+      return bounds.left < -1 || bounds.right > innerWidth + 1 ? [element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName] : [];
+    }),
+  }));
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+  expect(geometry.clipped).toEqual([]);
+}
+
+for (const viewport of dashboardConformanceReferences.viewports) {
+  for (const theme of dashboardConformanceReferences.themes) {
+    for (const purpose of ["hardware", "simulator"] as const) {
+      test(`guided setup orders hardware first and pairs ${purpose} at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+        await page.setViewportSize(viewport);
+        await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+        await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+        const fulfill = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+        const completed = ["branding", "roster"];
+        const pairingRequests: unknown[] = [];
+        const simulatorRequests: unknown[] = [];
+        let paired = false;
+        await page.route("**/setup/status", (route) => route.fulfill(fulfill({ configured: true, installation: { authMode: "local" }, settings: referenceSettings })));
+        await page.route("**/auth/session", (route) => route.fulfill(fulfill({ user: { role: "admin" } })));
+        await page.route("**/admin/branding", (route) => route.fulfill(fulfill({ settings: referenceSettings })));
+        await page.route("**/admin/setup/progress", (route) => {
+          if (route.request().method() === "PATCH") {
+            expect(route.request().postDataJSON()).toEqual({ step: "pair-kiosk", completed: true });
+            completed.push("pair-kiosk");
+          }
+          return route.fulfill(fulfill({ completedSteps: completed.map((step) => ({ step })) }));
+        });
+        await page.route("**/admin/kiosks", (route) => route.fulfill(fulfill({ kiosks: paired && purpose === "hardware" ? [{ id: "setup-pi", name: "Main kiosk", active: 1 }] : [] })));
+        await page.route("**/admin/simulator", (route) => {
+          if (route.request().method() === "POST") {
+            simulatorRequests.push(route.request().postDataJSON());
+            paired = true;
+          }
+          return route.fulfill(fulfill({ simulator: paired && purpose === "simulator" ? { name: "Main kiosk", active: 1, online: 0, readerOnline: false } : null }));
+        });
+        await page.route("**/admin/pairing-codes", (route) => {
+          pairingRequests.push(route.request().postDataJSON());
+          return route.fulfill(fulfill({ code: "SETUP-TEST", expiresAt: "2030-01-01T00:00:00Z", workerApiUrl: "https://setup.example.org/api" }));
+        });
+        await page.goto("/dashboard");
+        await expect(page.getByRole("heading", { level: 2, name: "Kiosk", exact: true })).toBeVisible();
+        await expect(page.locator("main h1")).toHaveCount(1);
+        await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+        await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
+        await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
+        const choices = page.getByRole("group", { name: "What are you testing?" });
+        const hardware = choices.getByRole("radio", { name: /Raspberry Pi/ });
+        const simulator = choices.getByRole("radio", { name: /Browser simulator/ });
+        await expect(choices.locator("strong")).toHaveText(["Raspberry Pi", "Browser simulator"]);
+        await expect(hardware).not.toBeChecked();
+        await expect(simulator).toBeChecked();
+        await expect(page.getByRole("progressbar", { name: "Guided setup progress" })).toHaveAttribute("aria-valuenow", "40");
+        const cards = choices.locator(".choice");
+        const first = (await cards.nth(0).boundingBox())!;
+        const second = (await cards.nth(1).boundingBox())!;
+        expect(first.height).toBeGreaterThanOrEqual(44);
+        expect(second.height).toBeGreaterThanOrEqual(44);
+        expect(viewport.width === 390 ? first.y < second.y : first.x < second.x).toBe(true);
+        // Enter from the preceding step navigation to check actual Tab order.
+        await page.getByRole("button", { name: "Attendance confirmation: not complete" }).focus();
+        await page.keyboard.press("Tab");
+        await expect(hardware).toBeFocused();
+        expect(await cards.nth(0).evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
+        await page.keyboard.press("Tab");
+        await expect(simulator).toBeFocused();
+        expect(await cards.nth(1).evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
+        await expectResponsiveFit(page);
+        if (purpose === "hardware") await page.screenshot({ path: test.info().outputPath("setup-choices.png"), fullPage: true });
+        if (purpose === "hardware") {
+          await hardware.focus();
+          await page.keyboard.press("Space");
+          await expect(hardware).toBeChecked();
+          await expect(simulator).not.toBeChecked();
+          await expect(page.getByRole("button", { name: "Create simulator pairing code" })).toHaveCount(0);
+          await page.getByRole("button", { name: "Create one-time pairing key", exact: true }).click();
+          const key = await page.locator(".pairing-key code").innerText();
+          expect(JSON.parse(Buffer.from(key.slice(4), "base64url").toString("utf8"))).toEqual({ apiUrl: "https://setup.example.org/api", code: "SETUP-TEST", kioskName: "Main kiosk" });
+          await expectResponsiveFit(page);
+          paired = true; // Simulate the Pi redeeming the key outside the dashboard.
+          await page.getByRole("button", { name: "I paired the Pi — check status" }).click();
+          expect(simulatorRequests).toEqual([]);
+        } else {
+          await page.keyboard.press("Space");
+          await page.getByRole("button", { name: "Create simulator pairing code" }).click();
+          await expect(page.getByText("Simulator-only code", { exact: true })).toBeVisible();
+          await expect(page.locator(".pairing-key")).toHaveCount(0);
+          await expect(page.getByLabel("Enter simulator pairing code")).toHaveValue("SETUP-TEST");
+          await expectResponsiveFit(page);
+          await page.getByRole("button", { name: "Pair browser simulator" }).click();
+          expect(simulatorRequests).toEqual([{ action: "pair", code: "SETUP-TEST", kioskName: "Main kiosk" }]);
+        }
+        expect(pairingRequests).toEqual([{ kioskName: "Main kiosk", replaceExisting: false, purpose }]);
+        await expect(page.getByRole("button", { name: "Kiosk: complete", exact: true })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Kiosk input test: not complete" })).toHaveAttribute("aria-current", "step");
+        await expect(page.getByRole("progressbar", { name: "Guided setup progress" })).toHaveAttribute("aria-valuenow", "60");
+        await expect(page.getByRole("button", { name: purpose === "hardware" ? "The local reader test passed" : "Send simulated arrival scan" })).toBeVisible();
+        await expectResponsiveFit(page);
+      });
+    }
+  }
+}
+
+for (const viewport of dashboardConformanceReferences.viewports) {
+  for (const theme of dashboardConformanceReferences.themes) {
+    test(`dual sign-in conforms at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+      await configureSignIn(page, "both");
+      await page.goto("/dashboard");
+
+      await expect(page.locator("main h1")).toHaveCount(1);
+      await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+      await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
+      await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
+      await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Continue with Google" })).toBeVisible();
+      await expectResponsiveFit(page);
+
+      const username = page.getByLabel("Username");
+      await username.focus();
+      expect(await username.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
+      expect((await username.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    });
+  }
+}
+
+for (const viewport of dashboardConformanceReferences.viewports) {
+  for (const theme of dashboardConformanceReferences.themes) {
+    test(`first-Admin Google guidance fits at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+      await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: false }) }));
+      await page.goto("/dashboard");
+      await page.getByLabel("Google OAuth").check();
+
+      const guideLink = page.getByRole("link", { name: /Open the complete Google OAuth guide/ });
+      await expect(guideLink).toHaveAttribute("href", "https://isriah.github.io/LancerLogin/setup.html#google-oauth");
+      await guideLink.focus();
+      await expect(guideLink).toBeFocused();
+      expect((await guideLink.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await expect(page.getByText(`${new URL(page.url()).origin}/api/auth/google/callback`, { exact: true })).toBeVisible();
+      expect((await page.locator(".oauth-walkthrough").getByRole("button", { name: "Copy" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await expectResponsiveFit(page);
+    });
+  }
+}
+
+test("first-Admin modes expose associated validation and a pending state", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
+  await page.addInitScript(() => {
+    localStorage.setItem("lancerlogin-theme", "dark");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => undefined } });
+  });
+  await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: false }) }));
+  await page.route("**/setup/bootstrap", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "The one-time setup code is invalid" }) });
+  });
+  await page.goto("/dashboard");
+
+  await expect(page.getByRole("heading", { level: 1, name: "Create your installation" })).toBeVisible();
+  await page.getByLabel("Both methods").check();
+  await expect(page.getByRole("group", { name: "Google OAuth guided setup" })).toBeVisible();
+  const guideLink = page.getByRole("link", { name: /Open the complete Google OAuth guide/ });
+  await expect(guideLink).toHaveAttribute("href", "https://isriah.github.io/LancerLogin/setup.html#google-oauth");
+  await guideLink.focus();
+  await expect(guideLink).toBeFocused();
+  expect((await guideLink.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  const callback = `${new URL(page.url()).origin}/api/auth/google/callback`;
+  await expect(page.getByText(callback, { exact: true })).toBeVisible();
+  const copyCallback = page.locator(".oauth-walkthrough").getByRole("button", { name: "Copy" });
+  await copyCallback.focus();
+  await expect(copyCallback).toBeFocused();
+  expect((await copyCallback.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await copyCallback.click();
+  await expect(page.locator(".oauth-walkthrough").getByRole("button", { name: "Copied" })).toBeVisible();
+  await page.getByLabel("One-time setup code").fill("not-the-right-code");
+  await page.getByLabel("Organization name").fill("Reference Arts Collective");
+  await page.getByLabel("Admin username").fill("admin");
+  await page.getByRole("textbox", { name: /^Admin password/ }).fill("correct-horse-battery");
+  await page.getByLabel("Confirm Admin password").fill("different-password");
+  await expect(page.getByText("Passwords do not match.")).toHaveAttribute("role", "alert");
+  await page.getByLabel("First Admin Google email").fill("admin@example.org");
+  await page.getByLabel("OAuth client ID").fill("client-id");
+  await page.getByLabel("OAuth client secret").fill("client-secret");
+  await page.getByLabel("Confirm Admin password").fill("correct-horse-battery");
+  await page.getByRole("button", { name: "Create first Admin" }).click();
+  await expect(page.getByRole("button", { name: "Creating installation…" })).toBeDisabled();
+  const error = page.getByRole("alert");
+  await expect(error).toContainText("one-time setup code is invalid");
+  await expect(page.getByLabel("One-time setup code")).toHaveAttribute("aria-describedby", /first-admin-error/);
+  await expectResponsiveFit(page);
+});
+
+test("local sign-in keeps denied and unavailable states explicit without revealing account state", async ({ page }) => {
+  await configureSignIn(page, "local");
+  let attempts = 0;
+  await page.route("**/auth/local", async (route) => {
+    attempts += 1;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    if (attempts === 1) await route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Invalid username or password" }) });
+    else await route.abort("connectionfailed");
+  });
+  await page.goto("/dashboard");
+  await page.getByLabel("Username").fill("admin");
+  await page.getByLabel("Password").fill("wrong-password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("button", { name: "Signing in…" })).toBeDisabled();
+  await expect(page.getByRole("alert")).toContainText("Invalid username or password");
+  await expect(page.getByLabel("Password")).toHaveAttribute("aria-invalid", "true");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("alert")).toContainText("Sign-in service unavailable");
+});
+
+test("Admin can inspect, skip, reopen, and complete all five guided-setup steps with focus contained", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
+  await page.addInitScript(() => localStorage.setItem("lancerlogin-theme", "dark"));
+  await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: true, installation: { authMode: "local" }, settings: referenceSettings }) }));
+  await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role: "admin" } }) }));
+  await page.route("**/admin/setup/progress", (route) => {
+    if (route.request().method() === "PATCH") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test"].map((step) => ({ step })) }) });
+  });
+  await page.route("**/admin/branding", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ settings: referenceSettings }) }));
+  await page.route("**/admin/members", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ members: [{ memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", active: 1 }] }) }));
+  await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1 }] }) }));
+  await page.route("**/meetings", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ meetings: [{ id: "meeting-1", title: "Build session", startsAt: new Date().toISOString() }] }) }));
+  await page.route("**/admin/simulator", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ simulator: null }) }));
+  await page.goto("/dashboard");
+
+  await expect(page.getByRole("heading", { level: 1, name: "Guided setup" })).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "Guided setup progress" })).toHaveAttribute("aria-valuenow", "80");
+  const steps = ["Organization & brand", "Roster", "Kiosk", "Kiosk input test", "Attendance confirmation"];
+  for (const name of steps) {
+    await page.getByRole("button", { name: new RegExp(`^${name}:`) }).click();
+    await expect(page.getByRole("heading", { level: 2, name, exact: true })).toBeVisible();
+  }
+  await page.getByRole("button", { name: "Organization & brand: complete" }).click();
+  await page.getByRole("button", { name: "Skip for now" }).click();
+  await expect(page.getByRole("button", { name: "Roster: complete" })).toHaveAttribute("aria-current", "step");
+  await page.getByRole("button", { name: "Attendance confirmation: not complete" }).click();
+  await page.getByRole("button", { name: "Refresh attendance" }).click();
+  await page.getByRole("button", { name: "Attendance matches — finish setup" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Setup complete" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Go to Dashboard" })).toBeFocused();
+  await expect(page.locator(".confetti")).toHaveCSS("display", "none");
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Go to Dashboard" })).toBeFocused();
+  const bounds = await dialog.boundingBox();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+  await expectResponsiveFit(page);
+});

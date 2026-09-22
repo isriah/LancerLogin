@@ -151,6 +151,122 @@ test("Admin member and import dialogs contain focus, report errors, and return f
   await expect(page.getByRole("button",{ name: "Edit" }).first()).toBeFocused();
 });
 
+test("roster import loads CSV files and previews tab-separated spreadsheet rows",async ({ page }) => {
+  await page.setViewportSize({ width: 390,height: 844 });
+  await page.addInitScript(() => localStorage.setItem("lancerlogin-theme","dark"));
+  await useReferenceContext(page);
+  let submitted: unknown;
+  await page.route("**/admin/members",async (route) => {
+    if(route.request().method()!=="POST") { await route.fallback(); return; }
+    submitted=route.request().postDataJSON();
+    await route.fulfill({ status: 201,contentType: "application/json",body: JSON.stringify({ warnings: [] }) });
+  });
+  await page.goto("/roster");
+  await page.getByRole("button",{ name: "Add member" }).click();
+  const dialog=page.getByRole("dialog",{ name: "Add roster member" });
+  await dialog.getByRole("button",{ name: "Import CSV instead" }).click();
+  const rosterText=dialog.getByLabel("Roster CSV or spreadsheet rows");
+  const fileInput=dialog.locator(".roster-import-file input[type='file']");
+  const chooseFile=dialog.getByRole("button",{ name: "Choose CSV file" });
+  await expect(fileInput).toBeHidden();
+  await fileInput.evaluate((element) => {
+    const input=element as HTMLInputElement;
+    input.dataset.pickerClicks="0";
+    input.addEventListener("click",() => { input.dataset.pickerClicks=String(Number(input.dataset.pickerClicks)+1); });
+  });
+  await dialog.getByText("CSV file",{ exact: true }).click();
+  await dialog.getByText("No file chosen").click();
+  await expect(fileInput).toHaveAttribute("data-picker-clicks","0");
+  expect((await chooseFile.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+  const invalidChooser=page.waitForEvent("filechooser");
+  await chooseFile.click();
+  await (await invalidChooser).setFiles({ name: "not-a-roster.txt",mimeType: "text/plain",buffer: Buffer.from("ignored") });
+  await expect(dialog.getByRole("alert")).toContainText("Choose a nonempty .csv file");
+  await expect(rosterText).toBeEmpty();
+  const csv='\uFEFFmemberId,firstName,lastName,email,discordUserId\r\nA-103,"Jordan, Jr.",Lee,jordan@example.org,\r\n';
+  await chooseFile.focus();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Shift+Tab");
+  await expect(chooseFile).toBeFocused();
+  expect(await chooseFile.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
+  const validChooser=page.waitForEvent("filechooser");
+  await page.keyboard.press("Enter");
+  await (await validChooser).setFiles({ name: "sample-roster.csv",mimeType: "text/csv",buffer: Buffer.from(csv) });
+  await expect(fileInput).toHaveAttribute("data-picker-clicks","2");
+  await expect(rosterText).toHaveValue(csv.replace(/^\uFEFF/,"").replaceAll("\r\n","\n"));
+  await expect(dialog.getByText("sample-roster.csv",{ exact: true })).toBeVisible();
+  await expect(dialog.getByRole("status")).toContainText("Loaded sample-roster.csv");
+  await dialog.getByRole("button",{ name: "Preview roster" }).click();
+  await expect(dialog.getByRole("table",{ name: "Processed roster import" })).toContainText("Jordan, Jr. Lee");
+
+  await dialog.getByRole("button",{ name: "Back",exact: true }).click();
+  await rosterText.fill('memberId\tfirstName\tlastName\temail\tdiscordUserId\nA-104\t"Grace, ""Amazing"""\tHopper\tgrace@example.org\t');
+  await expect(dialog.getByRole("status")).toHaveCount(0);
+  await dialog.getByRole("button",{ name: "Preview roster" }).click();
+  await expect(dialog.getByRole("table",{ name: "Processed roster import" })).toContainText('Grace, "Amazing" Hopper');
+  const backToMember=dialog.getByRole("button",{ name: "Back to one member" });
+  await expect(backToMember.locator("..")).toHaveClass(/dialog-actions/);
+  const secondary=await backToMember.evaluate((element) => {
+    const style=getComputedStyle(element);
+    const edit=getComputedStyle(document.querySelector<HTMLElement>(".roster-row-actions button")!);
+    return { color: style.color,background: style.backgroundColor,radius: style.borderRadius,height: element.getBoundingClientRect().height,editColor: edit.color,editBackground: edit.backgroundColor,editRadius: edit.borderRadius };
+  });
+  expect(secondary.color).toBe(secondary.editColor);
+  expect(secondary.background).toBe(secondary.editBackground);
+  expect(secondary.radius).toBe(secondary.editRadius);
+  expect(secondary.height).toBeGreaterThanOrEqual(44);
+  await expectResponsiveFit(page);
+  await backToMember.click();
+  await expect(dialog.getByLabel("Member ID")).toBeFocused();
+  await dialog.getByRole("button",{ name: "Import CSV instead" }).click();
+  const paste=dialog.getByLabel("Roster CSV or spreadsheet rows");
+  await expect(paste).toBeEmpty();
+  await paste.fill('firstName\tlastName\nCase\tPerson');
+  await dialog.getByRole("button",{ name: "Preview roster" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Header row requires memberId");
+  await paste.fill('30001\tAvery\tTest\tavery@example.test\n30002\tBlair\tSample\tblair@example.test');
+  await dialog.getByRole("button",{ name: "Preview roster" }).click();
+  await expect(dialog.getByRole("table",{ name: "Processed roster import" })).toContainText("Blair Sample");
+  await dialog.getByRole("button",{ name: "Confirm import" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(submitted).toMatchObject({ mode: "merge",members: [
+    { memberId: "30001",firstName: "Avery",lastName: "Test",email: "avery@example.test" },
+    { memberId: "30002",firstName: "Blair",lastName: "Sample",email: "blair@example.test" },
+  ] });
+});
+
+test("roster import back action follows the secondary theme at desktop and mobile sizes",async ({ page },testInfo) => {
+  await useReferenceContext(page);
+  for(const { width,height,theme } of [
+    { width: 1280,height: 900,theme: "light" },
+    { width: 390,height: 844,theme: "dark" },
+  ] as const) {
+    await page.setViewportSize({ width,height });
+    await page.goto("/roster");
+    await page.evaluate((value) => localStorage.setItem("lancerlogin-theme",value),theme);
+    await page.reload();
+    await expect(page.locator(".app")).toHaveAttribute("data-theme",theme);
+    await page.getByRole("button",{ name: "Add member" }).click();
+    const dialog=page.getByRole("dialog",{ name: "Add roster member" });
+    await dialog.getByRole("button",{ name: "Import CSV instead" }).click();
+    const chooseFile=dialog.getByRole("button",{ name: "Choose CSV file" });
+    expect((await chooseFile.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await page.screenshot({ path: testInfo.outputPath(`roster-import-${width}-${theme}.png`),fullPage: true });
+    const back=dialog.getByRole("button",{ name: "Back to one member" });
+    await expect(back.locator("..")).toHaveClass(/dialog-actions/);
+    const colors=await back.evaluate((element) => {
+      const style=getComputedStyle(element);
+      const edit=getComputedStyle(document.querySelector<HTMLElement>(".roster-row-actions button")!);
+      return { back: [style.color,style.backgroundColor,style.borderColor,style.borderRadius],edit: [edit.color,edit.backgroundColor,edit.borderColor,edit.borderRadius] };
+    });
+    expect(colors.back).toEqual(colors.edit);
+    await expectResponsiveFit(page);
+    await back.click();
+    await expect(dialog.getByLabel("Member ID")).toBeFocused();
+  }
+});
+
 test("Operator and member-detail states preserve identity policy, history, and unavailable recovery",async ({ page }) => {
   await useReferenceContext(page,"operator");
   await page.route("**/admin/members/A-101/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ member: roster[0],meanAnomalyMinutes: null,history: [{ meetingId: "meeting-1",title: "Build session with a deliberately long name",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",checkedInAt: "2026-09-01T18:05:00Z",checkedOutAt: "2026-09-01T19:58:00Z",disposition: "present" }] }) }));

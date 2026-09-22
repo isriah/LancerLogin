@@ -122,6 +122,7 @@ async function fixture(page: Page) {
   let expired = false;
   let attempts = 0;
   const enrolled: unknown[] = [], removed: string[] = [];
+  const displayState = await (await page.request.get(`${base}/display-state`)).json();
   const members = Array.from({ length: 80 }, (_, index) => ({ memberId: `synthetic-${index}`, firstName: `Member ${index}`, lastName: "Synthetic" }));
   let mappings: Record<string, unknown> = Object.fromEntries(members.slice(0, 60).map((member, index) => [String(index), { memberId: member.memberId, finger: "right index" }]));
   await page.route(`${base}/**`, async (route) => {
@@ -143,8 +144,7 @@ async function fixture(page: Page) {
       removed.push(path); delete mappings[path.split("/").pop()!]; return json({ mappings });
     }
     if (path === "/display-state" && enrolled.length) {
-      const response = await route.fetch(); const state = await response.json();
-      return json({ ...state, display: { id: "enroll_success", message: "Enrollment saved", detail: "Synthetic recovery guidance. ".repeat(30) } });
+      return json({ ...displayState, display: { id: "enroll_success", message: "Enrollment saved", detail: "Synthetic recovery guidance. ".repeat(30) } });
     }
     if (path === "/sensor/test") return json({ readerOnline: true, templateCount: 60 });
     if (path === "/enroll") { const input = route.request().postDataJSON(); enrolled.push(input); mappings[String(input.slot)] = { memberId: input.memberId, finger: input.finger }; return json({ enrolled: true }); }

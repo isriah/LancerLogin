@@ -20,8 +20,8 @@ import { networkApp, networkStyles } from "../apps/kiosk/src/network-ui.mjs";
 import { maintenanceApp, maintenanceHtml, maintenanceLayoutStyles, maintenanceStyles } from "../apps/kiosk/src/maintenance-ui.mjs";
 import { recoveryApp } from "../apps/kiosk/src/recovery-ui.mjs";
 import { startVerifiedKioskUpdate } from "../apps/kiosk/src/update-command.mjs";
-import { spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
+import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter, once } from "node:events";
 
 test("pairing code is hashed, single-use, and expires", () => {
   const issued = issuePairingCode({ now: () => 0, random: () => Buffer.from("123456") });
@@ -151,9 +151,14 @@ test("network policy grants only narrow NetworkManager actions to the kiosk acco
 test("loopback display state exposes only a safe release version and local Wi-Fi remains PIN-protected", async () => {
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-network-service-"));
   const previousPinPath = process.env.LANCERLOGIN_NETWORK_PIN;
+  const previousQueuePath = process.env.LANCERLOGIN_QUEUE;
   const previousNodeEnv = process.env.NODE_ENV;
   const previousReleaseVersion = process.env.LANCERLOGIN_VERSION;
   process.env.LANCERLOGIN_NETWORK_PIN = join(directory, "network-pin.json");
+  process.env.LANCERLOGIN_QUEUE = join(directory, "attendance-queue.json");
+  const seedQueue = createFileQueue(process.env.LANCERLOGIN_QUEUE);
+  await seedQueue.enqueue({ eventId: "review-1", memberId: "synthetic-member", occurredAt: "2026-09-19T12:00:00.000Z" });
+  await seedQueue.flush(async () => ({ rejected: true, status: 409, code: "no_eligible_meeting" }));
   process.env.NODE_ENV = "test";
   delete process.env.LANCERLOGIN_VERSION;
   let service;
@@ -172,20 +177,30 @@ test("loopback display state exposes only a safe release version and local Wi-Fi
     assert.equal(displayState.releaseVersion, "development");
     assert.equal("credential" in displayState, false);
     assert.equal("sensorPath" in displayState, false);
-    assert.equal("releaseVersion" in await (await request("/health")).json(), false);
+    const health = await (await request("/health")).json();
+    assert.equal("releaseVersion" in health, false);
+    assert.deepEqual(health.attendance, { saved: 1, pending: 0, accepted: 0, duplicate: 0, rejected: 1, historyComplete: true });
 
     assert.equal((await request("/network/wifi")).status, 403);
+    assert.equal((await request("/attendance/rejections")).status, 403);
     assert.equal((await request("/network/pin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: "123456" }) })).status, 201);
     const scan = await request("/network/wifi");
     assert.equal(scan.status, 200);
     assert.deepEqual((await scan.json()).networks, [{ ssid: "Workshop WiFi", signal: 91, secured: true, active: false }]);
+    const reviews = await (await request("/attendance/rejections")).json();
+    assert.equal(reviews.rejections.length, 1);
+    assert.equal(reviews.rejections[0].reasonCode, "no_eligible_meeting");
+    assert.equal((await request("/attendance/rejections/review-1/review", { method: "POST" })).status, 200);
+    assert.equal((await (await request("/attendance/rejections")).json()).rejections[0].reviewStatus, "reviewed");
 
     await request("/network/session", { method: "DELETE" });
     for (let attempt = 0; attempt < 5; attempt += 1) await request("/network/unlock", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: "654321" }) });
     assert.equal((await request("/network/wifi")).status, 403);
+    assert.equal((await request("/attendance/rejections")).status, 403);
   } finally {
     if (service?.server.listening) await new Promise((resolve, reject) => service.server.close((error) => error ? reject(error) : resolve()));
     if (previousPinPath === undefined) delete process.env.LANCERLOGIN_NETWORK_PIN; else process.env.LANCERLOGIN_NETWORK_PIN = previousPinPath;
+    if (previousQueuePath === undefined) delete process.env.LANCERLOGIN_QUEUE; else process.env.LANCERLOGIN_QUEUE = previousQueuePath;
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousNodeEnv;
     if (previousReleaseVersion === undefined) delete process.env.LANCERLOGIN_VERSION; else process.env.LANCERLOGIN_VERSION = previousReleaseVersion;
     await rm(directory, { recursive: true, force: true });
@@ -246,6 +261,141 @@ test("file queue survives restart, preserves order, and removes only delivered e
   } finally { await rm(directory, { recursive: true }); }
 });
 
+test("concurrent replay sends each event once and keeps accepting new scans", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-queue-concurrent-")); const path = join(directory, "queue.json");
+  try {
+    const queue = createFileQueue(path);
+    await queue.enqueue({ eventId: "one", memberId: "m1" });
+    await queue.enqueue({ eventId: "two", memberId: "m2" });
+    let startFirst;
+    const firstStarted = new Promise((resolve) => { startFirst = resolve; });
+    let releaseFirst;
+    const firstHeld = new Promise((resolve) => { releaseFirst = resolve; });
+    const sent = [];
+    const first = queue.flush(async (event) => {
+      sent.push(event.eventId);
+      if (event.eventId === "one") { startFirst(); await firstHeld; }
+    });
+    await firstStarted;
+    const second = queue.flush(async () => assert.fail("A second replay must join the active replay"));
+    assert.equal(await queue.enqueue({ eventId: "three", memberId: "m3" }), true);
+    releaseFirst();
+    assert.deepEqual(await first, ["one", "two", "three"]);
+    assert.deepEqual(await second, ["one", "two", "three"]);
+    assert.deepEqual(sent, ["one", "two", "three"]);
+    assert.deepEqual(await createFileQueue(path).pending(), []);
+  } finally { await rm(directory, { recursive: true }); }
+});
+
+test("an invalid queue file fails closed instead of discarding pending attendance", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-queue-invalid-")); const path = join(directory, "queue.json");
+  try {
+    await writeFile(path, "{broken");
+    await assert.rejects(() => createFileQueue(path).enqueue({ eventId: "new", memberId: "m1" }));
+    assert.equal(await readFile(path, "utf8"), "{broken");
+  } finally { await rm(directory, { recursive: true }); }
+});
+
+test("a saved Saturday scan keeps its original time after restart and Wednesday replay", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-queue-delayed-")); const path = join(directory, "queue.json");
+  try {
+    const occurredAt = "2026-09-19T12:00:00.000Z";
+    await createFileQueue(path).enqueue({ eventId: "saturday-scan", memberId: "synthetic-member", occurredAt });
+    const restarted = createFileQueue(path);
+    const requests = [];
+    const delivered = await restarted.flush(async (event) => {
+      const result = await sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "synthetic-token" }, event, {
+        fetchImpl: async (_url, init) => {
+          requests.push(JSON.parse(init.body));
+          return new Response(JSON.stringify({ accepted: true, eventId: event.eventId }), { status: 202, headers: { "content-type": "application/json" } });
+        },
+      });
+      assert.equal(result.accepted, true);
+    });
+    assert.deepEqual(delivered, ["saturday-scan"]);
+    assert.deepEqual(requests, [{ eventId: "saturday-scan", memberId: "synthetic-member", occurredAt }]);
+    assert.deepEqual(await createFileQueue(path).pending(), []);
+  } finally { await rm(directory, { recursive: true }); }
+});
+
+test("interrupted replay leaves the original event for idempotent recovery", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-queue-interrupted-")); const path = join(directory, "queue.json");
+  let child;
+  try {
+    await createFileQueue(path).enqueue({ eventId: "interrupted-1", memberId: "synthetic-member", occurredAt: "2026-09-19T12:00:00.000Z" });
+    const source = "const {createFileQueue}=await import(process.argv[1]);const queue=createFileQueue(process.argv[2]);await queue.flush(async()=>{process.stdout.write('server-accepted\\n');await new Promise(()=>{})});";
+    child = spawn(process.execPath, ["--input-type=module", "-e", source, new URL("../apps/kiosk/src/file-queue.mjs", import.meta.url).href, path], { stdio: ["ignore", "pipe", "pipe"] });
+    let timeout;
+    try { await Promise.race([once(child.stdout, "data"), new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("Replay child did not reach the send boundary")), 5_000); })]); }
+    finally { clearTimeout(timeout); }
+    child.kill();
+    await once(child, "exit");
+    assert.deepEqual((await createFileQueue(path).pending()).map((event) => event.eventId), ["interrupted-1"]);
+    const restarted = createFileQueue(path);
+    assert.deepEqual(await restarted.flush(async () => ({ duplicate: true })), ["interrupted-1"]);
+    assert.deepEqual(await restarted.diagnostics(), { saved: 1, pending: 0, accepted: 0, duplicate: 1, rejected: 0, historyComplete: true });
+  } finally {
+    if (child && child.exitCode === null) child.kill();
+    await rm(directory, { recursive: true });
+  }
+});
+
+test("rejected scans and safe reasons survive replay without blocking later valid scans", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-queue-rejected-")); const path = join(directory, "queue.json");
+  try {
+    const queue = createFileQueue(path);
+    await queue.enqueue({ eventId: "rejected-1", memberId: "synthetic-a", occurredAt: "2026-09-19T12:00:00.000Z" });
+    await queue.enqueue({ eventId: "accepted-2", memberId: "synthetic-b", occurredAt: "2026-09-19T12:01:00.000Z" });
+    await queue.enqueue({ eventId: "duplicate-3", memberId: "synthetic-c", occurredAt: "2026-09-19T12:02:00.000Z" });
+    const sent = [];
+    await queue.flush(async (event) => {
+      sent.push(event.eventId);
+      if (event.eventId === "rejected-1") return { rejected: true, status: 409, code: "no_eligible_meeting", error: "Do not store this raw message" };
+      if (event.eventId === "duplicate-3") return { duplicate: true };
+      return { accepted: true };
+    });
+    assert.deepEqual(sent, ["rejected-1", "accepted-2", "duplicate-3"]);
+    const restarted = createFileQueue(path);
+    assert.deepEqual(await restarted.diagnostics(), { saved: 3, pending: 0, accepted: 1, duplicate: 1, rejected: 1, historyComplete: true });
+    assert.deepEqual(await restarted.rejections(), [{ eventId: "rejected-1", memberId: "synthetic-a", occurredAt: "2026-09-19T12:00:00.000Z", httpStatus: 409, reasonCode: "no_eligible_meeting", reviewStatus: "open" }]);
+    assert.deepEqual(JSON.parse(await readFile(path, "utf8")), []);
+    assert.equal(await restarted.markReviewed("missing-event"), false);
+    assert.equal(await restarted.markReviewed("rejected-1"), true);
+    assert.equal((await createFileQueue(path).rejections())[0].reviewStatus, "reviewed");
+    assert.deepEqual(await restarted.diagnostics(), { saved: 3, pending: 0, accepted: 1, duplicate: 1, rejected: 1, historyComplete: true });
+    assert.equal((await readFile(path, "utf8")).includes("Do not store this raw message"), false);
+  } finally { await rm(directory, { recursive: true }); }
+});
+
+test("the release 1.0.6 array queue upgrades without losing its pending scan", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-queue-legacy-")); const path = join(directory, "queue.json");
+  try {
+    await writeFile(path, JSON.stringify([{ eventId: "legacy-1", memberId: "synthetic-a", occurredAt: "2026-09-19T12:00:00.000Z" }]));
+    const queue = createFileQueue(path);
+    assert.deepEqual(await queue.diagnostics(), { saved: 1, pending: 1, accepted: 0, duplicate: 0, rejected: 0, historyComplete: false });
+    await queue.flush(async () => ({ rejected: true, status: 404, code: "roster_inactive" }));
+    const restarted = createFileQueue(path);
+    assert.deepEqual(await restarted.diagnostics(), { saved: 1, pending: 0, accepted: 0, duplicate: 0, rejected: 1, historyComplete: false });
+    assert.equal((await restarted.rejections())[0].eventId, "legacy-1");
+    assert.deepEqual(JSON.parse(await readFile(path, "utf8")), []);
+  } finally { await rm(directory, { recursive: true }); }
+});
+
+test("recovery finishes a saved rejection after interruption between outcome and queue writes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-queue-recover-outcome-")); const path = join(directory, "queue.json");
+  try {
+    const event = { eventId: "saved-rejection-1", memberId: "synthetic-member", occurredAt: "2026-09-19T12:00:00.000Z" };
+    await writeFile(path, `${JSON.stringify([event])}\n`);
+    await writeFile(`${path}.outcomes.json`, `${JSON.stringify({ version: 1, accepted: 0, duplicate: 0,
+      rejected: [{ ...event, httpStatus: 409, reasonCode: "no_eligible_meeting", reviewStatus: "open" }],
+      pendingAck: { eventId: event.eventId }, historyComplete: false })}\n`);
+    const queue = createFileQueue(path);
+    assert.deepEqual(await queue.pending(), []);
+    assert.deepEqual(await queue.flush(async () => assert.fail("A terminal rejection must not be sent again")), []);
+    assert.deepEqual(await createFileQueue(path).diagnostics(), { saved: 1, pending: 0, accepted: 0, duplicate: 0, rejected: 1, historyComplete: false });
+  } finally { await rm(directory, { recursive: true }); }
+});
+
 test("slot mappings remain local and reject malformed records", async () => {
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-mapping-")); const path = join(directory, "mappings.json");
   try { const store = createMappingStore(path); const saved = await store.replace({ "12": { memberId: "member-1", finger: "right index" } }); assert.deepEqual(saved["12"], { memberId: "member-1", finger: "right index" }); assert.equal(await createMappingStore(path).memberForSlot(12), "member-1"); await assert.rejects(() => store.replace({ invalid: "member-2" }), /Invalid/); } finally { await rm(directory, { recursive: true }); }
@@ -273,7 +423,7 @@ test("legacy fingerprint import prepares roster and slot mappings without templa
 
 test("attendance client sends only identifiers and operational timestamps", async () => {
   let sent;
-  await sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z", fingerprint: "must-not-send" }, { fetchImpl: async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ accepted: true }), { headers: { "content-type": "application/json" } }); } });
+  await sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z", fingerprint: "must-not-send" }, { fetchImpl: async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ accepted: true, eventId: "event-1" }), { headers: { "content-type": "application/json" } }); } });
   assert.deepEqual(sent, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z" });
 });
 
@@ -281,7 +431,30 @@ test("attendance client lets the Worker resolve a meeting and treats a rejected 
   let sent;
   const result = await sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { eventId: "event-2", memberId: "member-1", occurredAt: "2026-09-01T20:00:00Z" }, { fetchImpl: async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ error: "No meeting is accepting attendance scans at this time" }), { status: 409, headers: { "content-type": "application/json" } }); } });
   assert.deepEqual(sent, { eventId: "event-2", memberId: "member-1", occurredAt: "2026-09-01T20:00:00Z" });
-  assert.deepEqual(result, { accepted: false, rejected: true, error: "No meeting is accepting attendance scans at this time" });
+  assert.deepEqual(result, { accepted: false, rejected: true, status: 409, code: "no_eligible_meeting", error: "No meeting is accepting attendance scans at this time" });
+});
+
+test("temporary HTTP client failures stay pending for replay", async () => {
+  const event = { eventId: "retry-1", memberId: "synthetic-member", occurredAt: "2026-09-19T12:00:00.000Z" };
+  for (const status of [401, 403, 408, 425, 429]) {
+    await assert.rejects(() => sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, event, {
+      fetchImpl: async () => new Response(JSON.stringify({ error: "Try again" }), { status, headers: { "content-type": "application/json" } }),
+    }), /Try again/);
+  }
+});
+
+test("an ambiguous success response cannot remove a queued scan", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-queue-ambiguous-")); const path = join(directory, "queue.json");
+  try {
+    const queue = createFileQueue(path);
+    const event = { eventId: "ambiguous-1", memberId: "synthetic-member", occurredAt: "2026-09-19T12:00:00.000Z" };
+    await queue.enqueue(event);
+    const delivered = await queue.flush((item) => sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, item, {
+      fetchImpl: async () => new Response(JSON.stringify({ accepted: true, eventId: "different-event" }), { status: 202, headers: { "content-type": "application/json" } }),
+    }));
+    assert.deepEqual(delivered, []);
+    assert.deepEqual((await createFileQueue(path).pending()).map((item) => item.eventId), ["ambiguous-1"]);
+  } finally { await rm(directory, { recursive: true }); }
 });
 
 function acknowledgement(confirmation, parameters = []) {
@@ -327,6 +500,48 @@ test("continuous scanner records a mapped match without a meeting ID", async () 
   assert.deepEqual(displays.map((item) => item.state), ["processing", "welcome"]);
   assert.equal(displays.at(-1).name, "Avery Stone");
   assert.deepEqual(led, ["processing", "welcome"]);
+});
+
+test("a second member can scan while the first network replay is still waiting", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-rapid-scans-")); const path = join(directory, "queue.json");
+  try {
+    const queue = createFileQueue(path);
+    let releaseFirst;
+    const firstHeld = new Promise((resolve) => { releaseFirst = resolve; });
+    const sent = []; const displays = [];
+    let activeFlush; let sequence = 0;
+    const scanner = createScanner({
+      scanSensor: async () => ({ status: "match", slot: ++sequence === 1 ? 12 : 14 }),
+      setLed: async () => undefined, mappings: { memberForSlot: async (slot) => slot === 12 ? "member-a" : "member-b" }, queue,
+      loadPairing: async () => ({ kioskToken: "synthetic" }),
+      flushAttendance: () => {
+        if (!activeFlush) activeFlush = (async () => {
+          const acknowledgements = [];
+          const delivered = await queue.flush(async (event) => {
+            sent.push(event.eventId);
+            if (event.eventId === "rapid-1") await firstHeld;
+            const result = { accepted: true, member: { displayName: event.memberId } };
+            acknowledgements.push({ eventId: event.eventId, ...result });
+            return result;
+          });
+          return { delivered, acknowledgements };
+        })();
+        return activeFlush;
+      },
+      onDisplay: async (state, values) => displays.push({ state, ...values }), onReader: () => undefined, onCloud: () => undefined,
+      now: () => Date.parse("2026-09-19T12:00:00.000Z") + sequence * 1000,
+      delay: async () => undefined, eventId: () => `rapid-${sequence}`, flushWaitMs: 5,
+    });
+    await scanner.tick();
+    await scanner.tick();
+    assert.deepEqual((await queue.pending()).map((event) => event.memberId), ["member-a", "member-b"]);
+    assert.deepEqual(displays.map((entry) => entry.state), ["processing", "welcome", "processing", "welcome"]);
+    assert.equal(displays.some((entry) => entry.name), false);
+    releaseFirst();
+    await activeFlush;
+    assert.deepEqual(sent, ["rapid-1", "rapid-2"]);
+    assert.deepEqual(await queue.pending(), []);
+  } finally { await rm(directory, { recursive: true }); }
 });
 
 test("scan feedback preserves semantic states, copy, durations, and reader aura behavior", () => {

@@ -60,6 +60,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
         const meeting = { id: "active-meeting", title: "Build session", startsAt: new Date(now - 30 * 60_000).toISOString(), endsAt: new Date(now + 120 * 60_000).toISOString(), attendanceClosesAt: new Date(now + 150 * 60_000).toISOString(), required: 1, notes: "Original notes", weightCategoryId: "retired", weightCategoryName: "Saved category", attendanceWeight: 2 };
         const submitted: Record<string, unknown>[] = [];
         await page.route("**/meeting-weight-categories", (route) => route.fulfill({ json: { categories: [{ id: "extended", name: "Extended workshop", weight: 3, minimumDurationMinutes: 60, position: 0, active: true }] } }));
+        await page.route("**/meetings/active-meeting/impact", (route) => route.fulfill({ json: { changed: false, completed: false, impact: [], previewToken: "current" } }));
         await page.route(/\/meetings\/active-meeting$/, (route) => {
           if (route.request().resourceType() === "document") return route.continue();
           if (route.request().method() === "PATCH") {
@@ -114,6 +115,12 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
         await dialog.getByRole("button", { name: "Save meeting" }).click();
         await expect(dialog).toHaveCount(0);
         expect(submitted[2]).not.toHaveProperty("weightCategoryId");
+        await edit.click();
+        await dialog.getByLabel("Selected labels").check();
+        await dialog.getByLabel("Mentor").check();
+        await dialog.getByRole("button", { name: "Save meeting" }).click();
+        await expect(dialog).toHaveCount(0);
+        expect(submitted[3]).toMatchObject({ audienceMode: "labels", audienceLabelIds: ["mentor"] });
         await switchMeeting.focus();
         await page.keyboard.press("End");
         await page.keyboard.press("Enter");

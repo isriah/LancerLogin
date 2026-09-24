@@ -62,11 +62,19 @@ export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) 
     headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
     body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt }),
   });
-  if (response.status >= 400 && response.status < 500 && response.status !== 401 && response.status !== 403) {
+  if (response.status >= 400 && response.status < 500 && ![401, 403, 408, 425, 429].includes(response.status)) {
     const body = await response.json().catch(() => ({}));
-    return { accepted: false, rejected: true, error: body.error ?? "The scan was not accepted" };
+    const error = typeof body.error === "string" ? body.error : "The scan was not accepted";
+    const code = response.status === 404 && /not linked to an active roster member/i.test(error) ? "roster_inactive"
+      : response.status === 409 && /No meeting is accepting/i.test(error) ? "no_eligible_meeting"
+      : response.status === 409 && /already complete/i.test(error) ? "attendance_complete"
+      : response.status === 409 && /begins on/i.test(error) ? "participation_not_started"
+      : response.status === 400 ? "invalid_scan" : `http_${response.status}`;
+    return { accepted: false, rejected: true, status: response.status, code, error };
   }
-  return parseResponse(response);
+  const result = await parseResponse(response);
+  if (result?.eventId !== event.eventId || (result.accepted !== true && result.duplicate !== true)) throw new Error("The attendance response did not confirm this scan");
+  return result;
 }
 
 export { normalizeApiUrl };

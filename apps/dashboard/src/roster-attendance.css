@@ -1,9 +1,25 @@
 .roster-page .roster-row { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) minmax(15rem,max-content); }
 .roster-page .roster-row.with-discord { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) minmax(15rem,max-content); }
+.roster-page .roster-row.bulk-selecting { grid-template-columns: minmax(5rem,max-content) minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) minmax(15rem,max-content); }
+.roster-page .roster-row.with-discord.bulk-selecting { grid-template-columns: minmax(5rem,max-content) minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) minmax(15rem,max-content); }
+.roster-page .bulk-select-label { min-width: var(--control-min-block-size); margin: 0; }
+.bulk-roster-actions,.quick-member-labels { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--ui-border); border-radius: var(--radius-card); background: var(--ui-surface-subtle); }
+.bulk-roster-actions h3,.bulk-roster-actions p,.quick-member-labels h3,.quick-member-labels p { margin: 0; }
+.bulk-roster-fields { display: grid; grid-template-columns: repeat(auto-fit,minmax(11rem,1fr)); gap: var(--space-3); }
+.bulk-roster-fields label { display: grid; gap: var(--space-2); }
+.bulk-roster-fields input,.bulk-roster-fields select { width: 100%; min-height: var(--control-min-block-size); padding: var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-control); color: var(--ui-text); background: var(--ui-surface); }
+.bulk-roster-fields small { color: var(--ui-text-muted); font-size: var(--text-small); }
+.quick-member-labels details { border: 1px solid var(--ui-border); border-radius: var(--radius-control); background: var(--ui-surface); }
+.quick-member-labels summary { min-height: var(--control-min-block-size); display: flex; align-items: center; padding: var(--space-3); cursor: pointer; }
+.quick-label-options { display: grid; grid-template-columns: repeat(auto-fit,minmax(10rem,1fr)); gap: var(--space-2); padding: var(--space-3); }
+.quick-label-options .checkbox-field input { width: 1.25rem; height: 1.25rem; margin: 0; }
+.quick-member-labels .label-change-preview,.bulk-roster-preview { display: grid; gap: var(--space-3); }
+.quick-member-labels summary:focus-visible,.bulk-roster-fields input:focus-visible,.bulk-roster-fields select:focus-visible,.bulk-select-label input:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
 .roster-page .roster-attendance-rate { color: var(--ui-text); font-family: var(--font-body); font-size: var(--text-body); }
 .roster-page .roster-attendance-help { color: var(--ui-text-muted); font-size: var(--text-small); }
 @media (max-width: 900px) {
-  .roster-page .roster-row,.roster-page .roster-row.with-discord { grid-template-columns: minmax(0,1fr) auto; }
+  .roster-page .roster-row,.roster-page .roster-row.with-discord,.roster-page .roster-row.bulk-selecting,.roster-page .roster-row.with-discord.bulk-selecting { grid-template-columns: minmax(0,1fr) auto; }
+  .roster-page .roster-row.bulk-selecting > [role="cell"]:first-child { grid-column: 1 / -1; }
   .roster-page .roster-attendance-rate { grid-column: 1 / -1; display: grid; gap: var(--space-1); }
   .roster-page .roster-attendance-rate::before { content: "Attendance rate"; color: var(--ui-text-muted); font-size: var(--text-caption); }
 }

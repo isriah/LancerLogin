@@ -2,7 +2,7 @@ import { kioskDisplayForQueuedScan } from "./kiosk-presentation.mjs";
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-export function createScanner({ scanSensor, setLed, mappings, queue, loadPairing, flushAttendance, onDisplay, onReader, onCloud, now = () => Date.now(), delay = wait, eventId = () => crypto.randomUUID(), debounceMs = 8_000 }) {
+export function createScanner({ scanSensor, setLed, mappings, queue, loadPairing, flushAttendance, onDisplay, onReader, onCloud, now = () => Date.now(), delay = wait, eventId = () => crypto.randomUUID(), debounceMs = 8_000, flushWaitMs = 1_000 }) {
   let stopped = false; let paused = false; let lastSlot; let lastSlotAt = 0; let lastUnknownAt = 0;
   async function show(id, overrides) { await onDisplay(id, overrides); try { await setLed(id); } catch { /* Display feedback remains available if the LED command fails. */ } }
   async function tick() {
@@ -21,9 +21,9 @@ export function createScanner({ scanSensor, setLed, mappings, queue, loadPairing
     if (observation.status !== "match") { await delay(100); return; }
     if (lastSlot === observation.slot && timestamp - lastSlotAt < debounceMs) { await delay(250); return; }
     lastSlot = observation.slot; lastSlotAt = timestamp;
+    await show("processing");
     const memberId = await mappings.memberForSlot(observation.slot);
     if (!memberId) { await show("unknown", { detail: "This fingerprint is not linked to an active roster member" }); await delay(250); return; }
-    await show("processing");
     const event = { eventId: eventId(), memberId, occurredAt: new Date(timestamp).toISOString() };
     let queuedDisplay;
     try {
@@ -35,7 +35,12 @@ export function createScanner({ scanSensor, setLed, mappings, queue, loadPairing
     }
     let acknowledgement;
     try {
-      const result = await flushAttendance(config); acknowledgement = result.acknowledgements.find((item) => item.eventId === event.eventId); onCloud(Boolean(acknowledgement));
+      let timer;
+      try {
+        const result = await Promise.race([flushAttendance(config), new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), flushWaitMs); })]);
+        acknowledgement = result?.acknowledgements?.find((item) => item.eventId === event.eventId);
+        if (result) onCloud(Boolean(acknowledgement));
+      } finally { clearTimeout(timer); }
     } catch { onCloud(false); }
     if (!acknowledgement) { await show(queuedDisplay.id, { detail: queuedDisplay.detail }); await delay(250); return; }
     if (acknowledgement.rejected) { await show("rejected", { detail: acknowledgement.error }); await delay(250); return; }

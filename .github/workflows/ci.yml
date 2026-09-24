@@ -75,14 +75,28 @@ jobs:
       - name: Audit the complete dependency lockfile
         if: steps.audit-policy.outputs.run == 'true'
         run: npm run audit:release
-  browser-smoke:
+  browser-shard:
+    name: Browser shard ${{ matrix.shard }}/4
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
       - run: npm ci --no-audit
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
+      - run: npm run test:browser -- --shard=${{ matrix.shard }}/4
+  browser-smoke:
+    if: ${{ github.event_name != 'schedule' && !cancelled() }}
+    needs: browser-shard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every browser shard to pass
+        env:
+          SHARD_RESULT: ${{ needs.browser-shard.result }}
+        run: test "$SHARD_RESULT" = success

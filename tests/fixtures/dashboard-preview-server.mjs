@@ -15,19 +15,26 @@ const members = [
   { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", email: "avery@example.org", discordUserId: "123456789012", active: 1, hasDashboardAccess: true },
   { id: "member-2", memberId: "A-102", firstName: "Morgan", lastName: "Diaz", email: "morgan@example.org", active: 1, hasDashboardAccess: false },
 ];
-const memberDetail = (member) => ({ member, history: [{ meetingId: "past-regular", title: "Completed build session", startsAt: meetings[0].startsAt, endsAt: meetings[0].endsAt, checkedInAt: iso(-4 * 24 * 60 + 5), checkedOutAt: iso(-4 * 24 * 60 + 115), disposition: "present" }] });
+const labels = [{ id: "mentor", name: "Mentor", active: 1, formulaEnabled: 1 }];
+const labelData = { labels, history: [], periods: [], today: new Date().toISOString().slice(0, 10) };
+const completedMeetings = meetings.slice(0, 2).map((meeting) => ({ ...meeting, attendanceWeight: 1, audienceMode: "all", audienceLabelIds: [] }));
+const report = { meetings: completedMeetings, members: members.map((member, index) => ({ member, currentLabelIds: [], rows: completedMeetings.map((meeting) => ({ meetingId: meeting.id, memberId: member.id, disposition: index ? "absent" : "present", eligibility: meeting.required ? "required" : "optional", policy: "standard", rateEligible: Boolean(meeting.required), attended: !index, weight: 1, audience: "All", memberLabelIds: [] })), policy: "standard", present: index ? 0 : 1, primaryTotal: 1, adjustedTotal: 1, rate: index ? 0 : 100, adjustedRate: index ? 0 : 100, pooledRate: null, weeks: [], belowTargetWeeks: [] })), labels, baseline: null, timeZone: "UTC" };
+const memberDetail = (member) => ({ member, labels, labelHistory: [], attendancePolicy: report.members.find((item) => item.member.id === member.id), history: [{ meetingId: "past-regular", title: "Completed build session", startsAt: meetings[0].startsAt, endsAt: meetings[0].endsAt, checkedInAt: iso(-4 * 24 * 60 + 5), checkedOutAt: iso(-4 * 24 * 60 + 115), disposition: "present", eligibility: "required", audience: "All", policy: "standard" }] });
 
 const server = createServer((request, response) => {
   const origin = request.headers.origin ?? "http://127.0.0.1:5173";
   response.setHeader("access-control-allow-origin", origin); response.setHeader("access-control-allow-credentials", "true"); response.setHeader("content-type", "application/json");
   if (request.method === "OPTIONS") { response.statusCode = 204; response.end(); return; }
-  const path = new URL(request.url ?? "/", `http://127.0.0.1:${port}`).pathname;
+  const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`); const path = url.pathname;
   const requestedMeeting = path.startsWith("/meetings/") ? meetings.find((meeting) => meeting.id === decodeURIComponent(path.slice("/meetings/".length))) : undefined;
   const payload = path === "/setup/status" ? { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Nova Arts Collective", subtitle: "Make things together", logoData: logo, primaryColor: "#8b2f72", secondaryColor: "#e9b949", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } }
     : path === "/auth/session" ? { user: { role: "admin" } }
     : path === "/admin/setup/progress" ? { completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }
     : path === "/integrations/capabilities" ? { integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: true } } }
     : path === "/meetings" ? { meetings, lateScanMinutes: 30 }
+    : path === "/labels" ? labelData
+    : path === "/reports/attendance" ? (() => { const type = url.searchParams.get("meetingType"); const from = url.searchParams.get("from"); const to = url.searchParams.get("to"); const selected = report.meetings.filter((meeting) => (!type || type === "all" || Boolean(meeting.required) === (type === "required")) && (!from || meeting.startsAt.slice(0, 10) >= from) && (!to || meeting.startsAt.slice(0, 10) <= to)); const ids = new Set(selected.map((meeting) => meeting.id)); return { ...report, meetings: selected, members: report.members.map((member) => ({ ...member, rows: member.rows.filter((row) => ids.has(row.meetingId)) })) }; })()
+    : path.endsWith("/impact") && path.startsWith("/meetings/") ? { changed: false, completed: false, impact: [], previewToken: "current" }
     : path.startsWith("/meetings/") ? requestedMeeting ? { meeting: requestedMeeting } : { error: "Meeting not found" }
     : path === "/meeting-templates" ? { templates: [] }
     : path === "/discord/contests" ? { contests: [{ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: meetings[2].startsAt, memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", status: "open", createdAt: iso(-5), lifetimeContestCount: 3, hasPartialScan: true, rawScanStatus: "partial" }] }

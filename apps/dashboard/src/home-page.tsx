@@ -3,6 +3,7 @@ import { api } from "./dashboard-api";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
 import { calendarDeliveryMessage, pendingMeetingDeletionKey, pendingMeetingDeletionLifetimeMs, readPendingMeetingDeletion, type CalendarDelivery, type CalendarSync, type PendingMeetingDeletion } from "./meeting-management";
 import { MeetingCreationDialog, MeetingsPage, type Meeting } from "./meetings-page";
+import { loadReportAttendance } from "./report-attendance";
 
 const dayKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 export const dashboardMeetingViewKey = "lancerlogin-dashboard-meeting-view";
@@ -10,12 +11,13 @@ type MeetingView = "calendar" | "table";
 
 export function HomePage({ navigate, discordEnabled }: { role: "admin" | "operator"; navigate: (path: string) => void; discordEnabled: boolean }) {
   const [meetings, setMeetings] = useState<Meeting[]>([]); const [notice, setNotice] = useState("Loading dashboard…");
+  const [policyAlerts, setPolicyAlerts] = useState<{ memberId: string; name: string; detail: string }[]>([]);
   const [noticeTone, setNoticeTone] = useState<"neutral" | "success" | "error">("neutral");
   const [meetingView, setMeetingView] = useState<MeetingView>(() => window.localStorage.getItem(dashboardMeetingViewKey) === "table" ? "table" : "calendar");
   const [calendarOffset, setCalendarOffset] = useState(0); const [creating, setCreating] = useState(false); const [creationNotice, setCreationNotice] = useState("");
   const [undo, setUndo] = useState<PendingMeetingDeletion | undefined>(() => readPendingMeetingDeletion(window.sessionStorage.getItem(pendingMeetingDeletionKey)));
   useDashboardLoadingOverlay(notice === "Loading dashboard…", "Loading dashboard…");
-  async function load() { const result = await api<{ meetings: Meeting[] }>("/meetings"); setMeetings(result.meetings); setNotice(""); setNoticeTone("neutral"); }
+  async function load() { const [result, report] = await Promise.all([api<{ meetings: Meeting[] }>("/meetings"), loadReportAttendance(api)]); setMeetings(result.meetings); setPolicyAlerts(report.members.flatMap((item) => item.currentCompliance?.status === "below" ? [{ memberId: item.member.memberId, name: `${item.member.firstName} ${item.member.lastName}`, detail: item.currentCompliance.ruleType === "weekly_count" ? `${item.currentCompliance.attended} of ${item.currentCompliance.required} meetings in the settled segment` : `${item.currentCompliance.rate ?? 0}% against ${item.currentCompliance.threshold}% required` }] : [])); setNotice(""); setNoticeTone("neutral"); }
   useEffect(() => { void load().catch((error: Error) => { setNotice(error.message); setNoticeTone("error"); }); const timer = window.setInterval(() => void load().catch(() => undefined), 60_000); return () => window.clearInterval(timer); }, [discordEnabled]);
   useEffect(() => {
     if (!undo) { window.sessionStorage.removeItem(pendingMeetingDeletionKey); return; }
@@ -35,6 +37,7 @@ export function HomePage({ navigate, discordEnabled }: { role: "admin" | "operat
   return <section className="page-stack dashboard-home" aria-labelledby="home-title">
     <div className="page-intro"><h1 id="home-title">Dashboard</h1></div>
     {(creationNotice || notice) && <p className="setup-status ui-status dashboard-meeting-status" data-tone={noticeTone} role="status">{creationNotice || notice}</p>}
+    {policyAlerts.length > 0 && <section className="task-card ui-card" aria-labelledby="policy-alerts-title"><div className="panel-heading"><h2 id="policy-alerts-title">Below attendance requirement</h2><span className="ui-status" data-tone="warning">{policyAlerts.length}</span></div><ul className="compact-list">{policyAlerts.slice(0, 10).map((item) => <li key={item.memberId}><strong>{item.name}</strong> · {item.detail}</li>)}</ul></section>}
     {undo && <div className="undo-meeting ui-status" data-tone={undo.calendarDelivery?.google_calendar.failed || undo.calendarDelivery?.discord.failed || undo.calendarSync?.failed ? "error" : "success"} role="status"><span>{undo.scope === "future" ? "This and future series occurrences were deleted." : `${undo.title} was deleted.`}{calendarDeliveryMessage(undo.calendarDelivery, undo.calendarSync)}</span><button type="button" onClick={() => void restore()}>Undo</button></div>}
     <section className="meeting-browser-controls ui-card" aria-label="Meeting browser controls">
       <fieldset className="meeting-view-toggle"><legend>Meeting view</legend><div><label className={meetingView === "calendar" ? "selected" : ""}><input type="radio" name="meeting-view" value="calendar" checked={meetingView === "calendar"} onChange={() => chooseView("calendar")} />Calendar</label><label className={meetingView === "table" ? "selected" : ""}><input type="radio" name="meeting-view" value="table" checked={meetingView === "table"} onChange={() => chooseView("table")} />Table</label></div></fieldset>

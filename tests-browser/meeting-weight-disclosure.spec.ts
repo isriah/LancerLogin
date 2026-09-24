@@ -31,7 +31,7 @@ for (const viewport of references.viewports) {
       });
       await page.goto("/settings/organization");
       await expect(page.locator(".meeting-weight-settings")).toHaveCount(0);
-      await page.goto("/settings/configuration");
+      await page.goto("/settings/attendance");
       const card = page.locator(".meeting-weight-settings");
       const disclosure = card.locator(".meeting-weight-disclosure");
       const summary = disclosure.locator(":scope > summary");
@@ -107,7 +107,7 @@ test("meeting weights open and close by touch with empty categories", async ({ b
   const page = await mobile.newPage();
   await context(page);
   await page.route("**/admin/meeting-weight-categories", (route) => route.fulfill({ json: { categories: [] } }));
-  await page.goto("/settings/configuration");
+  await page.goto("/settings/attendance");
   const summary = page.locator(".meeting-weight-disclosure > summary");
   await expect(summary).toContainText("0 active");
   await summary.tap();

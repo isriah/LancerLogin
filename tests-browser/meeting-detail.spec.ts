@@ -134,7 +134,7 @@ test("editing meeting details without changing weight preserves the saved snapsh
   await expect(dialog.getByLabel("Attendance weight")).toHaveValue("extended");
   await dialog.getByLabel("Title", { exact: true }).fill("Title only change");
   await dialog.getByRole("button", { name: "Save meeting" }).click();
-  expect(submitted).toMatchObject({ title: "Title only change" });
+  await expect.poll(() => submitted).toMatchObject({ title: "Title only change" });
   expect(submitted).not.toHaveProperty("weightCategoryId");
 });
 

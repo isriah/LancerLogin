@@ -16,6 +16,9 @@ type AttendanceRow = {
   checkedInAt?: string;
   checkedOutAt?: string;
   reason?: string;
+  eligibility?: string;
+  policy?: string;
+  rateEligible?: boolean;
 };
 type Lifecycle = "upcoming" | "in_progress" | "late_scan_window" | "past";
 type CalendarProviderResult = { provider: "google_calendar" | "discord"; synced: number; queued: number; skipped?: number; failed: number };
@@ -30,6 +33,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [meeting, setMeeting] = useState<Meeting>();
   const [rows, setRows] = useState<AttendanceRow[]>([]);
+  const [audience, setAudience] = useState("All");
   const [contests, setContests] = useState<Contest[]>([]);
   const [discordConfigured, setDiscordConfigured] = useState(false);
   const [calendarProviders, setCalendarProviders] = useState<Array<"google_calendar" | "discord">>([]);
@@ -46,8 +50,8 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const loadSequence = useRef(0);
   useDashboardLoadingOverlay(notice === "Loading meeting…", "Loading meeting…");
 
-  async function attendanceFor(id = meetingId) { return api<{ attendance: AttendanceRow[] }>(`/attendance?meetingId=${encodeURIComponent(id)}`); }
-  async function refreshAttendance(id = meetingId) { setRows((await attendanceFor(id)).attendance); }
+  async function attendanceFor(id = meetingId) { return api<{ attendance: AttendanceRow[]; audience: string }>(`/attendance?meetingId=${encodeURIComponent(id)}`); }
+  async function refreshAttendance(id = meetingId) { const result = await attendanceFor(id); setRows(result.attendance); setAudience(result.audience ?? "All"); }
 
   async function load(): Promise<boolean> {
     const sequence = ++loadSequence.current;
@@ -68,6 +72,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
     if (sequence !== loadSequence.current) return false;
     setMeeting(requested);
     setRows(attendance.attendance);
+    setAudience(attendance.audience ?? "All");
     setContests(contestResult.contests.filter((contest) => contest.status === "open"));
     setDiscordConfigured(discordAvailable);
     setCalendarProviders([...(capabilities.integrations.google_calendar?.configured ? ["google_calendar" as const] : []), ...(discordAvailable ? ["discord" as const] : [])]);
@@ -111,7 +116,6 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
     window.setTimeout(() => setMemberNotices((current) => { const next = { ...current }; delete next[memberId]; return next; }), 5000);
   }
   async function correct(row: AttendanceRow, disposition: "present" | "absent" | "excused") {
-    if (row.disposition === "not_required") { memberNotice(row.memberId, "This member was not required for this meeting."); return; }
     const reason = window.prompt(disposition === "present" ? `Optional note for marking ${row.firstName} present:` : `Reason for marking ${row.firstName} ${disposition}:`);
     if (reason === null) return;
     if (disposition !== "present" && !reason.trim()) { memberNotice(row.memberId, "A reason is required for this change."); return; }
@@ -159,7 +163,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const recurrence = meeting?.recurrenceFrequency
     ? `${frequencyLabel(meeting.recurrenceFrequency)}${meeting.recurrenceSequence ? ` · Occurrence ${meeting.recurrenceSequence}` : ""}${meeting.recurrenceUntil ? ` · Through ${new Date(meeting.recurrenceUntil).toLocaleDateString()}` : ""}`
     : "One time";
-  const absenceEligible = Boolean(meeting && clock >= Date.parse(meeting.startsAt));
+  const absenceEligible = Boolean(meeting?.required && clock >= Date.parse(meeting.startsAt));
 
   return <section className="attendance-workspace meeting-detail-workspace" aria-labelledby="meeting-detail-title">
     <nav className="meeting-detail-navigation" aria-label="Meeting detail navigation">
@@ -171,7 +175,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
       <dl className="meeting-summary ui-card" aria-label="Meeting summary">
         <div><dt>Date</dt><dd>{new Date(meeting.startsAt).toLocaleDateString()}</dd></div>
         <div><dt>Time</dt><dd>{new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}–{new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</dd></div>
-        <div><dt>Attendance</dt><dd>{meeting.required ? "Required" : "Optional"}</dd></div>
+        <div><dt>Attendance</dt><dd>{meeting.required ? "Required" : "Optional"}</dd></div><div><dt>Audience</dt><dd>{audience}</dd></div>
         <div><dt>Weight</dt><dd>{meeting.weightCategoryName ? `${meeting.weightCategoryName} · ` : ""}{meeting.attendanceWeight ?? 1}×</dd></div>
         <div><dt>Recurrence</dt><dd>{recurrence}</dd></div>
         <div className="meeting-summary-notes"><dt>Notes</dt><dd>{meeting.notes || "No notes"}</dd></div>
@@ -179,12 +183,12 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
       {calendarProviders.length > 0 && <section className="task-card meeting-calendar-delivery ui-card" aria-labelledby="meeting-calendar-title"><div className="panel-heading"><div><h2 id="meeting-calendar-title">Calendar delivery</h2><p>Sync this meeting to every configured calendar provider. Each provider reports its own result.</p></div><span className="progress-count">{calendarProviders.length} configured</span></div><button className="primary-button" type="button" disabled={calendarBusy} onClick={() => void syncCalendars()}>{calendarBusy ? "Syncing…" : "Sync configured calendars"}</button>{calendarNotice && <p className="meeting-discord-notice ui-status" data-tone={calendarNoticeTone} role="status" aria-live="polite">{calendarNotice}</p>}</section>}
       {discordConfigured && <div className="meeting-discord-layout">
         <section className="task-card meeting-discord-operations ui-card" aria-labelledby="meeting-discord-title"><div className="panel-heading"><div><h2 id="meeting-discord-title">Discord operations</h2><p>Actions apply only to this meeting.</p></div></div><div className="meeting-operation-list">
-          <article><div><h3>Absence notice</h3><p>{absenceEligible ? "Notify linked members currently marked absent." : `Available when the meeting starts at ${new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`}</p></div><button type="button" disabled={!absenceEligible || Boolean(discordBusy)} onClick={() => void notifyDiscordAbsences()}>{discordBusy === "absence" ? "Sending…" : "Send Discord absence notice"}</button></article>
+          <article><div><h3>Absence notice</h3><p>{absenceEligible ? "Notify linked members expected at this required meeting." : `Available when the meeting starts at ${new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`}</p></div><button type="button" disabled={!absenceEligible || Boolean(discordBusy)} onClick={() => void notifyDiscordAbsences()}>{discordBusy === "absence" ? "Sending…" : "Send Discord absence notice"}</button></article>
         </div>{discordNotice && <p className="meeting-discord-notice ui-status" data-tone={discordNoticeTone} role="status" aria-live="polite">{discordNotice}</p>}</section>
         <section className="task-card meeting-contests ui-card" aria-labelledby="meeting-contests-title"><div className="panel-heading"><div><h2 id="meeting-contests-title">Attendance contests</h2><p>Review requests submitted for this meeting.</p></div><span className="progress-count">{contests.length} open</span></div>{contests.length ? <ContestReviewList contests={contests} onResolved={(resolution, contest) => { setContests((current) => current.filter((item) => item.meetingId !== contest.meetingId || item.memberId !== contest.memberId)); setDiscordNotice(`Contest ${resolution}.`); setDiscordNoticeTone("success"); if (resolution === "approved") void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message)); }} /> : <p className="empty-state">No attendance contests need review for this meeting.</p>}</section>
       </div>}
       <div className="attendance-utilities"><span role="status" aria-live="polite">{notice}</span><span className="progress-count">{rows.filter((row) => row.disposition === "present").length} present</span></div>
-      <section className="attendance-card ui-card" aria-labelledby="meeting-attendance-title"><div className="panel-heading"><h2 id="meeting-attendance-title">Attendance</h2></div>{rows.length ? <div className="attendance-table" role="table" aria-label="Meeting attendance"><div className="attendance-row header" role="row"><span role="columnheader">Member</span><span role="columnheader">Scan times</span><span role="columnheader">Status</span><span role="columnheader">Actions</span></div>{rows.map((row) => <div className="attendance-row" role="row" key={row.memberId}><span role="cell"><strong>{row.firstName} {row.lastName}</strong><small>{row.externalId}</small>{memberNotices[row.memberId] && <small className="member-action-notice" role="status">{memberNotices[row.memberId]}</small>}</span><div role="cell"><dl className="attendance-scan-times"><div><dt>Check-in</dt><dd>{row.checkedInAt ? <time dateTime={row.checkedInAt}>{formatScanTime(row.checkedInAt)}</time> : formatScanTime()}</dd></div><div><dt>Check-out</dt><dd>{row.checkedOutAt ? <time dateTime={row.checkedOutAt}>{formatScanTime(row.checkedOutAt)}</time> : formatScanTime()}</dd></div></dl></div><span role="cell" className={`attendance-state ${row.disposition}`}>{row.disposition === "active" ? "Active · not checked out" : row.disposition === "not_required" ? "Not required" : row.disposition}</span><span role="cell" className="correction-actions"><button type="button" disabled={row.disposition === "present"} onClick={() => void correct(row, "present")}>Present</button><button type="button" disabled={row.disposition === "excused"} onClick={() => void correct(row, "excused")}>Excuse</button><button type="button" disabled={row.disposition === "absent"} onClick={() => void correct(row, "absent")}>Absent</button>{role === "admin" && <button type="button" disabled={row.disposition === "not_required"} onClick={() => void clear(row)}>Clear</button>}</span></div>)}</div> : <p className="empty-state">No active roster records are available.</p>}</section>
+      <section className="attendance-card ui-card" aria-labelledby="meeting-attendance-title"><div className="panel-heading"><h2 id="meeting-attendance-title">Attendance</h2></div>{rows.length ? <div className="attendance-table" role="table" aria-label="Meeting attendance"><div className="attendance-row header" role="row"><span role="columnheader">Member</span><span role="columnheader">Scan times</span><span role="columnheader">Status</span><span role="columnheader">Actions</span></div>{rows.map((row) => <div className="attendance-row" role="row" key={row.memberId}><span role="cell"><strong>{row.firstName} {row.lastName}</strong><small>{row.externalId} · {row.eligibility?.replace("_"," ")??"required"}{row.rateEligible?" · rate eligible":""}</small>{memberNotices[row.memberId] && <small className="member-action-notice" role="status">{memberNotices[row.memberId]}</small>}</span><div role="cell"><dl className="attendance-scan-times"><div><dt>Check-in</dt><dd>{row.checkedInAt ? <time dateTime={row.checkedInAt}>{formatScanTime(row.checkedInAt)}</time> : formatScanTime()}</dd></div><div><dt>Check-out</dt><dd>{row.checkedOutAt ? <time dateTime={row.checkedOutAt}>{formatScanTime(row.checkedOutAt)}</time> : formatScanTime()}</dd></div></dl></div><span role="cell" className={`attendance-state ${row.disposition}`}>{row.disposition === "active" ? "Active · not checked out" : row.disposition === "not_required" ? "Not required" : row.disposition}</span><span role="cell" className="correction-actions"><button type="button" disabled={row.disposition === "present"} onClick={() => void correct(row, "present")}>Present</button><button type="button" disabled={row.disposition === "excused"} onClick={() => void correct(row, "excused")}>Excuse</button><button type="button" disabled={row.disposition === "absent"} onClick={() => void correct(row, "absent")}>Absent</button>{role === "admin" && <button type="button" disabled={row.disposition === "not_required"} onClick={() => void clear(row)}>Clear</button>}</span></div>)}</div> : <p className="empty-state">No active roster records are available.</p>}</section>
       {managementAction === "edit" && <MeetingEditDialog meeting={meeting} onClose={() => setManagementAction(undefined)} onSaved={managementComplete} />}
       {managementAction === "duplicate" && <MeetingDuplicateDialog meeting={meeting} onClose={() => setManagementAction(undefined)} onCreated={managementComplete} />}
       {managementAction === "delete" && <MeetingDeleteDialog meeting={meeting} meetings={meetings} onClose={() => setManagementAction(undefined)} onDeleted={deleted} />}

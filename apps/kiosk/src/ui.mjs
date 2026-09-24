@@ -131,20 +131,31 @@ function render(value) {
   if (value.kioskName) document.title = value.kioskName + " · LancerLogin";
 }
 
+let refreshSequence = 0;
+let lastRenderedRefresh = 0;
 async function refresh() {
+  const sequence = ++refreshSequence;
   try {
     const health = await request("/health");
+    if (sequence < lastRenderedRefresh) return;
     byId("pairing-panel").hidden = health.paired;
-    if (!health.paired) return;
+    if (!health.paired) { lastRenderedRefresh = sequence; return; }
     try {
-      render(await request("/display-state"));
+      const state = await request("/display-state");
+      if (sequence < lastRenderedRefresh) return;
+      render(state);
+      lastRenderedRefresh = sequence;
     } catch (error) {
+      if (sequence < lastRenderedRefresh) return;
+      lastRenderedRefresh = sequence;
       if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") {
         byId("display-message").textContent = "Continue on the kiosk display";
         byId("display-detail").textContent = "Pairing is complete. Attendance controls remain private to this device.";
       } else throw error;
     }
   } catch {
+    if (sequence < lastRenderedRefresh) return;
+    lastRenderedRefresh = sequence;
     byId("display-message").textContent = "Kiosk service unavailable";
     byId("display-detail").textContent = "Restart the LancerLogin kiosk service";
   }

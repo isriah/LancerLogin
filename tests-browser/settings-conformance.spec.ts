@@ -120,7 +120,7 @@ test(`Admin can add, edit, reorder, retire, and restore meeting-weight categorie
     await route.fulfill({ status: method === "POST" ? 201 : 200, contentType: "application/json", body: "{}" });
   });
 
-  await page.goto("/settings/configuration");
+  await page.goto("/settings/attendance");
   const card = page.locator(".meeting-weight-settings");
   await card.locator(".meeting-weight-disclosure > summary").click();
   const add = card.locator(".meeting-weight-add");
@@ -387,7 +387,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await page.route("**/admin/integrations/discord/commands/reconcile", (route) => {
         attempts += 1;
         return attempts === 1
-          ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ provider: "discord", reconciled: true, commands: ["pair", "attendance-report"] }) })
+          ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ provider: "discord", reconciled: true, commands: ["pair", "attendance-report", "label"] }) })
           : route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: "Discord denied command management. Confirm the bot permissions and try command reconciliation again." }) });
       });
       await page.goto("/settings/integrations");
@@ -399,7 +399,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       const reconcile = card.getByRole("button", { name: "Reconcile Discord commands" });
       await reconcile.focus(); await expect(reconcile).toBeFocused(); expect((await reconcile.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await page.keyboard.press("Enter");
-      await expect(card.getByRole("status")).toContainText("/pair and /attendance-report are ready");
+      await expect(card.getByRole("status").filter({ hasText: "Discord commands were reconciled" })).toContainText("/pair, /attendance-report, and /label are ready");
       await expect(reconcile).toBeEnabled();
       await reconcile.click();
       const failure = card.getByRole("alert"); await expect(failure).toContainText("Discord denied command management"); await expect(failure).toBeFocused();
@@ -417,6 +417,9 @@ test("Operator role cannot open administrative Settings routes", async ({ page }
   for (const [path] of routes) {
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1, name: "Page unavailable" })).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Settings categories" })).toHaveCount(0);
+    const settingsNav = page.getByRole("navigation", { name: "Settings categories" });
+    await expect(settingsNav.getByRole("link", { name: "Session" })).toBeVisible();
+    await expect(settingsNav.getByRole("link", { name: "Attendance" })).toBeVisible();
+    await expect(settingsNav.getByRole("link")).toHaveCount(2);
   }
 });

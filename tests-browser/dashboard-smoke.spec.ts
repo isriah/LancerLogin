@@ -33,11 +33,11 @@ test("roster columns stay vertically centered with actions at the desktop right 
   const row = page.locator(".roster-row:not(.header)").first();
   const cells = row.locator(":scope > *");
   const columnHeaders = header.getByRole("columnheader");
-  await expect(columnHeaders).toHaveText(["Name", "Member ID", "Discord ID", "Attendance rate", "Actions"]);
+  await expect(columnHeaders).toHaveText(["Name", "Member ID", "Discord ID", "Current compliance", "Actions"]);
   await expect(cells).toHaveCount(5);
   const columnNames = await columnHeaders.allTextContents();
   const actionsIndex = columnNames.indexOf("Actions");
-  const attendanceIndex = columnNames.indexOf("Attendance rate");
+  const attendanceIndex = columnNames.indexOf("Current compliance");
   expect(actionsIndex).toBe(columnNames.length - 1);
   expect(attendanceIndex).toBe(actionsIndex - 1);
   await expect(cells.nth(actionsIndex)).toHaveClass(/roster-action-cell/);
@@ -271,13 +271,13 @@ test("Reports filters completed Regular and Optional meetings without hiding All
   const scope = page.locator(".report-scope");
   const meetingType = page.getByLabel("Meeting type");
 
-  await expect(scope).toHaveText("Showing 2 completed meetings across all preserved history.");
-  await meetingType.selectOption("regular");
-  await expect(scope).toHaveText("Showing 1 completed meeting across all preserved history.");
+  await expect(scope).toContainText("Showing 2 completed meetings across all preserved history.");
+  await meetingType.selectOption("required");
+  await expect(scope).toContainText("Showing 1 completed meeting across all preserved history.");
   await meetingType.selectOption("optional");
-  await expect(scope).toHaveText("Showing 1 completed meeting across all preserved history.");
+  await expect(scope).toContainText("Showing 1 completed meeting across all preserved history.");
   await meetingType.selectOption("all");
-  await expect(scope).toHaveText("Showing 2 completed meetings across all preserved history.");
+  await expect(scope).toContainText("Showing 2 completed meetings across all preserved history.");
 });
 
 test("Reports identifies preserved history when no operational baseline is configured", async ({ page }) => {
@@ -286,15 +286,15 @@ test("Reports identifies preserved history when no operational baseline is confi
   await expect(reportingPeriod).toHaveValue("all");
   await expect(reportingPeriod).toBeEnabled();
   await expect(reportingPeriod.locator('option[value="baseline"]')).toHaveAttribute("disabled", "");
-  await expect(page.locator("#reporting-period-help")).toHaveText("No operational baseline is configured, so All preserved history is active. An Admin can configure a baseline in Configuration settings to make the operational period available.");
+  await expect(page.locator(".report-scope")).toContainText("across all preserved history");
 });
 
 test("Reports defaults to a configured operational baseline while preserving historical access", async ({ page }) => {
   const baseline = new Date(Date.now() - 3.5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  await page.route("**/meetings", async (route) => {
+  await page.route("**/reports/attendance*", async (route) => {
     const response = await route.fetch();
     const payload = await response.json();
-    await route.fulfill({ response, json: { ...payload, attendanceReportingStartsOn: baseline } });
+    await route.fulfill({ response, json: { ...payload, baseline } });
   });
   await page.goto("/reports");
 
@@ -302,12 +302,11 @@ test("Reports defaults to a configured operational baseline while preserving his
   await expect(reportingPeriod).toHaveValue("baseline");
   await expect(reportingPeriod.locator('option[value="baseline"]')).not.toHaveAttribute("disabled", "");
   await expect(page.getByLabel("From")).toBeDisabled();
-  await expect(page.locator("#reporting-period-help")).toHaveText(`The operational baseline starts ${baseline} and is selected by default. Choose All preserved history to include completed meetings from before that date.`);
-  await expect(page.locator(".report-scope")).toContainText(`in the operational reporting baseline (from ${baseline})`);
+  await expect(page.locator(".report-scope")).toContainText(`from ${baseline}`);
 
   await reportingPeriod.selectOption("all");
   await expect(page.getByLabel("From")).toBeEnabled();
-  await expect(page.locator(".report-scope")).toHaveText("Showing 2 completed meetings across all preserved history.");
+  await expect(page.locator(".report-scope")).toContainText("across all preserved history");
 });
 
 test("Reports selectors keep selected values and inset arrows visible at supported widths", async ({ page }) => {
@@ -336,7 +335,7 @@ test("Reports selectors keep selected values and inset arrows visible at support
       };
     }));
 
-    expect(geometries).toHaveLength(5);
+    expect(geometries).toHaveLength(7);
     for (const geometry of geometries) {
       expect(geometry.left).toBeGreaterThanOrEqual(0);
       expect(geometry.right).toBeLessThanOrEqual(geometry.clientWidth);

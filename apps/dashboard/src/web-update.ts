@@ -27,7 +27,7 @@ const errors: Record<string, string> = {
 export function webUpdateError(code?: string | null, fallback = "The web update could not be completed.") { return code ? errors[code] ?? fallback : fallback; }
 export function webUpdateStatus(request: WebUpdateRequest) {
   const statuses: Record<WebUpdateRequest["state"], string> = {
-    prepared: "Release pinned. Download the backup, then confirm that you saved the file.",
+    prepared: "Update prepared. Download the backup, then confirm that you saved the file.",
     dispatching: "Submitting this update to GitHub. Dispatch alone does not confirm installation.",
     queued: "Update queued in GitHub. Waiting for the workflow to start.",
     awaiting_approval: "Waiting for production approval in GitHub. An authorized reviewer must approve the run there.",
@@ -38,7 +38,7 @@ export function webUpdateStatus(request: WebUpdateRequest) {
     recovery_required: "Recovery required. Do not start another update. Your installation operator must inspect and repair the installation with explicit recovery authorization.",
     expired: "This prepared update expired. Prepare a new update and download its associated backup.",
   };
-  return `${statuses[request.state]}${request.errorCode ? ` ${webUpdateError(request.errorCode)}` : ""}${request.maintenance ? " Installation writes are paused; kiosk scans remain queued for replay." : ""}`;
+  return `Update to ${request.targetTag}. ${statuses[request.state]}${request.errorCode ? ` ${webUpdateError(request.errorCode)}` : ""}${request.maintenance ? " Installation writes are paused; kiosk scans remain queued for replay." : ""}`;
 }
 export function canReloadWebUpdate(request: WebUpdateRequest, bundledVersion: string) {
   return request.state === "succeeded" && request.reloadReady === true && request.targetTag.replace(/^v/, "") !== bundledVersion.replace(/^v/, "");

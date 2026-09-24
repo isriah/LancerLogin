@@ -147,6 +147,21 @@
       "name": "0029_web_updates.sql",
       "sha256": "1dddba4650a82be88d6f4f6c01796ae5dc29d6522e51d410005d664838eca324",
       "forwardCompatible": true
+    },
+    {
+      "name": "0030_member_labels.sql",
+      "sha256": "25abf0dbc8c5bb3f1e9bc4c1727b22bb4e781c9a4467e45a9279a7e2ab571c4d",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0031_configurable_attendance.sql",
+      "sha256": "27daf405c483ce13fb6fd11ec0b080080d8d1f11173488425fbb863b998915ff",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0032_discord_label_roles.sql",
+      "sha256": "210aa49509b01caddefa9d538a019405ca916974fed48d05dcdfd8327668701c",
+      "forwardCompatible": true
     }
   ]
 }

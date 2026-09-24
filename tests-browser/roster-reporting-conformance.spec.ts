@@ -27,6 +27,12 @@ async function useReferenceContext(page: Page,role: Role="admin") {
   await page.route("**/integrations/capabilities",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ integrations: { google: { enabled: true,configured: true },resend: { enabled: false,configured: false },discord: { enabled: true,configured: true } } }) }));
   await page.route("**/admin/members",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ members: roster,discordConfigured: true }) }));
   await page.route("**/admin/roster/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ imports: [{ createdAt: "2026-09-03T18:00:00Z",count: 2,mode: "merge",deactivated: 0 }] }) }));
+  await page.route("**/labels",(route) => route.fulfill({ json: { labels: [{ id: "mentor",name: "Mentor",active: 1,formulaEnabled: 1 }],history: [],periods: [],today: "2026-09-22" } }));
+  await page.route("**/reports/attendance*",(route) => {
+    const from=new URL(route.request().url()).searchParams.get("from"); const meetings=from&&from>"2026-09-01"? []:[{ id: "meeting-1",title: "Build session",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",attendanceClosesAt: "2026-09-01T20:30:00Z",required: true,attendanceWeight: 1,audienceMode: "all",audienceLabelIds: [] }];
+    const members=meetings.length? roster.map((member,index) => ({ member,currentLabelIds: [],rows: [{ meetingId: "meeting-1",memberId: member.id,disposition: index? "absent":"present",eligibility: "required",policy: "standard",rateEligible: true,attended: !index,weight: 1,audience: "All",memberLabelIds: [] }],policy: "standard",present: index? 0:1,primaryTotal: 1,adjustedTotal: 1,rate: index? 0:100,adjustedRate: index? 0:100,pooledRate: null,weeks: [],belowTargetWeeks: [] })) : [];
+    return route.fulfill({ json: { meetings,members,labels: [{ id: "mentor",name: "Mentor",active: 1,formulaEnabled: 1 }],baseline: null,timeZone: "UTC" } });
+  });
 }
 
 async function expectResponsiveFit(page: Page) {
@@ -41,6 +47,21 @@ async function expectResponsiveFit(page: Page) {
   }));
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
   expect(geometry.clipped).toEqual([]);
+}
+
+async function expectLabelButtonTheme(page: Page,name: string,kind: "secondary"|"primary"|"danger") {
+  const button=page.locator(".member-labels-panel").getByRole("button",{ name,exact: true });
+  await expect(button).toBeVisible();
+  const colors=await button.evaluate((element,role) => {
+    const app=element.closest(".app")!; const probe=document.createElement("button");
+    const tokens=role==="primary"? ["--primary","--on-primary","--primary"]:role==="danger"? ["--ui-error-surface","--ui-error","--ui-error"]:["--ui-surface-subtle","--ui-text","--ui-border"];
+    probe.style.backgroundColor=`var(${tokens[0]})`; probe.style.color=`var(${tokens[1]})`; probe.style.borderColor=`var(${tokens[2]})`; probe.style.borderStyle="solid"; probe.style.borderRadius="var(--radius-control)";
+    app.append(probe); const actual=getComputedStyle(element); const expected=getComputedStyle(probe);
+    const result={ actual: [actual.backgroundColor,actual.color,actual.borderTopColor,actual.borderTopLeftRadius],expected: [expected.backgroundColor,expected.color,expected.borderTopColor,expected.borderTopLeftRadius],height: element.getBoundingClientRect().height };
+    probe.remove(); return result;
+  },kind);
+  expect(colors.actual).toEqual(colors.expected);
+  expect(colors.height).toBeGreaterThanOrEqual(44);
 }
 
 for(const viewport of dashboardConformanceReferences.viewports) {
@@ -80,11 +101,51 @@ for(const viewport of dashboardConformanceReferences.viewports) {
 
 for(const viewport of dashboardConformanceReferences.viewports) {
   for(const theme of dashboardConformanceReferences.themes) {
+    test("attendance label controls follow the active theme at " + viewport.width + "x" + viewport.height + " in " + theme + " mode",async ({ page },testInfo) => {
+      await page.setViewportSize(viewport);
+      await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme",savedTheme),theme);
+      await useReferenceContext(page);
+      await page.route("**/attendance/policy",(route) => route.fulfill({ json: { labels: [{ id: "mentor",name: "Mentor",active: 1 },{ id: "drive",name: "Drive Team",active: 0 }],rules: [{ id: "fall",labelId: "mentor",startsOn: "2026-09-01",endsOn: "2026-09-30",ruleType: "weekly_count",meetingsPerWeek: 2,thresholdPercent: null }],recentDays: 30 } }));
+      await page.route("**/attendance/policy/preview",(route) => route.fulfill({ json: { impact: [],previewToken: "policy-preview" } }));
+      await page.route("**/labels/membership/preview",(route) => route.fulfill({ json: { changes: [{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "2026-09-01" }],impact: [],previewToken: "label-preview" } }));
+      await page.goto("/settings/attendance");
+      for(const name of ["Create label","Preview new rule","Preview window change"]) await expectLabelButtonTheme(page,name,"primary");
+      for(const name of ["Retire","Preview removal"]) await expectLabelButtonTheme(page,name,"danger");
+      await expectLabelButtonTheme(page,"Restore","secondary");
+      await page.getByRole("button",{ name: "Preview removal" }).click();
+      await expectLabelButtonTheme(page,"Apply attendance policy","primary");
+      await expectLabelButtonTheme(page,"Back","secondary");
+      await expectResponsiveFit(page);
+      if(viewport.width===390&&theme==="dark") await page.screenshot({ path: testInfo.outputPath("attendance-settings-dark-mobile.png"),fullPage: true });
+      await page.goto("/roster");
+      await expectLabelButtonTheme(page,"Preview CSV import","primary");
+      const chooser=page.getByLabel("Label changes CSV file");
+      const fileStyle=await chooser.evaluate((element) => {
+        const app=element.closest(".app")!; const probe=document.createElement("button"); probe.style.backgroundColor="var(--ui-surface)"; probe.style.color="var(--ui-text)"; app.append(probe);
+        const actual=getComputedStyle(element,"::file-selector-button"); const expected=getComputedStyle(probe);
+        const result={ background: actual.backgroundColor,color: actual.color,expectedBackground: expected.backgroundColor,expectedColor: expected.color,minHeight: parseFloat(actual.minHeight) };
+        probe.remove(); return result;
+      });
+      expect(fileStyle.background).toBe(fileStyle.expectedBackground);
+      expect(fileStyle.color).toBe(fileStyle.expectedColor);
+      expect(fileStyle.minHeight).toBeGreaterThanOrEqual(44);
+      await page.getByLabel("CSV contents").fill("memberId,label,action,effectiveDate\nA-101,Mentor,add,2026-09-01");
+      await page.getByRole("button",{ name: "Preview CSV import" }).click();
+      await expectLabelButtonTheme(page,"Apply label changes","primary");
+      await expectLabelButtonTheme(page,"Back","secondary");
+      await expectResponsiveFit(page);
+      if(viewport.width===390&&theme==="dark") await page.screenshot({ path: testInfo.outputPath("attendance-label-actions-dark-mobile.png"),fullPage: true });
+    });
+  }
+}
+
+for(const viewport of dashboardConformanceReferences.viewports) {
+  for(const theme of dashboardConformanceReferences.themes) {
     test(`member anomaly metric conforms at ${viewport.width}x${viewport.height} in ${theme} mode`,async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme",savedTheme),theme);
       await useReferenceContext(page,"operator");
-      await page.route("**/admin/members/A-101/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ member: roster[0],meanAnomalyMinutes: 15,history: [{ meetingId: "meeting-1",title: "Build session",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",checkedInAt: "2026-09-01T18:12:00Z",checkedOutAt: "2026-09-01T19:42:00Z",disposition: "present" }] }) }));
+      await page.route("**/admin/members/A-101/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ member: roster[0],labels: [],labelHistory: [],attendancePolicy: null,meanAnomalyMinutes: 15,history: [{ meetingId: "meeting-1",title: "Build session",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",checkedInAt: "2026-09-01T18:12:00Z",checkedOutAt: "2026-09-01T19:42:00Z",disposition: "present" }] }) }));
       await page.goto("/roster/A-101");
       await expect(page.getByText("Mean anomalous time",{ exact: true })).toBeVisible();
       await expect(page.getByText("15 minutes",{ exact: true })).toBeVisible();
@@ -95,16 +156,16 @@ for(const viewport of dashboardConformanceReferences.viewports) {
 
 test("saved report views, preserved-history empty state, and CSV export remain operable",async ({ page }) => {
   await useReferenceContext(page);
-  await page.route("**/exports/attendance.csv",(route) => route.fulfill({ status: 200,contentType: "text/csv",body: "member_id,status\nA-101,present\n" }));
+  await page.route("**/exports/attendance.csv?**",(route) => route.fulfill({ status: 200,contentType: "text/csv",body: "memberId,disposition\nA-101,present\n" }));
   await page.goto("/reports");
 
   await expect(page.getByLabel("Reporting period")).toHaveValue("all");
-  await expect(page.getByText(/No operational baseline is configured/)).toBeVisible();
+  await expect(page.getByLabel("Reporting period")).toBeVisible();
   await page.getByRole("button",{ name: "Use saved view" }).click();
   await expect(page.getByRole("status")).toHaveText("No saved report view is available in this browser.");
   await page.getByLabel("Meeting type").selectOption("optional");
   await page.getByRole("button",{ name: "Save this view" }).click();
-  await page.getByLabel("Meeting type").selectOption("regular");
+  await page.getByLabel("Meeting type").selectOption("required");
   await page.getByRole("button",{ name: "Use saved view" }).click();
   await expect(page.getByLabel("Meeting type")).toHaveValue("optional");
 
@@ -141,14 +202,14 @@ test("Admin member and import dialogs contain focus, report errors, and return f
   await expect(addMember).toBeFocused();
   await expectResponsiveFit(page);
 
-  await page.getByRole("button",{ name: "Edit" }).first().click();
+  await page.getByRole("button",{ name: "Edit",exact: true }).first().click();
   const editDialog=page.getByRole("dialog",{ name: "Edit roster member" });
   await expect(editDialog.getByRole("button",{ name: "Close member editor" })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(editDialog.getByRole("button",{ name: "Save member" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(editDialog).toHaveCount(0);
-  await expect(page.getByRole("button",{ name: "Edit" }).first()).toBeFocused();
+  await expect(page.getByRole("button",{ name: "Edit",exact: true }).first()).toBeFocused();
 });
 
 test("roster import loads CSV files and previews tab-separated spreadsheet rows",async ({ page }) => {
@@ -269,7 +330,7 @@ test("roster import back action follows the secondary theme at desktop and mobil
 
 test("Operator and member-detail states preserve identity policy, history, and unavailable recovery",async ({ page }) => {
   await useReferenceContext(page,"operator");
-  await page.route("**/admin/members/A-101/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ member: roster[0],meanAnomalyMinutes: null,history: [{ meetingId: "meeting-1",title: "Build session with a deliberately long name",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",checkedInAt: "2026-09-01T18:05:00Z",checkedOutAt: "2026-09-01T19:58:00Z",disposition: "present" }] }) }));
+  await page.route("**/admin/members/A-101/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ member: roster[0],labels: [],labelHistory: [],attendancePolicy: null,meanAnomalyMinutes: null,history: [{ meetingId: "meeting-1",title: "Build session with a deliberately long name",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",checkedInAt: "2026-09-01T18:05:00Z",checkedOutAt: "2026-09-01T19:58:00Z",disposition: "present" }] }) }));
   await page.route("**/admin/members/missing/history",(route) => route.fulfill({ status: 404,contentType: "application/json",body: JSON.stringify({ error: "Member not found" }) }));
 
   await page.goto("/roster");
@@ -290,81 +351,140 @@ test("Operator and member-detail states preserve identity policy, history, and u
   await expect(page.getByRole("link",{ name: "Return to roster" })).toBeVisible();
 });
 
-// Roster attendance coverage keeps its reporting data local to these tests; shared fixtures remain unchanged.
-const rateMembers=[...roster,{ id: "member-3",memberId: "A-103",firstName: "Jordan",lastName: "Lee",active: 1 }];
-const rateMeetings=[
-  { id: "old",title: "Preserved session",startsAt: "2020-01-01T10:00:00Z",endsAt: "2020-01-01T11:00:00Z",required: true,attendanceWeight: 2 },
-  { id: "present",title: "Weighted session",startsAt: "2020-02-01T10:00:00Z",endsAt: "2020-02-01T11:00:00Z",required: true,attendanceWeight: 0.5 },
-  { id: "excused",title: "Optional session",startsAt: "2020-02-02T10:00:00Z",endsAt: "2020-02-02T11:00:00Z",required: false,attendanceWeight: 1 },
-  { id: "pre-start",title: "Before participation",startsAt: "2020-02-03T10:00:00Z",endsAt: "2020-02-03T11:00:00Z",required: true,attendanceWeight: 4 },
-  { id: "future",title: "Future session",startsAt: "2099-01-01T10:00:00Z",endsAt: "2099-01-01T11:00:00Z",required: true,attendanceWeight: 8 },
-  { id: "test",title: "Test session",startsAt: "2020-02-04T10:00:00Z",endsAt: "2020-02-04T11:00:00Z",required: true,attendanceWeight: 8,isTest: true },
-];
-async function useRateData(page: Page,baseline="",role: Role="admin") {
-  await useReferenceContext(page,role);
-  await page.route("**/admin/members",(route) => route.fulfill({ json: { members: rateMembers,discordConfigured: true } }));
-  await page.route("**/meetings",(route) => route.fulfill({ json: { meetings: rateMeetings,attendanceReportingStartsOn: baseline||null } }));
-  await page.route("**/attendance?**",(route) => {
-    const url=new URL(route.request().url()); const id=url.searchParams.get("meetingId");
-    expect(url.searchParams.get("includeInactive")).toBe("1");
-    expect(["old","present","excused","pre-start"]).toContain(id);
-    const attendance=rateMembers.map((member) => ({ memberId: member.id,externalId: member.memberId,firstName: member.firstName,lastName: member.lastName,disposition: member.id==="member-2"? "absent":member.id==="member-3"||id==="pre-start"? "not_required":id==="present"? "present":id==="excused"? "excused":"absent" }));
-    return route.fulfill({ json: { attendance } });
-  });
-}
-
-for(const viewport of dashboardConformanceReferences.viewports) for(const theme of dashboardConformanceReferences.themes) for(const baseline of ["","2020-02-01"]) {
-  test(`roster primary attendance matches Reports ${baseline? "baseline":"history"} at ${viewport.width}x${viewport.height} ${theme}`,async ({ page },testInfo) => {
-    await page.setViewportSize(viewport);
-    await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme",savedTheme),theme);
-    const role=theme==="dark"? "operator":"admin";
-    await useRateData(page,baseline,role);
-    await page.goto("/reports");
-    const reportRow=page.locator(".report-row:not(.header)").filter({ hasText: "Avery Stone" });
-    const expected=baseline? "33%":"14%";
-    await expect(reportRow.getByRole("cell").nth(1)).toHaveText(expected);
-    await expect(reportRow.getByRole("cell").nth(2)).toHaveText(baseline? "100%":"20%");
-    await page.goto("/roster");
-    await expect(page.locator("main h1")).toHaveCount(1);
-    const rosterRow=page.getByRole("row").filter({ hasText: "Avery Stone" });
-    await expect(rosterRow.locator(".roster-attendance-rate")).toHaveText(expected);
-    await expect(page.getByRole("row").filter({ hasText: "Jordan Lee" }).locator(".roster-attendance-rate")).toHaveText("No eligible meetings");
-    await expect(page.locator(".roster-attendance-help")).toContainText(baseline? "operational baseline":"preserved completed history");
-    const show=page.getByLabel("Show"); await show.focus();
-    expect(await show.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
-    await page.keyboard.press("a"); await page.keyboard.press("Enter");
-    // selectOption is deterministic across platform native select implementations.
-    await show.selectOption("all");
-    await expect(page.getByRole("row").filter({ hasText: "Morgan Diaz" }).locator(".roster-attendance-rate")).toHaveText("0%");
-    await expect(page.getByRole("button",{ name: "Edit",exact: true })).toHaveCount(role==="admin"? 3:0);
-    await page.getByLabel("Search roster").fill("A-101");
-    await expect(page.locator(".roster-row:not(.header)")).toHaveCount(1);
-    const link=page.getByRole("link",{ name: "Avery Stone" }); await link.focus();
-    expect((await link.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    expect(await link.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
-    await page.getByLabel("Search roster").fill("");
-    await expectResponsiveFit(page);
-    await page.screenshot({ path: testInfo.outputPath("roster-attendance.png"),fullPage: true });
-    await link.focus(); await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(/\/roster\/A-101$/);
-  });
-}
-
-test("roster attendance exposes loading, failed requests, retry, missing rows and zero completed meetings",async ({ page }) => {
-  await useRateData(page);
-  let release!: () => void; const wait=new Promise<void>((resolve) => { release=resolve; });
-  await page.route("**/attendance?**",async (route) => { await wait; await route.fulfill({ status: 503,json: { error: "Unavailable" } }); });
+// Policy responses are calculated by the Worker. The browser must display the same rate in each view.
+test("server policy rates agree across Reports and Roster and optional meetings stay out of standard rates",async ({ page }) => {
+  await useReferenceContext(page);
+  const meeting={ id: "required",title: "Required build",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",attendanceClosesAt: "2026-09-01T20:30:00Z",required: true,attendanceWeight: 1,audienceMode: "all",audienceLabelIds: [] };
+  await page.route("**/reports/attendance*",(route) => route.fulfill({ json: { meetings: [meeting,{ ...meeting,id: "optional",title: "Open practice",required: false }],members: [{ member: roster[0],currentLabelIds: [],rows: [],policy: "standard",present: 0,primaryTotal: 1,adjustedTotal: 1,rate: 0,adjustedRate: 0,pooledRate: null,weeks: [],belowTargetWeeks: [] }],labels: [],baseline: null,timeZone: "UTC" } }));
+  await page.goto("/reports");
+  await expect(page.locator(".report-row:not(.header)").filter({ hasText: "Avery Stone" }).getByRole("cell").nth(1)).toContainText("0%");
   await page.goto("/roster");
-  await expect(page.locator(".roster-attendance-rate").first()).toHaveText("Loading\u2026");
-  await expect(page.getByRole("link",{ name: "Avery Stone" })).toBeVisible();
-  release();
-  await expect(page.locator(".roster-attendance-rate").first()).toHaveText("Unavailable");
-  await page.unroute("**/attendance?**");
-  await page.route("**/attendance?**",(route) => route.fulfill({ json: { attendance: [] } }));
-  const retry=page.getByRole("button",{ name: "Retry attendance rates" }); await retry.focus(); await page.keyboard.press("Enter");
-  await expect(retry).toHaveCount(0);
-  await expect(page.locator(".roster-attendance-rate").first()).toHaveText("Unavailable");
-  await page.route("**/meetings",(route) => route.fulfill({ json: { meetings: [] } }));
-  await page.reload();
-  await expect(page.locator(".roster-attendance-rate").first()).toHaveText("No eligible meetings");
+  await expect(page.getByRole("row").filter({ hasText: "Avery Stone" }).locator(".roster-attendance-rate")).toHaveText("0%");
 });
+
+test("Admin previews and applies a separate dated label CSV; Operator sees labels without mutation controls",async ({ page }) => {
+  await useReferenceContext(page);
+  let applied=false;
+  await page.route("**/labels/membership/preview",async (route) => {
+    const body=route.request().postDataJSON() as { changes: Array<{ memberId: string; label: string; action: string; effectiveDate: string }> };
+    expect(body.changes).toEqual([{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "2026-09-01" }]);
+    await route.fulfill({ json: { changes: body.changes,impact: [{ memberId: "A-101",beforeRate: 50,afterRate: 100,beforePolicy: "standard",afterPolicy: "weekly",affectedCompletedMeetings: 2 }],previewToken: "preview" } });
+  });
+  await page.route("**/labels/membership/apply",async (route) => { expect(route.request().postDataJSON()).toMatchObject({ previewToken: "preview" }); applied=true; await route.fulfill({ json: { applied: 1 } }); });
+  await page.goto("/roster");
+  await page.getByLabel("CSV contents").fill("memberId,label,action,effectiveDate\nA-101,Mentor,add,2026-09-01");
+  await page.getByRole("button",{ name: "Preview CSV import" }).click();
+  await expect(page.getByRole("heading",{ name: "Review dated label changes" })).toBeVisible();
+  await expect(page.getByText(/A-101: 50% to 100%/)).toBeVisible();
+  await page.getByRole("button",{ name: "Apply label changes" }).click();
+  expect(applied).toBe(true);
+  await useReferenceContext(page,"operator");
+  await page.reload();
+  await expect(page.getByRole("heading",{ name: "Bulk label changes" })).toHaveCount(0);
+  await expect(page.getByRole("button",{ name: "Preview CSV import" })).toHaveCount(0);
+});
+
+test("Roster quick labels, CSV defaults, and bulk selection preview changes before applying",async ({ page }) => {
+  await page.setViewportSize({ width: 390,height: 844 });
+  await page.addInitScript(() => localStorage.setItem("lancerlogin-theme","dark"));
+  await useReferenceContext(page);
+  const labelRequests: unknown[]=[]; let statusApplied=false;
+  await page.route("**/labels/membership/preview",async (route) => {
+    const body=route.request().postDataJSON() as { changes: Array<{ memberId: string; label: string; action: string; effectiveDate: string }> };
+    labelRequests.push(body.changes);
+    await route.fulfill({ json: { changes: body.changes.map((change) => ({ ...change,action: change.action || "add",effectiveDate: change.effectiveDate || "2026-09-23" })),impact: [],previewToken: "label-preview" } });
+  });
+  await page.route("**/labels/membership/apply",(route) => route.fulfill({ json: { applied: 1 } }));
+  await page.route("**/admin/members/bulk/preview",(route) => route.fulfill({ json: { members: [{ memberId: "A-101",name: "Avery Stone",active: true,willChange: true },{ memberId: "A-102",name: "Morgan Diaz",active: false,willChange: false }],changed: 1,previewToken: "status-preview" } }));
+  await page.route("**/admin/members/bulk/apply",(route) => { expect(route.request().postDataJSON()).toMatchObject({ memberIds: ["member-1","member-2"],active: false,previewToken: "status-preview" }); statusApplied=true; return route.fulfill({ json: { applied: 1 } }); });
+  await page.goto("/roster");
+  await page.getByRole("button",{ name: "Edit",exact: true }).first().click();
+  const dialog=page.getByRole("dialog",{ name: "Edit roster member" });
+  await expect(dialog.getByText("Current labels: None")).toBeVisible();
+  await dialog.getByText("Change labels").click();
+  await dialog.getByRole("checkbox",{ name: "Mentor" }).check();
+  await dialog.getByRole("button",{ name: "Preview label changes" }).click();
+  await expect(dialog.getByText("2026-09-23",{ exact: true })).toBeVisible();
+  await dialog.getByRole("button",{ name: "Apply label changes" }).click();
+  await dialog.getByRole("button",{ name: "Close member editor" }).click();
+  await page.getByLabel("CSV contents").fill("memberId,label\nA-101,Mentor");
+  await page.getByRole("button",{ name: "Preview CSV import" }).click();
+  await expect(page.getByRole("heading",{ name: "Review dated label changes" })).toBeVisible();
+  expect(labelRequests).toContainEqual([{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "" }]);
+  await page.getByRole("button",{ name: "Back" }).click();
+  await page.getByLabel("Show").selectOption("all");
+  await page.getByRole("button",{ name: "Bulk edit" }).click();
+  await page.getByRole("checkbox",{ name: "Select all shown members" }).check();
+  await expect(page.getByText("2 members selected.",{ exact: false })).toBeVisible();
+  await page.getByLabel("Action").selectOption("deactivate");
+  await page.getByRole("button",{ name: "Preview bulk change" }).click();
+  await expect(page.getByText("1 members will change roster status",{ exact: false })).toBeVisible();
+  await page.getByRole("button",{ name: "Apply bulk change" }).click();
+  expect(statusApplied).toBe(true);
+  await expect(page.getByRole("region",{ name: "Bulk edit" })).toContainText("0 members selected");
+  await page.getByRole("checkbox",{ name: "Select all shown members" }).check();
+  await page.getByLabel("Action").selectOption("add");
+  await page.getByRole("region",{ name: "Bulk edit" }).getByRole("combobox",{ name: "Label" }).selectOption("mentor");
+  await page.getByRole("button",{ name: "Preview bulk change" }).click();
+  expect(labelRequests).toContainEqual([{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "" },{ memberId: "A-102",label: "Mentor",action: "add",effectiveDate: "" }]);
+  await expect(page.getByRole("region",{ name: "Bulk change preview" })).toContainText("2 dated label changes");
+  await expectResponsiveFit(page);
+});
+
+test("Admin assigns one member label from the profile while Operator only views history",async ({ page }) => {
+  await useReferenceContext(page);
+  await page.route("**/admin/members/A-101/history",(route) => route.fulfill({ json: { member: roster[0],labels: [{ id: "mentor",name: "Mentor",active: 1 }],labelHistory: [],attendancePolicy: null,meanAnomalyMinutes: null,history: [] } }));
+  await page.route("**/labels/membership/preview",(route) => route.fulfill({ json: { changes: [{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "2026-09-22" }],impact: [],previewToken: "one-member" } }));
+  await page.goto("/roster/A-101");
+  await expect(page.getByRole("heading",{ name: "Assign member labels" })).toBeVisible();
+  await page.getByRole("combobox",{ name: "Label",exact: true }).selectOption("mentor");
+  await page.getByRole("button",{ name: "Preview label change" }).click();
+  await expectLabelButtonTheme(page,"Apply label changes","primary");
+  await useReferenceContext(page,"operator");
+  await page.reload();
+  await expect(page.getByRole("heading",{ name: "Assign member labels" })).toHaveCount(0);
+  await expect(page.getByRole("heading",{ name: "Label history" })).toBeVisible();
+});
+
+test("report label group offers current and historical views and CSV uses visible filters",async ({ page }) => {
+  await useReferenceContext(page);
+  let exported="";
+  await page.route("**/exports/attendance.csv?**",(route) => { exported=route.request().url(); return route.fulfill({ status: 200,contentType: "text/csv",body: "memberId,eligibility\nA-101,weekly\n" }); });
+  await page.goto("/reports");
+  await page.getByLabel("Label group").selectOption("mentor");
+  await page.getByLabel("Group view").selectOption("historical");
+  const download=page.waitForEvent("download");
+  await page.getByRole("button",{ name: "Download attendance CSV" }).click();
+  await download;
+  expect(exported).toContain("labelId=mentor");
+  expect(exported).toContain("membership=historical");
+});
+
+for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,height: 844,theme: "dark" }]) {
+  test(`Discord label role sync preview and status work at ${view.width}px in ${view.theme} mode`,async ({ page }) => {
+    await page.setViewportSize({ width: view.width,height: view.height });
+    await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme",theme),view.theme);
+    await useReferenceContext(page);
+    await page.route("**/attendance/policy",(route) => route.fulfill({ json: { labels: [{ id: "frc-321",name: "FRC 321",active: 1 }],rules: [],recentDays: 30 } }));
+    await page.route("**/admin/integrations/discord/label-roles",(route) => route.fulfill({ json: { integrationAvailable: true,mappings: [{ labelId: "frc-321",labelName: "FRC 321",roleId: "423456789012345678",roleName: "FRC 321",health: "ready",createdAt: "2026-09-23T00:00:00Z" }] } }));
+    await page.route("**/admin/integrations/discord/label-roles/preview",(route) => route.fulfill({ json: { previewId: "preview-1",expiresAt: new Date(Date.now()+60000).toISOString(),labelId: "frc-321",roleName: "FRC 321",memberCount: 4,additions: [{ discordUserId: "111111111111111111",displayName: "Avery",memberId: "A-101" }],removals: [{ discordUserId: "222222222222222222",displayName: "Unpaired" }],unpaired: [{ memberId: "A-102",name: "Morgan Diaz" }],absent: [],inactive: [] } }));
+    await page.route("**/admin/integrations/discord/label-roles/apply",(route) => route.fulfill({ json: { jobId: "job-1",status: "pending",additions: 1,removals: 1 } }));
+    await page.route("**/admin/integrations/discord/label-role-jobs/job-1",(route) => route.fulfill({ json: { id: "job-1",status: "completed",updatedAt: new Date().toISOString(),items: [{ discordUserId: "111111111111111111",action: "add",status: "completed",attempts: 1 },{ discordUserId: "222222222222222222",action: "remove",status: "completed",attempts: 1 }] } }));
+    await page.goto("/settings/attendance");
+    await expect(page.getByRole("heading",{ name: "Discord roles" })).toBeVisible();
+    await expectLabelButtonTheme(page,"Sync to Discord","primary");
+    await page.getByRole("button",{ name: "Sync to Discord" }).click();
+    await expect(page.getByRole("heading",{ name: "Review role changes for FRC 321" })).toBeVisible();
+    await expect(page.getByText("Unpaired · 222222222222222222")).toBeVisible();
+    await expectLabelButtonTheme(page,"Confirm full-server sync","primary");
+    await expectResponsiveFit(page);
+    await page.getByRole("button",{ name: "Confirm full-server sync" }).click();
+    await expect(page.getByRole("heading",{ name: "Role sync status" })).toBeVisible();
+    await expect(page.getByText("2 completed, 0 pending, 0 failed.")).toBeVisible();
+    await useReferenceContext(page,"operator"); await page.reload();
+    await expect(page.getByRole("heading",{ name: "Discord roles" })).toBeVisible();
+    await expect(page.getByRole("button",{ name: "Sync to Discord" })).toHaveCount(0);
+    await expect(page.getByRole("button",{ name: "Unlink" })).toHaveCount(0);
+    await expectResponsiveFit(page);
+  });
+}

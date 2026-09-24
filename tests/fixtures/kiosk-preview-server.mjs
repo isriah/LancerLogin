@@ -3,6 +3,7 @@ import { kioskApp, kioskHtml, kioskStatusStyles, kioskStyles } from "../../apps/
 import { networkApp, networkStyles } from "../../apps/kiosk/src/network-ui.mjs";
 import { maintenanceApp, maintenanceHtml, maintenanceStyles, maintenanceLayoutStyles } from "../../apps/kiosk/src/maintenance-ui.mjs";
 import { recoveryApp } from "../../apps/kiosk/src/recovery-ui.mjs";
+import { attendanceReviewApp, attendanceReviewHtml, attendanceReviewStyles } from "../../apps/kiosk/src/attendance-review.mjs";
 
 const port = Number(process.env.LANCERLOGIN_KIOSK_PREVIEW_PORT ?? 8792);
 const baseState = {
@@ -27,7 +28,7 @@ function previewState(request) {
 
 createServer((request, response) => {
   const path = new URL(request.url ?? "/", `http://127.0.0.1:${port}`).pathname;
-  const assets = { "/": ["text/html; charset=utf-8", kioskHtml], "/styles.css": ["text/css; charset=utf-8", kioskStyles + kioskStatusStyles], "/app.js": ["text/javascript; charset=utf-8", kioskApp], "/network.css": ["text/css; charset=utf-8", networkStyles], "/network.js": ["text/javascript; charset=utf-8", networkApp], "/maintenance": ["text/html; charset=utf-8", maintenanceHtml], "/maintenance.css": ["text/css; charset=utf-8", maintenanceStyles + maintenanceLayoutStyles], "/maintenance.js": ["text/javascript; charset=utf-8", maintenanceApp], "/recovery.js": ["text/javascript; charset=utf-8", recoveryApp] };
+  const assets = { "/": ["text/html; charset=utf-8", kioskHtml], "/styles.css": ["text/css; charset=utf-8", kioskStyles + kioskStatusStyles], "/app.js": ["text/javascript; charset=utf-8", kioskApp], "/network.css": ["text/css; charset=utf-8", networkStyles], "/network.js": ["text/javascript; charset=utf-8", networkApp], "/maintenance": ["text/html; charset=utf-8", maintenanceHtml], "/maintenance.css": ["text/css; charset=utf-8", maintenanceStyles + maintenanceLayoutStyles], "/maintenance.js": ["text/javascript; charset=utf-8", maintenanceApp], "/recovery.js": ["text/javascript; charset=utf-8", recoveryApp], "/attendance-review": ["text/html; charset=utf-8", attendanceReviewHtml], "/attendance-review.css": ["text/css; charset=utf-8", attendanceReviewStyles], "/attendance-review.js": ["text/javascript; charset=utf-8", attendanceReviewApp] };
   if (assets[path]) { response.setHeader("content-type", assets[path][0]); response.end(assets[path][1]); return; }
   response.setHeader("content-type", "application/json; charset=utf-8");
   if (path === "/health") response.end(JSON.stringify({ ok: true, paired: true }));

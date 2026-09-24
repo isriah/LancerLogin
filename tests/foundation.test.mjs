@@ -82,7 +82,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES/);
@@ -108,7 +108,7 @@ test("Google Calendar migration and worker keep delivery scoped and retryable", 
   assert.match(discordCalendarMigration, /lease_expires_at TEXT/);
   assert.match(discordCalendarMigration, /revision INTEGER NOT NULL DEFAULT 1/);
   assert.match(migration, /action IN \('upsert', 'delete'\)/);
-  assert.match(source, /summary: meeting.title, description: meeting.notes/);
+  assert.match(source, /summary: meeting.title, description: calendarAttendanceDetails\(meeting, await meetingAudienceText\(db, operation.meetingId\)\)/);
   assert.match(source, /Google Calendar delivery retries safely on the next scheduled pass/);
   assert.match(source, /enqueueGoogleCalendarDelete/);
   assert.match(source, /enqueueGoogleCalendarRestore/);
@@ -281,7 +281,7 @@ test("CI isolates browser runs and applies the selective release audit policy", 
   assert.match(ciWorkflow, /schedule:[\s\S]*cron:/);
   assert.match(ciWorkflow, /workflow_dispatch:/);
   assert.match(ciWorkflow, /dependency-audit:[\s\S]*npm run audit:release/);
-  const dependencyAuditJob = ciWorkflow.match(/  dependency-audit:([\s\S]*?)  browser-smoke:/)?.[1];
+  const dependencyAuditJob = ciWorkflow.match(/  dependency-audit:([\s\S]*?)  browser-shard:/)?.[1];
   assert.ok(dependencyAuditJob);
   assert.match(dependencyAuditJob, /node-version: 24/);
   assert.match(dependencyAuditJob, /npm ci --ignore-scripts --no-audit/);
@@ -291,13 +291,22 @@ test("CI isolates browser runs and applies the selective release audit policy", 
   assert.match(dependencyAuditJob, /HEAD_COMMIT_MESSAGE.*Release\\ v\*/);
   assert.match(ciWorkflow, /timeout-minutes: 20/);
   assert.match(ciWorkflow, /rhysd\/actionlint:1\.7\.12/);
-  assert.match(ciWorkflow, /npm run test:browser/);
+  const browserShardJob = ciWorkflow.match(/  browser-shard:([\s\S]*?)  browser-smoke:/)?.[1];
+  assert.ok(browserShardJob);
+  assert.match(browserShardJob, /fail-fast: false/);
+  assert.match(browserShardJob, /shard: \[1, 2, 3, 4\]/);
+  assert.match(browserShardJob, /npm run test:browser -- --shard=\$\{\{ matrix\.shard \}\}\/4/);
+  const browserGate = ciWorkflow.match(/  browser-smoke:([\s\S]*)$/)?.[1];
+  assert.ok(browserGate);
+  assert.match(browserGate, /needs: browser-shard/);
+  assert.match(browserGate, /test "\$SHARD_RESULT" = success/);
   assert.equal(packageDocument.scripts["test:browser"], "node scripts/run-browser-tests.mjs");
   const browserRunner = await readFile("scripts/run-browser-tests.mjs", "utf8");
   assert.match(browserRunner, /PWTEST_CACHE_DIR/);
   assert.match(browserRunner, /LANCERLOGIN_BROWSER_PORT_BASE/);
   const playwrightConfig = await readFile("playwright.config.ts", "utf8");
   assert.match(playwrightConfig, /LANCERLOGIN_BROWSER_PORT_BASE/);
+  assert.match(playwrightConfig, /workers: process\.env\.CI \? 1 : undefined/);
   assert.doesNotMatch(playwrightConfig, /reuseExistingServer: true|reuseExistingServer: !process\.env\.CI/);
   const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
   assert.match(releaseWorkflow, /actions: read/);

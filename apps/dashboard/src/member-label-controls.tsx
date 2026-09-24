@@ -1,0 +1,41 @@
+import { useEffect, useState, type FormEvent } from "react";
+import { api } from "./dashboard-api";
+import { labelsForMember, parseLabelChangesCsv, type LabelData } from "./member-labels";
+
+type Change = { memberId: string; label: string; action: "add" | "remove"; effectiveDate: string };
+type Preview = { changes: Change[]; impact: { memberId: string; beforeRate: number | null; afterRate: number | null; affectedCompletedMeetings: number }[]; previewToken: string };
+function LabelPreview({ preview, busy, onBack, onApply }: { preview: Preview; busy: boolean; onBack: () => void; onApply: () => void }) {
+  return <section className="label-change-preview" aria-labelledby="label-preview-title"><h3 id="label-preview-title">Review dated label changes</h3><div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Member</th><th scope="col">Label</th><th scope="col">Action</th><th scope="col">Effective</th></tr></thead><tbody>{preview.changes.map((change, index) => <tr key={change.memberId + ":" + change.label + ":" + index}><td>{change.memberId}</td><td>{change.label}</td><td>{change.action}</td><td>{change.effectiveDate}</td></tr>)}</tbody></table></div><p>Historical impact for {preview.impact.length} member records.</p><ul className="compact-list">{preview.impact.map((item) => <li key={item.memberId}>{item.memberId}: {item.beforeRate===null?"N/A":String(item.beforeRate)+"%"} to {item.afterRate===null?"N/A":String(item.afterRate)+"%"} · {item.affectedCompletedMeetings} completed meetings change eligibility</li>)}</ul><div className="dialog-actions"><button className="ui-button" type="button" disabled={busy} onClick={onBack}>Back</button><button className="ui-button ui-button--primary" type="button" disabled={busy} onClick={onApply}>Apply label changes</button></div></section>;
+}
+function useLabelChanges(onApplied: () => Promise<void>) {
+  const [pending, setPending] = useState<Change[]>([]);
+  const [preview, setPreview] = useState<Preview>();
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  async function prepare(changes: Change[]) { setBusy(true); setNotice(""); try { const result = await api<Preview>("/labels/membership/preview", { method: "POST", body: JSON.stringify({ changes }) }); setPending(result.changes); setPreview(result); } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); } }
+  async function apply() { if (!preview) return; setBusy(true); try { await api("/labels/membership/apply", { method: "POST", body: JSON.stringify({ changes: pending, previewToken: preview.previewToken }) }); setPreview(undefined); await onApplied(); setNotice(String(pending.length) + " dated label changes applied."); } catch (error) { setPreview(undefined); setNotice((error as Error).message); } finally { setBusy(false); } }
+  return { preview, setPreview, busy, notice, setNotice, prepare, apply };
+}
+export function MemberLabelControls({ memberId, data, onApplied }: { memberId: string; data?: LabelData; onApplied: () => Promise<void> }) {
+  const [labelId, setLabelId] = useState("");
+  const [action, setAction] = useState<Change["action"]>("add");
+  const [effectiveDate, setEffectiveDate] = useState("");
+  const state = useLabelChanges(onApplied);
+  useEffect(() => { if (data?.today && !effectiveDate) setEffectiveDate(data.today); }, [data?.today]);
+  function submit(event: FormEvent) { event.preventDefault(); const label = data?.labels.find((item) => item.id === labelId); if (label) void state.prepare([{ memberId, label: label.name, action, effectiveDate }]); }
+  return <section className="task-card ui-card member-labels-panel" aria-labelledby="member-label-control-title"><h2 id="member-label-control-title">Assign member labels</h2><p>Changes take effect on the chosen date. Preview how completed attendance changes before applying.</p>{state.notice && <p className="ui-status" role="status">{state.notice}</p>}<form className="form-grid" onSubmit={submit}><label>Label<select required value={labelId} onChange={(event) => setLabelId(event.target.value)}><option value="">Choose label</option>{data?.labels.filter((label) => action === "remove" || label.active).map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label><label>Action<select value={action} onChange={(event) => setAction(event.target.value as Change["action"])}><option value="add">Add</option><option value="remove">Remove</option></select></label><label>Effective date<input required type="date" value={effectiveDate} onChange={(event) => setEffectiveDate(event.target.value)} /></label><button className="ui-button ui-button--primary" type="submit" disabled={state.busy}>Preview label change</button></form>{state.preview && <LabelPreview preview={state.preview} busy={state.busy} onBack={() => state.setPreview(undefined)} onApply={() => void state.apply()} />}</section>;
+}
+export function QuickMemberLabels({ memberId, externalMemberId, data, onApplied }: { memberId: string; externalMemberId: string; data?: LabelData; onApplied: () => Promise<void> }) {
+  const current = data ? labelsForMember(data, memberId) : [];
+  const currentIds = current.map((label) => label.id);
+  const [selected, setSelected] = useState<string[]>(currentIds);
+  const state = useLabelChanges(onApplied);
+  useEffect(() => { setSelected(currentIds); state.setPreview(undefined); }, [memberId, data]);
+  const changes = data?.labels.filter((label) => selected.includes(label.id) !== currentIds.includes(label.id)).map((label) => ({ memberId: externalMemberId, label: label.name, action: (selected.includes(label.id) ? "add" : "remove") as Change["action"], effectiveDate: "" })) ?? [];
+  return <section className="quick-member-labels" aria-labelledby="quick-labels-title"><h3 id="quick-labels-title">Member labels</h3><p>Current labels: {current.map((label) => label.name).join(", ") || "None"}</p><details><summary>Change labels</summary><div className="quick-label-options">{data?.labels.filter((label) => label.active || currentIds.includes(label.id)).map((label) => <label className="checkbox-field" key={label.id}><input type="checkbox" checked={selected.includes(label.id)} onChange={(event) => { setSelected((old) => event.target.checked ? [...old, label.id] : old.filter((id) => id !== label.id)); state.setPreview(undefined); }} />{label.name}{!label.active ? " (retired)" : ""}</label>)}</div></details>{state.notice && <p className="ui-status" role="status">{state.notice}</p>}<button className="ui-button" type="button" disabled={state.busy || !changes.length} onClick={() => void state.prepare(changes)}>Preview label changes</button>{state.preview && <LabelPreview preview={state.preview} busy={state.busy} onBack={() => state.setPreview(undefined)} onApply={() => void state.apply()} />}</section>;
+}
+export function LabelCsvImport({ onApplied }: { onApplied: () => Promise<void> }) {
+  const [csv, setCsv] = useState("memberId,label\n");
+  const state = useLabelChanges(onApplied);
+  return <section className="task-card ui-card member-labels-panel" aria-labelledby="label-import-title"><h2 id="label-import-title">Bulk label changes</h2><p>Import label changes separately from roster records. Required columns: memberId,label. Optional action defaults to add and optional effectiveDate defaults to today in the organization time zone. Review the resolved values before applying.</p>{state.notice && <p className="ui-status" role="status">{state.notice}</p>}<label className="file-picker">Label changes CSV file<input type="file" accept=".csv,text/csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void file.text().then(setCsv).catch(() => state.setNotice("Could not read CSV file.")); }} /></label><label>CSV contents<textarea rows={5} value={csv} onChange={(event) => setCsv(event.target.value)} /></label><button className="ui-button ui-button--primary" type="button" disabled={state.busy} onClick={() => { try { void state.prepare(parseLabelChangesCsv(csv)); } catch (error) { state.setNotice((error as Error).message); } }}>Preview CSV import</button>{state.preview && <LabelPreview preview={state.preview} busy={state.busy} onBack={() => state.setPreview(undefined)} onApply={() => void state.apply()} />}</section>;
+}

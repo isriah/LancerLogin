@@ -64,6 +64,7 @@ Use the `--ui-*` semantic aliases for new component CSS: surface, subtle surface
 All controls need visible labels, an accessible name, a visible keyboard focus state, and defined hover, disabled, and error states. Supporting instructions follow the label and are associated with the control; validation text is associated with `aria-describedby`, and invalid controls use `aria-invalid`.
 
 - Buttons trigger actions; links navigate. Their role and visual presentation must agree.
+- Every new dashboard action button needs an explicit shared style. Use `ui-button` for a secondary action, add `ui-button--primary` for the one main action in its section, or add `ui-button--danger` for a destructive action. Do not rely on browser default button styling or on an incidental parent selector. Give a new variant a reusable class in `styles.css` before using it.
 - Inputs, textareas, and native selects share the standard height, padding, border, radius, typography, and state treatment. Native selects use the established inset arrow and enough right padding to keep text clear of it.
 - Use native checkboxes and radios. Their visual mark may be smaller than 44px, but the associated label provides at least a 44px activation area, and text aligns vertically with the mark.
 - File inputs use the shared bordered field treatment and one `::file-selector-button` pattern. Show the selected filename as text when the browser control does not make it sufficiently clear.
@@ -94,7 +95,9 @@ Before handoff:
 - Confirm heading hierarchy and one page `h1`.
 - Confirm single-line rows are vertically centered and multiline rows are intentionally top-aligned.
 - Confirm control labels, states, focus behavior, 44px targets, and primary-action hierarchy.
+- Inventory every action button and file chooser on the touched panel. Confirm each uses the shared style or an established scoped control, including controls shown only after a preview, error, or role change.
 - Inspect at 1280x900 and 390x844 in light and dark modes using representative custom primary and secondary colors.
+- For a new or changed panel, add focused browser coverage that checks computed button background, text, border, radius, and target size against the active theme tokens. Exercise representative hover, keyboard focus, disabled, and destructive states. A class-name assertion or screenshot alone does not prove that the rendered control is themed.
 - Check for clipping, unintended horizontal page scrolling, inconsistent padding, and new literal values that duplicate a token.
 - Run `npm run verify:dashboard` and the focused browser test for any changed interaction.
 - Record remaining legacy inconsistencies separately rather than broadening the selected change.

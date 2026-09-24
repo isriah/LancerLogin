@@ -14,6 +14,7 @@ import { createNetworkPinStore } from "./network-pin.mjs";
 import { networkApp, networkStyles } from "./network-ui.mjs";
 import { maintenanceApp, maintenanceHtml, maintenanceLayoutStyles, maintenanceStyles } from "./maintenance-ui.mjs";
 import { recoveryApp } from "./recovery-ui.mjs";
+import { attendanceReviewApp, attendanceReviewHtml, attendanceReviewStyles } from "./attendance-review.mjs";
 import { startVerifiedKioskUpdate } from "./update-command.mjs";
 import { kioskApp, kioskHtml, kioskStatusStyles, kioskStyles } from "./ui.mjs";
 
@@ -41,7 +42,20 @@ async function loadPairing() { if (pairingLoaded) return pairingConfig; pairingL
 async function savePairing(config) { const temporary = `${configPath}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, configPath); await chmod(configPath, 0o600); pairingConfig = config; pairingLoaded = true; state = { ...state, paired: true, kioskName: config.kioskName }; display = kioskState("ready"); }
 async function loadBranding() { try { branding = { ...branding, ...JSON.parse(await readFile(brandingPath, "utf8")) }; } catch { /* Defaults remain available before the first cloud sync. */ } }
 async function saveBranding(value) { const safe = { organizationName: String(value?.organizationName || "LancerLogin").slice(0, 100), subtitle: String(value?.subtitle || "").slice(0, 140), logoData: typeof value?.logoData === "string" ? value.logoData : "", primaryColor: /^#[0-9a-f]{6}$/i.test(value?.primaryColor) ? value.primaryColor : "#7c3aed", secondaryColor: /^#[0-9a-f]{6}$/i.test(value?.secondaryColor) ? value.secondaryColor : "#0f766e", logoBackdrop: ["auto", "light", "dark", "none"].includes(value?.logoBackdrop) ? value.logoBackdrop : "auto" }; const temporary = `${brandingPath}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify(safe)}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, brandingPath); await chmod(brandingPath, 0o600); branding = safe; }
-async function flushAttendance(config) { const pending = await queue.pending(); const acknowledgements = []; const delivered = await queue.flush(async (event) => { const result = await sendAttendance(config, event); acknowledgements.push({ eventId: event.eventId, ...result }); }); if (delivered.length < pending.length) throw new Error("Cloud attendance sync is unavailable"); return { delivered, acknowledgements }; }
+let attendanceFlush;
+function flushAttendance(config) {
+  if (!attendanceFlush) attendanceFlush = (async () => {
+    const acknowledgements = [];
+    const delivered = await queue.flush(async (event) => {
+      const result = await sendAttendance(config, event);
+      acknowledgements.push({ eventId: event.eventId, ...result });
+      return result;
+    });
+    if ((await queue.pending()).length) throw new Error("Cloud attendance sync is unavailable");
+    return { delivered, acknowledgements };
+  })().finally(() => { attendanceFlush = undefined; });
+  return attendanceFlush;
+}
 async function useSensor(operation) { const current = sensorOperation.then(operation, operation); sensorOperation = current.then(() => undefined, () => undefined); return current; }
 async function testSensor() { if (!sensor) { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } try { const status = await useSensor(() => sensor.status()); state.readerOnline = status.connected; return { readerOnline: status.connected, templateCount: status.templateCount }; } catch { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } }
 async function heartbeat() { const config = await loadPairing(); if (!config) return; await testSensor(); let networkDiagnostics = { type: "offline", signal: null }; try { networkDiagnostics = await network.diagnostics(); state.networkType = networkDiagnostics.type; } catch { state.networkType = undefined; } try { await flushAttendance(config); state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; const remote = await fetchKioskConfiguration(config); if (remote.settings) await saveBranding(remote.settings); if (remote.kiosk?.name) state.kioskName = remote.kiosk.name; await sendHeartbeat(config, { readerOnline: state.readerOnline, releaseVersion, uptimeSeconds: Math.floor((Date.now() - serviceStartedAt) / 1_000), networkType: networkDiagnostics.type, networkSignal: networkDiagnostics.signal, lastWifiScanAt: state.lastWifiScanAt ?? null, pendingEvents: (await queue.pending()).length, lastSyncAt: state.lastSyncAt, errorCategory: null }); state.cloudOnline = true; } catch { state.cloudOnline = false; state.errorCategory = "cloud_sync"; } }
@@ -87,9 +101,28 @@ const server = createServer(async (request, response) => {
   if (pathname === "/maintenance" && request.method === "GET") { response.setHeader("content-type", "text/html; charset=utf-8"); response.setHeader("content-security-policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"); response.end(maintenanceHtml); return; }
   if (pathname === "/maintenance.css" && request.method === "GET") { response.setHeader("content-type", "text/css; charset=utf-8"); response.end(maintenanceStyles + maintenanceLayoutStyles); return; }
   if (pathname === "/maintenance.js" && request.method === "GET") { response.setHeader("content-type", "text/javascript; charset=utf-8"); response.end(maintenanceApp); return; }
+  if (pathname === "/attendance-review" && request.method === "GET") { response.setHeader("content-type", "text/html; charset=utf-8"); response.setHeader("content-security-policy", "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'"); response.end(attendanceReviewHtml); return; }
+  if (pathname === "/attendance-review.css" && request.method === "GET") { response.setHeader("content-type", "text/css; charset=utf-8"); response.end(attendanceReviewStyles); return; }
+  if (pathname === "/attendance-review.js" && request.method === "GET") { response.setHeader("content-type", "text/javascript; charset=utf-8"); response.end(attendanceReviewApp); return; }
   response.setHeader("content-type", "application/json; charset=utf-8");
-  if (pathname === "/health" && request.method === "GET") { await loadPairing(); response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", ...state, pendingEvents: (await queue.pending()).length })); return; }
-  if (pathname === "/display-state" && request.method === "GET") { response.end(JSON.stringify({ display, branding, kioskName: state.kioskName, readerOnline: state.readerOnline, cloudOnline: state.cloudOnline, networkType: state.networkType, pendingEvents: (await queue.pending()).length, uptimeSeconds: Math.floor((Date.now() - serviceStartedAt) / 1000), releaseVersion, displayReloadToken })); return; }
+  if (pathname === "/health" && request.method === "GET") { await loadPairing(); const attendance = await queue.diagnostics(); response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", ...state, pendingEvents: attendance.pending, attendance })); return; }
+  if (pathname === "/display-state" && request.method === "GET") { const attendance = await queue.diagnostics(); response.end(JSON.stringify({ display, branding, kioskName: state.kioskName, readerOnline: state.readerOnline, cloudOnline: state.cloudOnline, networkType: state.networkType, pendingEvents: attendance.pending, attendance, uptimeSeconds: Math.floor((Date.now() - serviceStartedAt) / 1000), releaseVersion, displayReloadToken })); return; }
+  if (pathname === "/attendance/rejections" && request.method === "GET") {
+    try { await requireNetworkSession(); } catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock local settings before reviewing scans" })); return; }
+    try { response.end(JSON.stringify({ rejections: await queue.rejections() })); }
+    catch { response.statusCode = 500; response.end(JSON.stringify({ error: "Saved scan outcomes are unavailable" })); }
+    return;
+  }
+  if (pathname.startsWith("/attendance/rejections/") && pathname.endsWith("/review") && request.method === "POST") {
+    try { await requireNetworkSession(); } catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock local settings before reviewing scans" })); return; }
+    let eventId;
+    try { eventId = decodeURIComponent(pathname.slice("/attendance/rejections/".length, -"/review".length)); }
+    catch { response.statusCode = 400; response.end(JSON.stringify({ error: "Invalid event ID" })); return; }
+    if (!eventId || eventId.length > 100) { response.statusCode = 400; response.end(JSON.stringify({ error: "Invalid event ID" })); return; }
+    try { const reviewed = await queue.markReviewed(eventId); response.statusCode = reviewed ? 200 : 404; response.end(JSON.stringify({ reviewed })); }
+    catch { response.statusCode = 500; response.end(JSON.stringify({ error: "Scan review could not be saved" })); }
+    return;
+  }
   if (pathname === "/pair" && request.method === "POST") { try { if (await loadPairing()) throw new Error("This kiosk is already paired"); const input = await body(request); const pairing = decodePairingKey(input.pairingKey); const config = await pairInstallation(pairing); await savePairing(config); response.statusCode = 201; response.end(JSON.stringify({ paired: true, kioskName: config.kioskName })); void heartbeat(); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Pairing failed" })); } return; }
   if (pathname === "/attendance" && request.method === "POST") { try { const event = await body(request); const accepted = await queue.enqueue({ eventId: event.eventId || crypto.randomUUID(), memberId: event.memberId, meetingId: event.meetingId, occurredAt: event.occurredAt || new Date().toISOString() }); const config = await loadPairing(); if (config) await flushAttendance(config); response.statusCode = accepted ? 202 : 200; response.end(JSON.stringify({ accepted, queued: (await queue.pending()).length })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Invalid attendance event" })); } return; }
   if (pathname === "/mappings" && request.method === "GET") { try { await requireNetworkSession(); response.end(JSON.stringify({ mappings: await mappings.read() })); } catch (error) { response.statusCode = 403; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Mappings unavailable" })); } return; }

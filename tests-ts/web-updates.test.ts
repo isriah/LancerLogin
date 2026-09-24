@@ -278,7 +278,7 @@ test("operational locks survive category backup/delete and kiosk scans retry503 
     const fetchImpl = async (url: string, init: RequestInit) => worker.fetch(new Request(url, init), env);
     assert.deepEqual(await queue.flush((scan: typeof event) => sendAttendance(config, scan, { fetchImpl })), []);
     const restarted = createFileQueue(join(temp, "queue.json")); assert.equal((await restarted.pending()).length, 1);
-    assert.deepEqual(await restarted.flush((scan: typeof event) => sendAttendance(config, scan, { fetchImpl: async () => Response.json({ accepted: true }) })), [event.eventId]);
+    assert.deepEqual(await restarted.flush((scan: typeof event) => sendAttendance(config, scan, { fetchImpl: async () => Response.json({ accepted: true, eventId: scan.eventId }) })), [event.eventId]);
     const response = await worker.fetch(new Request("https://api.test/kiosk/attendance", { method: "POST" }), env); assert.equal(response.status, 503); assert.equal(response.headers.get("retry-after"), "30");
     const cookie = `lancerlogin_session=${await createSessionCodec(secret).issue({ userId: "admin", role: "admin" })}`;
     const backup = await worker.fetch(new Request("https://api.test/admin/data/backup?scope=installation", { headers: { cookie } }), env);

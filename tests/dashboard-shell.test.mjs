@@ -234,8 +234,8 @@ test("Settings separates operational configuration, access, and kiosk update com
   assert.match(integrations, /Manage the configured attendance channel/);
   assert.doesNotMatch(organization, /Late scan allowance|Discord contest window/);
   assert.match(updates, /<h2>Physical kiosk<\/h2>/);
-  assert.match(updates, /<span>Installed<\/span>/);
-  assert.match(updates, /<span>Latest compatible<\/span>/);
+  assert.match(updates, /<span>Current<\/span>/);
+  assert.match(updates, /<span>Available<\/span>/);
   assert.match(updates, /className="version-grid"/);
 });
 
@@ -326,7 +326,9 @@ test("attendance actions preserve their layout and mute unavailable choices", as
 test("reports are an operational workspace with filters, trend, saved views, and direct contest review", async () => {
   const reports = await readFile("apps/dashboard/src/reports-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
-  assert.match(reports, /includeInactive=1/);
+  assert.match(reports, /loadReportAttendance\(api, filters\)/);
+  assert.match(reports, /reportQuery\(filters\)/);
+  assert.match(reports, /Historical membership/);
   assert.match(reports, /From<input type="date"/);
   assert.match(reports, /Meeting type<select/);
   assert.match(reports, /Active roster/);
@@ -336,7 +338,7 @@ test("reports are an operational workspace with filters, trend, saved views, and
   assert.match(reports, /Approve and mark present/);
   assert.match(reports, /\/discord\/contests\/resolve/);
   assert.match(reports, /lancerlogin-reports-view/);
-  assert.match(reports, /attendanceReportingStartsOn/);
+  assert.match(reports, /result\.baseline/);
   assert.match(reports, /Operational baseline/);
   assert.match(reports, /All preserved history/);
   assert.match(reports, /Download attendance CSV/);
@@ -347,11 +349,11 @@ test("reports are an operational workspace with filters, trend, saved views, and
 test("contest review requires a reason and keeps failures beside the unresolved contest", async () => {
   const reports = await readFile("apps/dashboard/src/reports-page.tsx", "utf8");
   assert.match(reports, /const\s*\[reviewError,\s*setReviewError\]\s*=\s*useState\(""\)/);
-  assert.match(reports, /A review reason is required before resolving this contest\./);
-  assert.match(reports, /reviewNote:\s*trimmedReviewNote/);
-  assert.match(reports, /Contest resolution failed: \$\{message\}/);
+  assert.match(reports, /A review reason is required\./);
+  assert.match(reports, /reviewNote:\s*note/);
+  assert.match(reports, /setReviewError\(\(error as Error\)\.message\)/);
   assert.match(reports, /Review reason<textarea[^>]+required aria-invalid=\{Boolean\(reviewError\)\}/);
-  assert.match(reports, /id="contest-review-reason-error"[^>]+role="alert"/);
+  assert.match(reports, /id="contest-review-error"[^>]+role="alert"/);
 });
 
 test("pending contests use meeting detail and the global notifier instead of Dashboard or Reports", async () => {
@@ -473,7 +475,7 @@ test("member detail routes preserve deep links, history, and role-limited action
   const detail = await readFile("apps/dashboard/src/member-detail-page.tsx", "utf8");
   assert.match(shell, /path\.startsWith\("\/roster\/"\)/);
   assert.match(roster, /RouteLink href=\{`\/roster\/\$\{encodeURIComponent\(current\.memberId\)/);
-  assert.match(reports, /href=\{`\/roster\/\$\{encodeURIComponent\(member\.externalId\)/);
+  assert.match(reports, /href=\{`\/roster\/\$\{encodeURIComponent\(item\.member\.memberId\)/);
   assert.match(detail, /\/admin\/members\/\$\{encodeURIComponent\(memberId\)\}\/history/);
   assert.match(detail, /Complete attendance history/);
   assert.match(detail, /Check-in/);

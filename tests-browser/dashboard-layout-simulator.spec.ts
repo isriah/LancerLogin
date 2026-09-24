@@ -39,7 +39,7 @@ for (const viewport of references.viewports) for (const theme of references.them
     const identityLink = row.locator(".member-link");
     expect((await identityLink.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     const title = await identityLink.locator("strong").boundingBox();
-    const email = await identityLink.locator("small").boundingBox();
+    const email = await identityLink.locator("small").first().boundingBox();
     expect(email!.y - title!.y - title!.height).toBeLessThanOrEqual(1);
     await expect(header.locator(".primary-navigation a")).toHaveText(["Dashboard", "Roster", "Reports", "Kiosks", "Settings"]);
     await row.getByRole("button", { name: "Edit", exact: true }).click();
@@ -119,7 +119,10 @@ test("Operator can change theme and sign out through Settings without Admin acce
   await expect(page.getByRole("switch", { name: "Dark mode" })).toHaveCount(0);
   await page.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page).toHaveURL(/\/settings\/session$/);
-  await expect(page.getByRole("navigation", { name: "Settings categories" })).toHaveCount(0);
+  const settingsNav = page.getByRole("navigation", { name: "Settings categories" });
+  await expect(settingsNav.getByRole("link", { name: "Session" })).toBeVisible();
+  await expect(settingsNav.getByRole("link", { name: "Attendance" })).toBeVisible();
+  await expect(settingsNav.getByRole("link")).toHaveCount(2);
   const toggle = page.getByRole("switch", { name: "Dark mode" });
   await toggle.press("Space");
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");

@@ -5,10 +5,12 @@ This guide is for Administrators preparing a dashboard installation update and m
 ## Update the dashboard installation
 
 1. Sign in as an Administrator and open **Settings → Updates**.
-2. In the **Dashboard** card, choose **Back up and begin update**. Review the pinned release notes.
+2. In the **Dashboard** card, choose **Back up and begin update**. Review the release notes for the prepared update.
 3. Choose **Download entire-installation backup**, save the file securely outside the installation, and select the confirmation checkbox. Refreshing the page never confirms that you saved the file.
 4. Choose **Start update to vMAJOR.MINOR.PATCH** once it becomes available. Track any required GitHub approval and the deployment status in the card.
 5. Choose **Reload updated dashboard** only after the card reports verified completion. If the card reports recovery required or progress cannot be confirmed, stop and use the diagnostic link with an authorized recovery plan. Do not start another update or restore D1 automatically.
+
+For an enabled, verified Discord connection, the Worker checks its managed server commands on the next five-minute maintenance pass after an update completes. Command setup is reported in **Settings → Integrations → Discord** and can be retried there. A Discord command failure does not change the verified web-update result or trigger database recovery. Label-to-role mapping and role assignment sync remain manual.
 
 The fixed private `upgrade-web.yml` workflow runs on `main`. Only an active Admin can prepare, start, or read status. Mutations require the exact dashboard Origin and JSON. The browser cannot select a repository, workflow, ref, slug, or executable parameter. One complete stable official release is resolved and pinned by public commit. Downgrades are refused.
 
@@ -34,7 +36,7 @@ Prepare/start/status return `{ releaseVersion, workflowUrl, request }`. `request
 
 States: `prepared`, `dispatching`, `queued`, `awaiting_approval`, `running`, `verifying`, `succeeded`, `failed`, `recovery_required`, `expired`. Stages identify build/checkpoint/migrations/API deployment/Pages deployment/health. Keep the fixed workflow/run URL as diagnostics/manual recovery; environment approval stays in GitHub. Reloads resume through status without browser-local request storage. Failed/expired requests permit deliberate new prepare; recovery-required retains the active lock. Started requests impose a two-minute cooldown.
 
-Settings keeps **Dashboard** and **Physical kiosk** updates separate. Preparing shows pinned release notes as plain text; download the associated entire-installation backup, save it securely, then check the saved-file confirmation to enable **Start update to vMAJOR.MINOR.PATCH**. Refreshing or opening another tab restores server progress but never restores that confirmation. GitHub approval is shown as a direct review link when required; request IDs, technical stages, and manual recovery links are under **Diagnostics and manual recovery**. The explicit **Reload updated dashboard** action appears only after verified finalization and when the running JavaScript bundle differs from the target version; persisted success never causes automatic reload loops.
+Settings keeps **Dashboard** and **Physical kiosk** updates separate. The cards show **Current** and **Available** versions. Available reflects the latest discovered stable release. Progress and update notes identify the exact version selected for the update. Preparing shows its release notes as plain text; download the associated entire-installation backup, save it securely, then check the saved-file confirmation to enable **Start update to vMAJOR.MINOR.PATCH**. Refreshing or opening another tab restores server progress but never restores that confirmation. GitHub approval is shown as a direct review link when required; request IDs, technical stages, and manual recovery links are under **Diagnostics and manual recovery**. The explicit **Reload updated dashboard** action appears only after verified finalization and when the running JavaScript bundle differs from the target version; persisted success never causes automatic reload loops.
 
 Errors use `{ error, code }` plus existing authorization errors. Safe codes: `not_configured`, `credential_required`, `credential_expired`, `not_private`, `workflow_required`, `cooldown`, `already_current`, `release_unavailable`, `invalid_request`, `request_missing`, `request_expired`, `backup_required`, `provider_unavailable`, `run_mismatch`. Definite dispatch credential/cooldown rejection is retained as `request.errorCode`; uncertain outcomes use `dispatch_ambiguous`. Both retain the one-way claim and return 202/current request. Inspect state/error instead of treating 202 as success. Reconcile the exact request run-name and workflow path; multiple/unresolved runs become `dispatch_unresolved` recovery after fifteen minutes. Never blind redispatch. Completed failure before executor claim is `failed/preflight_failed`; a completed claimed executor without verified finalization requires recovery.
 
@@ -76,7 +78,7 @@ Operational rows are excluded from dashboard category backups/restores and have 
 
 ## Current release and migration evidence
 
-The stable public release is v1.0.7. Each installation must verify its own data, session, migrations, update tracking, and maintenance state. Web-update evidence does not establish physical-kiosk operation, and physical-kiosk evidence does not establish web-update completion.
+The stable public release is v1.1.0. Each installation must verify its own data, session, migrations, update tracking, and maintenance state. Web-update evidence does not establish physical-kiosk operation, and physical-kiosk evidence does not establish web-update completion.
 
 The private deployment repository has an inherited CI assertion failure. Do not describe all private CI as green. The isolated rehearsal has a historical reload-card limitation after manual version changes. These facts and the earlier waived physical checks are evidence limits, not reasons to bypass the fixed web-update controls.
 

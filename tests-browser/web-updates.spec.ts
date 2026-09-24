@@ -41,7 +41,7 @@ const refresh = (page: Page) => page.getByRole("button", { name: "Refresh update
 test("pins release, retries associated backup, requires saved confirmation and tracks verified completion without dispatch reload", async ({ page }) => {
   const state = await setup(page); await page.goto("/settings/updates");
   await page.getByRole("button", { name: "Back up and begin update" }).click();
-  await expect(page.getByRole("heading", { name: "Release notes" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: `Release notes for ${targetTag}` })).toBeVisible();
   await expect(page.locator(".web-update-notes")).toContainText("<img src=x");
   await expect(page.locator(".web-update-notes img")).toHaveCount(0);
   await expect(page.getByRole("button", { name: `Start update to ${targetTag}` })).toHaveCount(0);
@@ -91,7 +91,7 @@ for (const code of ["not_configured", "credential_required", "credential_expired
   await page.getByRole("button", { name: "Back up and begin update" }).click(); await expect(webStatus(page)).toHaveAttribute("data-tone", "error");
   expect(state.starts).toBe(0); expect(state.backups).toBe(0);
   state.prepareError = ""; await refresh(page).click(); await page.getByRole("button", { name: "Back up and begin update" }).click();
-  await expect(webStatus(page)).toContainText("Release pinned");
+  await expect(webStatus(page)).toContainText("Update prepared");
 });
 
 test("unconfirmed status and start error cannot unlock blind dispatch or saved confirmation", async ({ page }) => {
@@ -126,7 +126,7 @@ test("missing workflow and stalled backup cannot duplicate or start an update", 
 });
 
 test("prepared backup confirmation follows native keyboard, branded theme and responsive UI standards", async ({ page }, testInfo) => {
-  await setup(page, pinned({ backupExported: true }));
+  await setup(page, pinned({ backupExported: true, releaseNotes: "Long pinned release notes.\n".repeat(100) }));
   await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Reference Arts Collective", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark" } } }));
   for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
     await page.setViewportSize({ width, height: width === 1280 ? 900 : 844 }); await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), theme);
@@ -135,6 +135,11 @@ test("prepared backup confirmation follows native keyboard, branded theme and re
     const dismiss = page.getByRole("button", { name: "Dismiss update notice" }); if (await dismiss.isVisible()) await dismiss.click();
     await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary); await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
     const checkbox = page.getByRole("checkbox"); await expect(checkbox).toBeVisible(); await checkbox.focus(); await page.keyboard.press("Space"); await expect(checkbox).toBeChecked();
+    const notesTop = await page.locator(".web-update-notes").evaluate((element) => element.getBoundingClientRect().top);
+    for (const control of await page.locator(".web-update-backup, .web-update-card > button").all()) {
+      expect(await control.evaluate((element) => element.getBoundingClientRect().bottom)).toBeLessThanOrEqual(notesTop);
+      expect(await control.evaluate((element) => Boolean(element.compareDocumentPosition(document.querySelector(".web-update-notes")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    }
     expect(await checkbox.evaluate((element) => element.getBoundingClientRect().width)).toBeLessThanOrEqual(24);
     expect(await checkbox.evaluate((element) => getComputedStyle(element.closest("label")!).outlineStyle)).not.toBe("none");
     await page.getByText("Diagnostics and manual recovery", { exact: true }).click();
@@ -143,4 +148,21 @@ test("prepared backup confirmation follows native keyboard, branded theme and re
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: testInfo.outputPath(`prepared-${width}-${theme}.png`), fullPage: true });
   }
+});
+
+for (const updateState of ["prepared", "expired", "succeeded"] as const) test(`current and available stay independent of a ${updateState} update target`, async ({ page }) => {
+  await setup(page, pinned({ state: updateState, reloadReady: updateState === "succeeded" }));
+  const newerTag = `v${Number(targetTag.slice(1).split(".")[0]) + 1}.0.0`;
+  const newerUrl = `https://github.com/isriah/LancerLogin/releases/tag/${newerTag}`;
+  await page.route("**/admin/releases/latest", route => route.fulfill({ json: discovered({ tag_name: newerTag, html_url: newerUrl }) }));
+  await page.goto("/settings/updates");
+  const card = page.locator(".web-update-card");
+  await expect(card.locator(".version-grid")).toContainText("Current");
+  await expect(card.locator(".version-grid")).toContainText("Available");
+  await expect(card.locator(".version-grid strong").first()).toHaveText(bundledVersion);
+  await expect(card.locator(".version-grid strong").last()).toHaveText(newerTag.slice(1));
+  await expect(card.getByRole("link", { name: "Read release notes" })).toHaveAttribute("href", newerUrl);
+  await expect(webStatus(page)).toContainText(`Update to ${targetTag}.`);
+  await expect(card.getByRole("heading", { name: `Release notes for ${targetTag}` })).toBeVisible();
+  await expect(card.getByText("Pinned release", { exact: true })).toHaveCount(0);
 });

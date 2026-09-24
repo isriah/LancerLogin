@@ -64,17 +64,16 @@ export function WebUpdateCard({ current, available, workflowUrl, latestTag, rele
   const repeatable = !request || ["failed", "expired", "succeeded"].includes(request.state);
   const exported = Boolean(prepared && request.backupExported);
   const diagnostics = diagnosticUrl(request?.runUrl) ?? diagnosticUrl(status?.workflowUrl || workflowUrl);
-  const notesUrl = diagnosticUrl(request?.releaseUrl ?? releaseUrl);
+  const notesUrl = diagnosticUrl(releaseUrl);
   const reloadAvailable = Boolean(request && canReloadWebUpdate(request, __LANCERLOGIN_VERSION__));
   const tone = error || request?.state === "failed" || request?.state === "recovery_required" ? "error" : request?.state === "succeeded" && request.reloadReady ? "success" : request ? "warning" : "neutral";
   return <article className="web-update-card" aria-labelledby="dashboard-update-title">
     <div className="panel-heading"><div><h2 id="dashboard-update-title">Dashboard</h2><p>Cloudflare dashboard installation</p></div>
       {(repeatable || expired) && !reloadAvailable && <button className="primary-button" type="button" disabled={busy || !status || Boolean(error) || !available || !workflowUrl} onClick={() => void prepare()}>{busy ? "Preparing update…" : "Back up and begin update"}</button>}
     </div>
-    <div className="version-grid"><div><span>Installed</span><strong>{current}</strong></div><div><span>{request ? "Pinned release" : "Latest release"}</span><strong>{request?.targetTag ? formatVersion(request.targetTag) : latestTag ? formatVersion(latestTag) : "Unavailable"}</strong>{notesUrl && <a href={notesUrl} target="_blank" rel="noreferrer">Read release notes</a>}</div></div>
+    <div className="version-grid"><div><span>Current</span><strong>{current}</strong></div><div><span>Available</span><strong>{latestTag ? formatVersion(latestTag) : "Unavailable"}</strong>{notesUrl && <a href={notesUrl} target="_blank" rel="noreferrer">Read release notes</a>}</div></div>
     <p className="ui-status web-update-status" data-tone={tone} role="status">{error || (request ? webUpdateStatus(expired ? { ...request, state: "expired" } : request) : "Prepare an official release, save an entire-installation backup, then start the web update here.")}</p>
     {request?.state === "awaiting_approval" && diagnostics && <a className="web-update-approval" href={diagnostics} target="_blank" rel="noreferrer">Review approval in GitHub</a>}
-    {request && <section className="web-update-notes" aria-label="Pinned release notes"><h3>Release notes</h3><p>{request.releaseNotes || "No release notes supplied."}</p></section>}
     {prepared && !expired && <div className="web-update-backup">
       <p id="web-backup-help" className="field-help">Prepared until {new Date(request.expiresAt).toLocaleString()}. Keep the backup file securely outside this installation. Refreshing never confirms that you saved it.</p>
       <button className={exported ? "quiet-button" : "primary-button"} type="button" disabled={busy} onClick={() => void backup()}>{busy ? "Working…" : exported ? "Download backup again" : "Download entire-installation backup"}</button>
@@ -82,7 +81,8 @@ export function WebUpdateCard({ current, available, workflowUrl, latestTag, rele
     </div>}
     {reloadAvailable && <button className="primary-button" type="button" onClick={() => window.location.reload()}>Reload updated dashboard</button>}
     <button className="quiet-button" type="button" disabled={busy} onClick={() => void refresh()}>Refresh update status</button>
+    {request && <section className="web-update-notes" aria-label="Update release notes"><h3>Release notes for {request.targetTag}</h3><p>{request.releaseNotes || "No release notes supplied."}</p></section>}
     <details className="web-update-diagnostics"><summary>Diagnostics and manual recovery</summary>{request && <p className="field-help">Stage: {request.stage.replaceAll("_", " ")}. Request: {request.requestId}. Last updated {new Date(request.updatedAt).toLocaleString()}.</p>}{diagnostics && <a href={diagnostics} target="_blank" rel="noreferrer">Open diagnostic workflow / manual recovery</a>}</details>
-    {!request && <ol className="update-steps"><li>Pin the official release and review its notes.</li><li>Download the entire-installation backup and confirm the file was saved.</li><li>Start once here. Track GitHub approval, deployment and health verification.</li><li>Reload only after the installation is verified.</li></ol>}
+    {!request && <ol className="update-steps"><li>Review the available release and prepare your update.</li><li>Download the entire-installation backup and confirm the file was saved.</li><li>Start once here. Track GitHub approval, deployment and health verification.</li><li>Reload only after the installation is verified.</li></ol>}
   </article>;
 }

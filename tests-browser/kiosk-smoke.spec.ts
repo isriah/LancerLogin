@@ -45,6 +45,34 @@ test("physical kiosk screen fits the supported 800 by 480 display", async ({ pag
   expect(dimensions).toEqual({ width: 800, height: 480 });
 });
 
+test("a delayed display poll cannot restore the previous member name", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  await page.goto(`${kioskBaseUrl}/`);
+  await expect(page.getByRole("heading", { name: "Place finger on reader" })).toBeVisible();
+  let releaseOld: () => void = () => undefined;
+  const holdOld = new Promise<void>((resolve) => { releaseOld = resolve; });
+  let oldStarted: () => void = () => undefined;
+  const sawOld = new Promise<void>((resolve) => { oldStarted = resolve; });
+  let calls = 0;
+  await page.route(`${kioskBaseUrl}/display-state`, async (route) => {
+    calls += 1;
+    const response = await route.fetch();
+    const state = await response.json();
+    if (calls === 1) {
+      oldStarted();
+      await holdOld;
+      await route.fulfill({ response, json: { ...state, display: { id: "welcome", message: "Welcome", detail: "Arrival recorded", name: "Previous Member" } } });
+    } else {
+      await route.fulfill({ response, json: { ...state, display: { id: "welcome", message: "Welcome", detail: "Arrival recorded", name: "Current Member" } } });
+    }
+  });
+  await sawOld;
+  await expect(page.locator("#display-name")).toHaveText("Current Member");
+  releaseOld();
+  await page.waitForTimeout(250);
+  await expect(page.locator("#display-name")).toHaveText("Current Member");
+});
+
 test("physical kiosk gives bounded scan and offline feedback at 800 by 480", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 480 });
   await page.setExtraHTTPHeaders({ "x-lancerlogin-preview-state": "processing" });
@@ -128,4 +156,27 @@ test("fingerprint maintenance unlock fits the supported 800 by 480 display", asy
   await expect(page.getByRole("heading", { name: "Mappings" })).toBeHidden();
   const dimensions = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
   expect(dimensions).toEqual({ width: 800, height: 480 });
+});
+
+test("local rejected-scan review shows safe reasons and review does not change attendance", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  let reviewed = false;
+  const record = { eventId: "synthetic-event-1", memberId: "SYNTHETIC-001", occurredAt: "2026-09-19T12:00:00.000Z", reasonCode: "no_eligible_meeting", httpStatus: 409 };
+  await page.route(`${kioskBaseUrl}/attendance/rejections`, async (route) => {
+    await route.fulfill({ json: { rejections: [{ ...record, reviewStatus: reviewed ? "reviewed" : "open" }] } });
+  });
+  await page.route(`${kioskBaseUrl}/attendance/rejections/synthetic-event-1/review`, async (route) => {
+    reviewed = true;
+    await route.fulfill({ json: { reviewed: true } });
+  });
+  await page.goto(`${kioskBaseUrl}/attendance-review`);
+  await expect(page.getByRole("heading", { name: "Rejected attendance scans" })).toBeVisible();
+  await expect(page.getByText("No eligible meeting at scan time")).toBeVisible();
+  await expect(page.getByText("SYNTHETIC-001")).toBeVisible();
+  await page.getByRole("button", { name: "Mark scan synthetic-event-1 reviewed" }).click();
+  await expect(page.getByText("Reviewed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Marking a scan reviewed does not change attendance.", { exact: false })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(800);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
 });

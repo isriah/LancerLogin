@@ -23,7 +23,7 @@ test("Dashboard delegates live attendance and contest review to complete replace
 });
 
 test("Reports retains attendance CSV export", async ({ page }) => {
-  await page.route("**/exports/attendance.csv", (route) => route.fulfill({
+  await page.route("**/exports/attendance.csv*", (route) => route.fulfill({
     status: 200,
     contentType: "text/csv",
     headers: { "content-disposition": 'attachment; filename="attendance.csv"' },

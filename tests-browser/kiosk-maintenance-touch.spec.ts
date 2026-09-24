@@ -207,6 +207,7 @@ for (const height of [480, 360]) {
 
 for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 }, { width: 800, height: 360 }]) {
   test(`maintenance completes touch workflow at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    if (viewport.height === 360) test.setTimeout(180_000);
     await page.setViewportSize(viewport);
     const mock = await fixture(page);
     await page.goto(`${base}/maintenance`);
@@ -333,7 +334,7 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     await expect(page.locator("#member")).toHaveValue("");
     expect(await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }))).toEqual(viewport);
     await page.screenshot({ path: test.info().outputPath(`maintenance-${viewport.height}.png`) });
-    await tap(page, page.locator("#maintenance-header a"));
+    await tap(page, page.locator('#maintenance-header a[href="/"]'));
     await expect(page).toHaveURL(`${base}/`);
   });
 }

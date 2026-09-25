@@ -30,7 +30,7 @@ Use **Configuration** to set the organization-wide late scan allowance, late-arr
 
 In **Roster**, an Administrator can select **Add member** or import a CSV. The importer previews changes before writing. Required columns are `memberId`, `firstName`, and `lastName`; `email`, `discordUserId`, and `attendanceRequiredFrom` are optional. Replacing the active roster makes omitted people inactive and preserves their attendance history and dashboard accounts.
 
-In **Reports**, choose filters, save a browser-local view, or select **Download attendance CSV**. The default report uses the configured reporting baseline. When no baseline is set, it uses all preserved completed history. An excused meeting is excluded from the excuse-adjusted denominator.
+In **Reports**, choose filters, save a browser-local view, or select **Download attendance CSV**. The default report uses the configured reporting baseline. When no baseline is set, it uses all preserved completed history. Regular attendance keeps excused required meetings in its denominator. A member's assigned percentage policy separately follows its configured excused-meeting handling.
 
 ## Kiosks and simulator
 

@@ -167,6 +167,11 @@
       "name": "0033_discord_attendance_threads.sql",
       "sha256": "4605293fc66c1829c7b468682ec29828916746e9a275adb07c05c483f05c155c",
       "forwardCompatible": true
+    },
+    {
+      "name": "0034_attendance_excused_handling.sql",
+      "sha256": "fc030966dc0768a09a2ef10ae0dd6feafc120aded36165d81c9efdbe9b8bb550",
+      "forwardCompatible": true
     }
   ]
 }

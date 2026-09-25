@@ -1172,7 +1172,7 @@ async function runReportDefinition(db: D1Database, value: unknown): Promise<Repo
   if (resolved.warning) warnings.push(resolved.warning);
   const meetings = data.meetings.filter((meeting) => definition.meetingType === "all" || Boolean(meeting.required) === (definition.meetingType === "required"));
   const officialMembers = evaluateAttendance(data); const columnLabelIds = definition.columns.flatMap((column) => column.labelId ? [column.labelId] : []); const summaryLabelIds = [...new Set([...definition.labelIds, ...columnLabelIds])];
-  const periodMembers = evaluateAttendance({ ...data, meetings, from: resolved.from, to: resolved.to ?? today, historicalLabelIds: definition.membership === "historical" ? definition.labelIds : [], historicalLabelMatch: definition.labelMatch, summaryLabelIds })
+  const periodMembers = evaluateAttendance({ ...data, meetings, from: resolved.from, to: resolved.to ?? today, membership: definition.membership, historicalLabelIds: definition.membership === "historical" ? definition.labelIds : [], historicalLabelMatch: definition.labelMatch, summaryLabelIds })
     .filter((item) => (definition.roster === "all" || Boolean(item.member.active)) && (definition.membership === "historical" ? !definition.labelIds.length || item.rows.length > 0 : reportLabelsMatch(item.currentLabelIds, definition.labelIds, definition.labelMatch)));
   const rows = buildReportRows({ definition, official: officialMembers, period: periodMembers, meetings, labels: data.labels, rules: data.rules, timeZone: data.timeZone, from: resolved.from, to: resolved.to ?? today }); const labelNames = new Map(data.labels.map((label) => [label.id, label.name]));
   const matchingMemberIds = new Set(rows.map((row) => row.member.id));

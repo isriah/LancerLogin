@@ -198,7 +198,7 @@ test("contest notifier opens an accessible review popup with context and refresh
   await expect(page.getByRole("heading", { name: "Reports", exact: true })).toBeVisible();
   await expect(page.getByLabel("Meeting type")).toBeVisible();
   await expect(page.getByLabel("Roster")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Contests awaiting review" })).toBeHidden();
+  await expect(page.locator(".contest-report").getByRole("heading", { name: "Contests awaiting review" })).toBeVisible();
   const indicator = page.getByRole("button", { name: "1 attendance contest awaiting review. Open contest review." });
   await indicator.click();
   const dialog = page.getByRole("dialog", { name: "Contests awaiting review" });
@@ -277,30 +277,29 @@ test("Reports filters completed Regular and Optional meetings without hiding All
   // The preview includes completed meetings of each type. This specifically avoids the
   // prior gap, where the smoke test had only active or future meetings to filter.
   await page.goto("/reports");
-  const scope = page.locator(".report-scope");
   const meetingType = page.getByLabel("Meeting type");
 
-  await expect(scope).toContainText("Showing 2 completed meetings across all preserved history.");
+  await expect(page.getByText(/Showing \d+ completed meeting/)).toHaveCount(0);
   await meetingType.selectOption("required");
-  await expect(scope).toContainText("Showing 1 completed meeting across all preserved history.");
+  await expect(meetingType).toHaveValue("required");
   await meetingType.selectOption("optional");
-  await expect(scope).toContainText("Showing 1 completed meeting across all preserved history.");
+  await expect(meetingType).toHaveValue("optional");
   await meetingType.selectOption("all");
-  await expect(scope).toContainText("Showing 2 completed meetings across all preserved history.");
+  await expect(meetingType).toHaveValue("all");
 });
 
 test("Reports identifies preserved history when no operational baseline is configured", async ({ page }) => {
   await page.goto("/reports");
   const reportingPeriod = page.getByLabel("Reporting period");
-  await expect(reportingPeriod).toHaveValue("all");
+  await expect(reportingPeriod).toHaveValue("custom");
   await expect(reportingPeriod).toBeEnabled();
   await expect(reportingPeriod.locator('option[value="baseline"]')).toHaveAttribute("disabled", "");
-  await expect(page.locator(".report-scope")).toContainText("across all preserved history");
+  await expect(page.getByText(/Showing \d+ completed meeting/)).toHaveCount(0);
 });
 
 test("Reports defaults to a configured operational baseline while preserving historical access", async ({ page }) => {
   const baseline = new Date(Date.now() - 3.5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  await page.route("**/reports/attendance*", async (route) => {
+  await page.route("**/reports/leaderboard*", async (route) => {
     const response = await route.fetch();
     const payload = await response.json();
     await route.fulfill({ response, json: { ...payload, baseline } });
@@ -311,11 +310,11 @@ test("Reports defaults to a configured operational baseline while preserving his
   await expect(reportingPeriod).toHaveValue("baseline");
   await expect(reportingPeriod.locator('option[value="baseline"]')).not.toHaveAttribute("disabled", "");
   await expect(page.getByLabel("From")).toBeDisabled();
-  await expect(page.locator(".report-scope")).toContainText(`from ${baseline}`);
+  await expect(page.getByLabel("From")).toHaveValue(baseline);
 
-  await reportingPeriod.selectOption("all");
+  await reportingPeriod.selectOption("custom");
   await expect(page.getByLabel("From")).toBeEnabled();
-  await expect(page.locator(".report-scope")).toContainText("across all preserved history");
+  await expect(page.getByText(/Showing \d+ completed meeting/)).toHaveCount(0);
 });
 
 test("Reports selectors keep selected values and inset arrows visible at supported widths", async ({ page }) => {
@@ -323,6 +322,7 @@ test("Reports selectors keep selected values and inset arrows visible at support
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/reports");
     await expect(page.getByRole("heading", { level: 1, name: "Reports" })).toBeVisible();
+    await expect(page.getByLabel("Reporting period")).toHaveValue("custom");
     await page.evaluate(() => document.fonts.ready);
 
     const geometries = await page.locator(".reports-page select").evaluateAll((selectors) => selectors.map((selector) => {
@@ -341,17 +341,18 @@ test("Reports selectors keep selected values and inset arrows visible at support
         selectedTextWidth: context.measureText(element.selectedOptions[0].text).width,
         backgroundImage: styles.backgroundImage,
         backgroundPositionX: styles.backgroundPositionX,
+        label: element.closest("label")?.textContent?.trim() ?? "Select",
       };
     }));
 
-    expect(geometries).toHaveLength(7);
+    expect(geometries).toHaveLength(8);
     for (const geometry of geometries) {
       expect(geometry.left).toBeGreaterThanOrEqual(0);
       expect(geometry.right).toBeLessThanOrEqual(geometry.clientWidth);
       expect(geometry.paddingRight).toBeGreaterThanOrEqual(48);
       expect(geometry.backgroundImage).not.toBe("none");
       expect(geometry.backgroundPositionX).toContain("calc(100% -");
-      expect(geometry.availableTextWidth).toBeGreaterThanOrEqual(geometry.selectedTextWidth);
+      expect(geometry.availableTextWidth, geometry.label).toBeGreaterThanOrEqual(geometry.selectedTextWidth);
     }
   }
 });

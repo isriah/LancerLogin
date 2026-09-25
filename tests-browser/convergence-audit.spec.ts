@@ -55,7 +55,7 @@ async function expectGovernedSurface(page: Page, heading: string, route: string)
       return style.display !== "none" && style.visibility !== "hidden" && bounds.width > 0 && bounds.height > 0;
     };
     const name = (element: HTMLElement) => element.getAttribute("aria-label") || element.textContent?.trim().slice(0, 80) || element.tagName;
-    const containedScroller = (element: HTMLElement) => element.closest(".responsive-table,.table-scroll,.roster-table-scroll,.member-history-scroll");
+    const containedScroller = (element: HTMLElement) => element.closest(".report-tabs,.responsive-table,.table-scroll,.roster-table-scroll,.member-history-scroll,.report-table-scroll");
     const main = document.querySelector("main")!;
     const headings = Array.from(main.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")).filter(visible);
     const headingLevels = headings.map((element) => Number(element.tagName.slice(1)));

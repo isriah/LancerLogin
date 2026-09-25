@@ -42,3 +42,4 @@ Web updates use Admin-only prepare/start/status control and an installation-scop
 - Secret encryption uses AES-GCM with per-record random IVs and an installation-specific Worker secret.
 - Integration test actions use least-privilege operations and do not reveal credentials.
 - CSV export neutralizes leading spreadsheet formula markers before quoting cells.
+- The Worker owns the versioned saved-report definition and curated column registry. `/reports/query` and both report CSV endpoints validate the same definition, resolve organization-local periods, and use the canonical attendance evaluator. Page and page-size state stay outside saved definitions.

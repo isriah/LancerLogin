@@ -172,6 +172,16 @@
       "name": "0034_attendance_excused_handling.sql",
       "sha256": "fc030966dc0768a09a2ef10ae0dd6feafc120aded36165d81c9efdbe9b8bb550",
       "forwardCompatible": true
+    },
+    {
+      "name": "0035_user_debug_mode.sql",
+      "sha256": "c97650e1fc2686b62dd129bc5a1d3ec824dbbf3f30cfe5ccb09f890374f1c56b",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0036_saved_report_views.sql",
+      "sha256": "bae285aa9ede1fb7ce1df2f9a1c81b4b3453c8beff0e28e2ab7e1dc84100e421",
+      "forwardCompatible": true
     }
   ]
 }

@@ -148,6 +148,30 @@ for (const context of dashboardConformanceReferences.viewports.flatMap((viewport
     await expect(page.locator(".attendance-state.active")).toContainText("Active · not checked out");
     await expect(page.locator(".attendance-state.present")).toContainText("present");
     await expect(page.locator(".attendance-state.absent")).toContainText("absent");
+    const discordAction = page.getByRole("button", { name: "Send Discord absence notice" });
+    const actionAppearance = await discordAction.evaluate((element) => {
+      const app = element.closest(".app")!;
+      const probe = document.createElement("button");
+      probe.style.backgroundColor = "var(--ui-surface-subtle)";
+      probe.style.color = "var(--ui-text)";
+      probe.style.border = "1px solid var(--ui-border)";
+      probe.style.borderRadius = "var(--radius-control)";
+      app.append(probe);
+      const actual = getComputedStyle(element);
+      const expected = getComputedStyle(probe);
+      const result = {
+        actual: [actual.backgroundColor, actual.color, actual.borderTopColor, actual.borderTopLeftRadius],
+        expected: [expected.backgroundColor, expected.color, expected.borderTopColor, expected.borderTopLeftRadius],
+        height: element.getBoundingClientRect().height,
+      };
+      probe.remove();
+      return result;
+    });
+    expect(actionAppearance.actual).toEqual(actionAppearance.expected);
+    expect(actionAppearance.height).toBeGreaterThanOrEqual(44);
+    await discordAction.focus();
+    await expect(discordAction).toBeFocused();
+    expect(await discordAction.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
     await expectContained(page);
     await page.screenshot({ path: test.info().outputPath("meeting.png") });
     await test.info().attach("Meeting typography", { path: test.info().outputPath("meeting.png"), contentType: "image/png" });
@@ -176,7 +200,15 @@ test("meeting detail distinguishes timing gates, unavailable configuration, empt
   await page.goto("/meetings/upcoming");
   await expect(page.locator(".meeting-lifecycle")).toHaveText("Upcoming");
   await expect(page.getByRole("button", { name: "Sync configured calendars" })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Send Discord absence notice" })).toBeDisabled();
+  const disabledDiscordAction = page.getByRole("button", { name: "Send Discord absence notice" });
+  await expect(disabledDiscordAction).toBeDisabled();
+  const disabledAppearance = await disabledDiscordAction.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { cursor: style.cursor, opacity: Number(style.opacity), background: style.backgroundColor };
+  });
+  expect(disabledAppearance.cursor).toBe("not-allowed");
+  expect(disabledAppearance.opacity).toBeLessThan(1);
+  expect(disabledAppearance.background).not.toBe("rgba(0, 0, 0, 0)");
   await expect(page.getByText("No active roster records are available.")).toBeVisible();
   await page.getByRole("button", { name: "Sync configured calendars" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Discord: 0 updated, 1 need attention" })).toHaveAttribute("data-tone", "error");

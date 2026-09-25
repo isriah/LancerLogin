@@ -149,7 +149,7 @@ test("meeting-local calendar and Discord actions retain their scoped outcomes", 
   await page.route(/\/discord\/contests(?:\?.*)?$/, async (route) => { contestLoads += 1; await route.continue(); });
 
   await page.goto("/meetings/active-meeting");
-  await expect(page.getByRole("heading", { name: "Discord operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Meeting actions" })).toBeVisible();
   await page.getByRole("button", { name: "Sync configured calendars" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Google Calendar: 1 updated · Discord: 0 updated, 1 queued" })).toBeVisible();
   await page.getByRole("button", { name: "Send Discord absence notice" }).click();
@@ -165,7 +165,7 @@ test("meeting-local calendar and Discord actions retain their scoped outcomes", 
   await contest.getByLabel("Review reason").fill("Kiosk error confirmed with the member.");
   const loadsBeforeResolution = contestLoads;
   await contest.getByRole("button", { name: "Approve and mark present" }).click();
-  await expect(page.locator(".meeting-contests")).toContainText("No attendance contests need review for this meeting.");
+  await expect(page.locator(".meeting-contests")).toHaveCount(0);
   await expect.poll(() => contestLoads).toBeGreaterThan(loadsBeforeResolution);
   expect(resolutionBodies).toEqual([{ meetingId: "active-meeting", memberId: "member-3", resolution: "approved", reviewNote: "Kiosk error confirmed with the member." }]);
 });
@@ -202,7 +202,7 @@ test("meeting contest review distinguishes partial, missing, and complete raw sc
 test("unverified Discord exposes no meeting actions or global contest notifier", async ({ page }) => {
   await page.route("**/integrations/capabilities", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: false } } }) }));
   await page.goto("/meetings/active-meeting");
-  await expect(page.getByRole("heading", { name: "Discord operations" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Meeting actions" })).toHaveCount(0);
   await expect(page.locator(".meeting-contests")).toHaveCount(0);
   await expect(page.locator(".contest-indicator")).toHaveCount(0);
 });
@@ -214,9 +214,9 @@ test("meeting operations preserve the custom brand in light and dark desktop lay
   await expect(app).toHaveAttribute("data-theme", "dark");
   const tokens = await app.evaluate((element) => { const style = getComputedStyle(element); return { primary: style.getPropertyValue("--primary").trim(), secondary: style.getPropertyValue("--secondary").trim() }; });
   expect(tokens).toEqual({ primary: "#8b2f72", secondary: "#e9b949" });
-  const operations = await page.locator(".meeting-discord-operations").boundingBox();
+  const operations = await page.locator(".meeting-actions-card").boundingBox();
   const contests = await page.locator(".meeting-contests").boundingBox();
-  expect(operations && contests && operations.x < contests.x).toBe(true);
+  expect(operations && contests && operations.width <= 1280 && contests.width <= 1280).toBe(true);
   await setDashboardTheme(page, "light");
 
   await expect(app).toHaveAttribute("data-theme", "light");

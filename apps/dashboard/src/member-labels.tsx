@@ -3,7 +3,6 @@ export type LabelHistory = { id: string; memberId: string; externalMemberId: str
 export type WeeklyPeriod = { id: string; labelId: string; startsOn: string; endsOn: string; meetingsPerWeek: number };
 export type LabelData = { labels: MemberLabel[]; history: LabelHistory[]; periods: WeeklyPeriod[]; today: string };
 type Change = { memberId: string; label: string; action: "add" | "remove"; effectiveDate: string };
-type Preview = { changes: Change[]; impact: { memberId: string; beforeRate: number | null; afterRate: number | null; beforePolicy: string; afterPolicy: string; affectedCompletedMeetings: number }[]; previewToken: string };
 
 export function labelsForMember(data: LabelData, memberId: string, date = data.today): MemberLabel[] {
   const active = new Set<string>();

@@ -158,7 +158,7 @@ test("data deletion requires an exact typed confirmation", async ({ page }) => {
 
 test("expanded mobile content only scrolls where data requires it", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  const allowedScrollerSelectors = [".responsive-table", ".table-scroll"];
+  const allowedScrollerSelectors = [".responsive-table", ".table-scroll", ".report-table-scroll"];
 
   for (const route of routes) {
     await page.goto(route);

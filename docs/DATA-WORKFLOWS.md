@@ -18,6 +18,6 @@ At the scheduled end plus the organization-wide late scan allowance, an incomple
 
 ## Reports and audit history
 
-Open **Reports** to filter attendance or use **Download attendance CSV**. A saved report view stays in that browser. The default reporting period begins at the optional baseline set in **Settings → Configuration**; when no baseline exists, reports use all preserved completed history.
+Open **Reports** for the fixed paginated Leaderboard or a saved report tab. Saved personal and shared reports, including the selected filters, ordered columns, and one sort, are stored in the installation. Each account has its own ordered pinned tabs. The default new report begins at the optional baseline set in **Settings → Configuration**; when no baseline exists, it uses all preserved completed history.
 
-LancerLogin records audit entries for writes and exports. CSV cells that could be interpreted as spreadsheet formulas are exported as text. CSV is the supported report export format; PDF and spreadsheet exports are not included.
+Use **Download report CSV** for one row per matching member and only the selected columns. Its header names and order follow the saved report, so changing the columns changes the CSV header. Use **Download detailed attendance CSV** for the filtered meeting-level data and its explicit regular and policy fields. Both exports include all filtered results rather than the visible page. LancerLogin records audit entries for saved-report writes and both exports. CSV cells that could be interpreted as spreadsheet formulas are exported as text. CSV is the supported report export format; PDF and spreadsheet exports are not included.

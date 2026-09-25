@@ -37,6 +37,7 @@ async function setup(page: Page, initial: WebUpdateRequest | null = null) {
 }
 const webStatus = (page: Page) => page.locator(".web-update-status");
 const refresh = (page: Page) => page.getByRole("button", { name: "Refresh update status", exact: true });
+const backupConfirmation = (page: Page) => page.getByRole("checkbox", { name: "I saved this update’s entire-installation backup file securely." });
 
 test("pins release, retries associated backup, requires saved confirmation and tracks verified completion without dispatch reload", async ({ page }) => {
   const state = await setup(page); await page.goto("/settings/updates");
@@ -96,12 +97,12 @@ for (const code of ["not_configured", "credential_required", "credential_expired
 
 test("unconfirmed status and start error cannot unlock blind dispatch or saved confirmation", async ({ page }) => {
   const state = await setup(page, pinned({ backupExported: true })); await page.goto("/settings/updates");
-  await expect(page.getByRole("checkbox")).toBeVisible();
+  await expect(backupConfirmation(page)).toBeVisible();
   state.statusFailure = true; await refresh(page).click(); await expect(webStatus(page)).toContainText("Progress is unconfirmed");
-  await page.getByRole("checkbox").check(); await expect(page.getByRole("button", { name: `Start update to ${targetTag}` })).toBeDisabled();
+  await backupConfirmation(page).check(); await expect(page.getByRole("button", { name: `Start update to ${targetTag}` })).toBeDisabled();
   state.statusFailure = false; await refresh(page).click(); state.startError = "provider_unavailable";
   await page.getByRole("button", { name: `Start update to ${targetTag}` }).click(); await expect(webStatus(page)).toContainText("never be blindly redispatched");
-  await expect(page.getByRole("checkbox")).not.toBeChecked(); expect(state.starts).toBe(1);
+  await expect(backupConfirmation(page)).not.toBeChecked(); expect(state.starts).toBe(1);
 });
 
 test("terminal success for the bundled version does not offer reload or reload on mount", async ({ page }) => {
@@ -134,7 +135,7 @@ test("prepared backup confirmation follows native keyboard, branded theme and re
     await expect(page.locator(".settings-notice")).toContainText("newer community release");
     const dismiss = page.getByRole("button", { name: "Dismiss update notice" }); if (await dismiss.isVisible()) await dismiss.click();
     await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary); await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
-    const checkbox = page.getByRole("checkbox"); await expect(checkbox).toBeVisible(); await checkbox.focus(); await page.keyboard.press("Space"); await expect(checkbox).toBeChecked();
+    const checkbox = backupConfirmation(page); await expect(checkbox).toBeVisible(); await checkbox.focus(); await page.keyboard.press("Space"); await expect(checkbox).toBeChecked();
     const notesTop = await page.locator(".web-update-notes").evaluate((element) => element.getBoundingClientRect().top);
     for (const control of await page.locator(".web-update-backup, .web-update-card > button").all()) {
       expect(await control.evaluate((element) => element.getBoundingClientRect().bottom)).toBeLessThanOrEqual(notesTop);

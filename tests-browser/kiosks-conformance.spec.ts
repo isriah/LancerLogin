@@ -149,7 +149,7 @@ test("Operator sees health and history without Admin management, simulator, or u
 
   await expect(page.getByText("Degraded", { exact: true })).toBeVisible();
   await expect(page.getByRole("table", { name: "Retired kiosk history" })).toBeVisible();
-  await expect(page.getByText("Unavailable until the Discord integration is enabled, saved, and verified.")).toBeVisible();
+  await expect(page.getByText("Unavailable until the Discord integration is enabled, saved, and verified.")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Add kiosk|Replace kiosk|Rename|Reload display|Restart software|Reboot Pi|Reset network PIN|Retire kiosk|Sync Discord status/ })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Browser simulator" })).toHaveCount(0);
   await expectResponsiveFit(page);

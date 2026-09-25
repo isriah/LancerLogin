@@ -73,23 +73,36 @@ test("web release contract accepts strict stable majors and requires complete as
   assert.equal(fixedWorkflowPath(".github/workflows/upgrade-web.yml@hostile"), false);
 });
 
-test("discovery coalesces a fixed credential-free feed and expires without extending successful time", async () => {
+test("discovery coalesces a fixed authenticated feed and expires without extending successful time", async () => {
   let now = 100_000; let calls = 0; let finish!: (response: Response) => void;
+  const credential = { WEB_UPDATE_TOKEN: "synthetic-token", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(now + 86_400_000).toISOString() };
   const discovery = createReleaseDiscovery({ now: () => now, fetcher: async (url, init) => {
     calls++; assert.equal(url, officialReleaseUrl); assert.equal(init?.redirect, "manual");
-    assert.equal(new Headers(init?.headers).has("authorization"), false);
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer synthetic-token");
     assert.equal(new Headers(init?.headers).get("user-agent"), "LancerLogin");
     return new Promise<Response>((resolve) => { finish = resolve; });
   } });
-  const first = discovery.check(); assert.equal(discovery.check(), first); assert.equal(calls, 1);
+  const first = discovery.check(credential); assert.equal(discovery.check(credential), first); assert.equal(calls, 1);
   finish(Response.json({ ...release("v1.0.4"), html_url: "https://evil.test/notes" }));
   const result = await first;
   assert.equal(result.release?.html_url, "https://github.com/isriah/LancerLogin/releases/tag/v1.0.4");
   now += discoveryTtlMs - 1;
-  assert.equal((await discovery.check()).checkedAt, 100_000); assert.equal(calls, 1);
+  assert.equal((await discovery.check(credential)).checkedAt, 100_000); assert.equal(calls, 1);
   now++;
-  const expired = discovery.check(); assert.equal(calls, 2); finish(Response.json(release("v1.0.5")));
+  const expired = discovery.check(credential); assert.equal(calls, 2); finish(Response.json(release("v1.0.5")));
   assert.equal((await expired).release?.tag_name, "v1.0.5");
+});
+
+test("discovery omits missing or expired credentials from the fixed public feed", async () => {
+  let now = 100_000;
+  for (const credential of [undefined, { WEB_UPDATE_TOKEN: "synthetic-token", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(now - 1).toISOString() }]) {
+    const discovery = createReleaseDiscovery({ now: () => now, fetcher: async (_url, init) => {
+      assert.equal(new Headers(init?.headers).has("authorization"), false);
+      return Response.json(release("v1.0.4"));
+    } });
+    assert.equal((await discovery.check(credential)).fresh, true);
+    now++;
+  }
 });
 
 test("discovery honors provider seconds/date/reset cooldowns and distinguishes unrelated403", async () => {
@@ -192,7 +205,7 @@ test("simultaneous prepare/start and replay dispatch only one fixed request", as
     assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'web_update.started'").get()?.n, 1);
     const outbound = calls.filter((call) => call.url.endsWith("/dispatches")); assert.equal(outbound.length, 1);
     assert.deepEqual(JSON.parse(String(outbound[0]!.init?.body)), { ref: "main", inputs: { request_id: row.id, release_tag: "v1.0.0", release_sha: sha } });
-    for (const call of calls.filter((entry) => entry.url.includes("/repos/isriah/LancerLogin"))) assert.equal(new Headers(call.init?.headers).has("authorization"), false);
+    for (const call of calls.filter((entry) => entry.url.includes("/repos/isriah/LancerLogin"))) assert.equal(new Headers(call.init?.headers).get("authorization"), "Bearer synthetic-token");
     assert.equal(JSON.stringify(await latestUpdate(env)).includes("synthetic-token"), false);
   });
 });

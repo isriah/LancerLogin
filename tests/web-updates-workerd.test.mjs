@@ -14,7 +14,7 @@ const script = `${updater}\n${discovery}
 export default { async fetch(request, env) {
   const path = new URL(request.url).pathname;
   if (path === '/runtime') return Response.json({ manual: new Request('https://example.invalid', { redirect: 'manual' }).redirect, timeout: typeof AbortSignal.timeout });
-  if (path === '/discover') return Response.json(await releaseDiscovery.check());
+  if (path === '/discover') return Response.json(await releaseDiscovery.check(env));
   try { const result = path === '/prepare' ? await prepareWebUpdate(env, 'synthetic-admin') : path === '/start' ? await startWebUpdate(env, await request.json(), 'synthetic-admin') : await webUpdateStatus(env); return Response.json(result); }
   catch(error) { return Response.json({ code: error.code, error: error.message }, { status: error.status || 500 }); }
 } };`;
@@ -54,12 +54,11 @@ test("actual workerd updater prepare performs supported fixed manual GETs", asyn
     assert.equal(probe.manual, "manual"); assert.equal(probe.timeout, "function");
     const prepared = await instance.fetch("/prepare", {}); assert.equal(prepared.status, 200); const result = await prepared.json(); assert.equal(result.request.targetTag, "v1.0.0"); assert.equal(result.request.targetCommit, sha);
     assert.equal(instance.calls.length, 4);
-    assert.equal(instance.calls.slice(0, 2).every((call) => call.authorization === "Bearer synthetic-runtime-token"), true);
-    assert.equal(instance.calls.slice(2).every((call) => call.authorization === null), true);
+    assert.equal(instance.calls.every((call) => call.authorization === "Bearer synthetic-runtime-token"), true);
   } finally { await instance.worker.dispose(); }
 });
 
-test("actual workerd discovery caches success and provider cooldown without credentials or dispatch", async () => {
+test("actual workerd discovery caches success and provider cooldown with fixed credentials", async () => {
   for (const discoveryStatus of [200, 429, 503]) {
     const instance = await runtime({ discoveryStatus });
     try {
@@ -71,7 +70,7 @@ test("actual workerd discovery caches success and provider cooldown without cred
       if (discoveryStatus === 200) assert.equal(result.release.tag_name, "v1.0.0");
       else assert.ok(result.retryAt >= result.attemptedAt + 120_000);
       assert.deepEqual(await (await instance.fetch("/discover")).json(), result);
-      assert.equal(instance.calls.length, 1); assert.equal(instance.calls[0].authorization, null);
+      assert.equal(instance.calls.length, 1); assert.equal(instance.calls[0].authorization, "Bearer synthetic-runtime-token");
       assert.equal(instance.calls[0].path, "/repos/isriah/LancerLogin/releases/latest");
     } finally { await instance.worker.dispose(); }
   }

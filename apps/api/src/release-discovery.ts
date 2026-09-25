@@ -8,6 +8,7 @@ export type DiscoverySnapshot = {
   release?: DiscoveryRelease; checkedAt?: number; attemptedAt?: number; retryAt?: number;
   error?: string; code?: DiscoveryCode; fresh: boolean;
 };
+export type ReleaseCredential = { WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string };
 const messages: Record<DiscoveryCode, string> = {
   rate_limited: "GitHub release discovery is rate limited.",
   timeout: "Latest release check timed out.",
@@ -16,7 +17,14 @@ const messages: Record<DiscoveryCode, string> = {
   invalid_release: "A complete stable official release could not be confirmed.",
 };
 
-// One fixed public feed, no installation credentials or browser-selected URLs.
+export function releaseRequestHeaders(credential?: ReleaseCredential, now = Date.now()): Headers {
+  const headers = new Headers({ accept: "application/vnd.github+json", "user-agent": "LancerLogin", "x-github-api-version": "2026-03-10" });
+  const expiry = Date.parse(credential?.WEB_UPDATE_TOKEN_EXPIRES_AT ?? "");
+  if (credential?.WEB_UPDATE_TOKEN && Number.isFinite(expiry) && expiry > now) headers.set("authorization", `Bearer ${credential.WEB_UPDATE_TOKEN}`);
+  return headers;
+}
+
+// One fixed public feed with optional fixed Worker credentials and no browser-selected URLs.
 // Cache/coalescing is bounded to this Worker isolate, not a global provider lock.
 export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeoutMs = 4_000 }: {
   fetcher?: typeof fetch; now?: () => number; timeoutMs?: number;
@@ -39,12 +47,12 @@ export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeou
     data = { ...data, fresh: false, code, error: messages[code], retryAt };
     return snapshot();
   }
-  async function load() {
+  async function load(credential?: ReleaseCredential) {
     data.attemptedAt = now();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const result = await fetcher(officialReleaseUrl, { headers: { accept: "application/vnd.github+json", "user-agent": "LancerLogin", "x-github-api-version": "2026-03-10" }, redirect: "manual", signal: controller.signal, cache: "no-store" });
+      const result = await fetcher(officialReleaseUrl, { headers: releaseRequestHeaders(credential, now()), redirect: "manual", signal: controller.signal, cache: "no-store" });
       if (!result.ok) {
         const limited = result.status === 429 || result.status === 403 && (result.headers.has("retry-after") || result.headers.get("x-ratelimit-remaining") === "0");
         return fail(limited ? "rate_limited" : "provider_unavailable", result);
@@ -58,10 +66,10 @@ export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeou
       return fail(controller.signal.aborted ? "timeout" : "network");
     } finally { clearTimeout(timer); }
   }
-  function check(): Promise<DiscoverySnapshot> {
+  function check(credential?: ReleaseCredential): Promise<DiscoverySnapshot> {
     if (inFlight) return inFlight;
     if (snapshot().fresh || data.retryAt && now() < data.retryAt) return Promise.resolve(snapshot());
-    const tracked = load().finally(() => { inFlight = undefined; });
+    const tracked = load(credential).finally(() => { inFlight = undefined; });
     inFlight = tracked;
     return tracked;
   }

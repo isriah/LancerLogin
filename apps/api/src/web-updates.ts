@@ -91,11 +91,11 @@ export async function prepareWebUpdate(env: WebUpdateEnv, actorId?: string) {
   const workflow = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}`, env);
   const info = workflow.ok ? await workflow.json() as { state?: string; path?: string } : undefined;
   if (info?.state !== "active" || info.path !== `.github/workflows/${WEB_UPDATE_WORKFLOW}`) fail(503, "workflow_required", "Install the reviewed private web upgrade workflow before updating.");
-  const response = await github("/repos/isriah/LancerLogin/releases/latest");
+  const response = await github("/repos/isriah/LancerLogin/releases/latest", env);
   const target = response.ok ? officialWebRelease(await response.json()) : undefined;
   if (!target) fail(503, "release_unavailable", "A complete stable official release is unavailable.");
   if (!newerRelease(target.tag, env.RELEASE_VERSION ?? "")) fail(409, "already_current", "This installation already has the latest stable release.");
-  const commitResponse = await github(`/repos/isriah/LancerLogin/commits/${target.tag}`);
+  const commitResponse = await github(`/repos/isriah/LancerLogin/commits/${target.tag}`, env);
   const commit = commitResponse.ok ? await commitResponse.json() as { sha?: string } : undefined;
   if (!commit?.sha || !/^[0-9a-f]{40}$/.test(commit.sha)) fail(503, "release_unavailable", "The official release commit could not be pinned.");
   const id = crypto.randomUUID(); const expires = new Date(Date.now() + 30 * 60_000).toISOString();

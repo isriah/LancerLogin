@@ -1070,9 +1070,10 @@ label { font-size: .9rem; }
 .roster-summary-card strong { font-size: var(--text-section-heading); }
 .roster-directory { padding: var(--space-5); }
 .roster-directory .panel-heading,.roster-import-history .panel-heading,.member-profile-card .panel-heading,.member-history-card .panel-heading { min-height: var(--control-min-block-size); gap: var(--space-4); padding: 0 0 var(--space-4); border-color: var(--ui-border); }
-.roster-directory .panel-heading > div,.roster-import-history .panel-heading > div,.member-profile-card .panel-heading > div,.member-history-card .panel-heading > div { display: grid; gap: var(--space-1); min-width: 0; }
+.roster-directory .panel-heading > div:not(.roster-actions),.roster-import-history .panel-heading > div,.member-profile-card .panel-heading > div,.member-history-card .panel-heading > div { display: grid; gap: var(--space-1); min-width: 0; }
 .roster-directory .panel-heading h2,.roster-directory .panel-heading p,.roster-import-history .panel-heading h2,.roster-import-history .panel-heading p,.member-profile-card .panel-heading h2,.member-history-card .panel-heading h2,.member-history-card .panel-heading p { margin: 0; }
 .roster-actions { gap: var(--space-2); }
+.roster-directory .roster-actions { flex-wrap: nowrap; }
 .roster-actions .primary-button { width: auto; min-width: 0; min-height: var(--control-min-block-size); margin: 0; padding: var(--space-2) var(--space-4); border-radius: var(--radius-control); }
 .roster-filters { grid-template-columns: minmax(0,1fr) minmax(12rem,.3fr); gap: var(--space-3); margin: var(--space-4) 0; }
 .roster-filters label { display: grid; gap: var(--space-2); margin: 0; }
@@ -1129,6 +1130,7 @@ label { font-size: .9rem; }
   .report-action-card .report-actions,.member-profile-card .roster-row-actions { display: grid; grid-template-columns: 1fr; width: 100%; }
   .report-action-card .report-actions button,.member-profile-card .roster-row-actions button { width: 100%; }
   .roster-directory .roster-actions,.roster-directory .roster-actions button { width: 100%; }
+  .roster-directory .roster-actions > button { flex: 1; width: auto; min-width: 0; }
   .roster-row-actions { grid-template-columns: repeat(3,minmax(0,1fr)); }
   .member-history { min-width: 38rem; }
 }

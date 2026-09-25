@@ -19,10 +19,16 @@ export function validDate(value: unknown): value is string {
   return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
 }
 export function localDate(timestamp: string, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(timestamp));
+  let formatter = dateFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+    dateFormatters.set(timeZone, formatter);
+  }
+  const parts = formatter.formatToParts(new Date(timestamp));
   const field = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return field("year") + "-" + field("month") + "-" + field("day");
 }
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
 function shiftDate(date: string, days: number): string { const result = new Date(date + "T12:00:00.000Z"); result.setUTCDate(result.getUTCDate() + days); return result.toISOString().slice(0, 10); }
 function weekStart(date: string): string { const day = new Date(date + "T12:00:00.000Z").getUTCDay(); return shiftDate(date, -(day === 0 ? 6 : day - 1)); }
 const rate = (numerator: number, denominator: number): number | null => denominator > 0 ? Math.round(100 * numerator / denominator) : null;
@@ -51,7 +57,9 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
   for (const change of input.changes) changesByMember.set(change.memberId, [...(changesByMember.get(change.memberId) ?? []), change]);
   for (const changes of changesByMember.values()) changes.sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate) || (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
   const observations = new Map(input.observations.map((observation) => [observation.meetingId + ":" + observation.memberId, observation]));
-  const meetings = input.meetings.filter((meeting) => !meeting.isTest && (!input.from || localDate(meeting.startsAt, input.timeZone) >= input.from) && (!input.to || localDate(meeting.startsAt, input.timeZone) <= input.to)).sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+  const meetingDates = new Map(input.meetings.map((meeting) => [meeting.id, localDate(meeting.startsAt, input.timeZone)]));
+  const completedMeetings = new Set(input.meetings.filter((meeting) => Date.parse(meeting.attendanceClosesAt) <= now).map((meeting) => meeting.id));
+  const meetings = input.meetings.filter((meeting) => !meeting.isTest && (!input.from || meetingDates.get(meeting.id)! >= input.from) && (!input.to || meetingDates.get(meeting.id)! <= input.to)).sort((a, b) => a.startsAt.localeCompare(b.startsAt));
   const audience = (meeting: PolicyMeeting) => meeting.audienceMode === "all" ? "All" : meeting.audienceLabelIds.map((id) => labelNames.get(id) ?? "Retired label").join(", ");
   return input.members.map((member) => {
     const changes = changesByMember.get(member.id) ?? [];
@@ -63,7 +71,7 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
     const rows: PolicyRow[] = [];
     const weekBuckets = new Map<string, { rule: AttendanceRule; labelId: string; weekStartsOn: string; segmentStartsOn: string; segmentEndsOn: string; target: number; legacy: boolean; opportunities: number; attended: number; excused: number; pending: boolean }>();
     for (const meeting of meetings) {
-      const date = localDate(meeting.startsAt, input.timeZone);
+      const date = meetingDates.get(meeting.id)!;
       const activeLabels = labelsAt(date);
       if (input.historicalLabelId && !activeLabels.has(input.historicalLabelId)) continue;
       const labelId = [...activeLabels].find((id) => policyLabels.has(id)) ?? (input.policyActivatedOn && date < input.policyActivatedOn ? [...activeLabels].find((id) => legacyFormulaLabels.has(id)) : undefined);
@@ -72,7 +80,7 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
       const legacy = Boolean(rule?.id.startsWith("legacy:") && input.policyActivatedOn && date < input.policyActivatedOn);
       const eligibleAudience = meeting.audienceMode === "all" || meeting.audienceLabelIds.some((id) => legacy ? id === labelId : activeLabels.has(id));
       const eligibleDate = !participationStart || date >= participationStart;
-      const completed = Date.parse(meeting.attendanceClosesAt) <= now;
+      const completed = completedMeetings.has(meeting.id);
       const observation = observations.get(meeting.id + ":" + member.id);
       const disposition = observation?.disposition === "active" ? "absent" : observation?.disposition ?? "absent";
       const eligibility = meetingEligibility({ date, participationStart, activeLabels: legacy && labelId ? new Set([labelId]) : activeLabels, formulaLabel: weekly || !rule && labelId ? labelId : undefined, hasWeeklyTarget: weekly, meeting });
@@ -116,10 +124,10 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
     const hasStandard = requiredRows.length > 0;
     const policy = hasWeekly ? hasStandard ? "mixed" : "weekly" : "standard";
     const dueWeeks = weeks.filter((week) => week.status === "met" || week.status === "below");
-    const legacyOnly = Boolean(input.policyActivatedOn && weeklyRows.length && rows.every((row) => meetings.some((meeting) => meeting.id === row.meetingId && localDate(meeting.startsAt, input.timeZone) < input.policyActivatedOn!)) && weeklyRows.every((row) => row.ruleId?.startsWith("legacy:")));
+    const legacyOnly = Boolean(input.policyActivatedOn && weeklyRows.length && rows.every((row) => meetingDates.get(row.meetingId)! < input.policyActivatedOn!) && weeklyRows.every((row) => row.ruleId?.startsWith("legacy:")));
     const allTimeRate = policy === "weekly" ? legacyOnly ? rate(weeklyPresent, weeklyTotal) : rate(dueWeeks.filter((week) => week.status === "met").length, dueWeeks.length) : policy === "standard" ? rate(weightedPresent, weightedTotal) : null;
     const allTimeAdjusted = policy === "weekly" ? legacyOnly ? rate(weeklyPresent, weeklyAdjusted) : allTimeRate : policy === "standard" ? rate(weightedPresent, weightedAdjusted) : null;
-    const recent = rows.filter((row) => row.ruleId === currentRule?.id && row.eligibility === "required" && meetings.some((meeting) => meeting.id === row.meetingId && localDate(meeting.startsAt, input.timeZone) >= recentFrom));
+    const recent = rows.filter((row) => row.ruleId === currentRule?.id && row.eligibility === "required" && meetingDates.get(row.meetingId)! >= recentFrom);
     const recentPresent = recent.reduce((sum, row) => sum + (row.attended ? row.weight : 0), 0);
     const recentTotal = recent.reduce((sum, row) => sum + row.weight, 0);
     const recentAdjusted = recent.reduce((sum, row) => sum + (row.disposition === "excused" ? 0 : row.weight), 0);

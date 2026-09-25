@@ -66,6 +66,44 @@ async function expectLabelButtonTheme(page: Page,name: string,kind: "secondary"|
 
 for(const viewport of dashboardConformanceReferences.viewports) {
   for(const theme of dashboardConformanceReferences.themes) {
+    test(`Roster actions and attendance retry follow ${theme} theme at ${viewport.width}x${viewport.height}`,async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme",savedTheme),theme);
+      await useReferenceContext(page);
+      let failAttendance=true;
+      await page.unroute("**/reports/attendance*");
+      await page.route("**/reports/attendance*",(route) => failAttendance ? route.fulfill({ status: 503,json: { error: "Unavailable" } }) : route.fulfill({ json: { meetings: [],members: [],labels: [],baseline: null,timeZone: "UTC" } }));
+      await page.goto("/roster");
+      const add=page.getByRole("button",{ name: "Add member",exact: true });
+      const bulk=page.getByRole("button",{ name: "Bulk edit",exact: true });
+      const addBox=await add.boundingBox(); const bulkBox=await bulk.boundingBox();
+      expect(addBox).not.toBeNull(); expect(bulkBox).not.toBeNull();
+      expect(addBox!.x+addBox!.width).toBeLessThanOrEqual(bulkBox!.x);
+      expect(Math.abs(addBox!.y+addBox!.height/2-bulkBox!.y-bulkBox!.height/2)).toBeLessThan(2);
+      await expect(page.getByText("Attendance rates could not be loaded.")).toBeVisible();
+      const retry=page.getByRole("button",{ name: "Retry attendance rates" });
+      const style=await retry.evaluate((element) => {
+        const app=element.closest(".app")!; const probe=document.createElement("button");
+        probe.style.backgroundColor="var(--ui-surface-subtle)"; probe.style.color="var(--ui-text)";
+        probe.style.border="1px solid var(--ui-border)"; probe.style.borderRadius="var(--radius-control)";
+        app.append(probe); const actual=getComputedStyle(element); const expected=getComputedStyle(probe);
+        const result={ actual: [actual.backgroundColor,actual.color,actual.borderTopColor,actual.borderTopLeftRadius],expected: [expected.backgroundColor,expected.color,expected.borderTopColor,expected.borderTopLeftRadius],height: element.getBoundingClientRect().height };
+        probe.remove(); return result;
+      });
+      expect(style.actual).toEqual(style.expected);
+      expect(style.height).toBeGreaterThanOrEqual(44);
+      await retry.focus();
+      expect(await retry.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
+      failAttendance=false;
+      await retry.click();
+      await expect(retry).toHaveCount(0);
+      await expectResponsiveFit(page);
+    });
+  }
+}
+
+for(const viewport of dashboardConformanceReferences.viewports) {
+  for(const theme of dashboardConformanceReferences.themes) {
     test(`Reports and Roster conform at ${viewport.width}x${viewport.height} in ${theme} mode with reference branding`,async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme",savedTheme),theme);

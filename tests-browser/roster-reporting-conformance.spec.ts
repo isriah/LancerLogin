@@ -30,7 +30,7 @@ async function useReferenceContext(page: Page,role: Role="admin") {
   await page.route("**/labels",(route) => route.fulfill({ json: { labels: [{ id: "mentor",name: "Mentor",active: 1,formulaEnabled: 1 }],history: [],periods: [],today: "2026-09-22" } }));
   await page.route("**/reports/attendance*",(route) => {
     const from=new URL(route.request().url()).searchParams.get("from"); const meetings=from&&from>"2026-09-01"? []:[{ id: "meeting-1",title: "Build session",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",attendanceClosesAt: "2026-09-01T20:30:00Z",required: true,attendanceWeight: 1,audienceMode: "all",audienceLabelIds: [] }];
-    const members=meetings.length? roster.map((member,index) => ({ member,currentLabelIds: [],rows: [{ meetingId: "meeting-1",memberId: member.id,disposition: index? "absent":"present",eligibility: "required",policy: "standard",rateEligible: true,attended: !index,weight: 1,audience: "All",memberLabelIds: [] }],policy: "standard",present: index? 0:1,primaryTotal: 1,adjustedTotal: 1,rate: index? 0:100,adjustedRate: index? 0:100,pooledRate: null,weeks: [],belowTargetWeeks: [] })) : [];
+    const members=meetings.length? roster.map((member,index) => ({ member,currentLabelIds: [],rows: [{ meetingId: "meeting-1",memberId: member.id,disposition: index? "absent":"present",eligibility: "required",policy: "standard",rateEligible: true,regularEligible: true,attended: !index,weight: 1,regularWeight: 1,audience: "All",memberLabelIds: [] }],regularAttendance: { rate: index? 0:100,attended: index? 0:1,required: 1,from: member.attendanceRequiredFrom,to: "2026-09-22" },currentCompliance: { labelId: null,labelName: null,ruleId: null,ruleType: null,excusedHandling: null,status: "no_rule",threshold: null,from: "2026-08-24",to: "2026-09-22",rate: null,unadjustedRate: null,attended: 0,required: 0 },historySummaries: [],policy: "standard",present: index? 0:1,primaryTotal: 1,adjustedTotal: 1,rate: index? 0:100,adjustedRate: index? 0:100,pooledRate: null,weeks: [],belowTargetWeeks: [] })) : [];
     return route.fulfill({ json: { meetings,members,labels: [{ id: "mentor",name: "Mentor",active: 1,formulaEnabled: 1 }],baseline: null,timeZone: "UTC" } });
   });
 }
@@ -117,7 +117,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.getByRole("heading",{ level: 1,name: "Reports" })).toBeVisible();
       await expect(page.getByRole("heading",{ level: 2,name: "Report filters" })).toBeVisible();
       await expect(page.getByRole("table",{ name: "Attendance leaderboard" })).toBeVisible();
-      await expect(page.getByRole("img",{ name: /Team attendance trend:/ })).toBeVisible();
+      await expect(page.getByRole("img",{ name: /Team regular attendance trend:/ })).toBeVisible();
       const reportingPeriod=page.getByLabel("Reporting period");
       expect((await reportingPeriod.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await reportingPeriod.focus();
@@ -147,6 +147,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await page.route("**/attendance/policy/preview",(route) => route.fulfill({ json: { impact: [],previewToken: "policy-preview" } }));
       await page.route("**/labels/membership/preview",(route) => route.fulfill({ json: { changes: [{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "2026-09-01" }],impact: [],previewToken: "label-preview" } }));
       await page.goto("/settings/attendance");
+      await expect(page.getByLabel("Excused meetings")).toHaveValue("exclude");
       for(const name of ["Create label","Preview new rule","Preview window change"]) await expectLabelButtonTheme(page,name,"primary");
       for(const name of ["Retire","Preview removal"]) await expectLabelButtonTheme(page,name,"danger");
       await expectLabelButtonTheme(page,"Restore","secondary");
@@ -389,15 +390,32 @@ test("Operator and member-detail states preserve identity policy, history, and u
   await expect(page.getByRole("link",{ name: "Return to roster" })).toBeVisible();
 });
 
-// Policy responses are calculated by the Worker. The browser must display the same rate in each view.
-test("server policy rates agree across Reports and Roster and optional meetings stay out of standard rates",async ({ page }) => {
+// Policy responses are calculated by the Worker. The browser must display the same rates in each view.
+test("regular and Class policy attendance agree across Reports, Roster, and member profile",async ({ page }) => {
   await useReferenceContext(page);
   const meeting={ id: "required",title: "Required build",startsAt: "2026-09-01T18:00:00Z",endsAt: "2026-09-01T20:00:00Z",attendanceClosesAt: "2026-09-01T20:30:00Z",required: true,attendanceWeight: 1,audienceMode: "all",audienceLabelIds: [] };
-  await page.route("**/reports/attendance*",(route) => route.fulfill({ json: { meetings: [meeting,{ ...meeting,id: "optional",title: "Open practice",required: false }],members: [{ member: roster[0],currentLabelIds: [],rows: [],policy: "standard",present: 0,primaryTotal: 1,adjustedTotal: 1,rate: 0,adjustedRate: 0,pooledRate: null,weeks: [],belowTargetWeeks: [] }],labels: [],baseline: null,timeZone: "UTC" } }));
+  const attendancePolicy={ member: roster[0],currentLabelIds: ["class"],rows: [],regularAttendance: { rate: 60,attended: 3,required: 5,from: "2026-01-01",to: "2026-09-22" },currentCompliance: { labelId: "class",labelName: "Class",ruleId: "class-rule",ruleType: "weighted_percentage" as const,excusedHandling: "exclude" as const,status: "met" as const,threshold: 75,from: "2026-08-24",to: "2026-09-22",rate: 75,unadjustedRate: 60,attended: 3,required: 4 },historySummaries: [{ ruleId: "class-rule",labelId: "class",labelName: "Class",ruleType: "weighted_percentage" as const,excusedHandling: "exclude" as const,startsOn: null,endsOn: null,rate: 75,unadjustedRate: 60,weeksMet: 0,weeksDue: 0,status: "evaluated" }],policy: "standard" as const,present: 3,primaryTotal: 5,adjustedTotal: 4,rate: 60,adjustedRate: 75,pooledRate: null,weeks: [],belowTargetWeeks: [] };
+  await page.route("**/reports/attendance*",(route) => route.fulfill({ json: { meetings: [meeting,{ ...meeting,id: "optional",title: "Open practice",required: false }],members: [attendancePolicy],labels: [{ id: "class",name: "Class",active: 1,formulaEnabled: 0 }],baseline: null,timeZone: "UTC" } }));
+  await page.route("**/admin/members/A-101/history",(route) => route.fulfill({ json: { member: roster[0],labels: [{ id: "class",name: "Class",active: 1,formulaEnabled: 0 }],labelHistory: [],attendancePolicy,meanAnomalyMinutes: null,history: [] } }));
   await page.goto("/reports");
-  await expect(page.locator(".report-row:not(.header)").filter({ hasText: "Avery Stone" }).getByRole("cell").nth(1)).toContainText("0%");
+  const reportRow=page.locator(".report-row:not(.header)").filter({ hasText: "Avery Stone" });
+  await expect(reportRow.getByRole("cell").nth(1)).toContainText("60%");
+  await expect(reportRow.getByRole("cell").nth(2)).toContainText("Class: 75% of 75% · met");
   await page.goto("/roster");
-  await expect(page.getByRole("row").filter({ hasText: "Avery Stone" }).locator(".roster-attendance-rate")).toHaveText("0%");
+  await expect(page.getByRole("row").filter({ hasText: "Avery Stone" }).locator(".roster-attendance-rate")).toHaveText("Regular: 60% · Class: 75% of 75% · met");
+  await page.goto("/roster/A-101");
+  await expect(page.getByText("60% · 2026-01-01 to 2026-09-22",{ exact: true })).toBeVisible();
+  await expect(page.getByText("Class: 75% of 75% · met · 2026-08-24 to 2026-09-22",{ exact: true })).toBeVisible();
+});
+
+test("weekly assigned policies display meeting counts and pending status",async ({ page }) => {
+  await useReferenceContext(page);
+  const weeklyPolicy={ member: roster[0],currentLabelIds: ["mentor"],rows: [],regularAttendance: { rate: 100,attended: 2,required: 2,from: "2026-01-01",to: "2026-09-22" },currentCompliance: { labelId: "mentor",labelName: "Mentor",ruleId: "mentor-rule",ruleType: "weekly_count",excusedHandling: null,status: "pending",threshold: 3,from: "2026-09-21",to: "2026-09-27",rate: 67,unadjustedRate: 67,attended: 2,required: 3 },historySummaries: [],policy: "weekly",present: 2,primaryTotal: 3,adjustedTotal: 3,rate: null,adjustedRate: null,pooledRate: null,weeks: [],belowTargetWeeks: [] };
+  await page.route("**/reports/attendance*",(route) => route.fulfill({ json: { meetings: [],members: [weeklyPolicy],labels: [{ id: "mentor",name: "Mentor",active: 1,formulaEnabled: 0 }],baseline: null,timeZone: "UTC" } }));
+  await page.goto("/reports");
+  await expect(page.locator(".report-row:not(.header)").filter({ hasText: "Avery Stone" }).getByRole("cell").nth(2)).toContainText("Mentor: 2 of 3 meetings · pending");
+  await page.goto("/roster");
+  await expect(page.getByRole("row").filter({ hasText: "Avery Stone" }).locator(".roster-attendance-rate")).toHaveText("Regular: 100% · Mentor: 2 of 3 meetings · pending");
 });
 
 test("Admin previews and applies a separate dated label CSV; Operator sees labels without mutation controls",async ({ page }) => {

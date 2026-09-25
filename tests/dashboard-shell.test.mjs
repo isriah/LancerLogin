@@ -332,8 +332,8 @@ test("reports are an operational workspace with filters, trend, saved views, and
   assert.match(reports, /From<input type="date"/);
   assert.match(reports, /Meeting type<select/);
   assert.match(reports, /Active roster/);
-  assert.match(reports, /Team attendance trend/);
-  assert.match(reports, /role="img" aria-label=\{`Team attendance trend/);
+  assert.match(reports, /Team regular attendance trend/);
+  assert.match(reports, /role="img" aria-label=\{`Team regular attendance trend/);
   assert.match(reports, /Review contest/);
   assert.match(reports, /Approve and mark present/);
   assert.match(reports, /\/discord\/contests\/resolve/);

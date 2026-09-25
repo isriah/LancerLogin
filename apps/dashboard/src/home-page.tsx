@@ -3,7 +3,7 @@ import { api } from "./dashboard-api";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
 import { calendarDeliveryMessage, pendingMeetingDeletionKey, pendingMeetingDeletionLifetimeMs, readPendingMeetingDeletion, type CalendarDelivery, type CalendarSync, type PendingMeetingDeletion } from "./meeting-management";
 import { MeetingCreationDialog, MeetingsPage, type Meeting } from "./meetings-page";
-import { loadReportAttendance } from "./report-attendance";
+import { loadReportAttendance, policyResultText } from "./report-attendance";
 
 const dayKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 export const dashboardMeetingViewKey = "lancerlogin-dashboard-meeting-view";
@@ -20,7 +20,7 @@ export function HomePage({ navigate, discordEnabled }: { role: "admin" | "operat
   async function load() {
     const result = await api<{ meetings: Meeting[] }>("/meetings");
     setMeetings(result.meetings); setNotice(""); setNoticeTone("neutral");
-    void loadReportAttendance(api).then((report) => setPolicyAlerts(report.members.flatMap((item) => item.currentCompliance?.status === "below" ? [{ memberId: item.member.memberId, name: `${item.member.firstName} ${item.member.lastName}`, detail: item.currentCompliance.ruleType === "weekly_count" ? `${item.currentCompliance.attended} of ${item.currentCompliance.required} meetings in the settled segment` : `${item.currentCompliance.rate ?? 0}% against ${item.currentCompliance.threshold}% required` }] : []))).catch(() => setPolicyAlerts([]));
+    void loadReportAttendance(api).then((report) => setPolicyAlerts(report.members.flatMap((item) => item.currentCompliance.status === "below" ? [{ memberId: item.member.memberId, name: `${item.member.firstName} ${item.member.lastName}`, detail: policyResultText(item.currentCompliance) }] : []))).catch(() => setPolicyAlerts([]));
   }
   useEffect(() => { void load().catch((error: Error) => { setNotice(error.message); setNoticeTone("error"); }); const timer = window.setInterval(() => void load().catch(() => undefined), 60_000); return () => window.clearInterval(timer); }, [discordEnabled]);
   useEffect(() => {

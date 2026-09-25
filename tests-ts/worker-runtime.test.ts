@@ -886,7 +886,7 @@ test("attendance export is authenticated, quoted, and safe to open in spreadshee
   assert.match(csv, /"Studio, weekly"/);
   assert.match(csv, /"'=HYPERLINK\(""https:\/\/example\.test""\)"/);
   assert.match(csv, /'\+Avery/);
-  assert.match(csv, /audience,required,attendanceWeight/); assert.match(csv, /All,true,2\.5/); assert.match(csv, /required,true,present,2\.5,2\.5,2\.5/);
+  assert.match(csv, /audience,required,attendanceWeight/); assert.match(csv, /regularEligible,regularWeight,regularWeightedPresent,regularRate,regularAttended,regularRequired,regularFrom,regularTo/); assert.match(csv, /policyLabel,policyRuleType,policyExcusedHandling,policyStatus/); assert.match(csv, /All,true,2\.5/); assert.match(csv, /present,required,true,2\.5,2\.5,100,2\.5,2\.5/);
   assert.ok(database.calls.some((call) => call.sql.includes("FROM attendance_events e JOIN meetings mt")));
   assert.ok(database.calls.some((call) => call.sql.includes("FROM attendance_corrections c JOIN meetings mt")));
 });
@@ -1378,7 +1378,7 @@ test("signed Discord attendance reports match canonical reporting and attendance
   assert.equal(result.status, 200);
   const body = await result.json() as { type: number; data: { content: string; flags: number; allowed_mentions: { parse: string[] } } };
   assert.equal(body.type, 4); assert.equal(body.data.flags, 64); assert.deepEqual(body.data.allowed_mentions, { parse: [] });
-  assert.match(body.data.content, /Attendance: \*\*33%\*\*.*Excuse adjusted: \*\*38%\*\*/);
+  assert.match(body.data.content, /Regular attendance: 33% from 2026-08-15 to \d{4}-\d{2}-\d{2}\. No assigned attendance policy\./);
   for (const expected of ["No scan", "Corrected absent", "Partial scan"]) assert.match(body.data.content, new RegExp(expected));
   assert.doesNotMatch(body.data.content, /Optional meetup|Complete attendance|Corrected present|Excused meeting/);
   assert.ok(database.calls.some((call) => call.sql.includes("FROM attendance_events e JOIN meetings mt")));
@@ -1394,7 +1394,7 @@ test("Discord attendance reports handle empty and provider-bounded histories", a
     const result = await worker.fetch(signedDiscordInteraction({ type: 2, guild_id: "123456789012345678", data: { name: "attendance-report" }, member: { user: { id: "323456789012345678" } } }, privateKey), env);
     return (await result.json() as { data: { content: string } }).data.content;
   };
-  const empty = await run([]); assert.match(empty, /Attendance: \*\*No target\*\*/); assert.match(empty, /No eligible missed meetings/);
+  const empty = await run([]); assert.match(empty, /Regular attendance: N\/A from 2026-01-01 to \d{4}-\d{2}-\d{2}\. No assigned attendance policy\./); assert.match(empty, /No missed required meetings/);
   const long = await run(Array.from({ length: 80 }, (_, index) => ({ title: `Very long required or optional meeting ${index + 1} ${"x".repeat(90)}`, startsAt: `2026-08-${String(index % 28 + 1).padStart(2, "0")}T20:00:00Z`, endsAt: "2020-01-01T21:00:00Z" })));
   assert.ok(long.length <= 2_000); assert.match(long, /More meetings omitted to fit Discord/); assert.ok((long.match(/^• /gm) ?? []).length < 80);
 });
@@ -2433,7 +2433,7 @@ test("policy changes require Admin preview, audit the apply, and reject stale pr
   const database = new FakeDatabase();
   seedPolicy(database, { labels: [{ id: "student", name: "Student", active: 1, formulaEnabled: 0 }] });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const change = { rule: { labelId: "student", startsOn: null, endsOn: null, ruleType: "weighted_percentage", thresholdPercent: 80 } };
+  const change = { rule: { labelId: "student", startsOn: null, endsOn: null, ruleType: "weighted_percentage", thresholdPercent: 80, excusedHandling: "exclude" } };
   assert.equal((await worker.fetch(request("/attendance/policy/preview", change, { cookie: await sessionCookie("operator") }), env)).status, 403);
   const preview = await worker.fetch(request("/attendance/policy/preview", change, { cookie: await sessionCookie("admin") }), env);
   assert.equal(preview.status, 200, await preview.clone().text());
@@ -2443,9 +2443,39 @@ test("policy changes require Admin preview, audit the apply, and reject stale pr
   const applied = await worker.fetch(request("/attendance/policy/apply", { ...change, previewToken: body.previewToken }, { cookie: await sessionCookie("admin") }), env);
   assert.equal(applied.status, 200, await applied.clone().text());
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO label_attendance_rules") && item.values.includes(80)));
+  assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO label_attendance_rules") && item.values.includes("exclude")));
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("'attendance_policy.changed'")));
   database.lists.set("rule_type AS ruleType, threshold_percent AS thresholdPercent", [{ id: "other", labelId: "student", startsOn: null, endsOn: null, ruleType: "weighted_percentage", thresholdPercent: 90 }]);
   assert.equal((await worker.fetch(request("/attendance/policy/apply", { ...change, previewToken: body.previewToken }, { cookie: await sessionCookie("admin") }), env)).status, 409);
+});
+
+test("policy previews include historical-only percentage changes", async () => {
+  const database = new FakeDatabase();
+  seedPolicy(database, {
+    members: [{ id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: 1, attendanceRequiredFrom: "2026-01-01" }],
+    labels: [{ id: "class", name: "Class", active: 1, formulaEnabled: 0 }],
+    changes: [{ memberId: "member-1", labelId: "class", action: "add", effectiveDate: "2026-01-01", createdAt: "2026-01-01T00:00:00Z" }],
+    rules: [
+      { id: "class-standing", labelId: "class", startsOn: null, endsOn: null, ruleType: "weighted_percentage", thresholdPercent: 75, meetingsPerWeek: null, excusedHandling: "exclude" },
+      { id: "class-summer", labelId: "class", startsOn: "2026-07-01", endsOn: "2026-07-31", ruleType: "weighted_percentage", thresholdPercent: 75, meetingsPerWeek: null, excusedHandling: "exclude" },
+    ],
+    meetings: [
+      { id: "summer-present", title: "Summer present", startsAt: "2026-07-10T20:00:00Z", endsAt: "2026-07-10T21:00:00Z", required: 1, attendanceWeight: 1, audienceMode: "all", isTest: 0 },
+      { id: "summer-excused", title: "Summer excused", startsAt: "2026-07-11T20:00:00Z", endsAt: "2026-07-11T21:00:00Z", required: 1, attendanceWeight: 1, audienceMode: "all", isTest: 0 },
+    ],
+    corrections: [
+      { meetingId: "summer-present", memberId: "member-1", disposition: "present", reason: "Verified" },
+      { meetingId: "summer-excused", memberId: "member-1", disposition: "excused", reason: "School" },
+    ],
+  });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/attendance/policy/preview", { rule: { id: "class-summer", labelId: "class", startsOn: "2026-07-01", endsOn: "2026-07-31", ruleType: "weighted_percentage", thresholdPercent: 75, excusedHandling: "count_missed" } }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 200, await result.clone().text());
+  const body = await result.json() as { impact: Array<{ before: { status: string; rate: number | null }; after: { status: string; rate: number | null }; beforeHistory: Array<{ ruleId: string; rate: number | null }>; afterHistory: Array<{ ruleId: string; rate: number | null }> }> };
+  assert.equal(body.impact.length, 1);
+  assert.deepEqual(body.impact[0].before, body.impact[0].after);
+  assert.equal(body.impact[0].beforeHistory.find((item) => item.ruleId === "class-summer")?.rate, 100);
+  assert.equal(body.impact[0].afterHistory.find((item) => item.ruleId === "class-summer")?.rate, 50);
 });
 
 test("new policy rejects members already holding another policy label", async () => {
@@ -2484,17 +2514,34 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.lists.set("FROM member_labels WHERE", [{ id: "mentor:primary", installation_id: "primary", name: "Mentor", active: 1, formula_enabled: 1, created_by: null, created_at: "2026-01-01T00:00:00Z" }]);
   database.lists.set("FROM member_label_changes WHERE", []);
   database.lists.set("FROM label_weekly_targets WHERE", []);
-  database.lists.set("FROM label_attendance_rules WHERE", []);
+  database.lists.set("FROM label_attendance_rules WHERE", [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { schemaVersion: number; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 17); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { schemaVersion: number; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 18); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
+  assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO member_labels") && item.values.includes("Mentor")));
+  assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO label_attendance_rules") && item.values.includes("count_missed")));
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("attendance_policy_activated_on = ?") && item.values.includes("2026-09-22")));
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("DELETE FROM discord_label_role_mappings") && item.sql.includes("active = 0")));
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("'data.backup_restored'")));
+});
+
+test("schema 17 roster restore defaults percentage rules to excluded excuses", async () => {
+  const database = new FakeDatabase();
+  const backup = { product: "LancerLogin", schemaVersion: 17, scope: "roster", exportedAt: "2026-09-24T00:00:00Z", attendanceRecentDays: 30, attendancePolicyActivatedOn: "2026-09-01", tables: {
+    members: [],
+    member_labels: [{ id: "class", installation_id: "primary", name: "Class", active: 1, formula_enabled: 1, created_by: null, created_at: "2026-09-01T00:00:00Z" }],
+    member_label_changes: [],
+    label_weekly_targets: [],
+    label_attendance_rules: [{ id: "class-rule", installation_id: "primary", label_id: "class", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" }],
+  } };
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const result = await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 200, await result.clone().text());
+  assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO label_attendance_rules") && item.values.includes("exclude")));
 });
 
 test("installation backup retains Discord role mappings while roster backup omits provider role IDs", async () => {
@@ -2503,7 +2550,7 @@ test("installation backup retains Discord role mappings while roster backup omit
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 17); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 18); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   const restored = await worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: installation }, { cookie }), env);
   assert.equal(restored.status, 200, await restored.clone().text());
@@ -2532,7 +2579,7 @@ test("schema 14 roster restore converts prior weekly targets into current rules"
   } };
   const result = await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie: await sessionCookie("admin") }), env);
   assert.equal(result.status, 200, await result.clone().text());
-  assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO label_attendance_rules") && item.values.includes("legacy:old-target")));
+  assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO label_attendance_rules") && item.values.includes("legacy:old-target") && item.values.includes("exclude")));
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("attendance_policy_activated_on = ?") && item.values.includes(new Date().toISOString().slice(0, 10))));
 });
 

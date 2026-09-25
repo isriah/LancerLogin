@@ -46,6 +46,29 @@ test("weighted percentage compares unrounded excuse-adjusted rate to threshold a
   assert.equal(excused.rows.find((row) => row.meetingId === "optional")?.rateEligible, false);
 });
 
+test("regular attendance stays independent while percentage policies configure excused meetings", () => {
+  const changes: LabelChange[] = [{ memberId: "a", labelId: "student", action: "add", effectiveDate: "2026-09-01" }];
+  const meetings = [1, 2, 3, 4, 5].map((value) => meeting(`required-${value}`, `2026-09-${20 + value}`, []));
+  const observations = [observed("required-1", "a", "present"), observed("required-2", "a", "present"), observed("required-3", "a", "present"), observed("required-5", "a", "excused")];
+  const excluded = evaluate({ members: [members[0]], changes, rules: [{ ...percentage(), labelId: "student", excusedHandling: "exclude", thresholdPercent: 75 }], meetings, observations, from: "2026-09-01" })[0];
+  assert.deepEqual(excluded.regularAttendance, { rate: 60, attended: 3, required: 5, from: "2026-09-01", to: "2026-10-01" });
+  assert.equal(excluded.currentCompliance.rate, 75);
+  assert.equal(excluded.currentCompliance.status, "met");
+  assert.equal(excluded.historySummaries[0].rate, 75);
+  const counted = evaluate({ members: [members[0]], changes, rules: [{ ...percentage(), labelId: "student", excusedHandling: "count_missed", thresholdPercent: 75 }], meetings, observations, from: "2026-09-01" })[0];
+  assert.deepEqual(counted.regularAttendance, excluded.regularAttendance);
+  assert.equal(counted.currentCompliance.rate, 60);
+  assert.equal(counted.currentCompliance.status, "below");
+  assert.equal(counted.historySummaries[0].rate, 60);
+});
+
+test("regular attendance uses required meeting weights even for a weekly policy", () => {
+  const changes: LabelChange[] = [{ memberId: "a", labelId: "mentor", action: "add", effectiveDate: "2026-09-01" }];
+  const result = evaluate({ members: [members[0]], changes, rules: [weekly("weekly", "2026-09-01", null, 1)], meetings: [meeting("heavy", "2026-09-21", [], true, 3), meeting("light", "2026-09-22", [], true, 1), meeting("optional", "2026-09-23", [], false, 20)], observations: [observed("light", "a", "present"), observed("optional", "a", "present")] })[0];
+  assert.deepEqual(result.regularAttendance, { rate: 25, attended: 1, required: 4, from: "2026-09-01", to: "2026-10-01" });
+  assert.equal(result.currentCompliance.ruleType, "weekly_count");
+});
+
 test("dated label changes and start-count dates keep historical eligibility", () => {
   const result = evaluate({ members: [{ ...members[0], attendanceRequiredFrom: "2026-09-08" }], changes: [{ memberId: "a", labelId: "student", action: "add", effectiveDate: "2026-09-07" }, { memberId: "a", labelId: "student", action: "remove", effectiveDate: "2026-09-09" }], rules: [percentage()], meetings: [meeting("early", "2026-09-07", ["student"]), meeting("during", "2026-09-08", ["student"]), meeting("later", "2026-09-09", ["student"])], observations: [observed("early", "a", "present"), observed("later", "a", "present")] })[0];
   assert.deepEqual(result.rows.map((row) => row.eligibility), ["before_start", "required", "outside_audience"]);
@@ -127,7 +150,9 @@ test("additive migration backfills prior weekly targets and stops future Mentor 
   const mentor = db.prepare("SELECT id FROM member_labels WHERE installation_id = 'existing' AND name = 'Mentor'").get() as { id: string };
   db.prepare("INSERT INTO label_weekly_targets(id, installation_id, label_id, starts_on, ends_on, meetings_per_week, created_at) VALUES ('old-target', 'existing', ?, '2026-09-01', '2026-09-30', 1, '2026-09-01T00:00:00Z')").run(mentor.id);
   db.exec(readFileSync(new URL("../apps/api/migrations/0031_configurable_attendance.sql", import.meta.url), "utf8"));
+  db.exec(readFileSync(new URL("../apps/api/migrations/0034_attendance_excused_handling.sql", import.meta.url), "utf8"));
   assert.deepEqual({ ...db.prepare("SELECT id, rule_type, meetings_per_week FROM label_attendance_rules").get() }, { id: "legacy:old-target", rule_type: "weekly_count", meetings_per_week: 1 });
+  assert.equal(db.prepare("SELECT excused_handling FROM label_attendance_rules").get()?.excused_handling, "exclude");
   assert.deepEqual({ ...db.prepare("SELECT attendance_recent_days, attendance_policy_activated_on FROM organization_settings").get() }, { attendance_recent_days: 30, attendance_policy_activated_on: new Date().toISOString().slice(0, 10) });
   db.prepare("INSERT INTO installations VALUES (?, ?)").run("new", "2026-10-01T00:00:00Z");
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM member_labels WHERE installation_id = 'new'").get()?.count, 0);

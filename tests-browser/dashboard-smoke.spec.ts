@@ -42,11 +42,11 @@ test("roster columns stay vertically centered with actions at the desktop right 
   const row = page.locator(".roster-row:not(.header)").first();
   const cells = row.locator(":scope > *");
   const columnHeaders = header.getByRole("columnheader");
-  await expect(columnHeaders).toHaveText(["Name", "Member ID", "Discord ID", "Current compliance", "Actions"]);
+  await expect(columnHeaders).toHaveText(["Name", "Member ID", "Discord ID", "Attendance", "Actions"]);
   await expect(cells).toHaveCount(5);
   const columnNames = await columnHeaders.allTextContents();
   const actionsIndex = columnNames.indexOf("Actions");
-  const attendanceIndex = columnNames.indexOf("Current compliance");
+  const attendanceIndex = columnNames.indexOf("Attendance");
   expect(actionsIndex).toBe(columnNames.length - 1);
   expect(attendanceIndex).toBe(actionsIndex - 1);
   await expect(cells.nth(actionsIndex)).toHaveClass(/roster-action-cell/);

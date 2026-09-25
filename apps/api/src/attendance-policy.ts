@@ -2,15 +2,17 @@ export type PolicyMember = { id: string; memberId: string; firstName: string; la
 export type PolicyLabel = { id: string; name: string; active: number | boolean; formulaEnabled: number | boolean };
 export type LabelChange = { memberId: string; labelId: string; action: "add" | "remove"; effectiveDate: string; createdAt?: string };
 export type WeeklyTarget = { id: string; labelId: string; startsOn: string; endsOn: string; meetingsPerWeek: number };
-export type AttendanceRule = { id: string; labelId: string; startsOn?: string | null; endsOn?: string | null; ruleType: "weighted_percentage" | "weekly_count"; thresholdPercent?: number | null; meetingsPerWeek?: number | null };
+export type ExcusedHandling = "exclude" | "count_missed";
+export type AttendanceRule = { id: string; labelId: string; startsOn?: string | null; endsOn?: string | null; ruleType: "weighted_percentage" | "weekly_count"; thresholdPercent?: number | null; meetingsPerWeek?: number | null; excusedHandling?: ExcusedHandling | null };
 export type PolicyMeeting = { id: string; title: string; startsAt: string; endsAt: string; attendanceClosesAt: string; required: number | boolean; attendanceWeight: number; audienceMode: "all" | "labels"; audienceLabelIds: string[]; isTest?: number | boolean };
 export type Observation = { meetingId: string; memberId: string; disposition: "present" | "active" | "absent" | "excused"; checkedInAt?: string | null; checkedOutAt?: string | null; reason?: string | null };
 export type Eligibility = "required" | "optional" | "outside_audience" | "before_start" | "weekly" | "no_target";
-export type PolicyRow = { meetingId: string; memberId: string; disposition: Observation["disposition"]; eligibility: Eligibility; policy: "standard" | "weekly"; ruleId?: string | null; rateEligible: boolean; attended: boolean; weight: number; audience: string; memberLabelIds: string[]; checkedInAt?: string | null; checkedOutAt?: string | null; reason?: string | null };
+export type PolicyRow = { meetingId: string; memberId: string; disposition: Observation["disposition"]; eligibility: Eligibility; policy: "standard" | "weekly"; ruleId?: string | null; rateEligible: boolean; regularEligible: boolean; attended: boolean; weight: number; regularWeight: number; audience: string; memberLabelIds: string[]; checkedInAt?: string | null; checkedOutAt?: string | null; reason?: string | null };
 export type PolicyWeek = { weekStartsOn: string; weekEndsOn: string; segmentStartsOn: string; segmentEndsOn: string; labelId: string; ruleId: string; target: number; opportunities: number; attended: number; excused: number; numerator: number; denominator: number; adjustedDenominator: number; rate: number | null; adjustedRate: number | null; belowTarget: boolean; status: "met" | "below" | "pending" | "not_applicable" };
-export type PolicyCompliance = { labelId: string | null; ruleId: string | null; ruleType: AttendanceRule["ruleType"] | null; status: "met" | "below" | "pending" | "not_applicable" | "no_rule"; threshold: number | null; from: string; to: string; rate: number | null; unadjustedRate: number | null; attended: number; required: number };
-export type PolicyHistory = { ruleId: string; labelId: string; ruleType: AttendanceRule["ruleType"]; startsOn: string | null; endsOn: string | null; rate: number | null; unadjustedRate: number | null; weeksMet: number; weeksDue: number; status: string };
-export type PolicyMemberResult = { member: PolicyMember; currentLabelIds: string[]; rows: PolicyRow[]; policy: "standard" | "weekly" | "mixed"; present: number; primaryTotal: number; adjustedTotal: number; rate: number | null; adjustedRate: number | null; pooledRate: number | null; weeks: PolicyWeek[]; belowTargetWeeks: PolicyWeek[]; currentCompliance: PolicyCompliance; historySummaries: PolicyHistory[] };
+export type RegularAttendance = { rate: number | null; attended: number; required: number; from: string | null; to: string };
+export type PolicyCompliance = { labelId: string | null; labelName: string | null; ruleId: string | null; ruleType: AttendanceRule["ruleType"] | null; excusedHandling: ExcusedHandling | null; status: "met" | "below" | "pending" | "not_applicable" | "no_rule"; threshold: number | null; from: string; to: string; rate: number | null; unadjustedRate: number | null; attended: number; required: number };
+export type PolicyHistory = { ruleId: string; labelId: string; labelName: string; ruleType: AttendanceRule["ruleType"]; excusedHandling: ExcusedHandling | null; startsOn: string | null; endsOn: string | null; rate: number | null; unadjustedRate: number | null; weeksMet: number; weeksDue: number; status: string };
+export type PolicyMemberResult = { member: PolicyMember; currentLabelIds: string[]; rows: PolicyRow[]; regularAttendance: RegularAttendance; policy: "standard" | "weekly" | "mixed"; present: number; primaryTotal: number; adjustedTotal: number; rate: number | null; adjustedRate: number | null; pooledRate: number | null; weeks: PolicyWeek[]; belowTargetWeeks: PolicyWeek[]; currentCompliance: PolicyCompliance; historySummaries: PolicyHistory[] };
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 export function validDate(value: unknown): value is string {
@@ -49,7 +51,7 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
   const now = Date.parse(nowText);
   const today = localDate(nowText, input.timeZone);
   const recentFrom = shiftDate(today, 1 - (input.recentDays ?? 30));
-  const rules = input.rules ?? (input.targets ?? []).map((target) => ({ id: target.id, labelId: target.labelId, startsOn: target.startsOn, endsOn: target.endsOn, ruleType: "weekly_count" as const, meetingsPerWeek: target.meetingsPerWeek }));
+  const rules: AttendanceRule[] = input.rules ?? (input.targets ?? []).map((target) => ({ id: target.id, labelId: target.labelId, startsOn: target.startsOn, endsOn: target.endsOn, ruleType: "weekly_count" as const, meetingsPerWeek: target.meetingsPerWeek, excusedHandling: "exclude" }));
   const policyLabels = new Set(rules.map((rule) => rule.labelId));
   const legacyFormulaLabels = new Set(input.labels.filter((label) => Boolean(label.formulaEnabled)).map((label) => label.id));
   const labelNames = new Map(input.labels.map((label) => [label.id, label.name]));
@@ -79,6 +81,7 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
       const weekly = rule?.ruleType === "weekly_count";
       const legacy = Boolean(rule?.id.startsWith("legacy:") && input.policyActivatedOn && date < input.policyActivatedOn);
       const eligibleAudience = meeting.audienceMode === "all" || meeting.audienceLabelIds.some((id) => legacy ? id === labelId : activeLabels.has(id));
+      const regularAudience = meeting.audienceMode === "all" || meeting.audienceLabelIds.some((id) => activeLabels.has(id));
       const eligibleDate = !participationStart || date >= participationStart;
       const completed = completedMeetings.has(meeting.id);
       const observation = observations.get(meeting.id + ":" + member.id);
@@ -97,7 +100,7 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
         weekBuckets.set(key, bucket);
       }
       if (!completed) continue;
-      rows.push({ meetingId: meeting.id, memberId: member.id, disposition, eligibility, policy: weekly ? "weekly" : "standard", ruleId: rule?.id ?? null, rateEligible: eligibility === "required" || eligibility === "weekly", attended: disposition === "present", weight: weekly ? 1 : Number(meeting.attendanceWeight ?? 1), audience: audience(meeting), memberLabelIds: [...activeLabels], checkedInAt: observation?.checkedInAt, checkedOutAt: observation?.checkedOutAt, reason: observation?.reason });
+      rows.push({ meetingId: meeting.id, memberId: member.id, disposition, eligibility, policy: weekly ? "weekly" : "standard", ruleId: rule?.id ?? null, rateEligible: eligibility === "required" || eligibility === "weekly", regularEligible: eligibleDate && regularAudience && Boolean(meeting.required), attended: disposition === "present", weight: weekly ? 1 : Number(meeting.attendanceWeight ?? 1), regularWeight: Number(meeting.attendanceWeight ?? 1), audience: audience(meeting), memberLabelIds: [...activeLabels], checkedInAt: observation?.checkedInAt, checkedOutAt: observation?.checkedOutAt, reason: observation?.reason });
     }
     const weeks: PolicyWeek[] = [...weekBuckets.values()].map((bucket) => {
       const target = bucket.target;
@@ -127,24 +130,30 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
     const legacyOnly = Boolean(input.policyActivatedOn && weeklyRows.length && rows.every((row) => meetingDates.get(row.meetingId)! < input.policyActivatedOn!) && weeklyRows.every((row) => row.ruleId?.startsWith("legacy:")));
     const allTimeRate = policy === "weekly" ? legacyOnly ? rate(weeklyPresent, weeklyTotal) : rate(dueWeeks.filter((week) => week.status === "met").length, dueWeeks.length) : policy === "standard" ? rate(weightedPresent, weightedTotal) : null;
     const allTimeAdjusted = policy === "weekly" ? legacyOnly ? rate(weeklyPresent, weeklyAdjusted) : allTimeRate : policy === "standard" ? rate(weightedPresent, weightedAdjusted) : null;
+    const regularRows = rows.filter((row) => row.regularEligible);
+    const regularPresent = regularRows.reduce((sum, row) => sum + (row.attended ? row.regularWeight : 0), 0);
+    const regularRequired = regularRows.reduce((sum, row) => sum + row.regularWeight, 0);
+    const regularAttendance: RegularAttendance = { rate: rate(regularPresent, regularRequired), attended: regularPresent, required: regularRequired, from: input.from ?? (participationStart || null), to: input.to ?? today };
     const recent = rows.filter((row) => row.ruleId === currentRule?.id && row.eligibility === "required" && meetingDates.get(row.meetingId)! >= recentFrom);
     const recentPresent = recent.reduce((sum, row) => sum + (row.attended ? row.weight : 0), 0);
     const recentTotal = recent.reduce((sum, row) => sum + row.weight, 0);
     const recentAdjusted = recent.reduce((sum, row) => sum + (row.disposition === "excused" ? 0 : row.weight), 0);
+    const currentPercentageRequired = currentRule?.excusedHandling === "count_missed" ? recentTotal : recentAdjusted;
     const currentWeek = currentRule ? weeks.find((week) => week.ruleId === currentRule.id && week.weekStartsOn === weekStart(today)) : undefined;
     const currentCompliance: PolicyCompliance = currentRule?.ruleType === "weighted_percentage"
-      ? { labelId: currentLabelId, ruleId: currentRule.id, ruleType: currentRule.ruleType, status: recentAdjusted === 0 ? "not_applicable" : (rawRate(recentPresent, recentAdjusted)! >= Number(currentRule.thresholdPercent) ? "met" : "below"), threshold: Number(currentRule.thresholdPercent), from: recentFrom, to: today, rate: rate(recentPresent, recentAdjusted), unadjustedRate: rate(recentPresent, recentTotal), attended: recentPresent, required: recentAdjusted }
+      ? { labelId: currentLabelId, labelName: currentLabelId ? labelNames.get(currentLabelId) ?? "Retired label" : null, ruleId: currentRule.id, ruleType: currentRule.ruleType, excusedHandling: currentRule.excusedHandling ?? "exclude", status: currentPercentageRequired === 0 ? "not_applicable" : (rawRate(recentPresent, currentPercentageRequired)! >= Number(currentRule.thresholdPercent) ? "met" : "below"), threshold: Number(currentRule.thresholdPercent), from: recentFrom, to: today, rate: rate(recentPresent, currentPercentageRequired), unadjustedRate: rate(recentPresent, recentTotal), attended: recentPresent, required: currentPercentageRequired }
       : currentRule?.ruleType === "weekly_count"
-      ? { labelId: currentLabelId, ruleId: currentRule.id, ruleType: currentRule.ruleType, status: currentWeek?.status ?? "not_applicable", threshold: Number(currentRule.meetingsPerWeek), from: currentWeek?.segmentStartsOn ?? weekStart(today), to: currentWeek?.segmentEndsOn ?? shiftDate(weekStart(today), 6), rate: currentWeek?.adjustedRate ?? null, unadjustedRate: currentWeek?.rate ?? null, attended: currentWeek?.attended ?? 0, required: currentWeek?.adjustedDenominator ?? 0 }
-      : { labelId: currentLabelId, ruleId: null, ruleType: null, status: "no_rule", threshold: null, from: recentFrom, to: today, rate: null, unadjustedRate: null, attended: 0, required: 0 };
+      ? { labelId: currentLabelId, labelName: currentLabelId ? labelNames.get(currentLabelId) ?? "Retired label" : null, ruleId: currentRule.id, ruleType: currentRule.ruleType, excusedHandling: null, status: currentWeek?.status ?? "not_applicable", threshold: Number(currentRule.meetingsPerWeek), from: currentWeek?.segmentStartsOn ?? weekStart(today), to: currentWeek?.segmentEndsOn ?? shiftDate(weekStart(today), 6), rate: currentWeek?.adjustedRate ?? null, unadjustedRate: currentWeek?.rate ?? null, attended: currentWeek?.attended ?? 0, required: currentWeek?.adjustedDenominator ?? 0 }
+      : { labelId: currentLabelId, labelName: currentLabelId ? labelNames.get(currentLabelId) ?? "Retired label" : null, ruleId: null, ruleType: null, excusedHandling: null, status: "no_rule", threshold: null, from: recentFrom, to: today, rate: null, unadjustedRate: null, attended: 0, required: 0 };
     const historySummaries: PolicyHistory[] = currentLabelId ? rules.filter((rule) => rule.labelId === currentLabelId).map((rule) => {
       const selectedRows = rows.filter((row) => row.ruleId === rule.id && row.eligibility === "required");
       const selectedWeeks = weeks.filter((week) => week.ruleId === rule.id && (week.status === "met" || week.status === "below"));
       const numerator = selectedRows.reduce((sum, row) => sum + (row.attended ? row.weight : 0), 0);
       const denominator = selectedRows.reduce((sum, row) => sum + (row.disposition === "excused" ? 0 : row.weight), 0);
       const unadjusted = selectedRows.reduce((sum, row) => sum + row.weight, 0);
-      return { ruleId: rule.id, labelId: rule.labelId, ruleType: rule.ruleType, startsOn: rule.startsOn ?? null, endsOn: rule.endsOn ?? null, rate: rule.ruleType === "weighted_percentage" ? rate(numerator, denominator) : rate(selectedWeeks.filter((week) => week.status === "met").length, selectedWeeks.length), unadjustedRate: rule.ruleType === "weighted_percentage" ? rate(numerator, unadjusted) : null, weeksMet: selectedWeeks.filter((week) => week.status === "met").length, weeksDue: selectedWeeks.length, status: selectedRows.length || selectedWeeks.length ? "evaluated" : "not_applicable" };
+      const policyDenominator = rule.excusedHandling === "count_missed" ? unadjusted : denominator;
+      return { ruleId: rule.id, labelId: rule.labelId, labelName: labelNames.get(rule.labelId) ?? "Retired label", ruleType: rule.ruleType, excusedHandling: rule.ruleType === "weighted_percentage" ? rule.excusedHandling ?? "exclude" : null, startsOn: rule.startsOn ?? null, endsOn: rule.endsOn ?? null, rate: rule.ruleType === "weighted_percentage" ? rate(numerator, policyDenominator) : rate(selectedWeeks.filter((week) => week.status === "met").length, selectedWeeks.length), unadjustedRate: rule.ruleType === "weighted_percentage" ? rate(numerator, unadjusted) : null, weeksMet: selectedWeeks.filter((week) => week.status === "met").length, weeksDue: selectedWeeks.length, status: selectedRows.length || selectedWeeks.length ? "evaluated" : "not_applicable" };
     }) : [];
-    return { member, currentLabelIds, rows, policy, present: weightedPresent + weeklyPresent, primaryTotal: weightedTotal + weeklyTotal, adjustedTotal: weightedAdjusted + weeklyAdjusted, rate: allTimeRate, adjustedRate: allTimeAdjusted, pooledRate: legacyOnly ? rate(weeklyRows.filter((row) => row.attended).length, weeklyTotal) : null, weeks, belowTargetWeeks: weeks.filter((week) => week.belowTarget), currentCompliance, historySummaries };
+    return { member, currentLabelIds, rows, regularAttendance, policy, present: weightedPresent + weeklyPresent, primaryTotal: weightedTotal + weeklyTotal, adjustedTotal: weightedAdjusted + weeklyAdjusted, rate: allTimeRate, adjustedRate: allTimeAdjusted, pooledRate: legacyOnly ? rate(weeklyRows.filter((row) => row.attended).length, weeklyTotal) : null, weeks, belowTargetWeeks: weeks.filter((week) => week.belowTarget), currentCompliance, historySummaries };
   });
 }

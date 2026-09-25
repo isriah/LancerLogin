@@ -764,6 +764,10 @@ test("saved reports apply multi-label matching and membership filters to CSV exp
   let exported: { definition?: { labelIds?: string[]; labelMatch?: string; membership?: string } }={};
   await page.route("**/exports/report.csv",async (route) => { exported=route.request().postDataJSON(); return route.fulfill({ status: 200,headers: { "content-type": "text/csv","content-disposition": "attachment; filename=report.csv" },body: "Member\nAvery Stone\n" }); });
   await page.goto("/reports/new");
+  await expect(page.getByRole("combobox",{ name: "Membership",exact: true })).toBeEnabled();
+  await expect(page.getByText("Current membership applies today’s labels",{ exact: false })).toBeVisible();
+  await page.getByRole("combobox",{ name: "Membership",exact: true }).selectOption("historical");
+  await expect(page.getByText("Historical membership uses the labels held on each meeting date.",{ exact: false })).toBeVisible();
   await page.getByText("Labels (all)",{ exact: true }).click();
   await page.getByRole("checkbox",{ name: "Mentor",exact: true }).check();
   await page.getByRole("heading",{ level: 2,name: "New report" }).click();

@@ -60,6 +60,76 @@ test("historical multi-label matching applies Any and All on each meeting date",
   assert.deepEqual(all.rows.map((row) => row.meetingId), ["optional"]);
 });
 
+test("current report membership counts earlier weighted meetings and excuses without changing official history", () => {
+  const lateChanges: LabelChange[] = [{ memberId: "a", labelId: "class", action: "add", effectiveDate: "2026-09-09" }];
+  const reportMeetings: PolicyMeeting[] = [
+    { ...meetings[0], audienceMode: "labels", audienceLabelIds: ["class"] },
+    meetings[1],
+    ...["04", "05"].map((day) => ({ ...meetings[0], id: day, startsAt: `2026-09-${day}T18:00:00Z`, endsAt: `2026-09-${day}T19:00:00Z`, attendanceClosesAt: `2026-09-${day}T19:30:00Z`, attendanceWeight: 1 })),
+  ];
+  const input = { ...base, members: [members[0]], changes: lateChanges, meetings: reportMeetings, observations: [
+    { meetingId: "night", memberId: "a", disposition: "present" as const },
+    { meetingId: "optional", memberId: "a", disposition: "present" as const },
+    { meetingId: "05", memberId: "a", disposition: "excused" as const },
+  ] };
+  const definition: ReportDefinition = { ...defaultReportDefinition(false), period: { type: "fixed", from: "2026-09-01", to: "2026-09-08" }, labelIds: ["class"], columns: [{ key: "member" }, { key: "regular_attendance" }, { key: "report_policy_result", labelId: "class" }, { key: "official_policy_result", labelId: "class" }] };
+  const official = evaluateAttendance(input);
+  const period = evaluateAttendance({ ...input, membership: "current", from: "2026-09-01", to: "2026-09-08" });
+  const historical = evaluateAttendance({ ...input, membership: "historical", from: "2026-09-01", to: "2026-09-08", historicalLabelIds: ["class"] });
+  const rows = buildReportRows({ definition, official, period, meetings: reportMeetings, labels, rules, timeZone: base.timeZone });
+  assert.equal(rows[0].cells.regular_attendance.text, "50%");
+  assert.equal(rows[0].cells["report_policy_result:class"].text, "Class: 67% · below");
+  assert.equal(rows[0].cells["official_policy_result:class"].text, "Class: N/A");
+  assert.equal(period[0].rows.find((row) => row.meetingId === "night")?.eligibility, "required");
+  assert.deepEqual(historical[0].rows, []);
+  assert.equal(historical[0].historySummaries[0].rate, null);
+  assert.deepEqual(evaluateAttendance(input), official);
+  assert.deepEqual(lateChanges, [{ memberId: "a", labelId: "class", action: "add", effectiveDate: "2026-09-09" }]);
+});
+
+test("current report membership respects attendance starts, dated rules, removals, and future assignments", () => {
+  const reportMeetings = ["01", "03", "05", "07"].map((day) => ({ ...meetings[0], id: day, startsAt: `2026-09-${day}T18:00:00Z`, endsAt: `2026-09-${day}T19:00:00Z`, attendanceClosesAt: `2026-09-${day}T19:30:00Z`, attendanceWeight: 1 }));
+  const input = { ...base, members: [{ ...members[0], attendanceRequiredFrom: "2026-09-03" }], meetings: reportMeetings,
+    changes: [{ memberId: "a", labelId: "class", action: "add" as const, effectiveDate: "2026-09-09" }],
+    rules: [{ ...rules[0], startsOn: "2026-09-05", endsOn: "2026-09-06" }],
+    observations: [{ meetingId: "05", memberId: "a", disposition: "excused" as const }],
+    membership: "current" as const, from: "2026-09-01", to: "2026-09-08", summaryLabelIds: ["class"],
+  };
+  const excluded = evaluateAttendance(input)[0];
+  assert.equal(excluded.rows.find((row) => row.meetingId === "01")?.eligibility, "before_start");
+  assert.equal(excluded.regularAttendance.required, 3);
+  assert.equal(excluded.historySummaries[0].required, 0);
+  assert.equal(excluded.historySummaries[0].rate, null);
+  const counted = evaluateAttendance({ ...input, rules: [{ ...input.rules[0], excusedHandling: "count_missed" }] })[0];
+  assert.equal(counted.historySummaries[0].required, 1);
+  assert.equal(counted.historySummaries[0].rate, 0);
+  const membershipChanges: LabelChange[] = [
+    { memberId: "a", labelId: "class", action: "add", effectiveDate: "2026-09-01" },
+    { memberId: "a", labelId: "class", action: "remove", effectiveDate: "2026-09-09" },
+    { memberId: "a", labelId: "team", action: "add", effectiveDate: "2026-09-11" },
+  ];
+  const removed = evaluateAttendance({ ...input, changes: membershipChanges })[0];
+  assert.deepEqual(removed.currentLabelIds, []);
+  assert.equal(removed.historySummaries[0].required, 0);
+  assert.ok(removed.rows.every((row) => row.memberLabelIds.length === 0));
+});
+
+test("current report membership evaluates weekly rules over the report period", () => {
+  const input = { ...base, members: [members[0]], membership: "current" as const,
+    changes: [{ memberId: "a", labelId: "class", action: "add" as const, effectiveDate: "2026-09-09" }],
+    rules: [{ id: "weekly", labelId: "class", ruleType: "weekly_count" as const, meetingsPerWeek: 1, startsOn: "2026-09-01", endsOn: "2026-09-06" }],
+    meetings: [{ ...meetings[0], audienceMode: "labels" as const, audienceLabelIds: ["class"] }],
+    observations: [{ meetingId: "night", memberId: "a", disposition: "present" as const }],
+    from: "2026-09-01", to: "2026-09-06",
+  };
+  const current = evaluateAttendance(input)[0];
+  assert.equal(current.historySummaries[0].weeksMet, 1);
+  assert.equal(current.historySummaries[0].weeksDue, 1);
+  assert.equal(current.historySummaries[0].rate, 100);
+  const historical = evaluateAttendance({ ...input, membership: "historical" })[0];
+  assert.equal(historical.historySummaries[0].rate, null);
+});
+
 test("saved report migration enforces library uniqueness and cascades tab pins", () => {
   const db = new DatabaseSync(":memory:"); db.exec("PRAGMA foreign_keys = ON; CREATE TABLE installations(id TEXT PRIMARY KEY); CREATE TABLE users(id TEXT PRIMARY KEY, installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE); INSERT INTO installations VALUES ('primary'); INSERT INTO users VALUES ('u1','primary'),('u2','primary');");
   db.exec(readFileSync(new URL("../apps/api/migrations/0036_saved_report_views.sql", import.meta.url), "utf8"));

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiBaseUrl } from "./dashboard-api";
 import { formatVersion } from "./update-indicator";
 import { canReloadWebUpdate, diagnosticUrl, webUpdateError, webUpdateStatus, type WebUpdateResponse } from "./web-update";
+import { InfoHeading } from "./info-tip";
 
 export function WebUpdateCard({ current, available, workflowUrl, latestTag, releaseUrl }: { current: string; available: boolean; workflowUrl: string; latestTag?: string; releaseUrl?: string }) {
   const [status, setStatus] = useState<WebUpdateResponse>();
@@ -68,7 +69,7 @@ export function WebUpdateCard({ current, available, workflowUrl, latestTag, rele
   const reloadAvailable = Boolean(request && canReloadWebUpdate(request, __LANCERLOGIN_VERSION__));
   const tone = error || request?.state === "failed" || request?.state === "recovery_required" ? "error" : request?.state === "succeeded" && request.reloadReady ? "success" : request ? "warning" : "neutral";
   return <article className="web-update-card" aria-labelledby="dashboard-update-title">
-    <div className="panel-heading"><div><h2 id="dashboard-update-title">Dashboard</h2><p>Cloudflare dashboard installation</p></div>
+    <div className="panel-heading"><InfoHeading id="dashboard-update-title" info="Cloudflare dashboard installation">Dashboard</InfoHeading>
       {(repeatable || expired) && !reloadAvailable && <button className="primary-button" type="button" disabled={busy || !status || Boolean(error) || !available || !workflowUrl} onClick={() => void prepare()}>{busy ? "Preparing update…" : "Back up and begin update"}</button>}
     </div>
     <div className="version-grid"><div><span>Current</span><strong>{current}</strong></div><div><span>Available</span><strong>{latestTag ? formatVersion(latestTag) : "Unavailable"}</strong>{notesUrl && <a href={notesUrl} target="_blank" rel="noreferrer">Read release notes</a>}</div></div>

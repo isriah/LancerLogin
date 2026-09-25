@@ -323,10 +323,13 @@ test("attendance actions preserve their layout and mute unavailable choices", as
   assert.match(styles, /min-width: 4\.8rem/);
 });
 
-test("reports are an operational workspace with filters, trend, saved views, and direct contest review", async () => {
+test("reports are a routed workspace with a paginated leaderboard and saved report builder", async () => {
   const reports = await readFile("apps/dashboard/src/reports-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
-  assert.match(reports, /loadReportAttendance\(api, filters\)/);
+  assert.match(reports, /\/reports\/catalog/);
+  assert.match(reports, /\/reports\/views/);
+  assert.match(reports, /\/reports\/leaderboard/);
+  assert.match(reports, /\/reports\/query/);
   assert.match(reports, /reportQuery\(filters\)/);
   assert.match(reports, /Historical membership/);
   assert.match(reports, /From<input type="date"/);
@@ -338,12 +341,21 @@ test("reports are an operational workspace with filters, trend, saved views, and
   assert.match(reports, /Approve and mark present/);
   assert.match(reports, /\/discord\/contests\/resolve/);
   assert.match(reports, /lancerlogin-reports-view/);
-  assert.match(reports, /result\.baseline/);
   assert.match(reports, /Operational baseline/);
-  assert.match(reports, /All preserved history/);
-  assert.match(reports, /Download attendance CSV/);
-  assert.match(reports, /\/exports\/attendance\.csv/);
+  assert.match(reports, /All history/);
+  assert.match(reports, /Browse reports/);
+  assert.match(reports, /aria-label="Create report"/);
+  assert.match(reports, /Download report CSV/);
+  assert.match(reports, /Download detailed attendance CSV/);
+  assert.match(reports, /\/exports\/report\.csv/);
+  assert.match(reports, /\/exports\/report-detail\.csv/);
+  assert.match(reports, /Discard unsaved report changes/);
+  assert.match(reports, />Edit<\/button>/);
+  assert.match(reports, /report-settings-summary/);
+  assert.doesNotMatch(reports, /className="tab-order"/);
   assert.match(styles, /\.report-filters/);
+  assert.match(styles, /\.report-tabs/);
+  assert.match(styles, /\.report-pagination/);
 });
 
 test("contest review requires a reason and keeps failures beside the unresolved contest", async () => {
@@ -356,11 +368,12 @@ test("contest review requires a reason and keeps failures beside the unresolved 
   assert.match(reports, /id="contest-review-error"[^>]+role="alert"/);
 });
 
-test("pending contests use meeting detail and the global notifier instead of Dashboard or Reports", async () => {
+test("pending contests use meeting detail, the global notifier, and the Reports leaderboard", async () => {
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const indicator = await readFile("apps/dashboard/src/contest-indicator.tsx", "utf8");
   const reviewList = await readFile("apps/dashboard/src/contest-review-list.tsx", "utf8");
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
+  const reports = await readFile("apps/dashboard/src/reports-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(shell, /ContestIndicator/);
   assert.match(shell, /ContestIndicator enabled=\{integrations\.discord\.configured\}/);
@@ -381,7 +394,8 @@ test("pending contests use meeting detail and the global notifier instead of Das
   assert.match(reviewList, /A review reason is required before resolving this contest\./);
   assert.match(reviewList, /window\.dispatchEvent\(new Event\(contestsChangedEvent\)\)/);
   assert.doesNotMatch(home, /ContestReviewList|\/discord\/contests|Attendance contests/);
-  assert.match(styles, /\.reports-page \.contest-report \{ display: none; \}/);
+  assert.match(reports, /className="task-card contest-report"/);
+  assert.doesNotMatch(styles, /\.reports-page \.contest-report \{ display: none; \}/);
 });
 
 test("dashboard cards keep their spacing and operational actions aligned", async () => {
@@ -532,7 +546,8 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*\.kiosk-card-heading \.primary-button \{ width: 100%; \}/);
   assert.doesNotMatch(styles, /\.kiosk-page-heading/);
   assert.doesNotMatch(source, /openSetup/);
-  assert.match(source, /kiosk-discord-status\$\{discordConfigured \? "" : " unavailable"\}/);
+  assert.doesNotMatch(source, /kiosk-discord-status/);
+  assert.match(source, /Sync Discord status/);
   assert.match(source, /\/discord\/kiosk-status/);
   assert.match(source, /Sync Discord status/);
   assert.match(source, /Persistent Discord kiosk status (?:updated|is already current)/);

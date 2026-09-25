@@ -10,9 +10,11 @@ Open **Settings → Data**. Each category has separate download, restore, and ty
 | --- | --- | --- |
 | Meetings and attendance | Meetings, audience label selections, scans, corrections, excuses, and contests | Deletion keeps roster, member labels, accounts, settings, integrations, and audit history. |
 | Roster | Member identity/contact data, Discord links, active state, dated label changes, label definitions, attendance rules, the recent compliance window, and policy activation date | Dashboard accounts remain separate. Historical members missing from a restore remain inactive when referenced. |
-| Entire installation | All retained D1 state, including Discord label-to-role associations | Restore only while the installation encryption secrets are unchanged. Role sync jobs are operational and are not replayed from dashboard backups. |
+| Entire installation | All retained D1 state, including saved personal/shared reports, account-pinned report tabs, and Discord label-to-role associations | Restore only while the installation encryption secrets are unchanged. Role sync jobs are operational and are not replayed from dashboard backups. |
 
 Each JSON file records its scope and schema version. The dashboard rejects a file from another category and requires `RESTORE <CATEGORY>` exactly. Dashboard restore accepts files up to 10 MiB. **Reset onboarding** only reopens the shared Guided Setup checklist; it does not delete organization data.
+
+Backup schema 20 adds saved report views and report-tab preferences to entire-installation backups. Older backups restore with an empty report library. Roster and meetings restores preserve existing reports. If a preserved report refers to a label that is absent after a category restore, the report displays an actionable warning and keeps the missing reference for editing instead of broadening its results.
 
 Portable roster backups omit Discord role IDs. Restoring a roster keeps only existing role associations whose labels remain active, and stops any pending role sync. It does not modify Discord roles.
 

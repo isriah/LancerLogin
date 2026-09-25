@@ -15,25 +15,44 @@ test("Dashboard delegates live attendance and contest review to complete replace
   await page.locator('.calendar-day button[title^="Build session,"]').click();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Meeting actions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Calendar delivery|Discord operations/ })).toHaveCount(0);
   await expect(page.getByRole("table", { name: "Meeting attendance" })).toContainText("Active · not checked out");
+  await expect(page.getByRole("link", { name: "Avery Stone" })).toHaveAttribute("href", "/roster/A-101");
   await expect(page.locator(".meeting-contests")).toContainText("Jordan Lee");
   await expect(page.locator(".meeting-contests")).toContainText("Submitted contests");
   await expect(page.locator(".meeting-contests")).toContainText("Partial — checked in, no check-out");
   expect(attendanceLoads).toBeGreaterThan(0);
 });
 
-test("Reports retains attendance CSV export", async ({ page }) => {
-  await page.route("**/exports/attendance.csv*", (route) => route.fulfill({
+test("meeting contest card stays hidden when that meeting has no contests", async ({ page }) => {
+  await page.route("**/discord/contests?meetingId=*", (route) => route.fulfill({ json: { contests: [] } }));
+  await page.goto("/meetings/active-meeting");
+  await expect(page.getByRole("heading", { name: "Attendance" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Attendance contests" })).toHaveCount(0);
+});
+
+test("Saved reports retain summary and detailed attendance CSV exports", async ({ page }) => {
+  await page.route("**/exports/report.csv", (route) => route.fulfill({
     status: 200,
     contentType: "text/csv",
-    headers: { "content-disposition": 'attachment; filename="attendance.csv"' },
+    headers: { "content-disposition": 'attachment; filename="report.csv"' },
+    body: "Member,Regular attendance\nAvery Stone,100%\n",
+  }));
+  await page.route("**/exports/report-detail.csv", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/csv",
+    headers: { "content-disposition": 'attachment; filename="report-detail.csv"' },
     body: "member_id,status\nA-101,present\n",
   }));
-  await page.goto("/reports");
+  await page.goto("/reports/new");
 
-  const download = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download attendance CSV" }).click();
-  await expect((await download).suggestedFilename()).toMatch(/^lancerlogin-attendance-\d{4}-\d{2}-\d{2}\.csv$/);
+  const summary = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download report CSV" }).click();
+  await expect((await summary).suggestedFilename()).toBe("lancerlogin-report.csv");
+  const detail = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download detailed attendance CSV" }).click();
+  await expect((await detail).suggestedFilename()).toBe("lancerlogin-report-detail.csv");
 });
 
 test("Kiosks exposes verified Discord status sync beside physical health and stays responsive", async ({ page }) => {
@@ -50,9 +69,8 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
     await page.setViewportSize(viewport);
     await page.goto("/kiosks");
     const physical = page.locator(".kiosk-grid > .task-card").filter({ has: page.getByRole("heading", { name: "Physical kiosk" }) });
-    const discordStatus = physical.getByRole("region", { name: "Discord kiosk status" });
-    await expect(discordStatus).toBeVisible();
-    const syncButton = discordStatus.getByRole("button", { name: "Sync Discord status" });
+    await expect(physical.getByRole("region", { name: "Discord kiosk status" })).toHaveCount(0);
+    const syncButton = physical.getByRole("button", { name: "Sync Discord status" });
     expect((await syncButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
     const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
     expect(widths.scroll).toBeLessThanOrEqual(widths.client);
@@ -83,7 +101,6 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
     body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: false } } }),
   }));
   await page.goto("/kiosks");
-  await expect(page.getByRole("region", { name: "Discord kiosk status" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Sync Discord status" })).toHaveCount(0);
 
   await page.route("**/integrations/capabilities", (route) => route.fulfill({
@@ -94,5 +111,5 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [] }) }));
   await page.goto("/kiosks");
   await expect(page.getByText("No kiosk paired", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sync Discord status" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync Discord status" })).toHaveCount(0);
 });

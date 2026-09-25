@@ -11,7 +11,7 @@ An unfinished installation opens Guided Setup instead of the normal dashboard fo
 | Area | Administrator | Operator |
 | --- | --- | --- |
 | Dashboard and meeting details | Create, edit, duplicate, and delete meetings; manage attendance | Create, edit, duplicate, and delete meetings; manage attendance |
-| Reports and roster | Manage roster and export reports | View roster and export reports |
+| Reports and roster | Manage roster; create personal or shared reports; export reports | View roster; create personal or shared reports; export reports |
 | Kiosks | Pair, replace, name, retire, and manage maintenance actions | View status and use permitted attendance operations |
 | Settings | Full access | Theme and sign-out only |
 
@@ -30,7 +30,13 @@ Use **Configuration** to set the organization-wide late scan allowance, late-arr
 
 In **Roster**, an Administrator can select **Add member** or import a CSV. The importer previews changes before writing. Required columns are `memberId`, `firstName`, and `lastName`; `email`, `discordUserId`, and `attendanceRequiredFrom` are optional. Replacing the active roster makes omitted people inactive and preserves their attendance history and dashboard accounts.
 
-In **Reports**, choose filters, save a browser-local view, or select **Download attendance CSV**. The default report uses the configured reporting baseline. When no baseline is set, it uses all preserved completed history. Regular attendance keeps excused required meetings in its denominator. A member's assigned percentage policy separately follows its configured excused-meeting handling.
+**Reports** opens a routed tab workspace. **Leaderboard** is always first and keeps its own period, meeting, roster, label, membership, sorting, and pagination controls. It also contains policy alerts, the team regular-attendance trend, and any attendance contests awaiting review. Choose 25, 50, 100, or all matching members per page.
+
+Saved reports appear as account-synced tabs. **Browse reports** finds accessible personal and shared reports, and **+** opens one unsaved draft. Closing a tab unpins it without deleting the report. A direct report link pins that report for the signed-in account. Administrators and Operators can create, edit, or delete shared reports. A personal report is visible only to its owner. Saved reports open in a read-only view that shows their current settings; select **Edit** before changing filters, sorting, or columns.
+
+The report builder supports fixed and rolling periods, active or complete roster history, required/optional/all meetings, Any or All matching across multiple labels, and current or historical label membership. **Member** is the first required column. While editing, use **Add column** at the right edge of the results table to choose curated roster, regular-attendance, policy, count, and date-list columns. Label-specific policy choices are grouped by result type, followed by a searchable label selection. Open a column heading to sort, move, or remove it, or drag movable headings left and right. Text columns can also be filtered from the heading menu. Results refresh after a short delay and paginate without saving the current page in the report definition. Official policy columns keep their configured windows. Report-period policy columns recalculate inside the report dates while preserving dated rule periods.
+
+**Download report CSV** exports every matching member using the selected columns and order. **Download detailed attendance CSV** exports the filtered meeting-level records with the existing explicit `regular*` and `policy*` fields. Both exports escape CSV values and neutralize spreadsheet formulas. A browser-local report view from an older release appears in **Browse reports** as an unsaved imported draft and is removed only after saving or dismissal.
 
 ## Kiosks and simulator
 
@@ -49,6 +55,8 @@ The **Browser simulator** is available to Administrators. Normal reads follow ph
 - **Data** downloads or restores category-specific backups and performs typed-confirmation deletion.
 - **Guided Setup** reopens the shared setup checklist without deleting data.
 - **Updates** compares releases and provides the backup-first web update flow.
+
+Every user can turn on **Debug mode** in the Settings navigation bar. Debug mode reveals diagnostic history such as member label history, current-label attendance history, and recent roster imports for that user only. It does not change organization data or another user's view.
 
 ## Update safely
 

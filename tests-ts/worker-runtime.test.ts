@@ -4,6 +4,7 @@ import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:cryp
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
+import { defaultReportDefinition } from "../apps/api/src/report-builder.ts";
 
 class FakeStatement {
   values: unknown[] = [];
@@ -53,6 +54,7 @@ function seedPolicy(database: FakeDatabase, options: {
   database.lists.set("SELECT e.meeting_id AS meetingId, e.member_id AS memberId", options.events ?? []);
   database.lists.set("SELECT c.meeting_id AS meetingId, c.member_id AS memberId", options.corrections ?? []);
   database.rows.set("SELECT time_zone AS timeZone, late_scan_minutes AS lateScanMinutes, attendance_reporting_starts_on AS baseline", { timeZone: "UTC", lateScanMinutes: 30, baseline: options.baseline ?? null });
+  database.rows.set("SELECT attendance_reporting_starts_on AS baseline, time_zone AS timeZone", { timeZone: "UTC", baseline: options.baseline ?? null });
 }
 
 const setupCode = "private setup code 1234";
@@ -150,6 +152,20 @@ test("successful local login clears prior failed-login state", async () => {
   assert.equal(result.status, 200);
   assert.match(result.headers.get("set-cookie") ?? "", /lancerlogin_session=/);
   assert.ok(database.calls.some((call) => call.sql.includes("failed_login_count = 0")));
+});
+
+test("Admin and Operator users can persist their own Debug mode preference", async () => {
+  for (const role of ["admin", "operator"] as const) {
+    const database = new FakeDatabase();
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+    assert.equal((await worker.fetch(request("/auth/preferences", { debugMode: "yes" }, { method: "PATCH", cookie: await sessionCookie(role) }), env)).status, 400);
+    const result = await worker.fetch(request("/auth/preferences", { debugMode: true }, { method: "PATCH", cookie: await sessionCookie(role) }), env);
+    assert.equal(result.status, 200);
+    assert.deepEqual(await result.json(), { debugMode: true });
+    const update = database.calls.find((call) => call.sql.includes("UPDATE users SET debug_mode"));
+    assert.deepEqual(update?.values, [1, `${role}-1`]);
+    assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO audit_log") && call.values.includes("user.preferences_updated")));
+  }
 });
 
 test("Google-only bootstrap encrypts OAuth credentials before the first sign-in", async () => {
@@ -710,6 +726,34 @@ test("Reports may request inactive roster history without changing the default a
   const attendanceQuery = database.calls.find((call) => call.sql.includes("SELECT m.id AS memberId"));
   assert.ok(attendanceQuery?.sql.includes("m.active = 1 OR ? = 1"));
   assert.equal(attendanceQuery?.values.at(-1), 1);
+});
+
+test("report catalog and paginated queries are authenticated for both dashboard roles", async () => {
+  for (const role of ["admin", "operator"] as const) {
+    const database = new FakeDatabase(); seedPolicy(database, { baseline: "2026-09-01" });
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie(role);
+    const catalog = await worker.fetch(request("/reports/catalog", undefined, { cookie }), env); assert.equal(catalog.status, 200); assert.equal((await catalog.json() as { defaultDefinition: { period: { type: string } } }).defaultDefinition.period.type, "baseline");
+    const queried = await worker.fetch(request("/reports/query", { definition: defaultReportDefinition(true), page: 1, pageSize: 25 }, { cookie }), env); assert.equal(queried.status, 200); assert.deepEqual((await queried.json() as { pagination: { totalRows: number; pageSize: number } }).pagination, { page: 1, pageSize: 25, totalRows: 0, totalPages: 1, rangeStart: 0, rangeEnd: 0 });
+  }
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: new FakeDatabase() } as unknown as Env;
+  assert.equal((await worker.fetch(request("/reports/catalog"), env)).status, 401); assert.equal((await worker.fetch(request("/reports/query", { definition: defaultReportDefinition(false) }), env)).status, 401);
+});
+
+test("Admins and Operators can create shared reports and creation pins the new tab", async () => {
+  for (const role of ["admin", "operator"] as const) {
+    const database = new FakeDatabase(); seedPolicy(database); database.rows.set("COALESCE(MAX(position)", { position: 2 }); database.rows.set("SELECT id, owner_user_id AS ownerUserId", { id: "report-1", ownerUserId: `${role}-1`, scope: "shared", name: "Class attendance", definitionJson: JSON.stringify(defaultReportDefinition(false)), revision: 1, createdBy: `${role}-1`, updatedBy: `${role}-1`, createdAt: "2026-09-25", updatedAt: "2026-09-25" });
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const result = await worker.fetch(request("/reports/views", { name: "Class attendance", scope: "shared", definition: defaultReportDefinition(false) }, { cookie: await sessionCookie(role) }), env); assert.equal(result.status, 201);
+    assert.ok(database.batches[0].some((call) => call.sql.includes("INSERT INTO saved_report_views") && call.values.includes("shared"))); assert.ok(database.batches[0].some((call) => call.sql.includes("INSERT INTO saved_report_tabs") && call.values.includes(2))); assert.ok(database.calls.some((call) => call.values.includes("report.created")));
+  }
+});
+
+test("personal report isolation and revision checks reject unauthorized or stale edits", async () => {
+  const personal = new FakeDatabase(); personal.rows.set("SELECT id, owner_user_id AS ownerUserId", (_sql, values) => values[1] === "admin-1" ? { id: "private-1", ownerUserId: "admin-1", scope: "personal", name: "Private", definitionJson: JSON.stringify(defaultReportDefinition(false)), revision: 1, createdBy: "admin-1", updatedBy: "admin-1", createdAt: "2026-09-25", updatedAt: "2026-09-25" } : undefined);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: personal } as unknown as Env;
+  assert.equal((await worker.fetch(request("/reports/views/private-1", { name: "Changed", scope: "personal", definition: defaultReportDefinition(false), revision: 1 }, { method: "PATCH", cookie: await sessionCookie("operator") }), env)).status, 404);
+  const shared = new FakeDatabase(); shared.rows.set("SELECT id, owner_user_id AS ownerUserId", { id: "shared-1", ownerUserId: "admin-1", scope: "shared", name: "Shared", definitionJson: JSON.stringify(defaultReportDefinition(false)), revision: 5, createdBy: "admin-1", updatedBy: "admin-1", createdAt: "2026-09-25", updatedAt: "2026-09-25" });
+  assert.equal((await worker.fetch(request("/reports/views/shared-1", { name: "Changed", scope: "shared", definition: defaultReportDefinition(false), revision: 4 }, { method: "PATCH", cookie: await sessionCookie("operator") }), { ...env, DB: shared } as unknown as Env)).status, 409);
 });
 
 test("member history is stable by roster ID and available to Operators", async () => {
@@ -2373,7 +2417,7 @@ test("dated label changes require Admin preview and are applied with an audited 
   assert.equal((await worker.fetch(request("/labels/membership/preview", { changes }, { cookie: await sessionCookie("operator") }), env)).status, 403);
   const preview = await worker.fetch(request("/labels/membership/preview", { changes }, { cookie: await sessionCookie("admin") }), env);
   assert.equal(preview.status, 200); const body = await preview.json() as { previewToken: string; impact: Array<{ memberId: string; beforeRate: number | null; afterRate: number | null; affectedCompletedMeetings: number }> };
-  assert.deepEqual(body.impact, [{ memberId: "A-101", beforeRate: null, afterRate: 0, beforePolicy: "standard", afterPolicy: "standard", affectedCompletedMeetings: 1 }]);
+  assert.deepEqual(body.impact, [{ memberId: "A-101", beforeRate: null, afterRate: 0, beforePolicy: "standard", afterPolicy: "standard", beforePolicies: [], afterPolicies: [], affectedCompletedMeetings: 1 }]);
   assert.equal(database.batches.length, 0);
   assert.equal((await worker.fetch(request("/labels/membership/apply", { changes, previewToken: "wrong" }, { cookie: await sessionCookie("admin") }), env)).status, 409);
   const applied = await worker.fetch(request("/labels/membership/apply", { changes, previewToken: body.previewToken }, { cookie: await sessionCookie("admin") }), env);
@@ -2478,7 +2522,7 @@ test("policy previews include historical-only percentage changes", async () => {
   assert.equal(body.impact[0].afterHistory.find((item) => item.ruleId === "class-summer")?.rate, 50);
 });
 
-test("new policy rejects members already holding another policy label", async () => {
+test("new policy supports members already holding another policy label", async () => {
   const database = new FakeDatabase();
   seedPolicy(database, {
     members: [{ id: "m", memberId: "A-101", firstName: "A", lastName: "B", active: 1, attendanceRequiredFrom: "2026-09-01" }],
@@ -2488,8 +2532,28 @@ test("new policy rejects members already holding another policy label", async ()
   });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(request("/attendance/policy/preview", { rule: { labelId: "mentor", startsOn: null, endsOn: null, ruleType: "weekly_count", meetingsPerWeek: 1 } }, { cookie: await sessionCookie("admin") }), env);
-  assert.equal(result.status, 409);
+  assert.equal(result.status, 200, await result.clone().text());
   assert.equal(database.batches.length, 0);
+});
+
+test("label change previews show every resulting attendance policy", async () => {
+  const database = new FakeDatabase();
+  seedPolicy(database, {
+    members: [{ id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: 1, attendanceRequiredFrom: "2026-01-01" }],
+    labels: [{ id: "team", name: "FRC 321", active: 1, formulaEnabled: 0 }, { id: "class", name: "Class", active: 1, formulaEnabled: 0 }],
+    changes: [{ memberId: "member-1", labelId: "team", action: "add", effectiveDate: "2026-01-01", createdAt: "2026-01-01T00:00:00Z" }],
+    rules: [
+      { id: "team-rule", labelId: "team", startsOn: null, endsOn: null, ruleType: "weighted_percentage", thresholdPercent: 80, meetingsPerWeek: null, excusedHandling: "count_missed" },
+      { id: "class-rule", labelId: "class", startsOn: null, endsOn: null, ruleType: "weighted_percentage", thresholdPercent: 75, meetingsPerWeek: null, excusedHandling: "exclude" },
+    ],
+  });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const changes = [{ memberId: "A-101", label: "Class", action: "add", effectiveDate: "2026-01-01" }];
+  const result = await worker.fetch(request("/labels/membership/preview", { changes }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 200, await result.clone().text());
+  const body = await result.json() as { impact: Array<{ beforePolicies: Array<{ labelName: string }>; afterPolicies: Array<{ labelName: string }> }> };
+  assert.deepEqual(body.impact[0].beforePolicies.map((item) => item.labelName), ["FRC 321"]);
+  assert.deepEqual(body.impact[0].afterPolicies.map((item) => item.labelName).sort(), ["Class", "FRC 321"]);
 });
 
 test("completed meeting audience edits require a matching impact preview", async () => {
@@ -2518,7 +2582,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { schemaVersion: number; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 18); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { schemaVersion: number; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 20); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
@@ -2529,32 +2593,51 @@ test("roster backup and restore retain label definitions, dated history, and att
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("'data.backup_restored'")));
 });
 
-test("schema 17 roster restore defaults percentage rules to excluded excuses", async () => {
-  const database = new FakeDatabase();
-  const backup = { product: "LancerLogin", schemaVersion: 17, scope: "roster", exportedAt: "2026-09-24T00:00:00Z", attendanceRecentDays: 30, attendancePolicyActivatedOn: "2026-09-01", tables: {
-    members: [],
-    member_labels: [{ id: "class", installation_id: "primary", name: "Class", active: 1, formula_enabled: 1, created_by: null, created_at: "2026-09-01T00:00:00Z" }],
-    member_label_changes: [],
-    label_weekly_targets: [],
-    label_attendance_rules: [{ id: "class-rule", installation_id: "primary", label_id: "class", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" }],
-  } };
-  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie: await sessionCookie("admin") }), env);
-  assert.equal(result.status, 200, await result.clone().text());
-  assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO label_attendance_rules") && item.values.includes("exclude")));
-});
-
 test("installation backup retains Discord role mappings while roster backup omits provider role IDs", async () => {
   const database = new FakeDatabase(); const cookie = await sessionCookie("admin");
   database.lists.set("FROM discord_label_role_mappings WHERE", [{ installation_id: "primary", label_id: "label-1", guild_id: "123456789012345678", role_id: "423456789012345678", role_name: "FRC 321", created_by: null, created_at: "2026-09-23T00:00:00Z" }]);
+  database.lists.set("FROM saved_report_views WHERE", [{ id: "report-1", installation_id: "primary", owner_user_id: "admin-1", scope: "shared", name: "Class attendance", definition_json: JSON.stringify(defaultReportDefinition(false)), revision: 1, created_by: "admin-1", updated_by: "admin-1", created_at: "2026-09-25T00:00:00Z", updated_at: "2026-09-25T00:00:00Z" }]);
+  database.lists.set("FROM saved_report_tabs WHERE", [{ installation_id: "primary", user_id: "admin-1", report_view_id: "report-1", position: 0, pinned_at: "2026-09-25T00:00:00Z" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 18); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 20); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.tables.saved_report_views.length, 1); assert.equal(installation.tables.saved_report_tabs.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
+  assert.equal(Object.hasOwn(roster.tables, "saved_report_views"), false);
   const restored = await worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: installation }, { cookie }), env);
   assert.equal(restored.status, 200, await restored.clone().text());
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO discord_label_role_mappings") && item.values.includes("423456789012345678")));
+  assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO saved_report_views") && item.values.includes("Class attendance")));
+  assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO saved_report_tabs") && item.values.includes("report-1")));
+});
+
+test("custom report exports include every filtered row and neutralize selected values", async () => {
+  const database = new FakeDatabase(); seedPolicy(database, { members: [{ id: "member-1", memberId: "=MEMBER()", firstName: "+Avery", lastName: "Stone", email: "=EMAIL()", active: 1, attendanceRequiredFrom: "2026-01-01" }, { id: "member-2", memberId: "B-2", firstName: "Blair", lastName: "Baker", email: "blair@example.test", active: 1, attendanceRequiredFrom: "2026-01-01" }], meetings: [{ id: "meeting-1", title: "Studio, weekly", startsAt: "2026-09-01T20:00:00Z", endsAt: "2026-09-01T22:00:00Z", required: 1, attendanceWeight: 1, audienceMode: "all", isTest: 0 }] });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const definition = { ...defaultReportDefinition(false), columns: [{ key: "member" }, { key: "member_id" }, { key: "email" }], columnFilters: [{ column: { key: "member" as const }, operator: "contains" as const, value: "Avery" }], sort: { column: { key: "member" }, direction: "asc" as const } };
+  assert.equal((await worker.fetch(request("/exports/report.csv", { definition }), env)).status, 401);
+  const summary = await worker.fetch(request("/exports/report.csv", { definition }, { cookie: await sessionCookie("operator") }), env); assert.equal(summary.status, 200); const summaryCsv = await summary.text(); assert.match(summaryCsv, /Member,Member ID,Email/); assert.match(summaryCsv, /'\+Avery Stone,'=MEMBER\(\),'=EMAIL\(\)/); assert.doesNotMatch(summaryCsv, /Blair/);
+  const detail = await worker.fetch(request("/exports/report-detail.csv", { definition }, { cookie: await sessionCookie("operator") }), env); assert.equal(detail.status, 200); const detailCsv = await detail.text(); assert.match(detailCsv, /"Studio, weekly"/); assert.doesNotMatch(detailCsv, /Blair/);
+  assert.equal(database.calls.filter((call) => call.values.includes("report.exported")).length, 2);
+});
+
+test("schema 17 installation backups default fields added by parallel attendance and Discord upgrades", async () => {
+  const database = new FakeDatabase(); const cookie = await sessionCookie("admin");
+  database.lists.set("FROM users WHERE", [{ id: "admin-1", installation_id: "primary", email: null, local_username: "admin", password_hash: "hash", failed_login_count: 0, locked_until: null, role: "admin", active: 1, created_at: "2026-09-01T00:00:00Z", member_id: null, debug_mode: 1 }]);
+  database.lists.set("FROM label_attendance_rules WHERE", [{ id: "class-rule", installation_id: "primary", label_id: "class", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 80, meetings_per_week: null, created_by: "admin-1", created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z", excused_handling: "count_missed" }]);
+  database.lists.set("FROM discord_attendance_notifications WHERE", [{ installation_id: "primary", meeting_id: "meeting-1", status: "delivered", message_id: "notice-1", attempts: 1, last_error: null, processed_at: "2026-09-01T22:00:00Z", updated_at: "2026-09-01T22:00:00Z", channel_id: "223456789012345678", expires_at: "2026-09-02T22:00:00Z", deleted_at: null, thread_created_at: "2026-09-01T22:01:00Z" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const backup = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, Record<string, unknown>[]> };
+  backup.schemaVersion = 17;
+  delete backup.tables.users[0].debug_mode;
+  delete backup.tables.label_attendance_rules[0].excused_handling;
+  delete backup.tables.discord_attendance_notifications[0].thread_created_at;
+  const restored = await worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
+  assert.equal(restored.status, 200, await restored.clone().text());
+  const batch = database.batches.at(-1) ?? [];
+  assert.equal(batch.find((item) => item.sql.startsWith("INSERT INTO users"))?.values.at(-1), 0);
+  assert.equal(batch.find((item) => item.sql.startsWith("INSERT INTO label_attendance_rules"))?.values.at(-1), "exclude");
+  assert.equal(batch.find((item) => item.sql.startsWith("INSERT INTO discord_attendance_notifications"))?.values.at(-1), null);
 });
 
 test("schema 16 meeting restore defaults Discord thread tracking", async () => {

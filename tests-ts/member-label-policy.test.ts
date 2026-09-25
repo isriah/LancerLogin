@@ -62,6 +62,23 @@ test("regular attendance stays independent while percentage policies configure e
   assert.equal(counted.historySummaries[0].rate, 60);
 });
 
+test("overlapping percentage policies are evaluated independently", () => {
+  const changes: LabelChange[] = [
+    { memberId: "a", labelId: "student", action: "add", effectiveDate: "2026-09-01" },
+    { memberId: "a", labelId: "321", action: "add", effectiveDate: "2026-09-01" },
+  ];
+  const meetings = [1, 2, 3, 4, 5].map((value) => meeting(`overlap-${value}`, `2026-09-${20 + value}`, []));
+  const observations = [observed("overlap-1", "a", "present"), observed("overlap-2", "a", "present"), observed("overlap-3", "a", "present"), observed("overlap-5", "a", "excused")];
+  const result = evaluate({ members: [members[0]], changes, rules: [
+    { ...percentage("team-80"), excusedHandling: "count_missed", thresholdPercent: 80 },
+    { ...percentage("class-75"), labelId: "321", excusedHandling: "exclude", thresholdPercent: 75 },
+  ], meetings, observations, from: "2026-09-01" })[0];
+  assert.equal(result.regularAttendance.rate, 60);
+  assert.deepEqual(result.currentCompliances.map((item) => [item.labelName, item.rate, item.status]), [["Student", 60, "below"], ["321", 75, "met"]]);
+  assert.deepEqual(result.historySummaries.map((item) => [item.labelName, item.rate]), [["Student", 60], ["321", 75]]);
+  assert.deepEqual(result.currentCompliance, result.currentCompliances[0]);
+});
+
 test("regular attendance uses required meeting weights even for a weekly policy", () => {
   const changes: LabelChange[] = [{ memberId: "a", labelId: "mentor", action: "add", effectiveDate: "2026-09-01" }];
   const result = evaluate({ members: [members[0]], changes, rules: [weekly("weekly", "2026-09-01", null, 1)], meetings: [meeting("heavy", "2026-09-21", [], true, 3), meeting("light", "2026-09-22", [], true, 1), meeting("optional", "2026-09-23", [], false, 20)], observations: [observed("light", "a", "present"), observed("optional", "a", "present")] })[0];

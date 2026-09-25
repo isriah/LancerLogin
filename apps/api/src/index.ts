@@ -4,6 +4,7 @@ import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, reco
 import { releaseDiscovery, releaseRequestHeaders } from "./release-discovery.ts";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
+import { buildReportRows, defaultReportDefinition, reportColumnCatalog, reportColumnId, reportColumnLabel, reportLabelsMatch, resolveReportPeriod, validateReportDefinition, type ReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
 
 type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
 interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
@@ -219,7 +220,7 @@ async function localLogin(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); if (!env.SESSION_KEY) throw new HttpError(503, "Local authentication is not configured");
   const input = await parseJson<{ username?: string; password?: string }>(request);
   if (!input.username || !input.password) throw new HttpError(400, "Username and password are required");
-  const user = await db.prepare("SELECT id, role, password_hash AS passwordHash, failed_login_count AS failedLoginCount, locked_until AS lockedUntil FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; passwordHash: string | null; failedLoginCount: number; lockedUntil?: string }>();
+  const user = await db.prepare("SELECT id, role, debug_mode AS debugMode, password_hash AS passwordHash, failed_login_count AS failedLoginCount, locked_until AS lockedUntil FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; debugMode: number; passwordHash: string | null; failedLoginCount: number; lockedUntil?: string }>();
   const passwordValid = await verifyPassword(input.password, user?.passwordHash ?? await timingEqualizerHash());
   const locked = Boolean(user?.lockedUntil && Date.parse(user.lockedUntil) > Date.now());
   if (!user?.passwordHash || !passwordValid || locked) {
@@ -228,13 +229,21 @@ async function localLogin(request: Request, env: Env): Promise<Response> {
   }
   if (user.failedLoginCount || user.lockedUntil) await db.prepare("UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE installation_id = 'primary' AND id = ?").bind(user.id).run();
   const token = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role });
-  return response({ ok: true, user: { id: user.id, role: user.role } }, 200, { "set-cookie": `lancerlogin_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800` });
+  return response({ ok: true, user: { id: user.id, role: user.role, debugMode: Boolean(user.debugMode) } }, 200, { "set-cookie": `lancerlogin_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800` });
 }
 async function authSession(request: Request, env: Env): Promise<Response> {
   const principal = await principalFor(request, env);
-  const user = await requireDatabase(env).prepare("SELECT id, email, local_username AS localUsername, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first();
+  const user = await requireDatabase(env).prepare("SELECT id, email, local_username AS localUsername, role, debug_mode AS debugMode FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; email?: string; localUsername?: string; role: Role; debugMode: number }>();
   if (!user) throw new HttpError(401, "Session user is unavailable");
-  return response({ authenticated: true, user });
+  return response({ authenticated: true, user: { ...user, debugMode: Boolean(user.debugMode) } });
+}
+async function authPreferences(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
+  const input = await parseJson<{ debugMode?: boolean }>(request);
+  if (typeof input.debugMode !== "boolean") throw new HttpError(400, "Debug mode must be true or false");
+  await db.prepare("UPDATE users SET debug_mode = ? WHERE installation_id = 'primary' AND id = ?").bind(input.debugMode ? 1 : 0, principal.userId).run();
+  await writeAudit(db, principal, "user.preferences_updated", "user", principal.userId, { debugMode: input.debugMode });
+  return response({ debugMode: input.debugMode });
 }
 
 async function branding(request: Request, env: Env): Promise<Response> {
@@ -400,17 +409,10 @@ async function previewLabelChanges(db: D1Database, raw: LabelMutation[]) {
   });
   if (errors.length) throw new HttpError(400, "Invalid label changes", errors);
   const newChanges = normalized.map((item) => ({ memberId: item.member!.id, labelId: item.label!.id, action: item.action, effectiveDate: item.effectiveDate }));
-  const combined = [...data.changes, ...newChanges]; const formula = new Set(data.rules.map((rule) => rule.labelId));
-  for (const memberId of new Set(newChanges.map((item) => item.memberId))) {
-    const active = new Set<string>();
-    for (const change of combined.filter((item) => item.memberId === memberId).sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate) || (a.action === b.action ? 0 : a.action === "remove" ? -1 : 1))) {
-      if (change.action === "add") active.add(change.labelId); else active.delete(change.labelId);
-      if ([...active].filter((id) => formula.has(id)).length > 1) throw new HttpError(409, "A member may have at most one active attendance-policy label");
-    }
-  }
+  const combined = [...data.changes, ...newChanges];
   const affected = data.members.filter((member) => newChanges.some((change) => change.memberId === member.id));
   const before = evaluateAttendance({ ...data, members: affected }); const after = evaluateAttendance({ ...data, members: affected, changes: combined });
-  const impact = before.map((item, index) => ({ memberId: item.member.memberId, beforeRate: item.rate, afterRate: after[index].rate, beforePolicy: item.policy, afterPolicy: after[index].policy, affectedCompletedMeetings: after[index].rows.filter((row, rowIndex) => row.eligibility !== item.rows[rowIndex]?.eligibility).length }));
+  const impact = before.map((item, index) => ({ memberId: item.member.memberId, beforeRate: item.rate, afterRate: after[index].rate, beforePolicy: item.policy, afterPolicy: after[index].policy, beforePolicies: item.currentCompliances, afterPolicies: after[index].currentCompliances, affectedCompletedMeetings: after[index].rows.filter((row, rowIndex) => row.eligibility !== item.rows[rowIndex]?.eligibility).length }));
   const token = await sha256Hex(JSON.stringify({ raw: newChanges, state: data }));
   return { normalized, changes: newChanges, impact, token };
 }
@@ -426,17 +428,6 @@ async function labelMembership(request: Request, env: Env, apply: boolean): Prom
   await db.batch(statements); return response({ applied: preview.changes.length, impact: preview.impact });
 }
 type PolicyMutation = { rule?: AttendanceRule; removeRuleId?: string; recentDays?: number; previewToken?: string };
-function validatePolicyAssignments(data: Awaited<ReturnType<typeof policyData>>, rules: AttendanceRule[]): void {
-  const policyLabels = new Set(rules.map((rule) => rule.labelId));
-  for (const member of data.members) {
-    const active = new Set<string>();
-    const changes = data.changes.filter((change) => change.memberId === member.id).sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate) || (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
-    for (const change of changes) {
-      if (change.action === "add") active.add(change.labelId); else active.delete(change.labelId);
-      if ([...active].filter((id) => policyLabels.has(id)).length > 1) throw new HttpError(409, "A member may have at most one active attendance-policy label");
-    }
-  }
-}
 async function previewPolicyMutation(db: D1Database, input: PolicyMutation) {
   const data = await policyData(db);
   if (input.rule && input.removeRuleId || !input.rule && !input.removeRuleId && input.recentDays === undefined) throw new HttpError(400, "Choose one attendance policy change");
@@ -467,14 +458,13 @@ async function previewPolicyMutation(db: D1Database, input: PolicyMutation) {
     }
     rules.push(change);
   }
-  validatePolicyAssignments(data, rules);
   const recentDays = input.recentDays ?? data.recentDays;
   const before = evaluateAttendance(data);
   const after = evaluateAttendance({ ...data, rules, recentDays });
   const impact = before.flatMap((item, index) => {
     const next = after[index];
-    if (JSON.stringify(item.currentCompliance) === JSON.stringify(next.currentCompliance) && JSON.stringify(item.historySummaries) === JSON.stringify(next.historySummaries) && item.rate === next.rate && item.policy === next.policy && item.rows.every((row, rowIndex) => row.eligibility === next.rows[rowIndex]?.eligibility && row.ruleId === next.rows[rowIndex]?.ruleId)) return [];
-    return [{ memberId: item.member.memberId, before: item.currentCompliance, after: next.currentCompliance, beforeHistory: item.historySummaries, afterHistory: next.historySummaries, beforeHistoricalRate: item.rate, afterHistoricalRate: next.rate }];
+    if (JSON.stringify(item.currentCompliances) === JSON.stringify(next.currentCompliances) && JSON.stringify(item.historySummaries) === JSON.stringify(next.historySummaries) && item.rate === next.rate && item.policy === next.policy && item.rows.every((row, rowIndex) => row.eligibility === next.rows[rowIndex]?.eligibility && row.ruleId === next.rows[rowIndex]?.ruleId)) return [];
+    return [{ memberId: item.member.memberId, before: item.currentCompliance, after: next.currentCompliance, beforePolicies: item.currentCompliances, afterPolicies: next.currentCompliances, beforeHistory: item.historySummaries, afterHistory: next.historySummaries, beforeHistoricalRate: item.rate, afterHistoricalRate: next.rate }];
   });
   const token = await sha256Hex(JSON.stringify({ input: { rule: input.rule, removeRuleId: input.removeRuleId, recentDays: input.recentDays }, data }));
   return { data, change, rules, recentDays, impact, previewToken: token };
@@ -1031,7 +1021,7 @@ function csvCell(value: unknown): string {
 }
 async function policyData(db: D1Database): Promise<{ members: PolicyMember[]; labels: PolicyLabel[]; changes: LabelChange[]; rules: AttendanceRule[]; meetings: PolicyMeeting[]; observations: Observation[]; timeZone: string; baseline: string | null; recentDays: number; policyActivatedOn: string | null }> {
   const [memberResult, labelResult, changeResult, ruleResult, meetingResult, audienceResult, eventResult, correctionResult, settings] = await Promise.all([
-    db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, active, attendance_required_from AS attendanceRequiredFrom, created_at AS rosterAddedAt FROM members WHERE installation_id = 'primary' ORDER BY last_name, first_name").all<PolicyMember>(),
+    db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active, attendance_required_from AS attendanceRequiredFrom, created_at AS rosterAddedAt FROM members WHERE installation_id = 'primary' ORDER BY last_name, first_name").all<PolicyMember>(),
     db.prepare("SELECT id, name, active, formula_enabled AS formulaEnabled FROM member_labels WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE").all<PolicyLabel>(),
     db.prepare("SELECT member_id AS memberId, label_id AS labelId, action, effective_date AS effectiveDate, created_at AS createdAt FROM member_label_changes WHERE installation_id = 'primary' ORDER BY effective_date, created_at, id").all<LabelChange>(),
     db.prepare("SELECT id, label_id AS labelId, starts_on AS startsOn, ends_on AS endsOn, rule_type AS ruleType, threshold_percent AS thresholdPercent, meetings_per_week AS meetingsPerWeek, excused_handling AS excusedHandling FROM label_attendance_rules WHERE installation_id = 'primary' ORDER BY label_id, starts_on").all<AttendanceRule>(),
@@ -1067,29 +1057,170 @@ async function policyReport(db: D1Database, filters: ReportFilters): Promise<{ m
   if (filters.labelId && !data.labels.some((label) => label.id === filters.labelId)) throw new HttpError(400, "Unknown label filter");
   const meetings = data.meetings.filter((meeting) => filters.meetingType === "all" || Boolean(meeting.required) === (filters.meetingType === "required"));
   const from = filters.from ?? (filters.useBaseline ? data.baseline ?? undefined : undefined);
-  const fullResults = evaluateAttendance(data);
-  const historicalLabelId = filters.labelId && filters.membership === "historical" ? filters.labelId : undefined;
-  const unfiltered = filters.meetingType === "all" && !from && !filters.to && !historicalLabelId;
-  const full = new Map(fullResults.map((item) => [item.member.id, item]));
-  const selectedResults = unfiltered ? fullResults : evaluateAttendance({ ...data, meetings, from, to: filters.to, historicalLabelId });
-  const members = selectedResults.map((item) => ({ ...item, currentCompliance: full.get(item.member.id)?.currentCompliance ?? item.currentCompliance, historySummaries: full.get(item.member.id)?.historySummaries ?? item.historySummaries })).filter((item) => (filters.roster === "all" || Boolean(item.member.active)) && (!filters.memberId || item.member.id === filters.memberId) && (!filters.labelId || (filters.membership === "historical" ? item.rows.length > 0 : item.currentLabelIds.includes(filters.labelId))));
+  const full = new Map(evaluateAttendance(data).map((item) => [item.member.id, item]));
+  const members = evaluateAttendance({ ...data, meetings, from, to: filters.to, historicalLabelId: filters.labelId && filters.membership === "historical" ? filters.labelId : undefined }).map((item) => ({ ...item, currentCompliances: full.get(item.member.id)?.currentCompliances ?? item.currentCompliances, currentCompliance: full.get(item.member.id)?.currentCompliance ?? item.currentCompliance, historySummaries: full.get(item.member.id)?.historySummaries ?? item.historySummaries })).filter((item) => (filters.roster === "all" || Boolean(item.member.active)) && (!filters.memberId || item.member.id === filters.memberId) && (!filters.labelId || (filters.membership === "historical" ? item.rows.length > 0 : item.currentLabelIds.includes(filters.labelId))));
   return { meetings: meetings.filter((meeting) => !meeting.isTest && Date.parse(meeting.attendanceClosesAt) <= Date.now() && (!from || policyLocalDate(meeting.startsAt, data.timeZone) >= from) && (!filters.to || policyLocalDate(meeting.startsAt, data.timeZone) <= filters.to)), members, labels: data.labels, baseline: data.baseline, timeZone: data.timeZone };
 }
 async function attendanceReport(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]);
   return response(await policyReport(requireDatabase(env), reportFilters(new URL(request.url))));
 }
+type SavedReportRow = { id: string; ownerUserId: string; scope: ReportScope; name: string; definitionJson: string; revision: number; createdBy: string; updatedBy: string; createdAt: string; updatedAt: string; pinnedPosition?: number | null };
+type ReportQueryInput = { definition?: unknown; page?: unknown; pageSize?: unknown };
+type ReportRun = { definition: ReportDefinition; warnings: string[]; resolvedPeriod: { from?: string; to: string }; columns: { id: string; key: string; label: string; labelId?: string }[]; rows: ReportResultRow[]; periodMembers: PolicyMemberResult[]; officialMembers: PolicyMemberResult[]; meetings: PolicyMeeting[]; labels: PolicyLabel[]; rules: AttendanceRule[]; timeZone: string };
+function reportName(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(value)) throw new HttpError(400, "Report name is required and must be at most 80 characters");
+  return value.trim();
+}
+function reportScope(value: unknown): ReportScope {
+  if (value !== "personal" && value !== "shared") throw new HttpError(400, "Report scope must be personal or shared");
+  return value;
+}
+function parseStoredReportDefinition(value: string): unknown {
+  try { return JSON.parse(value); } catch { return undefined; }
+}
+async function ensureUniqueReportName(db: D1Database, scope: ReportScope, name: string, ownerUserId: string, exceptId?: string): Promise<void> {
+  const existing = scope === "shared"
+    ? await db.prepare("SELECT id FROM saved_report_views WHERE installation_id = 'primary' AND scope = 'shared' AND name = ? COLLATE NOCASE AND (? IS NULL OR id <> ?)").bind(name, exceptId ?? null, exceptId ?? null).first<{ id: string }>()
+    : await db.prepare("SELECT id FROM saved_report_views WHERE installation_id = 'primary' AND scope = 'personal' AND owner_user_id = ? AND name = ? COLLATE NOCASE AND (? IS NULL OR id <> ?)").bind(ownerUserId, name, exceptId ?? null, exceptId ?? null).first<{ id: string }>();
+  if (existing) throw new HttpError(409, scope === "shared" ? "A shared report already uses that name" : "You already have a personal report with that name");
+}
+async function accessibleReport(db: D1Database, principal: Principal, id: string): Promise<SavedReportRow> {
+  const item = await db.prepare("SELECT id, owner_user_id AS ownerUserId, scope, name, definition_json AS definitionJson, revision, created_by AS createdBy, updated_by AS updatedBy, created_at AS createdAt, updated_at AS updatedAt FROM saved_report_views WHERE installation_id = 'primary' AND id = ? AND (scope = 'shared' OR owner_user_id = ?)").bind(id, principal.userId).first<SavedReportRow>();
+  if (!item) throw new HttpError(404, "Report not found");
+  return item;
+}
+async function reportMetadata(db: D1Database): Promise<{ labels: PolicyLabel[]; baseline: string | null; timeZone: string }> {
+  const [labels, settings] = await Promise.all([
+    db.prepare("SELECT id, name, active, formula_enabled AS formulaEnabled FROM member_labels WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE").all<PolicyLabel>(),
+    db.prepare("SELECT attendance_reporting_starts_on AS baseline, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ baseline: string | null; timeZone: string }>(),
+  ]);
+  return { labels: labels.results ?? [], baseline: settings?.baseline ?? null, timeZone: settings?.timeZone ?? "UTC" };
+}
+async function reportCatalog(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const data = await reportMetadata(requireDatabase(env));
+  return response({ columns: reportColumnCatalog, labels: data.labels, baseline: data.baseline, timeZone: data.timeZone, defaultDefinition: defaultReportDefinition(Boolean(data.baseline)), role: principal.role });
+}
+function savedReportResponse(item: SavedReportRow, labels: PolicyLabel[]) {
+  const validation = validateReportDefinition(parseStoredReportDefinition(item.definitionJson), labels, { allowMissingLabels: true });
+  return { id: item.id, ownerUserId: item.ownerUserId, scope: item.scope, name: item.name, definition: validation.definition ?? parseStoredReportDefinition(item.definitionJson), revision: Number(item.revision), createdBy: item.createdBy, updatedBy: item.updatedBy, createdAt: item.createdAt, updatedAt: item.updatedAt, pinnedPosition: item.pinnedPosition ?? null, warnings: validation.warnings, errors: validation.errors };
+}
+async function savedReports(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const data = await reportMetadata(db);
+  if (request.method === "GET") {
+    const result = await db.prepare("SELECT v.id, v.owner_user_id AS ownerUserId, v.scope, v.name, v.definition_json AS definitionJson, v.revision, v.created_by AS createdBy, v.updated_by AS updatedBy, v.created_at AS createdAt, v.updated_at AS updatedAt, t.position AS pinnedPosition FROM saved_report_views v LEFT JOIN saved_report_tabs t ON t.installation_id = v.installation_id AND t.report_view_id = v.id AND t.user_id = ? WHERE v.installation_id = 'primary' AND (v.scope = 'shared' OR v.owner_user_id = ?) ORDER BY CASE WHEN t.position IS NULL THEN 1 ELSE 0 END, t.position, v.name COLLATE NOCASE, v.id").bind(principal.userId, principal.userId).all<SavedReportRow>();
+    return response({ reports: (result.results ?? []).map((item) => savedReportResponse(item, data.labels)) });
+  }
+  const input = await parseJson<{ name?: unknown; scope?: unknown; definition?: unknown }>(request); const name = reportName(input.name); const scope = reportScope(input.scope);
+  const validation = validateReportDefinition(input.definition, data.labels); if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
+  await ensureUniqueReportName(db, scope, name, principal.userId);
+  const id = crypto.randomUUID(), now = new Date().toISOString();
+  const position = await db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM saved_report_tabs WHERE installation_id = 'primary' AND user_id = ?").bind(principal.userId).first<{ position: number }>();
+  await db.batch([
+    db.prepare("INSERT INTO saved_report_views (id, installation_id, owner_user_id, scope, name, definition_json, revision, created_by, updated_by, created_at, updated_at) VALUES (?, 'primary', ?, ?, ?, ?, 1, ?, ?, ?, ?)").bind(id, principal.userId, scope, name, JSON.stringify(validation.definition), principal.userId, principal.userId, now, now),
+    db.prepare("INSERT INTO saved_report_tabs (installation_id, user_id, report_view_id, position, pinned_at) VALUES ('primary', ?, ?, ?, ?)").bind(principal.userId, id, Number(position?.position ?? 0), now),
+  ]);
+  await writeAudit(db, principal, "report.created", "saved_report", id, { name, scope });
+  const created = await accessibleReport(db, principal, id); return response({ report: savedReportResponse({ ...created, pinnedPosition: Number(position?.position ?? 0) }, data.labels) }, 201);
+}
+async function manageSavedReport(request: Request, env: Env, id: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const current = await accessibleReport(db, principal, id);
+  if (request.method === "DELETE") {
+    const revisionText = new URL(request.url).searchParams.get("revision");
+    if (revisionText && Number(revisionText) !== Number(current.revision)) throw new HttpError(409, "This report changed after you opened it. Reload before deleting it.");
+    await db.prepare("DELETE FROM saved_report_views WHERE installation_id = 'primary' AND id = ?").bind(id).run();
+    await writeAudit(db, principal, "report.deleted", "saved_report", id, { name: current.name, scope: current.scope, revision: current.revision }); return response({ deleted: true });
+  }
+  const input = await parseJson<{ name?: unknown; scope?: unknown; definition?: unknown; revision?: unknown }>(request); const revision = Number(input.revision);
+  if (!Number.isInteger(revision) || revision !== Number(current.revision)) throw new HttpError(409, "This report changed after you opened it. Reload and reapply your changes.");
+  const name = reportName(input.name); const scope = reportScope(input.scope);
+  if (current.scope === "shared" && scope === "personal" && current.ownerUserId !== principal.userId) throw new HttpError(403, "Save a personal copy instead of converting another user's shared report");
+  const data = await reportMetadata(db); const validation = validateReportDefinition(input.definition, data.labels);
+  if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
+  await ensureUniqueReportName(db, scope, name, current.ownerUserId, id); const now = new Date().toISOString();
+  const result = await db.prepare("UPDATE saved_report_views SET scope = ?, name = ?, definition_json = ?, revision = revision + 1, updated_by = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND revision = ?").bind(scope, name, JSON.stringify(validation.definition), principal.userId, now, id, revision).run();
+  if (!result.meta?.changes) throw new HttpError(409, "This report changed after you opened it. Reload and reapply your changes.");
+  await writeAudit(db, principal, "report.updated", "saved_report", id, { name, scope, revision: revision + 1 }); const updated = await accessibleReport(db, principal, id);
+  return response({ report: savedReportResponse(updated, data.labels) });
+}
+async function savedReportTabs(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ reportIds?: unknown }>(request);
+  if (!Array.isArray(input.reportIds) || input.reportIds.length > 50 || input.reportIds.some((id) => typeof id !== "string") || new Set(input.reportIds).size !== input.reportIds.length) throw new HttpError(400, "Pinned reports must be a unique ordered list");
+  const reportIds = input.reportIds as string[];
+  if (reportIds.length) {
+    const accessible = await db.prepare(`SELECT id FROM saved_report_views WHERE installation_id = 'primary' AND id IN (${reportIds.map(() => "?").join(",")}) AND (scope = 'shared' OR owner_user_id = ?)` ).bind(...reportIds, principal.userId).all<{ id: string }>();
+    if ((accessible.results ?? []).length !== reportIds.length) throw new HttpError(400, "One or more pinned reports are unavailable");
+  }
+  const now = new Date().toISOString(); await db.batch([
+    db.prepare("DELETE FROM saved_report_tabs WHERE installation_id = 'primary' AND user_id = ?").bind(principal.userId),
+    ...reportIds.map((id, position) => db.prepare("INSERT INTO saved_report_tabs (installation_id, user_id, report_view_id, position, pinned_at) VALUES ('primary', ?, ?, ?, ?)").bind(principal.userId, id, position, now)),
+  ]);
+  return response({ reportIds });
+}
+function reportPagination(pageValue: unknown, pageSizeValue: unknown, total: number): { page: number; pageSize: 25 | 50 | 100 | "all"; from: number; to: number; totalPages: number } {
+  const pageSize = pageSizeValue === "all" ? "all" : Number(pageSizeValue ?? 25);
+  if (pageSize !== "all" && ![25, 50, 100].includes(pageSize)) throw new HttpError(400, "Page size must be 25, 50, 100, or all");
+  const totalPages = pageSize === "all" ? 1 : Math.max(1, Math.ceil(total / pageSize)); const page = Math.max(1, Number(pageValue ?? 1));
+  if (!Number.isInteger(page)) throw new HttpError(400, "Page must be a positive integer");
+  const safePage = Math.min(page, totalPages); const from = pageSize === "all" ? 0 : (safePage - 1) * pageSize; const to = pageSize === "all" ? total : Math.min(total, from + pageSize);
+  return { page: safePage, pageSize: pageSize as 25 | 50 | 100 | "all", from, to, totalPages };
+}
+async function runReportDefinition(db: D1Database, value: unknown): Promise<ReportRun> {
+  const data = await policyData(db); const validation = validateReportDefinition(value, data.labels, { allowMissingLabels: true });
+  if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
+  const definition = validation.definition; const today = policyLocalDate(new Date().toISOString(), data.timeZone); const resolved = resolveReportPeriod(definition.period, today, data.baseline); const warnings = [...validation.warnings];
+  if (resolved.warning) warnings.push(resolved.warning);
+  const meetings = data.meetings.filter((meeting) => definition.meetingType === "all" || Boolean(meeting.required) === (definition.meetingType === "required"));
+  const officialMembers = evaluateAttendance(data); const columnLabelIds = definition.columns.flatMap((column) => column.labelId ? [column.labelId] : []); const summaryLabelIds = [...new Set([...definition.labelIds, ...columnLabelIds])];
+  const periodMembers = evaluateAttendance({ ...data, meetings, from: resolved.from, to: resolved.to ?? today, historicalLabelIds: definition.membership === "historical" ? definition.labelIds : [], historicalLabelMatch: definition.labelMatch, summaryLabelIds })
+    .filter((item) => (definition.roster === "all" || Boolean(item.member.active)) && (definition.membership === "historical" ? !definition.labelIds.length || item.rows.length > 0 : reportLabelsMatch(item.currentLabelIds, definition.labelIds, definition.labelMatch)));
+  const rows = buildReportRows({ definition, official: officialMembers, period: periodMembers, meetings, labels: data.labels, rules: data.rules, timeZone: data.timeZone, from: resolved.from, to: resolved.to ?? today }); const labelNames = new Map(data.labels.map((label) => [label.id, label.name]));
+  const matchingMemberIds = new Set(rows.map((row) => row.member.id));
+  return { definition, warnings: [...new Set(warnings)], resolvedPeriod: { from: resolved.from, to: resolved.to ?? today }, columns: definition.columns.map((column) => ({ id: reportColumnId(column), key: column.key, label: reportColumnLabel(column, labelNames), labelId: column.labelId })), rows, periodMembers: periodMembers.filter((member) => matchingMemberIds.has(member.member.id)), officialMembers, meetings, labels: data.labels, rules: data.rules, timeZone: data.timeZone };
+}
+async function customReportQuery(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin", "operator"]); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(requireDatabase(env), input.definition); const pagination = reportPagination(input.page, input.pageSize, run.rows.length);
+  return response({ definition: run.definition, warnings: run.warnings, resolvedPeriod: run.resolvedPeriod, columns: run.columns, rows: run.rows.slice(pagination.from, pagination.to), pagination: { page: pagination.page, pageSize: pagination.pageSize, totalRows: run.rows.length, totalPages: pagination.totalPages, rangeStart: run.rows.length ? pagination.from + 1 : 0, rangeEnd: pagination.to } });
+}
+async function leaderboardReport(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin", "operator"]); const url = new URL(request.url); const report = await policyReport(requireDatabase(env), reportFilters(url)); const sort = url.searchParams.get("sort") ?? "regular-desc";
+  if (!["regular-desc", "first-name", "last-name"].includes(sort)) throw new HttpError(400, "Invalid leaderboard sort");
+  report.members.sort((left, right) => {
+    if (sort === "regular-desc") { const a = left.regularAttendance.rate, b = right.regularAttendance.rate; if (a === null && b !== null) return 1; if (a !== null && b === null) return -1; if (a !== null && b !== null && a !== b) return b - a; }
+    const first = sort === "first-name" ? left.member.firstName.localeCompare(right.member.firstName) : left.member.lastName.localeCompare(right.member.lastName);
+    return first || (sort === "first-name" ? left.member.lastName.localeCompare(right.member.lastName) : left.member.firstName.localeCompare(right.member.firstName)) || left.member.memberId.localeCompare(right.member.memberId);
+  });
+  const policyAlerts = report.members.flatMap((item) => item.currentCompliances.flatMap((policy, index) => policy.status === "below" ? [{ key: `${item.member.id}:${policy.labelId ?? index}`, memberId: item.member.memberId, name: `${item.member.firstName} ${item.member.lastName}`, policy }] : []));
+  const trend = report.meetings.map((meeting) => { const rows = report.members.flatMap((member) => member.rows.filter((row) => row.meetingId === meeting.id && row.regularEligible)); const attended = rows.reduce((sum, row) => sum + (row.attended ? row.regularWeight : 0), 0); const eligible = rows.reduce((sum, row) => sum + row.regularWeight, 0); return { meetingId: meeting.id, title: meeting.title, startsAt: meeting.startsAt, rate: eligible > 0 ? Math.round(attended / eligible * 100) : null }; }).filter((point) => point.rate !== null);
+  const pagination = reportPagination(url.searchParams.get("page") ?? 1, url.searchParams.get("pageSize") ?? 25, report.members.length); return response({ ...report, members: report.members.slice(pagination.from, pagination.to), insights: { policyAlerts, trend }, pagination: { page: pagination.page, pageSize: pagination.pageSize, totalRows: report.members.length, totalPages: pagination.totalPages, rangeStart: report.members.length ? pagination.from + 1 : 0, rangeEnd: pagination.to } });
+}
+async function reportCsvExport(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(db, input.definition);
+  const csv = [run.columns.map((column) => csvCell(column.label)).join(","), ...run.rows.map((row) => run.columns.map((column) => csvCell(row.cells[column.id]?.text ?? "")).join(","))].join("\r\n") + "\r\n";
+  await writeAudit(db, principal, "report.exported", "saved_report", null, { format: "summary", rows: run.rows.length, columns: run.columns.map((column) => column.id) });
+  return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-report-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
+}
+async function reportDetailCsvExport(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(db, input.definition); const meetingMap = new Map(run.meetings.map((meeting) => [meeting.id, meeting])); const official = new Map(run.officialMembers.map((item) => [item.member.id, item])); const labelNames = new Map(run.labels.map((label) => [label.id, label.name]));
+  const headers = ["meeting", "meetingStart", "meetingEnd", "audience", "required", "attendanceWeight", "memberId", "firstName", "lastName", "memberLabels", "disposition", "eligibility", "regularEligible", "regularWeight", "regularWeightedPresent", "regularRate", "regularAttended", "regularRequired", "regularFrom", "regularTo", "policyEligible", "policyWeight", "policyWeightedPresent", "policyLabel", "policyRuleType", "policyExcusedHandling", "policyStatus", "policyTarget", "policyAttended", "policyRequired", "policyRate", "policyFrom", "policyTo", "policyResults", "policyHistory", "weeklyTarget", "weekStartsOn", "weekSegmentStartsOn", "weekSegmentEndsOn", "checkedInAt", "checkedOutAt", "reason"];
+  const rows: Record<string, unknown>[] = run.periodMembers.flatMap((period) => { const item = official.get(period.member.id) ?? period; return period.rows.flatMap((row) => { const meeting = meetingMap.get(row.meetingId); if (!meeting) return []; const date = policyLocalDate(meeting.startsAt, run.timeZone); const week = period.weeks.find((candidate) => candidate.segmentStartsOn <= date && date <= candidate.segmentEndsOn); const policy = item.currentCompliance; return [{ meeting: meeting.title, meetingStart: meeting.startsAt, meetingEnd: meeting.endsAt, audience: row.audience, required: Boolean(meeting.required), attendanceWeight: meeting.attendanceWeight, memberId: period.member.memberId, firstName: period.member.firstName, lastName: period.member.lastName, memberLabels: row.memberLabelIds.map((labelId) => labelNames.get(labelId) ?? "Retired label").join("; "), disposition: row.disposition, eligibility: row.eligibility, regularEligible: row.regularEligible, regularWeight: row.regularWeight, regularWeightedPresent: row.regularEligible && row.attended ? row.regularWeight : 0, regularRate: period.regularAttendance.rate ?? "", regularAttended: period.regularAttendance.attended, regularRequired: period.regularAttendance.required, regularFrom: period.regularAttendance.from ?? "", regularTo: period.regularAttendance.to, policyEligible: row.rateEligible, policyWeight: row.weight, policyWeightedPresent: row.rateEligible && row.attended ? row.weight : 0, policyLabel: policy.labelName ?? "", policyRuleType: policy.ruleType ?? "", policyExcusedHandling: policy.excusedHandling ?? "", policyStatus: policy.status, policyTarget: policy.threshold ?? "", policyAttended: policy.attended, policyRequired: policy.required, policyRate: policy.rate ?? "", policyFrom: policy.status === "no_rule" ? "" : policy.from, policyTo: policy.status === "no_rule" ? "" : policy.to, policyResults: JSON.stringify(item.currentCompliances), policyHistory: JSON.stringify(item.historySummaries), weeklyTarget: week?.target ?? "", weekStartsOn: week?.weekStartsOn ?? "", weekSegmentStartsOn: week?.segmentStartsOn ?? "", weekSegmentEndsOn: week?.segmentEndsOn ?? "", checkedInAt: row.checkedInAt, checkedOutAt: row.checkedOutAt, reason: row.reason }]; }); });
+  const csv = [headers.join(","), ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(","))].join("\r\n") + "\r\n"; await writeAudit(db, principal, "report.exported", "saved_report", null, { format: "detail", rows: rows.length });
+  return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-report-detail-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
+}
 function policySummaryText(summary?: PolicyMemberResult): string {
   if (!summary) return "No attendance record is available.";
-  const current = summary.currentCompliance;
   const regular = "Regular attendance: " + (summary.regularAttendance.rate === null ? "N/A" : String(summary.regularAttendance.rate) + "%") + " from " + (summary.regularAttendance.from ?? "the first eligible meeting") + " to " + summary.regularAttendance.to + ".";
-  if (current.status === "no_rule") return regular + (current.labelName ? " " + current.labelName + ": no active attendance rule." : " No assigned attendance policy.");
-  const status = current.status === "not_applicable" ? "N/A" : current.status.replaceAll("_", " ");
-  const result = current.ruleType === "weekly_count"
-    ? String(current.attended) + " of " + String(current.threshold) + " meetings, " + status
-    : (current.rate === null ? "N/A" : String(current.rate) + "%") + " against " + String(current.threshold) + "% required, " + status + "; excused meetings " + (current.excusedHandling === "count_missed" ? "count as missed" : "are excluded");
+  if (!summary.currentCompliances.length) return regular + " No assigned attendance policy.";
+  const results = summary.currentCompliances.map((current) => {
+    if (current.status === "no_rule") return (current.labelName ?? "Attendance policy") + ": no active attendance rule";
+    const status = current.status === "not_applicable" ? "N/A" : current.status.replaceAll("_", " ");
+    const result = current.ruleType === "weekly_count"
+      ? String(current.attended) + " of " + String(current.threshold) + " meetings, " + status
+      : (current.rate === null ? "N/A" : String(current.rate) + "%") + " against " + String(current.threshold) + "% required, " + status + "; excused meetings " + (current.excusedHandling === "count_missed" ? "count as missed" : "are excluded");
+    return (current.labelName ?? "Attendance policy") + ": " + result + " from " + current.from + " to " + current.to;
+  }).join(". ");
   const history = summary.historySummaries.map((item) => item.ruleType === "weekly_count" ? item.labelName + ": " + String(item.weeksMet) + "/" + String(item.weeksDue) + " weeks met" : item.labelName + ": " + (item.rate === null ? "N/A" : String(item.rate) + "% weighted") + ", excused meetings " + (item.excusedHandling === "count_missed" ? "count as missed" : "excluded")).join("; ");
-  return regular + " " + (current.labelName ?? "Attendance policy") + ": " + result + " from " + current.from + " to " + current.to + ". Policy history: " + (history || "None") + ".";
+  return regular + " " + results + ". Policy history: " + (history || "None") + ".";
 }
 function calendarAttendanceDetails(meeting: { required: number | boolean; attendanceWeight: number; notes?: string | null }, audience: string): string {
   const status = meeting.required ? "Required" : "Optional";
@@ -1099,9 +1230,9 @@ function calendarAttendanceDetails(meeting: { required: number | boolean; attend
 async function attendanceExport(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const report = await policyReport(db, reportFilters(new URL(request.url))); const meetings = new Map(report.meetings.map((meeting) => [meeting.id, meeting]));
-  const headers = ["meeting", "meetingStart", "meetingEnd", "audience", "required", "attendanceWeight", "memberId", "firstName", "lastName", "memberLabels", "disposition", "eligibility", "regularEligible", "regularWeight", "regularWeightedPresent", "regularRate", "regularAttended", "regularRequired", "regularFrom", "regularTo", "policyEligible", "policyWeight", "policyWeightedPresent", "policyLabel", "policyRuleType", "policyExcusedHandling", "policyStatus", "policyTarget", "policyAttended", "policyRequired", "policyRate", "policyFrom", "policyTo", "policyHistory", "weeklyTarget", "weekStartsOn", "weekSegmentStartsOn", "weekSegmentEndsOn", "checkedInAt", "checkedOutAt", "reason"];
+  const headers = ["meeting", "meetingStart", "meetingEnd", "audience", "required", "attendanceWeight", "memberId", "firstName", "lastName", "memberLabels", "disposition", "eligibility", "regularEligible", "regularWeight", "regularWeightedPresent", "regularRate", "regularAttended", "regularRequired", "regularFrom", "regularTo", "policyEligible", "policyWeight", "policyWeightedPresent", "policyLabel", "policyRuleType", "policyExcusedHandling", "policyStatus", "policyTarget", "policyAttended", "policyRequired", "policyRate", "policyFrom", "policyTo", "policyResults", "policyHistory", "weeklyTarget", "weekStartsOn", "weekSegmentStartsOn", "weekSegmentEndsOn", "checkedInAt", "checkedOutAt", "reason"];
   const labels = new Map(report.labels.map((label) => [label.id, label.name]));
-  const rows: Record<string, unknown>[] = report.members.flatMap((item) => item.rows.flatMap((row) => { const meeting = meetings.get(row.meetingId); if (!meeting) return []; const date = policyLocalDate(meeting.startsAt, report.timeZone); const week = item.weeks.find((week) => week.segmentStartsOn <= date && date <= week.segmentEndsOn); const policy = item.currentCompliance; return [{ meeting: meeting.title, meetingStart: meeting.startsAt, meetingEnd: meeting.endsAt, audience: row.audience, required: Boolean(meeting.required), attendanceWeight: meeting.attendanceWeight, memberId: item.member.memberId, firstName: item.member.firstName, lastName: item.member.lastName, memberLabels: row.memberLabelIds.map((id) => labels.get(id) ?? "Retired label").join("; "), disposition: row.disposition, eligibility: row.eligibility, regularEligible: row.regularEligible, regularWeight: row.regularWeight, regularWeightedPresent: row.regularEligible && row.attended ? row.regularWeight : 0, regularRate: item.regularAttendance.rate ?? "", regularAttended: item.regularAttendance.attended, regularRequired: item.regularAttendance.required, regularFrom: item.regularAttendance.from ?? "", regularTo: item.regularAttendance.to, policyEligible: row.rateEligible, policyWeight: row.weight, policyWeightedPresent: row.rateEligible && row.attended ? row.weight : 0, policyLabel: policy.labelName ?? "", policyRuleType: policy.ruleType ?? "", policyExcusedHandling: policy.excusedHandling ?? "", policyStatus: policy.status, policyTarget: policy.threshold ?? "", policyAttended: policy.attended, policyRequired: policy.required, policyRate: policy.rate ?? "", policyFrom: policy.status === "no_rule" ? "" : policy.from, policyTo: policy.status === "no_rule" ? "" : policy.to, policyHistory: JSON.stringify(item.historySummaries), weeklyTarget: week?.target ?? "", weekStartsOn: week?.weekStartsOn ?? "", weekSegmentStartsOn: week?.segmentStartsOn ?? "", weekSegmentEndsOn: week?.segmentEndsOn ?? "", checkedInAt: row.checkedInAt, checkedOutAt: row.checkedOutAt, reason: row.reason }]; }));
+  const rows: Record<string, unknown>[] = report.members.flatMap((item) => item.rows.flatMap((row) => { const meeting = meetings.get(row.meetingId); if (!meeting) return []; const date = policyLocalDate(meeting.startsAt, report.timeZone); const week = item.weeks.find((week) => week.segmentStartsOn <= date && date <= week.segmentEndsOn); const policy = item.currentCompliance; return [{ meeting: meeting.title, meetingStart: meeting.startsAt, meetingEnd: meeting.endsAt, audience: row.audience, required: Boolean(meeting.required), attendanceWeight: meeting.attendanceWeight, memberId: item.member.memberId, firstName: item.member.firstName, lastName: item.member.lastName, memberLabels: row.memberLabelIds.map((id) => labels.get(id) ?? "Retired label").join("; "), disposition: row.disposition, eligibility: row.eligibility, regularEligible: row.regularEligible, regularWeight: row.regularWeight, regularWeightedPresent: row.regularEligible && row.attended ? row.regularWeight : 0, regularRate: item.regularAttendance.rate ?? "", regularAttended: item.regularAttendance.attended, regularRequired: item.regularAttendance.required, regularFrom: item.regularAttendance.from ?? "", regularTo: item.regularAttendance.to, policyEligible: row.rateEligible, policyWeight: row.weight, policyWeightedPresent: row.rateEligible && row.attended ? row.weight : 0, policyLabel: policy.labelName ?? "", policyRuleType: policy.ruleType ?? "", policyExcusedHandling: policy.excusedHandling ?? "", policyStatus: policy.status, policyTarget: policy.threshold ?? "", policyAttended: policy.attended, policyRequired: policy.required, policyRate: policy.rate ?? "", policyFrom: policy.status === "no_rule" ? "" : policy.from, policyTo: policy.status === "no_rule" ? "" : policy.to, policyResults: JSON.stringify(item.currentCompliances), policyHistory: JSON.stringify(item.historySummaries), weeklyTarget: week?.target ?? "", weekStartsOn: week?.weekStartsOn ?? "", weekSegmentStartsOn: week?.segmentStartsOn ?? "", weekSegmentEndsOn: week?.segmentEndsOn ?? "", checkedInAt: row.checkedInAt, checkedOutAt: row.checkedOutAt, reason: row.reason }]; }));
   const csv = [headers.join(","), ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(","))].join("\r\n") + "\r\n";
   await writeAudit(db, principal, "attendance.exported", "attendance", "csv", { filters: reportFilters(new URL(request.url)), rows: rows.length });
   return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-attendance-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
@@ -2583,13 +2714,15 @@ type BackupScope = "meetings" | "roster" | "installation";
 const tableColumns = {
   installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id", "google_enabled", "resend_enabled", "discord_enabled", "google_calendar_enabled"],
   organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on"],
-  users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id"],
+  users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id", "debug_mode"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at", "attendance_required_from"],
   member_labels: ["id", "installation_id", "name", "active", "formula_enabled", "created_by", "created_at"],
   member_label_changes: ["id", "installation_id", "member_id", "label_id", "action", "effective_date", "created_by", "created_at"],
   discord_label_role_mappings: ["installation_id", "label_id", "guild_id", "role_id", "role_name", "created_by", "created_at"],
   label_weekly_targets: ["id", "installation_id", "label_id", "starts_on", "ends_on", "meetings_per_week", "created_by", "created_at"],
   label_attendance_rules: ["id", "installation_id", "label_id", "starts_on", "ends_on", "rule_type", "threshold_percent", "meetings_per_week", "created_by", "created_at", "updated_at", "excused_handling"],
+  saved_report_views: ["id", "installation_id", "owner_user_id", "scope", "name", "definition_json", "revision", "created_by", "updated_by", "created_at", "updated_at"],
+  saved_report_tabs: ["installation_id", "user_id", "report_view_id", "position", "pinned_at"],
   meeting_weight_categories: ["id", "installation_id", "name", "weight", "minimum_duration_minutes", "position", "active", "created_by", "created_at", "updated_at"],
   meetings: ["id", "installation_id", "title", "starts_at", "ends_at", "required", "notes", "created_by", "created_at", "is_test", "series_id", "recurrence_frequency", "recurrence_until", "recurrence_sequence", "deleted_at", "weight_category_id", "weight_category_name", "attendance_weight", "audience_mode"],
   meeting_audience_labels: ["installation_id", "meeting_id", "label_id"],
@@ -2618,7 +2751,7 @@ const tableColumns = {
 type BackupTable = keyof typeof tableColumns;
 // Restore parents before children so SQLite's immediate foreign-key checks remain valid.
 const installationTables: BackupTable[] = [
-  "installations", "organization_settings", "members", "users", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
+  "installations", "organization_settings", "members", "users", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
   "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
@@ -2636,13 +2769,13 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const policySettings = scope === "roster" ? await db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ recentDays: number; policyActivatedOn: string | null }>() : null; const backup = { product: "LancerLogin", schemaVersion: 18, scope, exportedAt, tables: Object.fromEntries(entries), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
+  const exportedAt = new Date().toISOString(); const policySettings = scope === "roster" ? await db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ recentDays: number; policyActivatedOn: string | null }>() : null; const backup = { product: "LancerLogin", schemaVersion: 20, scope, exportedAt, tables: Object.fromEntries(entries), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
   const updateRequestId = new URL(request.url).searchParams.get("updateRequestId");
   if (updateRequestId) {
     if (scope !== "installation") throw new HttpError(400, "Web updates require an entire-installation backup");
     await recordUpdateBackup(env, updateRequestId);
   }
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 18 });
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 20 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
@@ -2652,19 +2785,19 @@ const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
   attendance_events: tableColumns.attendance_events.slice(0, -1),
   discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -2),
 };
-const legacyInstallationTables = installationTables.filter((table) => !["member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "meeting_audience_labels", "meeting_weight_categories", "meeting_templates", "discord_attendance_notifications", "discord_attendance_recipients", "discord_anomaly_reports", "google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations", "discord_calendar_event_mappings", "discord_calendar_operations"].includes(table));
+const legacyInstallationTables = installationTables.filter((table) => !["member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_audience_labels", "meeting_weight_categories", "meeting_templates", "discord_attendance_notifications", "discord_attendance_recipients", "discord_anomaly_reports", "google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations", "discord_calendar_event_mappings", "discord_calendar_operations"].includes(table));
 const legacyMeetingTables = meetingTables.filter((table) => !["meeting_audience_labels", "meeting_weight_categories", "meeting_templates", "discord_attendance_notifications", "discord_attendance_recipients", "discord_anomaly_reports"].includes(table));
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
   const schemaVersion = Number(value.schemaVersion);
   const sourceTables = value.tables;
-  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings"));
+  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings") && !(schemaVersion < 20 && ["saved_report_views", "saved_report_tabs"].includes(table)));
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -4) : schemaVersion < 17 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
+    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -4) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
@@ -2677,6 +2810,7 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   if (schemaVersion < 7 && tables.installations) { const providers = new Set(tables.encrypted_integrations.map((row) => row.provider)); tables.installations = tables.installations.map((row) => ({ ...row, google_enabled: providers.has("google") ? 1 : 0, resend_enabled: providers.has("resend") ? 1 : 0, discord_enabled: providers.has("discord") ? 1 : 0 })); }
   if (schemaVersion < 12 && tables.installations) tables.installations = tables.installations.map((row) => ({ google_calendar_enabled: 0, ...row }));
   if (tables.members) tables.members = tables.members.map((row) => ({ attendance_required_from: String(row.created_at ?? "").slice(0, 10), ...row }));
+  if (tables.users) tables.users = tables.users.map((row) => ({ debug_mode: 0, ...row }));
   if (tables.meetings) tables.meetings = tables.meetings.map((row) => {
     const normalized: Record<string, unknown> = { series_id: null, recurrence_frequency: null, recurrence_until: null, recurrence_sequence: null, deleted_at: null, weight_category_id: null, weight_category_name: null, attendance_weight: 1, audience_mode: "all", ...row };
     if (normalized.ends_at !== null) return normalized;
@@ -2701,6 +2835,13 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   }
   tables.label_attendance_rules = tables.label_attendance_rules.map((row) => ({ excused_handling: "exclude", ...row }));
   if (tables.label_attendance_rules.some((row) => !["exclude", "count_missed"].includes(String(row.excused_handling)))) throw new HttpError(400, "Backup attendance rule has invalid excused-meeting handling");
+  if (scope === "installation" && schemaVersion >= 20) {
+    const restoredLabels = tables.member_labels.map((row) => ({ id: String(row.id), name: String(row.name), active: Boolean(row.active), formulaEnabled: Boolean(row.formula_enabled) }));
+    for (const row of tables.saved_report_views) {
+      const validation = validateReportDefinition(parseStoredReportDefinition(String(row.definition_json)), restoredLabels, { allowMissingLabels: true });
+      if (!validation.definition || validation.errors.length) throw new HttpError(400, "Backup contains an invalid saved report definition", validation.errors);
+    }
+  }
   const attendanceRecentDays = scope === "roster" && schemaVersion >= 15 ? Number(value.attendanceRecentDays) : 30;
   if (!Number.isSafeInteger(attendanceRecentDays) || attendanceRecentDays < 1 || attendanceRecentDays > 365) throw new HttpError(400, "Backup attendance window is invalid");
   const attendancePolicyActivatedOn = scope === "roster" && schemaVersion >= 15 ? value.attendancePolicyActivatedOn ?? null : schemaVersion < 15 && (tables.member_labels.some((row) => row.formula_enabled === 1) || tables.label_attendance_rules.length) ? new Date().toISOString().slice(0, 10) : null;
@@ -2772,6 +2913,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/web-updates/status" && request.method === "GET" || ["/admin/web-updates/prepare", "/admin/web-updates/start"].includes(url.pathname) && request.method === "POST") result = await webUpdates(request, env);
     else if (url.pathname === "/auth/local" && request.method === "POST") result = await localLogin(request, env);
     else if (url.pathname === "/auth/session" && request.method === "GET") result = await authSession(request, env);
+    else if (url.pathname === "/auth/preferences" && request.method === "PATCH") result = await authPreferences(request, env);
     else if (url.pathname === "/auth/logout" && request.method === "POST") result = response({ ok: true }, 200, { "set-cookie": "lancerlogin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" });
     else if (url.pathname === "/auth/google/start" && request.method === "GET") result = await googleStart(request, env);
     else if (url.pathname === "/auth/google/callback" && request.method === "GET") result = await googleCallback(request, env);
@@ -2814,7 +2956,15 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/attendance" && ["GET", "POST"].includes(request.method)) result = await attendance(request, env);
     else if (url.pathname === "/attendance/corrections" && request.method === "POST") result = await correction(request, env);
     else if (url.pathname === "/attendance/cleanup" && request.method === "POST") result = await cleanupAttendance(request, env);
+    else if (url.pathname === "/reports/catalog" && request.method === "GET") result = await reportCatalog(request, env);
+    else if (url.pathname === "/reports/views" && ["GET", "POST"].includes(request.method)) result = await savedReports(request, env);
+    else if (/^\/reports\/views\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageSavedReport(request, env, decodeURIComponent(url.pathname.split("/")[3]));
+    else if (url.pathname === "/reports/tabs" && request.method === "PUT") result = await savedReportTabs(request, env);
+    else if (url.pathname === "/reports/leaderboard" && request.method === "GET") result = await leaderboardReport(request, env);
+    else if (url.pathname === "/reports/query" && request.method === "POST") result = await customReportQuery(request, env);
     else if (url.pathname === "/reports/attendance" && request.method === "GET") result = await attendanceReport(request, env);
+    else if (url.pathname === "/exports/report.csv" && request.method === "POST") result = await reportCsvExport(request, env);
+    else if (url.pathname === "/exports/report-detail.csv" && request.method === "POST") result = await reportDetailCsvExport(request, env);
     else if (url.pathname === "/exports/attendance.csv" && request.method === "GET") result = await attendanceExport(request, env);
     else if (url.pathname === "/admin/integrations" && request.method === "GET") result = await integrationsStatus(request, env);
     else if (url.pathname === "/admin/integrations/google-calendar" && ["PUT", "PATCH", "DELETE"].includes(request.method)) result = await googleCalendarConfiguration(request, env);

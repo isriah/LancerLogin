@@ -30,7 +30,7 @@ const routes = [
 
 async function useSettingsContext(page: Page, role: "admin" | "operator" = "admin") {
   await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: true, installation: { authMode: "local" }, settings }) }));
-  await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role } }) }));
+  await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { id: `${role}-1`, role, debugMode: false } }) }));
   await page.route("**/admin/setup/progress", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }) }));
   await page.route("**/integrations/capabilities", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: false, configured: false } } }) }));
   await page.route("**/admin/branding", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ settings }) }));
@@ -95,6 +95,129 @@ test("Admin can save independent attendance anomaly limits", async ({ page }) =>
   await expect(page.getByText("Attendance configuration saved.", { exact: true })).toBeVisible();
   expect(saved?.anomalyLateThresholdMinutes).toBe(12);
   expect(saved?.anomalyEarlyThresholdMinutes).toBe(18);
+});
+
+test("Settings keeps navigation and user controls together and persists Debug mode", async ({ page }) => {
+  await useSettingsContext(page);
+  let preference: Record<string, unknown> | undefined;
+  await page.route("**/auth/preferences", async (route) => { preference = route.request().postDataJSON() as Record<string, unknown>; await route.fulfill({ json: preference }); });
+  await page.goto("/settings/configuration");
+  const toolbar = page.locator(".settings-toolbar");
+  const navigation = toolbar.getByRole("navigation", { name: "Settings categories" });
+  await expect(navigation).toBeVisible();
+  const containment = await Promise.all([toolbar, navigation].map((element) => element.evaluate((node) => { const style = getComputedStyle(node); return { border: style.borderTopWidth, background: style.backgroundColor }; })));
+  expect(containment[0].border).not.toBe("0px");
+  expect(containment[1].border).toBe("0px");
+  expect(containment[1].background).toBe("rgba(0, 0, 0, 0)");
+  const darkMode = toolbar.getByRole("switch", { name: "Dark mode" });
+  await expect(darkMode).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "Sign out" })).toBeVisible();
+  const debug = toolbar.getByRole("switch", { name: "Debug mode" });
+  await expect(debug).toHaveAttribute("aria-checked", "false");
+  await debug.focus();
+  await page.keyboard.press("Space");
+  await expect.poll(() => preference).toEqual({ debugMode: true });
+  await expect(debug).toHaveAttribute("aria-checked", "true");
+  await expect(debug).toBeFocused();
+  expect(await debug.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
+  const toggleAppearance = (toggle: typeof darkMode) => toggle.evaluate((element) => {
+    const control = getComputedStyle(element);
+    const track = getComputedStyle(element.querySelector<HTMLElement>(".theme-toggle-track")!);
+    const thumb = getComputedStyle(element.querySelector<HTMLElement>(".theme-toggle-track > span")!);
+    const bounds = element.getBoundingClientRect();
+    const trackBounds = element.querySelector<HTMLElement>(".theme-toggle-track")!.getBoundingClientRect();
+    return {
+      control: [control.backgroundColor, control.color, control.borderColor, control.borderRadius],
+      track: [track.backgroundColor, track.borderColor, track.borderRadius],
+      thumb: [thumb.backgroundColor, thumb.borderRadius],
+      bounds: [bounds.height, trackBounds.width, trackBounds.height],
+    };
+  });
+  const darkModeAppearance = await toggleAppearance(darkMode);
+  await expect.poll(() => toggleAppearance(debug)).toEqual(darkModeAppearance);
+  const description = page.locator(".info-tip-content").filter({ hasText: "Scans close this many minutes" });
+  await expect(description).toBeHidden();
+  await page.locator(".configuration-grid label").first().locator(".info-tip-glyph").hover();
+  await expect(description).toBeVisible();
+});
+
+test("information tips use hover and keyboard focus on desktop but toggle on touch", async ({ page, browser }) => {
+  await useSettingsContext(page);
+  await page.goto("/settings/configuration");
+  const desktopTrigger = page.locator(".configuration-grid label").first().getByRole("button", { name: "More information" });
+  const desktopTooltip = page.locator(".info-tip-content").filter({ hasText: "Scans close this many minutes" });
+  await desktopTrigger.locator(".info-tip-glyph").hover();
+  await expect(desktopTooltip).toBeVisible();
+  await desktopTrigger.click();
+  await page.mouse.move(0, 0);
+  await expect(desktopTooltip).toBeHidden();
+  await expect(desktopTrigger).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("Tab");
+  await desktopTrigger.focus();
+  await expect(desktopTooltip).toBeVisible();
+  await desktopTrigger.press("Enter");
+  await expect(desktopTooltip).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(desktopTooltip).toBeHidden();
+
+  const origin = new URL(page.url()).origin;
+  const touchContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    const touchPage = await touchContext.newPage();
+    await useSettingsContext(touchPage);
+    await touchPage.goto(`${origin}/settings/configuration`);
+    const touchTrigger = touchPage.locator(".configuration-grid label").first().getByRole("button", { name: "More information" });
+    const touchTooltip = touchPage.locator(".info-tip-content").filter({ hasText: "Scans close this many minutes" });
+    await touchTrigger.tap();
+    await expect(touchTooltip).toBeVisible();
+    await expect(touchTrigger).toHaveAttribute("aria-expanded", "true");
+    await touchTrigger.tap();
+    await expect(touchTooltip).toBeHidden();
+    await expect(touchTrigger).toHaveAttribute("aria-expanded", "false");
+  } finally {
+    await touchContext.close();
+  }
+});
+
+test("information tips stay circular and inside the mobile viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await useSettingsContext(page);
+  await page.goto("/settings/organization");
+  const field = page.locator(".field-label-with-info").filter({ hasText: "Logo image" });
+  const trigger = field.getByRole("button", { name: "More information" });
+  const glyph = trigger.locator(".info-tip-glyph");
+  const tooltip = page.getByRole("tooltip").filter({ hasText: "up to 128 KiB" });
+  await expect(tooltip).toBeHidden();
+  const triggerBounds = await trigger.boundingBox();
+  expect(triggerBounds).not.toBeNull();
+  await page.mouse.move(triggerBounds!.x + 2, triggerBounds!.y + 2);
+  await expect(tooltip).toBeHidden();
+  await glyph.hover();
+  await expect(tooltip).toBeVisible();
+  const geometry = await page.evaluate(() => {
+    const tip = document.querySelector<HTMLElement>("[role='tooltip']");
+    const icon = document.querySelector<HTMLElement>(".info-tip-glyph");
+    const target = document.querySelector<HTMLElement>(".info-tip-button");
+    if (!tip || !icon || !target) throw new Error("Information tip did not render");
+    const tipBounds = tip.getBoundingClientRect();
+    const iconBounds = icon.getBoundingClientRect();
+    const targetBounds = target.getBoundingClientRect();
+    return {
+      tipLeft: tipBounds.left,
+      tipRight: tipBounds.right,
+      viewportWidth: innerWidth,
+      iconWidth: iconBounds.width,
+      iconHeight: iconBounds.height,
+      targetWidth: targetBounds.width,
+      targetHeight: targetBounds.height,
+    };
+  });
+  expect(geometry.tipLeft).toBeGreaterThanOrEqual(15);
+  expect(geometry.tipRight).toBeLessThanOrEqual(geometry.viewportWidth - 15);
+  expect(Math.abs(geometry.iconWidth - geometry.iconHeight)).toBeLessThan(0.5);
+  expect(geometry.targetWidth).toBeGreaterThanOrEqual(44);
+  expect(geometry.targetHeight).toBeGreaterThanOrEqual(44);
+  await expect(glyph).toHaveCSS("border-radius", "50%");
 });
 
 for (const viewport of dashboardConformanceReferences.viewports) {

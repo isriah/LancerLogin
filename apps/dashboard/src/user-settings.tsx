@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "./dashboard-api";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
+import { InfoHeading } from "./info-tip";
 
 export type RosterMember = { id: string; memberId: string; firstName: string; lastName: string; email?: string; discordUserId?: string; active: boolean | number; attendanceRequiredFrom?: string | null; hasDashboardAccess?: boolean | number };
 type User = { id: string; email?: string; localUsername?: string; memberId?: string | null; memberExternalId?: string; memberFirstName?: string; memberLastName?: string; role: "admin" | "operator"; active: boolean | number; createdAt: string };
@@ -19,7 +20,7 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
   async function update(user: User, patch: { active?: boolean; role?: User["role"]; memberId?: string | null }) { setError(""); try { await api(`/admin/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: JSON.stringify(patch) }); await load(); setNotice("Dashboard access updated and audited."); } catch (caught) { showError((caught as Error).message); } }
   const available = members.filter((member) => member.active && !users.some((user) => user.memberId === member.id));
   return <section className="user-section" aria-labelledby="access-workspace-title">
-    <div className="section-intro"><h2 id="access-workspace-title">Accounts and roles</h2><p>Grant Admin or Operator credentials to a roster member or an independent staff account.</p><span className="ui-status settings-notice" data-tone="neutral" role="status">{notice}</span></div>
+    <div className="section-intro"><InfoHeading id="access-workspace-title" info="Grant Admin or Operator credentials to a roster member or an independent staff account.">Accounts and roles</InfoHeading><span className="ui-status settings-notice" data-tone="neutral" role="status">{notice}</span></div>
     {error && <p id="dashboard-access-error" className="inline-messages error" role="alert" tabIndex={-1}>{error}</p>}
     <div className="user-layout"><form className="task-card" onSubmit={create}><h3>Grant dashboard access</h3>
       <label>Roster link <span>(optional)</span><select value={memberId} onChange={(event) => { const next = event.target.value; setMemberId(next); const member = members.find((item) => item.id === next); if (method === "google" && member?.email) setIdentifier(member.email.toLowerCase()); }}><option value="">Non-rostered Admin or Operator</option>{available.map((member) => <option key={member.id} value={member.id}>{member.firstName} {member.lastName} · {member.memberId}</option>)}</select></label>

@@ -60,6 +60,7 @@ const byId = (id) => document.getElementById(id);
 let members = [];
 let mappings = {};
 let stagePolling;
+let stagePollRevision = 0;
 let selectedMember;
 let numberTarget;
 let confirmResolve;
@@ -105,19 +106,24 @@ function stageFromDisplay(display) {
   stage(id, display?.message || "Ready to enroll", display?.detail || "Choose a member, finger, and slot.");
 }
 
-async function pollStage() {
-  try { stageFromDisplay((await call("/display-state")).display); } catch { /* Keep the last visible prompt. */ }
+async function pollStage(revision = stagePollRevision) {
+  try {
+    const display = (await call("/display-state")).display;
+    if (revision === stagePollRevision) stageFromDisplay(display);
+  } catch { /* Keep the last visible prompt. */ }
 }
 
 function startStagePolling() {
   clearInterval(stagePolling);
-  void pollStage();
-  stagePolling = setInterval(pollStage, 350);
+  const revision = ++stagePollRevision;
+  void pollStage(revision);
+  stagePolling = setInterval(() => pollStage(revision), 350);
 }
 
 function stopStagePolling() {
   clearInterval(stagePolling);
   stagePolling = undefined;
+  stagePollRevision += 1;
 }
 
 function mappingValue(value) {
@@ -378,9 +384,11 @@ byId("enroll-form").addEventListener("submit", async (event) => {
     renderMappings();
     suggestSlot();
     byId("replace").checked = false;
+    stopStagePolling();
     await pollStage();
     message("Enrollment saved in sensor slot " + slot + ".");
   } catch (error) {
+    stopStagePolling();
     await pollStage();
     message(friendlyError(error), true);
   } finally {

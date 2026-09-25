@@ -162,6 +162,11 @@
       "name": "0032_discord_label_roles.sql",
       "sha256": "210aa49509b01caddefa9d538a019405ca916974fed48d05dcdfd8327668701c",
       "forwardCompatible": true
+    },
+    {
+      "name": "0033_discord_attendance_threads.sql",
+      "sha256": "4605293fc66c1829c7b468682ec29828916746e9a275adb07c05c483f05c155c",
+      "forwardCompatible": true
     }
   ]
 }

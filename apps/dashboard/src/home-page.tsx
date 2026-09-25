@@ -17,7 +17,11 @@ export function HomePage({ navigate, discordEnabled }: { role: "admin" | "operat
   const [calendarOffset, setCalendarOffset] = useState(0); const [creating, setCreating] = useState(false); const [creationNotice, setCreationNotice] = useState("");
   const [undo, setUndo] = useState<PendingMeetingDeletion | undefined>(() => readPendingMeetingDeletion(window.sessionStorage.getItem(pendingMeetingDeletionKey)));
   useDashboardLoadingOverlay(notice === "Loading dashboard…", "Loading dashboard…");
-  async function load() { const [result, report] = await Promise.all([api<{ meetings: Meeting[] }>("/meetings"), loadReportAttendance(api)]); setMeetings(result.meetings); setPolicyAlerts(report.members.flatMap((item) => item.currentCompliance?.status === "below" ? [{ memberId: item.member.memberId, name: `${item.member.firstName} ${item.member.lastName}`, detail: item.currentCompliance.ruleType === "weekly_count" ? `${item.currentCompliance.attended} of ${item.currentCompliance.required} meetings in the settled segment` : `${item.currentCompliance.rate ?? 0}% against ${item.currentCompliance.threshold}% required` }] : [])); setNotice(""); setNoticeTone("neutral"); }
+  async function load() {
+    const result = await api<{ meetings: Meeting[] }>("/meetings");
+    setMeetings(result.meetings); setNotice(""); setNoticeTone("neutral");
+    void loadReportAttendance(api).then((report) => setPolicyAlerts(report.members.flatMap((item) => item.currentCompliance?.status === "below" ? [{ memberId: item.member.memberId, name: `${item.member.firstName} ${item.member.lastName}`, detail: item.currentCompliance.ruleType === "weekly_count" ? `${item.currentCompliance.attended} of ${item.currentCompliance.required} meetings in the settled segment` : `${item.currentCompliance.rate ?? 0}% against ${item.currentCompliance.threshold}% required` }] : []))).catch(() => setPolicyAlerts([]));
+  }
   useEffect(() => { void load().catch((error: Error) => { setNotice(error.message); setNoticeTone("error"); }); const timer = window.setInterval(() => void load().catch(() => undefined), 60_000); return () => window.clearInterval(timer); }, [discordEnabled]);
   useEffect(() => {
     if (!undo) { window.sessionStorage.removeItem(pendingMeetingDeletionKey); return; }

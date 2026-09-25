@@ -457,9 +457,9 @@ test("latest kiosk update accepts strict stable majors and rejects incomplete re
     for (const item of cases) {
       const database = new FakeDatabase();
       database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1, releaseVersion: "0.23.2" });
-      const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+      const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, WEB_UPDATE_TOKEN: "synthetic-token", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + 86_400_000).toISOString(), DB: database } as unknown as Env;
       let calls = 0;
-      globalThis.fetch = async (input) => { calls++; assert.equal(String(input), "https://api.github.com/repos/isriah/LancerLogin/releases/latest"); return Response.json(item.payload); };
+      globalThis.fetch = async (input, init) => { calls++; assert.equal(String(input), "https://api.github.com/repos/isriah/LancerLogin/releases/latest"); assert.equal(new Headers(init?.headers).get("authorization"), "Bearer synthetic-token"); assert.equal(init?.redirect, "manual"); return Response.json(item.payload); };
       const result = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest", targetVersion: "v9.9.9", url: "https://evil.test" }, { cookie }), env);
       assert.equal(result.status, item.status, JSON.stringify(item.payload));
       assert.equal(calls, 1);
@@ -1574,15 +1574,20 @@ test("Discord missing-member workflow mentions only linked absent members and re
   database.lists.set("SELECT id, discord_user_id AS discordUserId FROM members", [{ id: "member-1", discordUserId: "323456789012345678" }]);
   seedPolicy(database, { members: [{ id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: 1, attendanceRequiredFrom: "2026-01-01" }], meetings: [{ id: "meeting-1", title: "Studio", startsAt: "2026-09-01T20:00:00Z", endsAt: "2026-09-01T22:00:00Z", required: 1, attendanceWeight: 1, audienceMode: "all", isTest: 0 }] });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const originalFetch = globalThis.fetch; let outbound: RequestInit | undefined;
-  globalThis.fetch = async (_input, init) => { outbound = init; return new Response(JSON.stringify({ id: "message-1" }), { headers: { "content-type": "application/json" } }); };
+  const originalFetch = globalThis.fetch; const outbound: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => { outbound.push({ url: String(input), init }); return new Response(JSON.stringify({ id: "message-1" }), { headers: { "content-type": "application/json" } }); };
   try {
     const result = await worker.fetch(request("/discord/missing", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
     assert.equal(result.status, 202);
-    const payload = JSON.parse(String(outbound?.body));
+    const payload = JSON.parse(String(outbound.find((call) => call.url.endsWith("/messages"))?.init?.body));
     assert.match(payload.content, /<@323456789012345678>/);
     assert.deepEqual(payload.allowed_mentions, { parse: [], users: ["323456789012345678"] });
     assert.equal(payload.components[0].components[0].custom_id, "lancerlogin-attendance:meeting-1");
+    assert.match(payload.content, /Ask general questions in the thread/);
+    const thread = outbound.find((call) => call.url.endsWith("/messages/message-1/threads"));
+    assert.equal(thread?.init?.method, "POST");
+    assert.match(JSON.parse(String(thread?.init?.body)).name, /Attendance questions - Studio/);
+    assert.ok(database.calls.some((call) => call.sql.includes("SET thread_created_at = ?")));
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("discord_attendance_recipients")));
   assert.equal(database.batches.at(-1)?.some((call) => call.sql.includes("DELETE FROM discord_attendance_recipients")), false);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT OR IGNORE INTO discord_attendance_recipients")));
@@ -1741,7 +1746,7 @@ test("enabled Discord channel manager creates status before guidance and pins on
 
 test("channel manager reuses its two tracked messages and stays inactive until Discord is verified", async () => {
   const kioskContent = "**Front desk** · online · reader online · release 0.19.0";
-  const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. Use **View my attendance report** below or `/attendance-report` to receive your private report. After an absence notice appears, only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
+  const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. Use **View my attendance report** below or `/attendance-report` to receive your private report. Ask general questions in the thread under each absence notice. Only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
   const reportComponents = [{ type: 1, components: [{ type: 2, style: 1, label: "View my attendance report", custom_id: "lancerlogin-attendance-report" }] }];
   const verified = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
@@ -1915,7 +1920,7 @@ test("channel manager deletes only an expired tracked absence message and record
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
   database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 1 });
-  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 1 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24 });
   database.lists.set("FROM meetings m LEFT JOIN", []);
   database.lists.set("FROM discord_attendance_notifications WHERE", [{ meetingId: "meeting-1", messageId: "absence-1", channelId: "223456789012345678", processedAt: new Date(Date.now() - 25 * 3_600_000).toISOString(), expiresAt: new Date(Date.now() - 3_600_000).toISOString() }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
@@ -1926,6 +1931,45 @@ test("channel manager deletes only an expired tracked absence message and record
     assert.deepEqual(deletes, ["https://discord.com/api/v10/channels/223456789012345678/messages/absence-1"]);
     assert.ok(database.calls.some((call) => call.sql.includes("SET deleted_at = ?") && call.values.includes("meeting-1") && call.values.includes("absence-1")));
     assert.equal(deletes.some((url) => url.includes("unrelated")), false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("expired tracked notices are removed without the optional channel manager", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 0 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24 });
+  database.lists.set("FROM meetings m LEFT JOIN", []);
+  database.lists.set("FROM discord_attendance_notifications WHERE", [{ meetingId: "meeting-1", messageId: "absence-1", channelId: "223456789012345678", expiresAt: new Date(Date.now() - 60_000).toISOString() }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const deletes: string[] = [];
+  globalThis.fetch = async (input, init) => { if (init?.method === "DELETE") deletes.push(String(input)); return new Response(init?.method === "DELETE" ? null : JSON.stringify({ id: "managed-1" }), { status: init?.method === "DELETE" ? 204 : 200, headers: init?.method === "DELETE" ? undefined : { "content-type": "application/json" } }); };
+  try {
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    assert.deepEqual(deletes, ["https://discord.com/api/v10/channels/223456789012345678/messages/absence-1"]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("scheduled attendance thread retry recovers an already created thread", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 0 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24 });
+  database.lists.set("FROM meetings m LEFT JOIN", []);
+  database.lists.set("FROM discord_attendance_notifications n JOIN", [{ meetingId: "meeting-1", messageId: "absence-1", channelId: "223456789012345678", title: "Studio" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const calls: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push(`${init?.method} ${String(input)}`);
+    return new Response(JSON.stringify(init?.method === "POST" && String(input).endsWith("/threads") ? { code: 160004, message: "A thread has already been created" } : { id: "absence-1", parent_id: "223456789012345678" }), { status: init?.method === "POST" && String(input).endsWith("/threads") ? 400 : 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
+    assert.ok(calls.some((call) => call.includes("POST https://discord.com/api/v10/channels/223456789012345678/messages/absence-1/threads")));
+    assert.ok(calls.some((call) => call.includes("GET https://discord.com/api/v10/channels/absence-1")));
+    assert.ok(database.calls.some((call) => call.sql.includes("SET thread_created_at = ?")));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -2444,7 +2488,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { schemaVersion: number; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 16); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { schemaVersion: number; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 17); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO member_labels") && item.values.includes("Mentor")));
@@ -2459,11 +2503,22 @@ test("installation backup retains Discord role mappings while roster backup omit
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 16); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 17); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   const restored = await worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: installation }, { cookie }), env);
   assert.equal(restored.status, 200, await restored.clone().text());
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO discord_label_role_mappings") && item.values.includes("423456789012345678")));
+});
+
+test("schema 16 meeting restore defaults Discord thread tracking", async () => {
+  const database = new FakeDatabase(); const cookie = await sessionCookie("admin");
+  database.lists.set("FROM discord_attendance_notifications WHERE", [{ installation_id: "primary", meeting_id: "meeting-1", status: "delivered", message_id: "notice-1", attempts: 1, last_error: null, processed_at: "2026-09-01T22:00:00Z", updated_at: "2026-09-01T22:00:00Z", channel_id: "223456789012345678", expires_at: "2026-09-02T22:00:00Z", deleted_at: null }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const backup = await (await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
+  backup.schemaVersion = 16;
+  const restored = await worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup }, { cookie }), env);
+  assert.equal(restored.status, 200, await restored.clone().text());
+  assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO discord_attendance_notifications") && item.values.at(-1) === null));
 });
 
 test("schema 14 roster restore converts prior weekly targets into current rules", async () => {

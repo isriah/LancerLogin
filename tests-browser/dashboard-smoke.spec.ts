@@ -1,6 +1,15 @@
 import { setDashboardTheme } from "./dashboard-theme";
 import { expect, test } from "@playwright/test";
 
+test("Dashboard keeps meetings visible when attendance alerts fail", async ({ page }) => {
+  await page.route("**/reports/attendance*", (route) => route.fulfill({ status: 503, json: { error: "Report unavailable" } }));
+  await page.goto("/dashboard");
+  await page.getByRole("radio", { name: "Table" }).check();
+  await expect(page.getByText("5 of 5 shown")).toBeVisible();
+  await expect(page.getByRole("row", { name: /Completed build session/ })).toBeVisible();
+  await expect(page.getByText("Request failed")).toHaveCount(0);
+});
+
 test("roster stays primary and Admin actions open focused dialogs", async ({ page }) => {
   await page.goto("/dashboard");
   await page.getByRole("link", { name: "Roster" }).click();

@@ -1,7 +1,7 @@
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
 import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance } from "./web-updates.ts";
-import { releaseDiscovery } from "./release-discovery.ts";
+import { releaseDiscovery, releaseRequestHeaders } from "./release-discovery.ts";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
 
@@ -43,11 +43,10 @@ function compatibleReleaseTag(value: unknown): string | undefined {
   })];
   return required.every((name) => names.has(name)) ? release.tag_name : undefined;
 }
-async function latestCompatibleKioskRelease(): Promise<string> {
+async function latestCompatibleKioskRelease(env: Env): Promise<string> {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 4_000);
   try {
-    // GitHub rejects API requests without a valid application User-Agent.
-    const request = { headers: { accept: "application/vnd.github+json", "user-agent": "LancerLogin" }, signal: controller.signal };
+    const request = { headers: releaseRequestHeaders(env), redirect: "manual" as const, signal: controller.signal };
     const latest = await fetch(latestKioskReleaseUrl, request);
     if (!latest.ok) throw new Error("Latest release feed unavailable");
     const latestTag = compatibleReleaseTag(await latest.json().catch(() => undefined));
@@ -200,7 +199,7 @@ async function updateInfo(request: Request, env: Env): Promise<Response> {
 }
 async function discoverRelease(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
-  const result = await releaseDiscovery.check();
+  const result = await releaseDiscovery.check(env);
   return response(result, result.fresh ? 200 : result.code === "rate_limited" ? 429 : 503,
     result.retryAt ? { "retry-after": String(Math.max(1, Math.ceil((result.retryAt - Date.now()) / 1000))) } : undefined);
 }
@@ -676,7 +675,7 @@ async function queueKioskCommand(request: Request, env: Env, kioskId: string): P
   const kiosk = await db.prepare("SELECT id, name, release_version AS releaseVersion FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string; releaseVersion?: string }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
   let requestedReleaseVersion: string | null = null;
-  if (input.command === "install_latest") requestedReleaseVersion = await latestCompatibleKioskRelease();
+  if (input.command === "install_latest") requestedReleaseVersion = await latestCompatibleKioskRelease(env);
   const id = crypto.randomUUID(); const now = new Date().toISOString();
   await db.batch([
     db.prepare("INSERT INTO kiosk_commands (id, installation_id, kiosk_id, command_type, created_by, created_at, requested_release_version, release_version_before) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, kioskId, input.command, principal.userId, now, requestedReleaseVersion, input.command === "install_latest" ? kiosk.releaseVersion ?? null : null),
@@ -1066,8 +1065,12 @@ async function policyReport(db: D1Database, filters: ReportFilters): Promise<{ m
   const data = await policyData(db);
   if (filters.labelId && !data.labels.some((label) => label.id === filters.labelId)) throw new HttpError(400, "Unknown label filter");
   const meetings = data.meetings.filter((meeting) => filters.meetingType === "all" || Boolean(meeting.required) === (filters.meetingType === "required"));
-  const full = new Map(evaluateAttendance(data).map((item) => [item.member.id, item]));
-  const members = evaluateAttendance({ ...data, meetings, from: filters.from, to: filters.to, historicalLabelId: filters.labelId && filters.membership === "historical" ? filters.labelId : undefined }).map((item) => ({ ...item, currentCompliance: full.get(item.member.id)?.currentCompliance ?? item.currentCompliance, historySummaries: full.get(item.member.id)?.historySummaries ?? item.historySummaries })).filter((item) => (filters.roster === "all" || Boolean(item.member.active)) && (!filters.memberId || item.member.id === filters.memberId) && (!filters.labelId || (filters.membership === "historical" ? item.rows.length > 0 : item.currentLabelIds.includes(filters.labelId))));
+  const fullResults = evaluateAttendance(data);
+  const historicalLabelId = filters.labelId && filters.membership === "historical" ? filters.labelId : undefined;
+  const unfiltered = filters.meetingType === "all" && !filters.from && !filters.to && !historicalLabelId;
+  const full = new Map(fullResults.map((item) => [item.member.id, item]));
+  const selectedResults = unfiltered ? fullResults : evaluateAttendance({ ...data, meetings, from: filters.from, to: filters.to, historicalLabelId });
+  const members = selectedResults.map((item) => ({ ...item, currentCompliance: full.get(item.member.id)?.currentCompliance ?? item.currentCompliance, historySummaries: full.get(item.member.id)?.historySummaries ?? item.historySummaries })).filter((item) => (filters.roster === "all" || Boolean(item.member.active)) && (!filters.memberId || item.member.id === filters.memberId) && (!filters.labelId || (filters.membership === "historical" ? item.rows.length > 0 : item.currentLabelIds.includes(filters.labelId))));
   return { meetings: meetings.filter((meeting) => !meeting.isTest && Date.parse(meeting.attendanceClosesAt) <= Date.now() && (!filters.from || policyLocalDate(meeting.startsAt, data.timeZone) >= filters.from) && (!filters.to || policyLocalDate(meeting.startsAt, data.timeZone) <= filters.to)), members, labels: data.labels, baseline: data.baseline, timeZone: data.timeZone };
 }
 async function attendanceReport(request: Request, env: Env): Promise<Response> {
@@ -1826,21 +1829,46 @@ async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string
   }
   try {
     const userIds = members.map((member) => member.discordUserId); const mentions = userIds.map((id) => `<@${id}>`).join(" ");
-    const payload = { content: `Attendance has closed for **${meeting.title}**. The following members are marked absent: ${mentions}\nIf you attended, use the button below to request a private review. Your attendance will not change until an Operator or Admin approves it.`, allowed_mentions: { parse: [], users: userIds }, components: [{ type: 1, components: [{ type: 2, style: 2, label: "Contest absence", custom_id: `lancerlogin-attendance:${meeting.id}` }] }] };
+    const payload = { content: `Attendance has closed for **${meeting.title}**. The following members are marked absent: ${mentions}\nIf you attended, use the button below to request a private review. Your attendance will not change until an Operator or Admin approves it. Ask general questions in the thread under this notice.`, allowed_mentions: { parse: [], users: userIds }, components: [{ type: 1, components: [{ type: 2, style: 2, label: "Contest absence", custom_id: `lancerlogin-attendance:${meeting.id}` }] }] };
     const { body } = await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) }); const messageId = String(body.id ?? "");
     if (!messageId) throw new HttpError(502, "Discord did not return a message identifier");
     const contestWindow = await db.prepare("SELECT discord_contest_window_hours AS contestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ contestWindowHours?: number }>();
     const expiresAt = new Date(Date.parse(now) + (contestWindow?.contestWindowHours ?? 24) * 3_600_000).toISOString();
     await db.batch([
       ...members.map((member) => db.prepare("INSERT OR IGNORE INTO discord_attendance_recipients (installation_id, meeting_id, member_id, discord_user_id, message_id, delivered_at) VALUES ('primary', ?, ?, ?, ?, ?)").bind(meeting.id, member.id, member.discordUserId, messageId, now)),
-      db.prepare("UPDATE discord_attendance_notifications SET status = 'delivered', message_id = ?, channel_id = ?, expires_at = ?, deleted_at = NULL, processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(messageId, config.channelId, expiresAt, now, now, meeting.id),
+      db.prepare("UPDATE discord_attendance_notifications SET status = 'delivered', message_id = ?, channel_id = ?, expires_at = ?, deleted_at = NULL, thread_created_at = NULL, processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(messageId, config.channelId, expiresAt, now, now, meeting.id),
     ]);
+    try { await createDiscordAttendanceThread(db, config, { meetingId: meeting.id, messageId, channelId: config.channelId, title: meeting.title }); } catch { /* The delivered notice remains tracked for a scheduled thread retry. */ }
     if (options.actor) await writeAudit(db, options.actor, "discord.missing_notified", "meeting", meeting.id, { linkedMissingCount: members.length, messageId, manual: true });
     return { posted: true, linkedMissingCount: members.length, messageId };
   } catch (error) {
     await db.prepare("UPDATE discord_attendance_notifications SET status = 'failed', last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(error instanceof Error ? error.message.slice(0, 300) : "Discord delivery failed", new Date().toISOString(), meeting.id).run();
     throw error;
   }
+}
+async function createDiscordAttendanceThread(db: D1Database, config: Record<string, string>, notice: { meetingId: string; messageId: string; channelId: string; title: string }): Promise<void> {
+  const path = `/channels/${encodeURIComponent(notice.channelId)}/messages/${encodeURIComponent(notice.messageId)}/threads`;
+  try {
+    await discordRequest(config, path, { method: "POST", body: JSON.stringify({ name: `Attendance questions - ${discordReportText(notice.title, 70) || "meeting"}` }) });
+  } catch (error) {
+    // Discord may have created the thread even if the response was lost. Its ID is the starter message ID.
+    let exists = false;
+    try {
+      const { body } = await discordRequest<{ id?: string; parent_id?: string }>(config, `/channels/${encodeURIComponent(notice.messageId)}`, { method: "GET" });
+      exists = body.id === notice.messageId && body.parent_id === notice.channelId;
+    } catch { /* Retry creation on the next scheduled pass. */ }
+    if (!exists) {
+      await db.prepare("UPDATE discord_attendance_notifications SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(error instanceof Error ? error.message.slice(0, 300) : "Discord thread creation failed", new Date().toISOString(), notice.meetingId, notice.messageId).run();
+      return;
+    }
+  }
+  const createdAt = new Date().toISOString();
+  await db.prepare("UPDATE discord_attendance_notifications SET thread_created_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(createdAt, createdAt, notice.meetingId, notice.messageId).run();
+}
+async function retryDiscordAttendanceThreads(env: Env, config: Record<string, string>, now: number): Promise<void> {
+  const db = requireDatabase(env);
+  const notices = await db.prepare("SELECT n.meeting_id AS meetingId, n.message_id AS messageId, n.channel_id AS channelId, m.title FROM discord_attendance_notifications n JOIN meetings m ON m.installation_id = n.installation_id AND m.id = n.meeting_id WHERE n.installation_id = 'primary' AND n.status = 'delivered' AND n.message_id IS NOT NULL AND n.thread_created_at IS NULL AND n.deleted_at IS NULL AND n.expires_at > ? LIMIT 100").bind(new Date(now).toISOString()).all<{ meetingId: string; messageId: string; channelId: string; title: string }>();
+  for (const notice of notices.results ?? []) if (notice.channelId === config.channelId) await createDiscordAttendanceThread(db, config, notice);
 }
 async function expireDiscordAttendanceNotifications(env: Env, config: Record<string, string>, contestWindowHours: number, now: number): Promise<void> {
   const db = requireDatabase(env);
@@ -1862,8 +1890,10 @@ async function expireDiscordAttendanceNotifications(env: Env, config: Record<str
 }
 async function processDiscordAttendanceNotifications(env: Env, now = Date.now()): Promise<void> {
   const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0 || !discord.verifiedAt) return;
-  const db = requireDatabase(env); const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, discord_contest_window_hours AS contestWindowHours, discord_channel_manager_enabled AS channelManagerEnabled FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number; contestWindowHours?: number; channelManagerEnabled?: number }>();
-  if (settings?.channelManagerEnabled) await expireDiscordAttendanceNotifications(env, await discordConfiguration(env), settings.contestWindowHours ?? 24, now);
+  const db = requireDatabase(env); const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, discord_contest_window_hours AS contestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number; contestWindowHours?: number }>();
+  const config = await discordConfiguration(env);
+  await expireDiscordAttendanceNotifications(env, config, settings?.contestWindowHours ?? 24, now);
+  await retryDiscordAttendanceThreads(env, config, now);
   const meetings = await db.prepare("SELECT m.id, m.title, m.ends_at AS endsAt, n.status AS notificationStatus, n.updated_at AS notificationUpdatedAt FROM meetings m LEFT JOIN discord_attendance_notifications n ON n.installation_id = m.installation_id AND n.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.required = 1 AND m.is_test = 0 AND m.ends_at IS NOT NULL ORDER BY m.ends_at DESC LIMIT 100").all<{ id: string; title: string; endsAt: string; notificationStatus?: string; notificationUpdatedAt?: string }>();
   for (const meeting of meetings.results ?? []) {
     const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30)); const newlyEligible = cutoff <= now; const retry = meeting.notificationStatus === "failed";
@@ -2525,7 +2555,7 @@ async function syncDiscordManagedSurface(env: Env): Promise<void> {
   if (!settings?.enabled) { await syncDiscordKioskStatus(env); return; }
   const config = await discordConfiguration(env);
   await syncDiscordKioskStatus(env, true);
-  const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. Use **View my attendance report** below or `/attendance-report` to receive your private report. After an absence notice appears, only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
+  const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. Use **View my attendance report** below or `/attendance-report` to receive your private report. Ask general questions in the thread under each absence notice. Only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
   await upsertTrackedDiscordMessage(db, config, "channel-manager-howto", guidance, false, discordAttendanceReportComponents);
 }
 async function discordKioskStatus(request: Request, env: Env): Promise<Response> {
@@ -2573,7 +2603,7 @@ const tableColumns = {
   discord_calendar_operations: ["installation_id", "meeting_id", "generation", "action", "event_id", "status", "attempts", "revision", "next_attempt_at", "lease_token", "lease_expires_at", "last_error", "actor_user_id", "updated_at"],
   integration_deliveries: ["id", "installation_id", "provider", "delivery_key", "status", "external_id", "created_at", "updated_at"],
   integration_state: ["installation_id", "provider", "state_key", "external_id", "content_hash", "updated_at"],
-  discord_attendance_notifications: ["installation_id", "meeting_id", "status", "message_id", "attempts", "last_error", "processed_at", "updated_at", "channel_id", "expires_at", "deleted_at"],
+  discord_attendance_notifications: ["installation_id", "meeting_id", "status", "message_id", "attempts", "last_error", "processed_at", "updated_at", "channel_id", "expires_at", "deleted_at", "thread_created_at"],
   discord_attendance_recipients: ["installation_id", "meeting_id", "member_id", "discord_user_id", "message_id", "delivered_at"],
   discord_attendance_contests: ["installation_id", "meeting_id", "member_id", "message_id", "status", "resolved_by", "resolved_at", "created_at", "submitted_by_discord_user_id", "review_note"],
   discord_anomaly_reports: ["installation_id", "meeting_id", "channel_id", "status", "nonce", "message_id", "attempts", "last_error", "processed_at", "updated_at"],
@@ -2601,13 +2631,13 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const policySettings = scope === "roster" ? await db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ recentDays: number; policyActivatedOn: string | null }>() : null; const backup = { product: "LancerLogin", schemaVersion: 16, scope, exportedAt, tables: Object.fromEntries(entries), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
+  const exportedAt = new Date().toISOString(); const policySettings = scope === "roster" ? await db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ recentDays: number; policyActivatedOn: string | null }>() : null; const backup = { product: "LancerLogin", schemaVersion: 17, scope, exportedAt, tables: Object.fromEntries(entries), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
   const updateRequestId = new URL(request.url).searchParams.get("updateRequestId");
   if (updateRequestId) {
     if (scope !== "installation") throw new HttpError(400, "Web updates require an entire-installation backup");
     await recordUpdateBackup(env, updateRequestId);
   }
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 16 });
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 17 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
@@ -2622,14 +2652,14 @@ const legacyMeetingTables = meetingTables.filter((table) => !["meeting_audience_
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
   const schemaVersion = Number(value.schemaVersion);
   const sourceTables = value.tables;
   const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings"));
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -3) : tableColumns[table];
+    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -4) : schemaVersion < 17 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -1) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
@@ -2637,7 +2667,7 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   const tables = Object.fromEntries((Object.keys(tableColumns) as BackupTable[]).map((table) => [table, [] as Record<string, unknown>[]])) as Record<BackupTable, Record<string, unknown>[]>;
   for (const table of requiredTables) tables[table] = (sourceTables[table] as Record<string, unknown>[]).map((row) => ({ ...row }));
   if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, discord_anomaly_reports_enabled: 0, discord_anomaly_report_channel_id: null, discord_anomaly_reports_enabled_at: null, attendance_recent_days: 30, attendance_policy_activated_on: null, ...row }));
-  if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, ...row }));
+  if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, thread_created_at: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
   if (schemaVersion < 7 && tables.installations) { const providers = new Set(tables.encrypted_integrations.map((row) => row.provider)); tables.installations = tables.installations.map((row) => ({ ...row, google_enabled: providers.has("google") ? 1 : 0, resend_enabled: providers.has("resend") ? 1 : 0, discord_enabled: providers.has("discord") ? 1 : 0 })); }
   if (schemaVersion < 12 && tables.installations) tables.installations = tables.installations.map((row) => ({ google_calendar_enabled: 0, ...row }));

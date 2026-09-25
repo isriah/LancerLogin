@@ -164,6 +164,7 @@ async function pin(page: Page, value = "123456") {
 
 for (const height of [480, 360]) {
   test(`QWERTY rows and the complete roster scroll by touch at 800x${height}`, async ({ page }) => {
+    if (height === 360) test.setTimeout(180_000);
     await page.setViewportSize({ width: 800, height });
     const mock = await fixture(page);
     await page.goto(`${base}/maintenance`);

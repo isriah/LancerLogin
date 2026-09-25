@@ -2,8 +2,9 @@
 
 Every Git tag must have a matching `vX.Y.Z.md` file in this directory. The release workflow fails if the file is missing and publishes it as the GitHub Release body. Notes must describe user-visible changes, data migrations, configuration changes, known limits, and manual verification steps.
 
-> Historical index. [v1.1.0](v1.1.0.md) is the stable public release. Release notes record what was true when a version shipped. For a current procedure, use the linked guide rather than applying an older transition step out of context.
+> Historical index. [v1.1.1](v1.1.1.md) is the stable public release. Release notes record what was true when a version shipped. For a current procedure, use the linked guide rather than applying an older transition step out of context.
 
+- [v1.1.1](v1.1.1.md) - Discord attendance threads and reliability fixes
 - [v1.1.0](v1.1.0.md) - Member labels, attendance rules, and offline kiosk recovery
 - [v1.0.7](v1.0.7.md) - Roster CSV upload and spreadsheet paste
 - [v1.0.6](v1.0.6.md) - Dashboard, simulator and calendar improvements

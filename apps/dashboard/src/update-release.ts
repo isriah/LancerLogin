@@ -121,9 +121,15 @@ export function createReleaseCache({ load = () => fetchLatestRelease(), now = Da
     const request = Promise.resolve().then(load).then((value) => {
       const release = safeRelease(value);
       if (!release) throw new Error("A compatible stable release could not be confirmed.");
-      const checkedAt = value.checkedAt ?? now();
-      if (!timestamp(checkedAt) || checkedAt > now() || now() - checkedAt >= releaseCacheTtlMs) throw new Error("A compatible stable release could not be confirmed.");
-      data = { release, checkedAt, attemptedAt: value.attemptedAt ?? data.attemptedAt, failures: 0 };
+      const receivedAt = now();
+      const serverCheckedAt = value.checkedAt ?? receivedAt;
+      // Independent browser and server clocks can differ slightly. Clamp a small
+      // future timestamp to receipt time so it cannot extend the cache lifetime.
+      if (!timestamp(serverCheckedAt) || serverCheckedAt - receivedAt > 60_000 || receivedAt - serverCheckedAt >= releaseCacheTtlMs) throw new Error("A compatible stable release could not be confirmed.");
+      const checkedAt = Math.min(serverCheckedAt, receivedAt);
+      const attemptedAt = timestamp(value.attemptedAt) && value.attemptedAt - receivedAt <= 60_000
+        ? Math.min(value.attemptedAt, receivedAt) : data.attemptedAt;
+      data = { release, checkedAt, attemptedAt, failures: 0 };
       persist(); return release;
     }).catch((error: unknown) => {
       const failures = Math.min(data.failures + 1, 10);

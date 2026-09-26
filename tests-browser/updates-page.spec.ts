@@ -171,3 +171,28 @@ test("browser GitHub blocking and the old saved cooldown do not block API releas
   await expect(page.getByRole("button", { name: "Back up and begin update" })).toBeEnabled();
   expect(discoveries).toBe(1); expect(githubReads).toBe(0);
 });
+
+
+test("small server clock skew keeps the update available across reloads and respects later cooldowns", async ({ page }) => {
+  let discoveries = 0; let limited = false;
+  await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "1.2.1", workflowUrl: "https://github.example.test/deploy" } }));
+  await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
+  await page.route("**/admin/releases/latest", async (route) => {
+    discoveries++;
+    const now = await page.evaluate(() => Date.now());
+    return limited
+      ? route.fulfill({ status: 429, json: { fresh: false, code: "rate_limited", attemptedAt: now + 1_000, retryAt: now + 120_000 }, headers: { "retry-after": "120" } })
+      : route.fulfill({ json: discovered({ tag_name: "v1.2.2" }, now + 1_000) });
+  });
+  await page.goto("/settings/updates");
+  const action = page.getByRole("button", { name: "Back up and begin update" });
+  await expect(action).toBeEnabled();
+  await expect(page.locator(".version-grid").first()).toContainText("1.2.2");
+  await page.reload(); await expect(action).toBeEnabled(); expect(discoveries).toBe(1);
+  limited = true;
+  const check = page.getByRole("button", { name: "Check for updates", exact: true });
+  await check.focus(); await page.keyboard.press("Enter");
+  await expect(action).toBeDisabled(); await expect(check).toBeDisabled();
+  await expect(page.locator("#release-check-status")).toContainText("Next check after");
+  await page.reload(); await expect(check).toBeDisabled(); expect(discoveries).toBe(2);
+});

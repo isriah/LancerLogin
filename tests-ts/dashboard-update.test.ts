@@ -187,3 +187,29 @@ test("old direct-browser cooldown cannot prevent same-origin discovery", async (
   const cache = createReleaseCache({ now: () => 100_000, storage: () => storage, load: async () => { calls++; return { tag_name: "v1.0.4" }; } });
   assert.equal((await cache.check()).tag_name, "v1.0.4"); assert.equal(calls, 1);
 });
+
+
+test("small server clock differences confirm releases without extending freshness", async () => {
+  for (const aheadBy of [1, 150, 1_000, 60_000]) {
+    let now = 1_000_000; let calls = 0; const storage = memoryStorage();
+    const load = async () => { calls++; return { tag_name: "v1.2.2", checkedAt: now + aheadBy, attemptedAt: now + aheadBy }; };
+    const cache = createReleaseCache({ now: () => now, storage: () => storage, load });
+    await cache.check();
+    assert.equal(cache.snapshot().fresh, true);
+    assert.equal(cache.snapshot().checkedAt, now);
+    assert.equal(cache.snapshot().attemptedAt, now);
+    const reloaded = createReleaseCache({ now: () => now, storage: () => storage, load });
+    await reloaded.check(); assert.equal(calls, 1);
+    now += releaseCacheTtlMs - 1; assert.equal(reloaded.snapshot().fresh, true);
+    now++; assert.equal(reloaded.snapshot().fresh, false);
+  }
+});
+
+test("future clock tolerance cannot confirm stale or implausible release timestamps", async () => {
+  const now = 1_000_000;
+  for (const checkedAt of [now + 60_001, now - releaseCacheTtlMs, NaN, Infinity, 0, now + 0.5]) {
+    const cache = createReleaseCache({ now: () => now, storage: () => memoryStorage(), load: async () => ({ tag_name: "v1.2.2", checkedAt }) });
+    await assert.rejects(cache.check(), /could not be confirmed/);
+    assert.equal(cache.snapshot().fresh, false);
+  }
+});

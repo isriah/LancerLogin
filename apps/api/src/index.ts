@@ -6,9 +6,8 @@ import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DE
 import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
 import { buildReportRows, defaultReportDefinition, reportColumnCatalog, reportColumnId, reportColumnLabel, reportLabelsMatch, resolveReportPeriod, validateReportDefinition, type ReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
 
-type D1Result<T = unknown> = { results?: T[]; success?: boolean; meta?: { changes?: number } };
-interface D1Statement { bind(...values: unknown[]): D1Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<D1Result<T>>; run(): Promise<D1Result>; }
-interface D1Database { prepare(query: string): D1Statement; batch(statements: D1Statement[]): Promise<D1Result[]>; }
+import { databaseIdentity, measureD1, usageCategory, type D1Database, type D1Statement } from "./d1-usage.ts";
+import { ReportDataCache } from "./report-data-cache.ts";
 export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DB?: D1Database; }
 type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
 type ScheduledController = { cron?: string };
@@ -848,8 +847,8 @@ async function deleteMeetings(request: Request, env: Env, meetingId: string): Pr
   const now = new Date().toISOString();
   if (input.scope === "future" && meeting.seriesId) {
     const affected = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL").bind(meeting.seriesId, meeting.startsAt).all<{ id: string }>();
-    const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL").bind(now, meeting.seriesId, meeting.startsAt).run();
-    const count = updated.meta?.changes ?? 0; if (count < 1) throw new HttpError(404, "No future series occurrences were found");
+    const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL RETURNING id").bind(now, meeting.seriesId, meeting.startsAt).all<{ id: string }>();
+    const count = updated.results?.length ?? 0; if (count < 1) throw new HttpError(404, "No future series occurrences were found");
     await writeAudit(db, principal, "meeting.series_deleted", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, deleted: count });
     const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", (affected.results ?? []).map((item) => item.id));
     return response({ deleted: count, scope: "future", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
@@ -878,8 +877,8 @@ async function restoreMeetings(request: Request, env: Env, meetingId: string): P
   if (!meeting) throw new HttpError(404, "Deleted meeting not found");
   if (input.scope === "future" && meeting.seriesId) {
     const affected = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NOT NULL").bind(meeting.seriesId, meeting.startsAt).all<{ id: string }>();
-    const updated = await db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NOT NULL").bind(meeting.seriesId, meeting.startsAt).run();
-    const count = updated.meta?.changes ?? 0; if (count < 1) throw new HttpError(404, "No deleted future series occurrences were found");
+    const updated = await db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NOT NULL RETURNING id").bind(meeting.seriesId, meeting.startsAt).all<{ id: string }>();
+    const count = updated.results?.length ?? 0; if (count < 1) throw new HttpError(404, "No deleted future series occurrences were found");
     await writeAudit(db, principal, "meeting.series_restored", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, restored: count });
     const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "restore", (affected.results ?? []).map((item) => item.id));
     return response({ restored: count, scope: "future", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
@@ -1011,24 +1010,25 @@ async function cleanupAttendance(request: Request, env: Env): Promise<Response> 
   const member = await db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ?").bind(input.memberId).first<{ id: string }>();
   const meeting = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ?").bind(input.meetingId).first<{ id: string }>();
   if (!member || !meeting) throw new HttpError(404, "Member or meeting not found");
-  const results = await db.batch([db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ?").bind(member.id, meeting.id), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ?").bind(member.id, meeting.id)]);
-  const cleared = (results[0]?.meta?.changes ?? 0) + (results[1]?.meta?.changes ?? 0); await writeAudit(db, principal, "attendance.member_meeting_cleared", "meeting", meeting.id, { memberId: member.id, cleared }); return response({ cleared });
+  const results = await db.batch([db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ? RETURNING id").bind(member.id, meeting.id), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ? RETURNING id").bind(member.id, meeting.id)]);
+  const cleared = (results[0]?.results?.length ?? 0) + (results[1]?.results?.length ?? 0); await writeAudit(db, principal, "attendance.member_meeting_cleared", "meeting", meeting.id, { memberId: member.id, cleared }); return response({ cleared });
 }
 function csvCell(value: unknown): string {
   const text = value == null ? "" : String(value);
   const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
   return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
-async function policyData(db: D1Database): Promise<{ members: PolicyMember[]; labels: PolicyLabel[]; changes: LabelChange[]; rules: AttendanceRule[]; meetings: PolicyMeeting[]; observations: Observation[]; timeZone: string; baseline: string | null; recentDays: number; policyActivatedOn: string | null }> {
+async function loadPolicyData(db: D1Database, memberId?: string, meetingId?: string): Promise<{ members: PolicyMember[]; labels: PolicyLabel[]; changes: LabelChange[]; rules: AttendanceRule[]; meetings: PolicyMeeting[]; observations: Observation[]; timeZone: string; baseline: string | null; recentDays: number; policyActivatedOn: string | null }> {
+  const scoped = (sql: string, column: string, value?: string) => value ? db.prepare(sql.replace(" ORDER BY", ` AND ${column} = ? ORDER BY`)).bind(value) : db.prepare(sql);
   const [memberResult, labelResult, changeResult, ruleResult, meetingResult, audienceResult, eventResult, correctionResult, settings] = await Promise.all([
-    db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active, attendance_required_from AS attendanceRequiredFrom, created_at AS rosterAddedAt FROM members WHERE installation_id = 'primary' ORDER BY last_name, first_name").all<PolicyMember>(),
+    scoped("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active, attendance_required_from AS attendanceRequiredFrom, created_at AS rosterAddedAt FROM members WHERE installation_id = 'primary' ORDER BY last_name, first_name", "id", memberId).all<PolicyMember>(),
     db.prepare("SELECT id, name, active, formula_enabled AS formulaEnabled FROM member_labels WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE").all<PolicyLabel>(),
-    db.prepare("SELECT member_id AS memberId, label_id AS labelId, action, effective_date AS effectiveDate, created_at AS createdAt FROM member_label_changes WHERE installation_id = 'primary' ORDER BY effective_date, created_at, id").all<LabelChange>(),
+    scoped("SELECT member_id AS memberId, label_id AS labelId, action, effective_date AS effectiveDate, created_at AS createdAt FROM member_label_changes WHERE installation_id = 'primary' ORDER BY effective_date, created_at, id", "member_id", memberId).all<LabelChange>(),
     db.prepare("SELECT id, label_id AS labelId, starts_on AS startsOn, ends_on AS endsOn, rule_type AS ruleType, threshold_percent AS thresholdPercent, meetings_per_week AS meetingsPerWeek, excused_handling AS excusedHandling FROM label_attendance_rules WHERE installation_id = 'primary' ORDER BY label_id, starts_on").all<AttendanceRule>(),
-    db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, attendance_weight AS attendanceWeight, audience_mode AS audienceMode, is_test AS isTest FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at DESC").all<Omit<PolicyMeeting, "attendanceClosesAt" | "audienceLabelIds">>(),
+    scoped("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, attendance_weight AS attendanceWeight, audience_mode AS audienceMode, is_test AS isTest FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at DESC", "id", meetingId).all<Omit<PolicyMeeting, "attendanceClosesAt" | "audienceLabelIds">>(),
     db.prepare("SELECT meeting_id AS meetingId, label_id AS labelId FROM meeting_audience_labels WHERE installation_id = 'primary'").all<{ meetingId: string; labelId: string }>(),
-    db.prepare("SELECT e.meeting_id AS meetingId, e.member_id AS memberId, e.action, e.occurred_at AS occurredAt FROM attendance_events e JOIN meetings mt ON mt.id = e.meeting_id AND mt.installation_id = e.installation_id WHERE e.installation_id = 'primary' AND mt.deleted_at IS NULL ORDER BY e.occurred_at, e.id").all<{ meetingId: string; memberId: string; action: "check_in" | "check_out"; occurredAt: string }>(),
-    db.prepare("SELECT c.meeting_id AS meetingId, c.member_id AS memberId, c.disposition, c.reason FROM attendance_corrections c JOIN meetings mt ON mt.id = c.meeting_id AND mt.installation_id = c.installation_id WHERE c.installation_id = 'primary' AND mt.deleted_at IS NULL ORDER BY c.created_at, c.id").all<{ meetingId: string; memberId: string; disposition: "present" | "absent" | "excused"; reason: string }>(),
+    scoped("SELECT e.meeting_id AS meetingId, e.member_id AS memberId, e.action, e.occurred_at AS occurredAt FROM attendance_events e JOIN meetings mt ON mt.id = e.meeting_id AND mt.installation_id = e.installation_id WHERE e.installation_id = 'primary' AND mt.deleted_at IS NULL ORDER BY e.occurred_at, e.id", memberId ? "e.member_id" : "e.meeting_id", memberId ?? meetingId).all<{ meetingId: string; memberId: string; action: "check_in" | "check_out"; occurredAt: string }>(),
+    scoped("SELECT c.meeting_id AS meetingId, c.member_id AS memberId, c.disposition, c.reason FROM attendance_corrections c JOIN meetings mt ON mt.id = c.meeting_id AND mt.installation_id = c.installation_id WHERE c.installation_id = 'primary' AND mt.deleted_at IS NULL ORDER BY c.created_at, c.id", memberId ? "c.member_id" : "c.meeting_id", memberId ?? meetingId).all<{ meetingId: string; memberId: string; disposition: "present" | "absent" | "excused"; reason: string }>(),
     db.prepare("SELECT time_zone AS timeZone, late_scan_minutes AS lateScanMinutes, attendance_reporting_starts_on AS baseline, attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone: string; lateScanMinutes: number; baseline: string | null; recentDays: number; policyActivatedOn: string | null }>(),
   ]);
   const audienceLabels = new Map<string, string[]>();
@@ -1043,6 +1043,14 @@ async function policyData(db: D1Database): Promise<{ members: PolicyMember[]; la
   });
   return { members: memberResult.results ?? [], labels: labelResult.results ?? [], changes: changeResult.results ?? [], rules: ruleResult.results ?? [], meetings: (meetingResult.results ?? []).map((meeting) => ({ ...meeting, attendanceClosesAt: attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30), audienceLabelIds: audienceLabels.get(meeting.id) ?? [] })), observations, timeZone: settings?.timeZone ?? "UTC", baseline: settings?.baseline ?? null, recentDays: settings?.recentDays ?? 30, policyActivatedOn: settings?.policyActivatedOn ?? null };
 }
+type PolicyData = Awaited<ReturnType<typeof loadPolicyData>>;
+const reportDataCache = new ReportDataCache<PolicyData>();
+async function policyData(db: D1Database, scope: { memberId?: string; meetingId?: string } = {}): Promise<PolicyData> {
+  return reportDataCache.read(databaseIdentity(db), JSON.stringify(scope), async () => {
+    const row = await db.prepare("SELECT revision FROM report_data_revision WHERE installation_id = 'primary'").first<{ revision: number }>();
+    return row?.revision;
+  }, () => loadPolicyData(db, scope.memberId, scope.meetingId));
+}
 
 type ReportFilters = { from?: string; to?: string; meetingType: "all" | "required" | "optional"; roster: "active" | "all"; labelId?: string; membership: "current" | "historical"; memberId?: string; useBaseline?: boolean };
 function reportFilters(url: URL): ReportFilters {
@@ -1053,7 +1061,7 @@ function reportFilters(url: URL): ReportFilters {
   return { from, to, meetingType: meetingType as ReportFilters["meetingType"], roster: roster as ReportFilters["roster"], labelId: url.searchParams.get("labelId") || undefined, membership: membership as ReportFilters["membership"], memberId: url.searchParams.get("memberId") || undefined };
 }
 async function policyReport(db: D1Database, filters: ReportFilters): Promise<{ meetings: PolicyMeeting[]; members: PolicyMemberResult[]; labels: PolicyLabel[]; baseline: string | null; timeZone: string }> {
-  const data = await policyData(db);
+  const data = await policyData(db, filters.memberId ? { memberId: filters.memberId } : {});
   if (filters.labelId && !data.labels.some((label) => label.id === filters.labelId)) throw new HttpError(400, "Unknown label filter");
   const meetings = data.meetings.filter((meeting) => filters.meetingType === "all" || Boolean(meeting.required) === (filters.meetingType === "required"));
   const from = filters.from ?? (filters.useBaseline ? data.baseline ?? undefined : undefined);
@@ -1761,7 +1769,7 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
     if (!result?.rows.some((row) => row.meetingId === meeting.id && row.eligibility === "required" && row.disposition === "absent")) throw new HttpError(409, "This member is not currently marked absent from a required meeting in their audience");
     subject = `Missed meeting: ${meeting.title}`; content = `<p>Hello ${html(member.firstName)},</p><p>Our records show you missed <strong>${html(meeting.title)}</strong> on ${html(new Date(meeting.startsAt).toISOString().slice(0, 10))}.</p><p>Please contact your organization if this should be corrected or excused.</p>`; deliveryKey = `missed:${meeting.id}:${member.id}`;
   } else {
-    const all = await policyReport(db, { meetingType: "all", roster: "all", membership: "current", memberId: member.id }); const report = all.baseline ? await policyReport(db, { meetingType: "all", roster: "all", membership: "current", memberId: member.id, from: all.baseline }) : all; const summary = report.members[0]; const meetings = new Map(report.meetings.map((item) => [item.id, item]));
+    const report = await policyReport(db, { meetingType: "all", roster: "all", membership: "current", memberId: member.id, useBaseline: true }); const summary = report.members[0]; const meetings = new Map(report.meetings.map((item) => [item.id, item]));
     subject = "Your attendance report"; content = `<p>Hello ${html(member.firstName)},</p><p>Here is your current attendance report.</p><p>${html(policySummaryText(summary))}</p><table><thead><tr><th>Meeting</th><th>Date</th><th>Audience</th><th>Status</th><th>Eligibility</th></tr></thead><tbody>${(summary?.rows ?? []).slice(-100).map((row) => { const meeting = meetings.get(row.meetingId); return `<tr><td>${html(meeting?.title)}</td><td>${html(meeting?.startsAt.slice(0, 10))}</td><td>${html(row.audience)}</td><td>${html(row.disposition)}</td><td>${html(row.eligibility)}</td></tr>`; }).join("")}</tbody></table>`; deliveryKey = `report:${member.id}:${new Date().toISOString().slice(0, 10)}`;
   }
   if (await db.prepare("SELECT id FROM integration_deliveries WHERE installation_id = 'primary' AND provider = 'resend' AND delivery_key = ? AND status IN ('pending', 'delivered')").bind(deliveryKey).first()) throw new HttpError(409, "This email was already sent or is currently sending");
@@ -1945,7 +1953,7 @@ async function linkDiscordMember(request: Request, env: Env): Promise<Response> 
   return response({ linked: Boolean(input.discordUserId), memberId: input.memberId });
 }
 async function linkedAbsentMembers(db: D1Database, meetingId: string): Promise<{ id: string; discordUserId: string }[]> {
-  const data = await policyData(db); const meeting = data.meetings.find((item) => item.id === meetingId);
+  const data = await policyData(db, { meetingId }); const meeting = data.meetings.find((item) => item.id === meetingId);
   if (!meeting || !meeting.required) return [];
   const expected = new Set(evaluateAttendance({ ...data, meetings: [meeting], now: new Date(Math.max(Date.now(), Date.parse(meeting.attendanceClosesAt) + 1)).toISOString() }).filter((item) => item.member.active && item.rows.some((row) => row.meetingId === meetingId && row.eligibility === "required" && (row.disposition === "absent" || Date.now() >= Date.parse(meeting.attendanceClosesAt) && row.disposition === "active"))).map((item) => item.member.id));
   if (!expected.size) return [];
@@ -2143,8 +2151,7 @@ async function discordAttendanceReport(db: D1Database, discordUserId: string): P
   const linked = await db.prepare("SELECT id, active FROM members WHERE installation_id = 'primary' AND discord_user_id = ?").bind(discordUserId).all<{ id: string; active: number }>();
   const members = linked.results ?? [];
   if (members.length !== 1 || !members[0].active) return "Your Discord account is not linked to exactly one active LancerLogin roster member. Ask an Operator to check your roster link.";
-  const all = await policyReport(db, { meetingType: "all", roster: "all", membership: "current", memberId: members[0].id });
-  const report = all.baseline ? await policyReport(db, { meetingType: "all", roster: "all", membership: "current", memberId: members[0].id, from: all.baseline }) : all;
+  const report = await policyReport(db, { meetingType: "all", roster: "all", membership: "current", memberId: members[0].id, useBaseline: true });
   const summary = report.members[0]; if (!summary) return "No roster record was found for this Discord account.";
   const meetings = new Map(report.meetings.map((meeting) => [meeting.id, meeting]));
   const heading = "**Your attendance report**\n" + policySummaryText(summary);
@@ -2902,6 +2909,8 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
 
 const worker = { async fetch(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const url = new URL(request.url); let result: Response;
+  const usage = env.DB ? measureD1(env.DB) : undefined;
+  if (usage) env = { ...env, DB: usage.database };
   try {
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !["/auth/local", "/auth/logout", "/auth/google/callback"].includes(url.pathname) && await webUpdateMaintenance(env)) return withCors(response({ error: "An installation update requires temporary write suspension. Retry after recovery or completion.", code: "update_maintenance" }, 503, { "retry-after": "30" }), request, env);
     if (request.method === "OPTIONS") result = new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "authorization, content-type", "access-control-allow-credentials": "true" } });
@@ -3020,6 +3029,8 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     const detail = error instanceof HttpError ? error.details : env.APP_MODE === "unconfigured" && error instanceof Error ? [error.message] : undefined;
     result = response({ error: error instanceof HttpError || error instanceof WebUpdateError ? error.message : "Request failed", details: detail, ...(error instanceof WebUpdateError ? { code: error.code } : {}) }, status);
   }
+  const measured = usage?.snapshot();
+  if (measured && (measured.measuredRowsRead >= 100 || usageCategory(url.pathname) === "/reports")) console.log(JSON.stringify({ event: "d1_usage", category: usageCategory(url.pathname), status: result.status, ...measured }));
   return withCors(result, request, env);
 }, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
   if (await webUpdateMaintenance(env)) return;

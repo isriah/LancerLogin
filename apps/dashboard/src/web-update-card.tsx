@@ -1,3 +1,4 @@
+import { visiblePoll } from "./visible-poll";
 import { useEffect, useRef, useState } from "react";
 import { apiBaseUrl } from "./dashboard-api";
 import { formatVersion } from "./update-indicator";
@@ -26,7 +27,7 @@ export function WebUpdateCard({ current, available, workflowUrl, latestTag, rele
     catch (cause) { if (alive.current && revision.current === observed) setError(`${(cause as Error).message} Progress is unconfirmed; do not start another update until status is available.`); }
     finally { flight.current = false; }
   }
-  useEffect(() => { alive.current = true; void refresh(); const timer = window.setInterval(() => void refresh(), 10_000); return () => { alive.current = false; window.clearInterval(timer); }; }, []);
+  useEffect(() => { alive.current = true; void refresh(); const stop = visiblePoll(refresh, 10_000); return () => { alive.current = false; stop(); }; }, []);
   useEffect(() => { setSaved(false); setDownloaded(""); }, [request?.requestId]);
   useEffect(() => { if (downloaded && !busy && request?.state === "prepared" && request.requestId === downloaded) confirmation.current?.focus(); }, [downloaded, busy, request?.requestId, request?.state]);
   async function mutate(operation: () => Promise<void>) {

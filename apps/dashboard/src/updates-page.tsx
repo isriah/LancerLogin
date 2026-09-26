@@ -1,3 +1,4 @@
+import { visiblePoll } from "./visible-poll";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./dashboard-api";
 import { formatVersion, isNewerRelease } from "./update-indicator";
@@ -30,7 +31,7 @@ export function UpdatesPage() {
     await commandsRequest;
   }
   const refresh = useRef<(() => Promise<void>) | null>(null); if (!refresh.current) refresh.current = createSingleFlight(load);
-  useEffect(() => { const refreshUpdates = refresh.current!; void refreshUpdates().catch((error: Error) => { setLoading(false); setNotice(error.message); }); const timer = window.setInterval(() => void refreshUpdates().catch(() => undefined), 5_000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => { const refreshUpdates = refresh.current!; void refreshUpdates().catch((error: Error) => { setLoading(false); setNotice(error.message); }); return visiblePoll(refreshUpdates, 5_000); }, []);
   async function updateKiosk() { if (!kiosk || !kioskUpdateAvailable) return; setKioskBusy(true); try { await api(`/admin/kiosks/${encodeURIComponent(kiosk.id)}/commands`, { method: "POST", body: JSON.stringify({ command: "install_latest" }) }); await refresh.current!(); } catch (error) { setNotice((error as Error).message); } finally { setKioskBusy(false); } }
   const kioskOnline = Boolean(kiosk?.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < 90_000); const latestCommand = commands[0]; const kioskUpdate = kioskUpdateState(latestCommand, kiosk);
   const checkingRelease = release.checking;

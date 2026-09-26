@@ -872,6 +872,7 @@ test("Operator can hide one meeting or this and future series occurrences", asyn
 
   const future = new FakeDatabase();
   future.rows.set("series_id AS seriesId", { id: "meeting-3", seriesId: "series-1", startsAt: "2026-09-15T20:00:00.000Z" });
+  future.lists.set("UPDATE meetings SET deleted_at", [{ id: "meeting-3" }]);
   const futureResult = await worker.fetch(request("/meetings/meeting-3", { scope: "future" }, { method: "DELETE", cookie: await sessionCookie("operator") }), { ...env, DB: future } as unknown as Env);
   assert.equal(futureResult.status, 200);
   assert.ok(future.calls.some((call) => call.sql.includes("series_id = ?") && call.sql.includes("starts_at >= ?") && call.values.includes("series-1")));
@@ -892,6 +893,7 @@ test("Operator can immediately restore a soft-deleted meeting or future series o
 
   const future = new FakeDatabase();
   future.rows.set("deleted_at IS NOT NULL", { id: "meeting-3", seriesId: "series-1", startsAt: "2026-09-15T20:00:00.000Z" });
+  future.lists.set("UPDATE meetings SET deleted_at", [{ id: "meeting-3" }]);
   const restored = await worker.fetch(request("/meetings/meeting-3/restore", { scope: "future" }, { method: "POST", cookie: await sessionCookie("operator") }), { ...env, DB: future } as unknown as Env);
   assert.equal(restored.status, 200);
   assert.ok(future.calls.some((call) => call.sql.includes("SET deleted_at = NULL") && call.values.includes("series-1")));

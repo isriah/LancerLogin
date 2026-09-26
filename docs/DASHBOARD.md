@@ -2,6 +2,20 @@
 
 This guide is for Administrators and Operators. An Administrator configures the installation and manages access. An Operator manages permitted attendance work but cannot open administrative settings.
 
+## Page walkthroughs
+
+First-visit walkthroughs introduce Dashboard, Roster, member detail, Reports, meeting attendance, Kiosks, and the Administrator browser simulator. Settings and its subpages do not have walkthroughs. Member records share one member-detail walkthrough, meeting records share one meeting-workspace walkthrough, and all Leaderboard and saved-report routes share one Reports walkthrough.
+
+On Dashboard, **Start walkthrough** introduces the navigation, meeting calendar, searchable table, and meeting form. You can practice changing views, searching, selecting meetings, and filling the form. The **Practice preview** cannot save or delete meetings. Your previous calendar position, view, search, and selections return when you finish or exit. The final **Add meeting** action opens a fresh, normal form where you can save a real meeting.
+
+The other page walkthroughs explain the visible controls without sending provider actions or device commands. In the Reports guide, **Add example report** optionally saves and pins a personal **Monthly attendance example** using your roster, current-month attendance counts, labels, and report-period policy results. The report remains after the tour and can be edited or deleted normally. Skipping the option creates nothing.
+
+The Kiosks guide covers diagnostics, pairing, naming, fingerprint maintenance, restarts, PIN recovery, updates, and retirement. If no physical kiosk is paired, the tour shows a clearly labeled example with disabled management controls. It disappears when the tour closes and never creates a device record. Existing kiosks remain unchanged.
+
+Choose **Not now** to receive the invitation on a later visit, or **Don't show automatically again** to stop automatic invitations for that page. Progress is recorded separately for each page and follows your signed-in account across browsers and devices. Completing a walkthrough stops its automatic invitations.
+
+Page walkthroughs are separate from Guided Setup. Reopening or resetting setup does not reset them.
+
 ## Navigation and access
 
 After sign-in, the primary navigation contains **Dashboard**, **Roster**, **Reports**, and **Kiosks**. **Settings** gives both roles theme and sign-out controls. Administrators have separate **Organization**, **Configuration**, **Access**, **Integrations**, **Data**, **Guided Setup**, and **Updates** pages.
@@ -36,7 +50,9 @@ Saved reports appear as account-synced tabs. **Browse reports** finds accessible
 
 The report builder supports fixed and rolling periods, active or complete roster history, required/optional/all meetings, Any or All matching across multiple labels, and current or historical label membership. **Member** is the first required column. While editing, use **Add column** at the right edge of the results table to choose curated roster, regular-attendance, policy, count, and date-list columns. Label-specific policy choices are grouped by result type, followed by a searchable label selection. Open a column heading to sort, move, or remove it, or drag movable headings left and right. Text columns can also be filtered from the heading menu. Results refresh after a short delay and paginate without saving the current page in the report definition. Official policy columns keep their configured windows. Report-period policy columns recalculate inside the report dates while preserving dated rule periods.
 
-**Download report CSV** exports every matching member using the selected columns and order. **Download detailed attendance CSV** exports the filtered meeting-level records with the existing explicit `regular*` and `policy*` fields. Both exports escape CSV values and neutralize spreadsheet formulas. A browser-local report view from an older release appears in **Browse reports** as an unsaved imported draft and is removed only after saving or dismissal.
+In saved reports, **Current membership** uses each member's labels today throughout the selected report period, including meetings before those labels were assigned. For a monthly class report, select **Current month**, the class label, and its **Report-period policy result** column. There is no need to backdate label assignments. **Historical membership** uses the labels held on each meeting date. Both modes still respect attendance-required start dates, meeting audiences, completed attendance windows, policy rule periods, and the policy's excuse handling. This report setting does not rewrite label history or change official policy results.
+
+**Download report CSV** exports every matching member using the selected columns and order. **Download detailed attendance CSV** exports the filtered meeting-level records with the existing explicit `regular*` and `policy*` fields. Both exports use the report's membership selection; detailed `policyRate` and other official policy summary fields retain their configured windows and dated membership. Both exports escape CSV values and neutralize spreadsheet formulas. A browser-local report view from an older release appears in **Browse reports** as an unsaved imported draft and is removed only after saving or dismissal.
 
 ## Kiosks and simulator
 
@@ -56,7 +72,7 @@ The **Browser simulator** is available to Administrators. Normal reads follow ph
 - **Guided Setup** reopens the shared setup checklist without deleting data.
 - **Updates** compares releases and provides the backup-first web update flow.
 
-Every user can turn on **Debug mode** in the Settings navigation bar. Debug mode reveals diagnostic history such as member label history, current-label attendance history, and recent roster imports for that user only. It does not change organization data or another user's view.
+Every user can turn on **Debug mode** in the Settings navigation bar. Debug mode reveals diagnostic history such as member label history, current-label attendance history, and recent roster imports for that user only. On a page with a registered walkthrough, it also shows a floating **Reset page walkthrough** button. Resetting clears that account's progress for the current page and immediately opens its first-visit invitation. It does not change organization data or another user's view.
 
 ## Update safely
 

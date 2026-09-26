@@ -25,4 +25,4 @@ Use the Administrator's available local or remote access method for a physical-k
 
 If a kiosk update fails, the updater may restart a kiosk that was active before the failure but does not restore previous code bytes. Stop, inspect scrubbed service status through the available access method, and use an approved recovery plan. Do not re-pair, recreate resources, restore an old queue, or restore D1 automatically. A historical queue can duplicate or discard attendance.
 
-The stable public release is v1.2.0. The completed migration used the terminal Pi updater successfully, while dashboard-driven Pi release lookup acceptance remains unproven. Treat a dashboard error or absent completion status as unconfirmed, not as proof that an update ran.
+The stable public release is v1.2.2. The completed migration used the terminal Pi updater successfully, while dashboard-driven Pi release lookup acceptance remains unproven. Treat a dashboard error or absent completion status as unconfirmed, not as proof that an update ran.

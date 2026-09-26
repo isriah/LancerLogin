@@ -1,3 +1,4 @@
+import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough.ts";
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
 import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance } from "./web-updates.ts";
@@ -243,6 +244,25 @@ async function authPreferences(request: Request, env: Env): Promise<Response> {
   await db.prepare("UPDATE users SET debug_mode = ? WHERE installation_id = 'primary' AND id = ?").bind(input.debugMode ? 1 : 0, principal.userId).run();
   await writeAudit(db, principal, "user.preferences_updated", "user", principal.userId, { debugMode: input.debugMode });
   return response({ debugMode: input.debugMode });
+}
+
+async function authWalkthrough(request: Request, env: Env, pageId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]);
+  if (!Object.hasOwn(walkthroughs, pageId)) throw new HttpError(404, "Page walkthrough is unavailable");
+  const db = requireDatabase(env);
+  if (request.method === "GET") {
+    const progress = await db.prepare("SELECT page_id AS pageId, content_version AS version, status, step_id AS stepId FROM user_walkthroughs WHERE installation_id = 'primary' AND user_id = ? AND page_id = ?").bind(principal.userId, pageId).first<WalkthroughProgress>();
+    return response({ progress: progress ?? initialWalkthroughProgress(pageId as WalkthroughPage) });
+  }
+  const origin = request.headers.get("origin");
+  if (origin !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Walkthrough preferences require the dashboard origin");
+  const input = await parseJson<unknown>(request, 2048);
+  if (!isObject(input) || Object.keys(input).some((key) => !["version", "status", "stepId"].includes(key))) throw new HttpError(400, "Invalid walkthrough progress");
+  const progress = { ...input, pageId };
+  if (!validWalkthroughProgress(progress)) throw new HttpError(400, "Invalid walkthrough progress");
+  await db.prepare("INSERT INTO user_walkthroughs (installation_id, user_id, page_id, content_version, status, step_id, updated_at) VALUES ('primary', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, user_id, page_id) DO UPDATE SET content_version = excluded.content_version, status = excluded.status, step_id = excluded.step_id, updated_at = excluded.updated_at")
+    .bind(principal.userId, pageId, progress.version, progress.status, progress.stepId, new Date().toISOString()).run();
+  return response({ progress });
 }
 
 async function branding(request: Request, env: Env): Promise<Response> {
@@ -1180,7 +1200,7 @@ async function runReportDefinition(db: D1Database, value: unknown): Promise<Repo
   if (resolved.warning) warnings.push(resolved.warning);
   const meetings = data.meetings.filter((meeting) => definition.meetingType === "all" || Boolean(meeting.required) === (definition.meetingType === "required"));
   const officialMembers = evaluateAttendance(data); const columnLabelIds = definition.columns.flatMap((column) => column.labelId ? [column.labelId] : []); const summaryLabelIds = [...new Set([...definition.labelIds, ...columnLabelIds])];
-  const periodMembers = evaluateAttendance({ ...data, meetings, from: resolved.from, to: resolved.to ?? today, historicalLabelIds: definition.membership === "historical" ? definition.labelIds : [], historicalLabelMatch: definition.labelMatch, summaryLabelIds })
+  const periodMembers = evaluateAttendance({ ...data, meetings, from: resolved.from, to: resolved.to ?? today, membership: definition.membership, historicalLabelIds: definition.membership === "historical" ? definition.labelIds : [], historicalLabelMatch: definition.labelMatch, summaryLabelIds })
     .filter((item) => (definition.roster === "all" || Boolean(item.member.active)) && (definition.membership === "historical" ? !definition.labelIds.length || item.rows.length > 0 : reportLabelsMatch(item.currentLabelIds, definition.labelIds, definition.labelMatch)));
   const rows = buildReportRows({ definition, official: officialMembers, period: periodMembers, meetings, labels: data.labels, rules: data.rules, timeZone: data.timeZone, from: resolved.from, to: resolved.to ?? today }); const labelNames = new Map(data.labels.map((label) => [label.id, label.name]));
   const matchingMemberIds = new Set(rows.map((row) => row.member.id));
@@ -2721,6 +2741,7 @@ type BackupScope = "meetings" | "roster" | "installation";
 const tableColumns = {
   installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id", "google_enabled", "resend_enabled", "discord_enabled", "google_calendar_enabled"],
   organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on"],
+  user_walkthroughs: ["installation_id", "user_id", "page_id", "content_version", "status", "step_id", "updated_at"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id", "debug_mode"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at", "attendance_required_from"],
   member_labels: ["id", "installation_id", "name", "active", "formula_enabled", "created_by", "created_at"],
@@ -2758,7 +2779,7 @@ const tableColumns = {
 type BackupTable = keyof typeof tableColumns;
 // Restore parents before children so SQLite's immediate foreign-key checks remain valid.
 const installationTables: BackupTable[] = [
-  "installations", "organization_settings", "members", "users", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
+  "installations", "organization_settings", "members", "users", "user_walkthroughs", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
   "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
@@ -2776,13 +2797,13 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const policySettings = scope === "roster" ? await db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ recentDays: number; policyActivatedOn: string | null }>() : null; const backup = { product: "LancerLogin", schemaVersion: 20, scope, exportedAt, tables: Object.fromEntries(entries), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
+  const exportedAt = new Date().toISOString(); const policySettings = scope === "roster" ? await db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ recentDays: number; policyActivatedOn: string | null }>() : null; const backup = { product: "LancerLogin", schemaVersion: 21, scope, exportedAt, tables: Object.fromEntries(entries), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
   const updateRequestId = new URL(request.url).searchParams.get("updateRequestId");
   if (updateRequestId) {
     if (scope !== "installation") throw new HttpError(400, "Web updates require an entire-installation backup");
     await recordUpdateBackup(env, updateRequestId);
   }
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 20 });
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 21 });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
@@ -2797,10 +2818,10 @@ const legacyMeetingTables = meetingTables.filter((table) => !["meeting_audience_
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
   const schemaVersion = Number(value.schemaVersion);
   const sourceTables = value.tables;
-  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings") && !(schemaVersion < 20 && ["saved_report_views", "saved_report_tabs"].includes(table)));
+  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 21 && table === "user_walkthroughs") && !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings") && !(schemaVersion < 20 && ["saved_report_views", "saved_report_tabs"].includes(table)));
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
@@ -2848,6 +2869,10 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
       const validation = validateReportDefinition(parseStoredReportDefinition(String(row.definition_json)), restoredLabels, { allowMissingLabels: true });
       if (!validation.definition || validation.errors.length) throw new HttpError(400, "Backup contains an invalid saved report definition", validation.errors);
     }
+  }
+  for (const row of tables.user_walkthroughs) {
+    if (row.installation_id !== "primary" || !tables.users.some((user) => user.id === row.user_id && user.installation_id === row.installation_id)
+      || !validWalkthroughProgress({ pageId: row.page_id, version: row.content_version, status: row.status, stepId: row.step_id })) throw new HttpError(400, "Backup walkthrough progress is invalid");
   }
   const attendanceRecentDays = scope === "roster" && schemaVersion >= 15 ? Number(value.attendanceRecentDays) : 30;
   if (!Number.isSafeInteger(attendanceRecentDays) || attendanceRecentDays < 1 || attendanceRecentDays > 365) throw new HttpError(400, "Backup attendance window is invalid");
@@ -2922,6 +2947,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/web-updates/status" && request.method === "GET" || ["/admin/web-updates/prepare", "/admin/web-updates/start"].includes(url.pathname) && request.method === "POST") result = await webUpdates(request, env);
     else if (url.pathname === "/auth/local" && request.method === "POST") result = await localLogin(request, env);
     else if (url.pathname === "/auth/session" && request.method === "GET") result = await authSession(request, env);
+    else if (/^\/auth\/walkthroughs\/[^/]+$/.test(url.pathname) && ["GET", "PATCH"].includes(request.method)) result = await authWalkthrough(request, env, url.pathname.slice("/auth/walkthroughs/".length));
     else if (url.pathname === "/auth/preferences" && request.method === "PATCH") result = await authPreferences(request, env);
     else if (url.pathname === "/auth/logout" && request.method === "POST") result = response({ ok: true }, 200, { "set-cookie": "lancerlogin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" });
     else if (url.pathname === "/auth/google/start" && request.method === "GET") result = await googleStart(request, env);

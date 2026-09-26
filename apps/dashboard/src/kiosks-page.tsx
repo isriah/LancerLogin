@@ -51,9 +51,10 @@ function PairKioskDialog({ active, onClose, onPaired }: { active?: Kiosk; onClos
   </div></div>;
 }
 
-export function KiosksPage({ role, discordConfigured }: { role: "admin" | "operator"; discordConfigured: boolean }) {
+export function KiosksPage({ role, discordConfigured, walkthroughOpen = false }: { role: "admin" | "operator"; discordConfigured: boolean; walkthroughOpen?: boolean }) {
   const [kiosks, setKiosks] = useState<Kiosk[]>([]);
   const [simulator, setSimulator] = useState<Simulator | null>(null);
+  const [walkthroughReady, setWalkthroughReady] = useState(false);
   const [notice, setNotice] = useState<Notice>({ message: "Loading kiosk status…", tone: "neutral" });
   useDashboardLoadingOverlay(notice.message === "Loading kiosk status…", "Loading kiosk status…");
   const [pairing, setPairing] = useState(false);
@@ -67,12 +68,19 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
 
   async function load({ preserveNotice = false }: { preserveNotice?: boolean } = {}) {
     const [hardware, simulated] = await Promise.all([api<{ kiosks: Kiosk[] }>("/admin/kiosks"), role === "admin" ? api<{ simulator: Simulator | null }>("/admin/simulator") : Promise.resolve({ simulator: null })]);
-    setKiosks(hardware.kiosks); setSimulator(simulated.simulator); if (!preserveNotice) setNotice({ message: "", tone: "neutral" });
+    setKiosks(hardware.kiosks); setSimulator(simulated.simulator); setWalkthroughReady(true); if (!preserveNotice) setNotice({ message: "", tone: "neutral" });
   }
   useEffect(() => {
+    setWalkthroughReady(false);
     return visiblePoll(() => load(), 30_000, (error) => setNotice({ message: error.message, tone: "error" }), true);
   }, [role]);
-  const active = kiosks.find((kiosk) => kiosk.active === 1);
+  const paired = kiosks.find((kiosk) => kiosk.active === 1);
+  const example = walkthroughOpen && !paired;
+  const active: Kiosk | undefined = paired ?? (example ? {
+    id: "walkthrough-example", name: "Example kiosk", active: 1, readerOnline: 1,
+    networkType: "wifi", networkSignal: 90, pendingEvents: 0, uptimeSeconds: 7200,
+    pairedAt: "2026-01-01T12:00:00Z", lastSeenAt: new Date().toISOString(), lastSyncAt: new Date().toISOString(), releaseVersion: "1.0.0",
+  } : undefined);
   const retired = kiosks.filter((kiosk) => kiosk.active !== 1);
   const online = Boolean(active?.lastSeenAt && Date.now() - Date.parse(active.lastSeenAt) < 90_000);
   const healthy = Boolean(active && online && active.readerOnline && active.networkType !== "offline" && (active.pendingEvents ?? 0) === 0 && !active.errorCategory);
@@ -80,11 +88,12 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
   const healthLabel = health === "unpaired" ? "Not paired" : health[0].toUpperCase() + health.slice(1);
   const releaseCurrent = Boolean(release.fresh && hasComparableStableVersions(release.release, active?.releaseVersion ?? "") && !isNewerRelease(latestRelease, active!.releaseVersion!));
 
-  async function rename() { if (!active) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "PATCH", body: JSON.stringify({ name }) }); setEditing(false); setNotice({ message: "Kiosk renamed.", tone: "success" }); await load({ preserveNotice: true }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
-  async function retire() { if (!active || !window.confirm(`Retire ${active.name}? Its credential will stop working, but its history will remain.`)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "DELETE", body: JSON.stringify({ confirmation: "RETIRE KIOSK" }) }); setNotice({ message: "Kiosk retired. You can pair another device now.", tone: "success" }); await load({ preserveNotice: true }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
-  async function command(type: KioskCommand, label: string, confirmation?: string) { if (!active || type === "install_latest" && (!release.fresh || release.checking || !hasComparableStableVersions(release.release, active.releaseVersion ?? "")) || confirmation && !window.confirm(confirmation)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}/commands`, { method: "POST", body: JSON.stringify({ command: type }) }); setNotice({ message: `${label} queued. The kiosk normally receives it within five seconds.`, tone: "success" }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
+  async function rename() { if (!active || example) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "PATCH", body: JSON.stringify({ name }) }); setEditing(false); setNotice({ message: "Kiosk renamed.", tone: "success" }); await load({ preserveNotice: true }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
+  async function retire() { if (!active || example || !window.confirm(`Retire ${active.name}? Its credential will stop working, but its history will remain.`)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "DELETE", body: JSON.stringify({ confirmation: "RETIRE KIOSK" }) }); setNotice({ message: "Kiosk retired. You can pair another device now.", tone: "success" }); await load({ preserveNotice: true }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
+  async function command(type: KioskCommand, label: string, confirmation?: string) { if (!active || example || type === "install_latest" && (!release.fresh || release.checking || !hasComparableStableVersions(release.release, active.releaseVersion ?? "")) || confirmation && !window.confirm(confirmation)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}/commands`, { method: "POST", body: JSON.stringify({ command: type }) }); setNotice({ message: `${label} queued. The kiosk normally receives it within five seconds.`, tone: "success" }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
   async function stopSimulator() { try { await api("/admin/simulator", { method: "POST", body: JSON.stringify({ action: "stop" }) }); setNotice({ message: "Browser simulator stopped.", tone: "success" }); await load({ preserveNotice: true }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
   async function syncDiscordStatus() {
+    if (example) return;
     setDiscordBusy(true); setNotice({ message: "Syncing physical kiosk health to Discord…", tone: "neutral" });
     try {
       const result = await api<{ changed: boolean; messageUrl?: string }>("/discord/kiosk-status", { method: "POST", body: JSON.stringify({}) });
@@ -94,35 +103,36 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
     finally { setDiscordBusy(false); }
   }
 
-  return <section className="page-stack" aria-labelledby="kiosks-title">
+  return <section className="page-stack" aria-labelledby="kiosks-title" data-walkthrough-page="kiosks" data-walkthrough-ready={walkthroughReady ? "true" : undefined} tabIndex={-1}>
     <div className="page-intro"><h1 id="kiosks-title">Kiosks</h1></div>
     {notice.message && <p className="setup-status ui-status kiosk-notice" data-tone={notice.tone} role={notice.tone === "error" ? "alert" : "status"}>{notice.message}</p>}
     <div className="kiosk-grid">
       <article className="task-card kiosk-device-card">
-        <div className="kiosk-card-heading"><h2>Physical kiosk</h2>{role === "admin" && <button className="primary-button" type="button" onClick={() => setPairing(true)}>{active ? "Replace kiosk" : "Add kiosk"}</button>}</div>
-        <div className={`kiosk-state kiosk-state-${health}`}><strong>{active?.name ?? "No kiosk paired"}</strong><span className="status-pill kiosk-health-pill ui-status" data-tone={health === "healthy" ? "success" : health === "degraded" ? "warning" : health === "offline" ? "error" : "neutral"}>{healthLabel}</span></div>
+        <div className="kiosk-card-heading" data-walkthrough="kiosk-pairing"><h2>Physical kiosk</h2>{role === "admin" && <button className="primary-button" type="button" onClick={() => setPairing(true)}>{paired ? "Replace kiosk" : "Add kiosk"}</button>}</div>
+        {example && <p className="ui-status" data-tone="neutral">Example kiosk for this walkthrough. No device is paired; these management controls are disabled.</p>}
+        <div className={`kiosk-state kiosk-state-${health}`} data-walkthrough="kiosk-status"><strong>{active?.name ?? "No kiosk paired"}</strong><span className="status-pill kiosk-health-pill ui-status" data-tone={health === "healthy" ? "success" : health === "degraded" ? "warning" : health === "offline" ? "error" : "neutral"}>{healthLabel}</span></div>
         {active ? <>
-          <dl className="kiosk-diagnostics"><div><dt>Fingerprint reader</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div><div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Installed release</dt><dd>{active.releaseVersion ?? "Unknown"}</dd></div><div><dt>Latest stable</dt><dd>{latestRelease || "Unavailable"}{!release.fresh && latestRelease ? <small>Previously checked; confirmation required</small> : release.fresh && hasComparableStableVersions(release.release, active.releaseVersion ?? "") ? <small>{releaseCurrent ? "Current" : "Update available"}</small> : null}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div>{active.errorCategory && <div className="kiosk-diagnostic-error"><dt>Reported issue</dt><dd>{active.errorCategory.replaceAll("_", " ")}</dd></div>}</dl>
+          <dl className="kiosk-diagnostics" data-walkthrough="kiosk-diagnostics"><div><dt>Fingerprint reader</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div><div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Installed release</dt><dd>{active.releaseVersion ?? "Unknown"}</dd></div><div><dt>Latest stable</dt><dd>{latestRelease || "Unavailable"}{!release.fresh && latestRelease ? <small>Previously checked; confirmation required</small> : release.fresh && hasComparableStableVersions(release.release, active.releaseVersion ?? "") ? <small>{releaseCurrent ? "Current" : "Update available"}</small> : null}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div>{active.errorCategory && <div className="kiosk-diagnostic-error"><dt>Reported issue</dt><dd>{active.errorCategory.replaceAll("_", " ")}</dd></div>}</dl>
           {role === "admin" && <>
-            <div className="kiosk-actions">
-              {editing ? <><label>Device name<input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="primary-button" type="button" onClick={() => void rename()}>Save name</button><button type="button" onClick={() => setEditing(false)}>Cancel</button></> : <button type="button" onClick={() => { setName(active.name); setEditing(true); }}>Rename</button>}
-              <button type="button" onClick={() => setMaintenanceHelp((value) => !value)}>Fingerprint maintenance</button>
-              <button type="button" onClick={() => void command("reload_display", "Display reload")}>Reload display</button>
-              <button type="button" onClick={() => void command("restart_service", "Software restart")}>Restart software</button>
-              <button type="button" onClick={() => void command("reboot", "Device reboot", `Reboot ${active.name}? Attendance scanning will pause while the Pi restarts.`)}>Reboot Pi</button>
-              <button type="button" onClick={() => void command("reset_network_pin", "Network PIN reset", `Reset the local settings PIN on ${active.name}? Anyone at the kiosk can then create a new PIN.`)}>Reset network PIN</button>
-              <button className="primary-button" type="button" disabled={!online || release.checking || !release.fresh || !hasComparableStableVersions(release.release, active.releaseVersion ?? "")} onClick={() => void command("install_latest", "Latest stable kiosk update")}>Update to latest stable</button>
-              <button className="danger-button" type="button" onClick={() => void retire()}>Retire kiosk</button>
-              {discordConfigured && <button type="button" disabled={discordBusy} onClick={() => void syncDiscordStatus()}>{discordBusy ? "Syncing…" : "Sync Discord status"}</button>}
+            <div className="kiosk-actions" data-walkthrough="kiosk-actions">
+              {editing && !example ? <><label>Device name<input maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="primary-button" type="button" onClick={() => void rename()}>Save name</button><button type="button" onClick={() => setEditing(false)}>Cancel</button></> : <button type="button" disabled={example} data-walkthrough="kiosk-rename" onClick={() => { setName(active.name); setEditing(true); }}>Rename</button>}
+              <button type="button" disabled={example} data-walkthrough="kiosk-fingerprints" onClick={() => setMaintenanceHelp((value) => !value)}>Fingerprint maintenance</button>
+              <button type="button" disabled={example} data-walkthrough="kiosk-reload" onClick={() => void command("reload_display", "Display reload")}>Reload display</button>
+              <button type="button" disabled={example} data-walkthrough="kiosk-restart" onClick={() => void command("restart_service", "Software restart")}>Restart software</button>
+              <button type="button" disabled={example} data-walkthrough="kiosk-reboot" onClick={() => void command("reboot", "Device reboot", `Reboot ${active.name}? Attendance scanning will pause while the Pi restarts.`)}>Reboot Pi</button>
+              <button type="button" disabled={example} data-walkthrough="kiosk-network-pin" onClick={() => void command("reset_network_pin", "Network PIN reset", `Reset the local settings PIN on ${active.name}? Anyone at the kiosk can then create a new PIN.`)}>Reset network PIN</button>
+              <button className="primary-button" type="button" data-walkthrough="kiosk-update" disabled={example || !online || release.checking || !release.fresh || !hasComparableStableVersions(release.release, active.releaseVersion ?? "")} onClick={() => void command("install_latest", "Latest stable kiosk update")}>Update to latest stable</button>
+              <button className="danger-button" type="button" disabled={example} data-walkthrough="kiosk-retire" onClick={() => void retire()}>Retire kiosk</button>
+              {discordConfigured && <button type="button" disabled={example || discordBusy} onClick={() => void syncDiscordStatus()}>{discordBusy ? "Syncing…" : "Sync Discord status"}</button>}
               {discordConfigured && discordMessageUrl && <a className="secondary-button action-link" href={discordMessageUrl} target="_blank" rel="noreferrer">View Discord status message</a>}
             </div>
             {maintenanceHelp && <div className="settings-callout kiosk-maintenance"><div><strong>Open maintenance on the physical kiosk</strong><p>Press and hold the organization name or logo for three seconds, then enter the local settings PIN. Enrollment, reader tests, slot suggestions, replacement warnings, and mapping removal are available there so fingerprint templates never leave the sensor.</p></div></div>}
           </>}
         </> : <p>Pair a Raspberry Pi to begin unattended fingerprint attendance. Pairing and replacement are managed here after onboarding.</p>}
       </article>
-      {role === "admin" && <article className="task-card kiosk-simulator-card"><h2>Browser simulator</h2><div className="kiosk-state"><strong>{simulator?.name ?? "Not configured"}</strong><span className="status-pill ui-status" data-tone={simulator?.active && simulator.online ? "success" : simulator?.active ? "error" : "neutral"}>{simulator?.active ? simulator.online ? "Online" : "Offline" : "Not paired"}</span></div><p>Uses the kiosk scan surface with browser-selected simulated reads. Events are audited and do not count as physical kiosk activity.</p>{simulator?.active === 1 && <div className="kiosk-actions"><a className="primary-button action-link" href="/simulator">Open simulator</a><button type="button" onClick={() => void stopSimulator()}>Stop simulator</button></div>}</article>}
+      {role === "admin" && <article className="task-card kiosk-simulator-card" data-walkthrough="kiosk-simulator"><h2>Browser simulator</h2><div className="kiosk-state"><strong>{simulator?.name ?? "Not configured"}</strong><span className="status-pill ui-status" data-tone={simulator?.active && simulator.online ? "success" : simulator?.active ? "error" : "neutral"}>{simulator?.active ? simulator.online ? "Online" : "Offline" : "Not paired"}</span></div><p>Uses the kiosk scan surface with browser-selected simulated reads. Events are audited and do not count as physical kiosk activity.</p>{simulator?.active === 1 && <div className="kiosk-actions"><a className="primary-button action-link" href="/simulator">Open simulator</a><button type="button" onClick={() => void stopSimulator()}>Stop simulator</button></div>}</article>}
     </div>
-    {retired.length > 0 && <article className="task-card kiosk-history"><h2>Device history</h2><div className="table-scroll"><table className="data-table ui-table" aria-label="Retired kiosk history"><thead><tr><th scope="col">Name</th><th scope="col">Paired</th><th scope="col">Last seen</th><th scope="col">Release</th></tr></thead><tbody>{retired.map((kiosk) => <tr key={kiosk.id}><td>{kiosk.name}</td><td>{new Date(kiosk.pairedAt).toLocaleString()}</td><td>{kiosk.lastSeenAt ? new Date(kiosk.lastSeenAt).toLocaleString() : "Never"}</td><td>{kiosk.releaseVersion ?? "—"}</td></tr>)}</tbody></table></div></article>}
-    {pairing && <PairKioskDialog active={active} onClose={() => setPairing(false)} onPaired={load} />}
+    {retired.length > 0 && <article className="task-card kiosk-history" data-walkthrough="kiosk-history"><h2>Device history</h2><div className="table-scroll"><table className="data-table ui-table" aria-label="Retired kiosk history"><thead><tr><th scope="col">Name</th><th scope="col">Paired</th><th scope="col">Last seen</th><th scope="col">Release</th></tr></thead><tbody>{retired.map((kiosk) => <tr key={kiosk.id}><td>{kiosk.name}</td><td>{new Date(kiosk.pairedAt).toLocaleString()}</td><td>{kiosk.lastSeenAt ? new Date(kiosk.lastSeenAt).toLocaleString() : "Never"}</td><td>{kiosk.releaseVersion ?? "—"}</td></tr>)}</tbody></table></div></article>}
+    {pairing && <PairKioskDialog active={paired} onClose={() => setPairing(false)} onPaired={load} />}
   </section>;
 }

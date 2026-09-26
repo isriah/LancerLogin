@@ -82,7 +82,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES/);
@@ -256,11 +256,14 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.doesNotMatch(workflow, /run:[\s\S]{0,300}\$\{\{ inputs\.(?:operation|confirmation|installation_slug) \}\}/);
 });
 
-test("CI isolates browser runs and applies the selective release audit policy", async () => {
+test("CI scopes ordinary changes and runs one complete exact-release gate", async () => {
   const packageDocument = JSON.parse(await readFile("package.json", "utf8"));
   assert.equal(packageDocument.scripts["verify:migrations"], "node scripts/verify-d1-migrations.mjs");
   assert.match(packageDocument.scripts["verify:all"], /verify:migrations.*typecheck.*test.*build/);
   assert.match(packageDocument.scripts["verify:release"], /verify:all.*audit:release:local/);
+  assert.equal(packageDocument.scripts["test:release-ci"], "npm run test:web && node --test tests/kiosk-runtime.test.mjs");
+  assert.equal(packageDocument.scripts["verify:release-ci"], "npm run verify:migrations && npm run typecheck && npm run test:release-ci && npm run build");
+  assert.doesNotMatch(packageDocument.scripts["test:release-ci"], /kiosk-artifacts/);
   assert.equal(packageDocument.scripts["audit:release"], "node scripts/audit-dependencies.mjs");
   assert.equal(packageDocument.scripts["audit:release:local"], "node scripts/audit-dependencies.mjs --defer-transient-to-ci");
   const audit = await readFile("scripts/audit-dependencies.mjs", "utf8");
@@ -281,7 +284,14 @@ test("CI isolates browser runs and applies the selective release audit policy", 
   assert.match(verifier, /fingerprint_template\|raw_fingerprint\|biometric_template/);
   assert.doesNotMatch(verifier, /--remote|CLOUDFLARE_API_TOKEN/);
   const ciWorkflow = await readFile(".github/workflows/ci.yml", "utf8");
-  assert.match(ciWorkflow, /npm run verify:all/);
+  assert.match(ciWorkflow, /Select verification scope/);
+  assert.match(ciWorkflow, /npm run verify:dev/);
+  assert.match(ciWorkflow, /npm run verify:kiosk/);
+  assert.match(ciWorkflow, /npm run verify:release-ci/);
+  assert.doesNotMatch(ciWorkflow, /npm run verify:all/);
+  assert.match(ciWorkflow, /HEAD_COMMIT_MESSAGE.*Release\\ v\*/);
+  assert.match(ciWorkflow, /outputs\.full == 'true'[\s\S]*kiosk-artifacts\.test\.mjs/);
+  assert.match(ciWorkflow, /outputs\.full != 'true' && steps\.verification-scope\.outputs\.kiosk == 'true'/);
   assert.equal((ciWorkflow.match(/npm ci --no-audit/g) ?? []).length, 2);
   assert.match(ciWorkflow, /schedule:[\s\S]*cron:/);
   assert.match(ciWorkflow, /workflow_dispatch:/);
@@ -298,12 +308,15 @@ test("CI isolates browser runs and applies the selective release audit policy", 
   assert.match(ciWorkflow, /rhysd\/actionlint:1\.7\.12/);
   const browserShardJob = ciWorkflow.match(/  browser-shard:([\s\S]*?)  browser-smoke:/)?.[1];
   assert.ok(browserShardJob);
+  assert.match(browserShardJob, /workflow_dispatch/);
+  assert.match(browserShardJob, /startsWith\(github\.event\.head_commit\.message, 'Release v'\)/);
   assert.match(browserShardJob, /fail-fast: false/);
   assert.match(browserShardJob, /shard: \[1, 2, 3, 4\]/);
   assert.match(browserShardJob, /npm run test:browser -- --shard=\$\{\{ matrix\.shard \}\}\/4/);
   const browserGate = ciWorkflow.match(/  browser-smoke:([\s\S]*)$/)?.[1];
   assert.ok(browserGate);
   assert.match(browserGate, /needs: browser-shard/);
+  assert.match(browserGate, /startsWith\(github\.event\.head_commit\.message, 'Release v'\)/);
   assert.match(browserGate, /test "\$SHARD_RESULT" = success/);
   assert.equal(packageDocument.scripts["test:browser"], "node scripts/run-browser-tests.mjs");
   const browserRunner = await readFile("scripts/run-browser-tests.mjs", "utf8");
@@ -323,7 +336,6 @@ test("CI isolates browser runs and applies the selective release audit policy", 
   assert.match(releaseWorkflow, /--notes-file/);
   assert.doesNotMatch(releaseWorkflow, /--generate-notes/);
 });
-
 test("Cloudflare setup is adopter-guided and does not require a target account", async () => {
   const guide = await readFile("docs/CLOUDFLARE-LINKING.md", "utf8");
   assert.match(guide, /adopter's own Cloudflare account/i);

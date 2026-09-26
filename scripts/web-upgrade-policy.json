@@ -187,6 +187,11 @@
       "name": "0037_report_read_efficiency.sql",
       "sha256": "07496fbb503e8e520ef977f1454936cbca898bc4e825c4fff29e907dbda21df9",
       "forwardCompatible": true
+    },
+    {
+      "name": "0038_page_walkthroughs.sql",
+      "sha256": "10dd32647713e26134fc73ae9b7ab80fb93196ca93870e6a328085c036c0757d",
+      "forwardCompatible": true
     }
   ]
 }

@@ -327,6 +327,42 @@ for(const viewport of dashboardConformanceReferences.viewports) {
   }
 }
 
+for(const viewport of dashboardConformanceReferences.viewports) {
+  for(const theme of dashboardConformanceReferences.themes) {
+    test(`Browse reports popup keeps its themed surface at ${viewport.width}x${viewport.height} in ${theme} mode`,async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme",savedTheme),theme);
+      await useReferenceContext(page);
+      await page.goto("/reports");
+      await page.getByText("Browse reports",{ exact: true }).click();
+      const popup=page.locator(".report-browser-popover");
+      await expect(popup).toBeVisible();
+      const popupTheme=await page.evaluate(() => {
+        const app=document.querySelector<HTMLElement>(".app")!;
+        const trigger=document.querySelector<HTMLElement>(".report-browser > summary")!;
+        const menu=document.querySelector<HTMLElement>(".report-browser-popover")!;
+        const triggerStyle=getComputedStyle(trigger);
+        const menuStyle=getComputedStyle(menu);
+        return {
+          insideApp: app.contains(menu),
+          background: menuStyle.backgroundColor,
+          border: menuStyle.borderTopColor,
+          color: menuStyle.color,
+          expectedBackground: triggerStyle.backgroundColor,
+          expectedBorder: triggerStyle.borderTopColor,
+          expectedColor: triggerStyle.color,
+        };
+      });
+      expect(popupTheme.insideApp).toBe(true);
+      expect(popupTheme.background).toBe(popupTheme.expectedBackground);
+      expect(popupTheme.border).toBe(popupTheme.expectedBorder);
+      expect(popupTheme.color).toBe(popupTheme.expectedColor);
+      expect(popupTheme.background).not.toBe("rgba(0, 0, 0, 0)");
+      await expectResponsiveFit(page);
+    });
+  }
+}
+
 test("saved report tabs, imported drafts, configurable columns, and exports remain operable",async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("lancerlogin-reports-view",JSON.stringify({ meetingType: "optional",roster: "all" })));
   await useReferenceContext(page);
@@ -764,6 +800,10 @@ test("saved reports apply multi-label matching and membership filters to CSV exp
   let exported: { definition?: { labelIds?: string[]; labelMatch?: string; membership?: string } }={};
   await page.route("**/exports/report.csv",async (route) => { exported=route.request().postDataJSON(); return route.fulfill({ status: 200,headers: { "content-type": "text/csv","content-disposition": "attachment; filename=report.csv" },body: "Member\nAvery Stone\n" }); });
   await page.goto("/reports/new");
+  await expect(page.getByRole("combobox",{ name: "Membership",exact: true })).toBeEnabled();
+  await expect(page.getByText("Current membership applies today’s labels",{ exact: false })).toBeVisible();
+  await page.getByRole("combobox",{ name: "Membership",exact: true }).selectOption("historical");
+  await expect(page.getByText("Historical membership uses the labels held on each meeting date.",{ exact: false })).toBeVisible();
   await page.getByText("Labels (all)",{ exact: true }).click();
   await page.getByRole("checkbox",{ name: "Mentor",exact: true }).check();
   await page.getByRole("heading",{ level: 2,name: "New report" }).click();

@@ -46,7 +46,7 @@ export function meetingEligibility(input: { date: string; participationStart?: s
   if (formulaLabel) return hasWeeklyTarget ? "weekly" : "no_target";
   return meeting.required ? "required" : "optional";
 }
-export function evaluateAttendance(input: { members: PolicyMember[]; labels: PolicyLabel[]; changes: LabelChange[]; targets?: WeeklyTarget[]; rules?: AttendanceRule[]; meetings: PolicyMeeting[]; observations: Observation[]; timeZone: string; recentDays?: number; policyActivatedOn?: string | null; from?: string; to?: string; now?: string; historicalLabelId?: string; historicalLabelIds?: string[]; historicalLabelMatch?: "any" | "all"; summaryLabelIds?: string[] }): PolicyMemberResult[] {
+export function evaluateAttendance(input: { members: PolicyMember[]; labels: PolicyLabel[]; changes: LabelChange[]; targets?: WeeklyTarget[]; rules?: AttendanceRule[]; meetings: PolicyMeeting[]; observations: Observation[]; timeZone: string; recentDays?: number; policyActivatedOn?: string | null; from?: string; to?: string; now?: string; membership?: "current" | "historical"; historicalLabelId?: string; historicalLabelIds?: string[]; historicalLabelMatch?: "any" | "all"; summaryLabelIds?: string[] }): PolicyMemberResult[] {
   const nowText = input.now ?? new Date().toISOString();
   const now = Date.parse(nowText);
   const today = localDate(nowText, input.timeZone);
@@ -66,9 +66,12 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
   const audience = (meeting: PolicyMeeting) => meeting.audienceMode === "all" ? "All" : meeting.audienceLabelIds.map((id) => labelNames.get(id) ?? "Retired label").join(", ");
   return input.members.map((member) => {
     const changes = changesByMember.get(member.id) ?? [];
-    const labelsAt = (date: string): Set<string> => { const active = new Set<string>(); for (const change of changes) { if (change.effectiveDate > date) break; if (change.action === "add") active.add(change.labelId); else active.delete(change.labelId); } return active; };
+    const historicalLabelsAt = (date: string): Set<string> => { const active = new Set<string>(); for (const change of changes) { if (change.effectiveDate > date) break; if (change.action === "add") active.add(change.labelId); else active.delete(change.labelId); } return active; };
+    const currentLabels = historicalLabelsAt(today);
+    // Saved reports can apply today's membership across their period without rewriting label history.
+    const labelsAt = (date: string) => input.membership === "current" ? currentLabels : historicalLabelsAt(date);
     const participationStart = member.attendanceRequiredFrom ?? member.rosterAddedAt?.slice(0, 10) ?? "";
-    const currentLabelIds = [...labelsAt(today)];
+    const currentLabelIds = [...currentLabels];
     const currentPolicyLabelIds = currentLabelIds.filter((id) => policyLabels.has(id));
     const currentLabelId = currentPolicyLabelIds[0] ?? null;
     const currentRule = currentLabelId ? ruleOn(rules, currentLabelId, today) : undefined;

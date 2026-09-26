@@ -2584,7 +2584,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { schemaVersion: number; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 20); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { schemaVersion: number; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 21); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
@@ -2603,7 +2603,7 @@ test("installation backup retains Discord role mappings while roster backup omit
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 20); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 21); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(installation.tables.saved_report_views.length, 1); assert.equal(installation.tables.saved_report_tabs.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   assert.equal(Object.hasOwn(roster.tables, "saved_report_views"), false);
@@ -2612,6 +2612,46 @@ test("installation backup retains Discord role mappings while roster backup omit
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO discord_label_role_mappings") && item.values.includes("423456789012345678")));
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO saved_report_views") && item.values.includes("Class attendance")));
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO saved_report_tabs") && item.values.includes("report-1")));
+});
+
+test("custom report queries and exports apply current membership to past periods without label writes", async () => {
+  const database = new FakeDatabase();
+  seedPolicy(database, {
+    members: [{ id: "member-1", memberId: "A-1", firstName: "Avery", lastName: "Stone", active: 1, attendanceRequiredFrom: "2020-09-01" }],
+    labels: [{ id: "class", name: "Class", active: 1, formulaEnabled: 0 }],
+    changes: [{ memberId: "member-1", labelId: "class", action: "add", effectiveDate: new Date().toISOString().slice(0, 10) }],
+    rules: [{ id: "class-rule", labelId: "class", ruleType: "weighted_percentage", thresholdPercent: 75, excusedHandling: "exclude" }],
+    meetings: [1, 2, 3].map((day) => ({ id: `meeting-${day}`, title: `Class ${day}`, startsAt: `2020-09-0${day}T18:00:00Z`, endsAt: `2020-09-0${day}T20:00:00Z`, required: 1, attendanceWeight: day === 1 ? 3 : day === 3 ? 2 : 1, audienceMode: "labels", isTest: 0 })),
+    audience: [1, 2, 3].map((day) => ({ meetingId: `meeting-${day}`, labelId: "class" })),
+    corrections: [{ meetingId: "meeting-1", memberId: "member-1", disposition: "present" }, { meetingId: "meeting-3", memberId: "member-1", disposition: "excused" }],
+  });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("operator");
+  const definition = { ...defaultReportDefinition(false), period: { type: "fixed", from: "2020-09-01", to: "2020-09-30" }, labelIds: ["class"], columns: [{ key: "member" }, { key: "regular_attendance" }, { key: "report_policy_result", labelId: "class" }, { key: "official_policy_result", labelId: "class" }] };
+  const query = async (overrides = {}) => {
+    const result = await worker.fetch(request("/reports/query", { definition: { ...definition, ...overrides } }, { cookie }), env);
+    assert.equal(result.status, 200, await result.clone().text());
+    return await result.json() as { rows: { cells: Record<string, { text: string }> }[] };
+  };
+  const current = await query();
+  assert.equal(current.rows[0].cells.regular_attendance.text, "50%");
+  assert.equal(current.rows[0].cells["report_policy_result:class"].text, "Class: 75% · met");
+  assert.equal(current.rows[0].cells["official_policy_result:class"].text, "Class: N/A");
+  assert.deepEqual((await query({ membership: "historical" })).rows, []);
+  assert.equal((await query({ membership: "historical", labelIds: [] })).rows[0].cells["report_policy_result:class"].text, "Class: N/A");
+  const summary = await worker.fetch(request("/exports/report.csv", { definition }, { cookie }), env);
+  assert.equal(summary.status, 200);
+  assert.match(await summary.text(), /Avery Stone,50%,Class: 75% · met,Class: N\/A/);
+  const detail = await worker.fetch(request("/exports/report-detail.csv", { definition }, { cookie }), env);
+  assert.equal(detail.status, 200);
+  const lines = (await detail.text()).trim().split("\r\n");
+  const headers = lines[0].split(","), first = lines[1].split(",");
+  assert.equal(lines.length, 4);
+  assert.equal(first[headers.indexOf("memberLabels")], "Class");
+  assert.equal(first[headers.indexOf("regularEligible")], "true");
+  assert.equal(first[headers.indexOf("regularRate")], "50");
+  assert.equal(database.batches.length, 0);
+  assert.ok(database.calls.every((call) => !/INSERT INTO member_label_changes|UPDATE member_label_changes|DELETE FROM member_label_changes/.test(call.sql)));
 });
 
 test("custom report exports include every filtered row and neutralize selected values", async () => {

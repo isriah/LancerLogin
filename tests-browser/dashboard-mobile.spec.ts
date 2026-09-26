@@ -162,6 +162,8 @@ test("expanded mobile content only scrolls where data requires it", async ({ pag
 
   for (const route of routes) {
     await page.goto(route);
+    await expect(page.locator("main h1")).toBeVisible();
+    await expect(page.locator(".dashboard-loading-overlay")).toHaveCount(0);
     while (await page.locator("details:not([open]) > summary").count()) await page.locator("details:not([open]) > summary").first().click();
     const unexpectedScrollers = await page.evaluate((allowed) => Array.from(document.querySelectorAll<HTMLElement>("*")).flatMap((element) => {
       const style = getComputedStyle(element);
@@ -178,6 +180,8 @@ test("expanded mobile controls stay within reach", async ({ page }) => {
 
   for (const route of routes) {
     await page.goto(route);
+    await expect(page.locator("main h1")).toBeVisible();
+    await expect(page.locator(".dashboard-loading-overlay")).toHaveCount(0);
     while (await page.locator("details:not([open]) > summary").count()) await page.locator("details:not([open]) > summary").first().click();
     const clippedControls = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>("button, input, select, textarea, summary, [role='dialog']")).flatMap((element) => {
       const style = getComputedStyle(element);

@@ -267,9 +267,9 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(home, /className="meeting-browser-select"><span>Meeting<\/span><select className="ui-control ui-native-select"/);
   assert.match(home, /Add meeting/);
   assert.match(home, /setCalendarOffset/);
-  assert.match(home, /MeetingsPage discordEnabled=\{discordEnabled\} navigate=\{navigate\} embedded meetings=\{meetings\} onMeetingsChange=\{load\}/);
-  assert.match(home, /MeetingCreationDialog open=\{creating\}/);
-  assert.match(meetings, /useModalFocus\(dialog, open, busy, close\)/);
+  assert.match(home, /MeetingsPage[^>]+discordEnabled=\{discordEnabled\} navigate=\{openMeeting\} embedded meetings=\{meetings\} onMeetingsChange=\{load\}/);
+  assert.match(home, /MeetingCreationDialog[^>]+open=\{creating \|\| practiceForm\}/);
+  assert.match(meetings, /useModalFocus\(dialog, open && !practice, busy, close\)/);
   assert.match(meetings, /useEffect\(\(\) => \{ if \(error\) errorAlert\.current\?\.focus\(\); \}, \[error\]\)/);
   assert.match(meetings, /ref=\{errorAlert\} id="meeting-create-error"/);
   assert.doesNotMatch(meetings, /requestAnimationFrame\(\(\) => document\.getElementById\("meeting-create-error"\)/);
@@ -283,7 +283,7 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(attendance, /className="attendance-table"/);
   assert.match(attendance, /Active · not checked out/);
   assert.match(attendance, /ContestReviewList contests=\{contests\}/);
-  assert.match(home, /navigate\(`\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}`\)/);
+  assert.match(home, /openMeeting\(`\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}`\)/);
   assert.match(meetings, /className="meeting-browser-row"/);
   assert.match(attendance, /api<\{ meeting: Meeting \}>\(`\/meetings\/\$\{encodeURIComponent\(meetingId\)\}`\)/);
   assert.match(shell, /path\.startsWith\("\/meetings\/"\)/);
@@ -523,7 +523,7 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(source, /\/admin\/pairing-codes/);
   assert.match(source, /Replace kiosk/);
   assert.match(source, /<div className="page-intro"><h1 id="kiosks-title">Kiosks<\/h1><\/div>/);
-  assert.match(source, /<div className="kiosk-card-heading"><h2>Physical kiosk<\/h2>\{role === "admin" && <button className="primary-button"/);
+  assert.match(source, /<div className="kiosk-card-heading"[^>]*><h2>Physical kiosk<\/h2>\{role === "admin" && <button className="primary-button"/);
   assert.match(source, /Retire kiosk/);
   assert.match(source, /Update to latest stable/);
   assert.match(source, /Device history/);
@@ -601,7 +601,7 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /enabled && <details className="integration-details"/);
   assert.match(source, /method: "PATCH"/);
   assert.match(shell, /\/integrations\/capabilities/);
-  assert.match(shell, /HomePage[^>]+discordEnabled=\{integrations\.discord\.configured\}/);
+  assert.match(shell, /HomePage[^>]+discordEnabled=\{integrations\.discord\.configured\}[^>]+debugMode=\{debugMode\}/);
   assert.match(shell, /ReportsPage discordEnabled=\{integrations\.discord\.configured\}/);
   assert.match(shell, /KiosksPage role=\{role\} discordConfigured=\{integrations\.discord\.configured\}/);
   assert.doesNotMatch(meetings, /Sync all to Discord/);

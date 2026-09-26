@@ -2,7 +2,7 @@
   "name": "lancerlogin",
   "private": true,
   "type": "module",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Self-hosted single-kiosk attendance",
   "license": "Apache-2.0",
   "workspaces": [
@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "test": "node --test tests/**/*.test.mjs && node --experimental-strip-types --test tests-ts/**/*.test.ts",
-    "test:api": "node --test tests/attendance-service.test.mjs tests/d1-repository.test.mjs tests/d1-read-efficiency-workerd.test.mjs tests/integration-workflows.test.mjs tests/pairing-service.test.mjs tests/roster-import.test.mjs tests/security.test.mjs tests/setup-progress.test.mjs tests/web-updates-workerd.test.mjs tests/worker.test.mjs && node --experimental-strip-types --test tests-ts/attendance-lifecycle.test.ts tests-ts/member-label-policy.test.ts tests-ts/report-builder.test.ts tests-ts/integration-runtime.test.ts tests-ts/runtime-security.test.ts tests-ts/worker-runtime.test.ts tests-ts/d1-read-efficiency.test.ts tests-ts/web-updates.test.ts",
+    "test:api": "node --test tests/attendance-service.test.mjs tests/d1-repository.test.mjs tests/d1-read-efficiency-workerd.test.mjs tests/integration-workflows.test.mjs tests/pairing-service.test.mjs tests/roster-import.test.mjs tests/security.test.mjs tests/setup-progress.test.mjs tests/web-updates-workerd.test.mjs tests/worker.test.mjs && node --experimental-strip-types --test tests-ts/attendance-lifecycle.test.ts tests-ts/member-label-policy.test.ts tests-ts/report-builder.test.ts tests-ts/integration-runtime.test.ts tests-ts/runtime-security.test.ts tests-ts/worker-runtime.test.ts tests-ts/d1-read-efficiency.test.ts tests-ts/web-updates.test.ts tests-ts/walkthrough.test.ts",
     "test:dashboard": "node --test tests/dashboard-shell.test.mjs && node --experimental-strip-types --test tests-ts/dashboard-update.test.ts tests-ts/dashboard-conformance.test.ts",
     "test:browser": "node scripts/run-browser-tests.mjs",
     "test:docs": "node --test tests/docs-site.test.mjs",
@@ -36,7 +36,13 @@
     "dev:kiosk": "npm --workspace @lancerlogin/kiosk run dev",
     "reset-password": "node scripts/reset-local-password.mjs",
     "backup-d1": "node scripts/d1-maintenance.mjs backup",
-    "restore-d1": "node scripts/d1-maintenance.mjs restore"
+    "restore-d1": "node scripts/d1-maintenance.mjs restore",
+    "test:web": "node scripts/run-web-tests.mjs",
+    "typecheck:web": "npm run typecheck --workspace @lancerlogin/api --workspace @lancerlogin/dashboard --workspace @lancerlogin/shared",
+    "build:web": "npm run build --workspace @lancerlogin/api --workspace @lancerlogin/dashboard && node scripts/verify-template-config.mjs",
+    "verify:dev": "npm run verify:migrations && npm run typecheck:web && npm run test:web && npm run build:web",
+    "test:release-ci": "npm run test:web && node --test tests/kiosk-runtime.test.mjs",
+    "verify:release-ci": "npm run verify:migrations && npm run typecheck && npm run test:release-ci && npm run build"
   },
   "overrides": {
     "sharp": "0.35.4"

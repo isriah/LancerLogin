@@ -31,12 +31,12 @@ export function UpdateIndicator({ openUpdates }: { openUpdates: () => void }) {
   return <button className="update-indicator" type="button" onClick={openUpdates} aria-label={`LancerLogin ${check.latest} is available. Open Updates.`}><span aria-hidden="true">↑</span> Update available <strong>{check.latest}</strong></button>;
 }
 
-export function UpdateAvailablePopup({ openUpdates }: { openUpdates: () => void }) {
+export function UpdateAvailablePopup({ openUpdates, suppressed = false }: { openUpdates: () => void; suppressed?: boolean }) {
   const [check, setCheck] = useState<Check>();
   const release = useReleaseCheck();
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => { let active = true; void checkForUpdate().then((next) => { if (active) { setCheck(next); setDismissed(readDismissed(next.latest)); } }).catch(() => undefined); return () => { active = false; }; }, [release.checkedAt, release.fresh, release.release?.tag_name]);
-  if (!release.fresh || check?.latest !== formatVersion(release.release?.tag_name) || !check?.available || dismissed) return null;
+  if (!release.fresh || check?.latest !== formatVersion(release.release?.tag_name) || !check?.available || dismissed || suppressed) return null;
   const available = check;
   function dismiss() { try { localStorage.setItem(`lancerlogin-update-dismissed:${available.latest}`, "true"); } catch { /* Dismiss in memory. */ } setDismissed(true); }
   return <aside className="ui-card ui-status update-available-popup" role="status" aria-label="Update available"><div><strong>LancerLogin {check.latest} is ready</strong><span>This dashboard is running {check.current}. Review and install the available update.</span></div><button className="primary-button" type="button" onClick={openUpdates}>Open Updates</button><button className="popup-dismiss" type="button" aria-label="Dismiss update notice" onClick={dismiss}>×</button></aside>;

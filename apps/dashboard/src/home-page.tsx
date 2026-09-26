@@ -1,3 +1,4 @@
+import { visiblePoll } from "./visible-poll";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./dashboard-api";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
@@ -19,7 +20,7 @@ export function HomePage({ navigate, discordEnabled }: { role: "admin" | "operat
     const result = await api<{ meetings: Meeting[] }>("/meetings");
     setMeetings(result.meetings); setNotice(""); setNoticeTone("neutral");
   }
-  useEffect(() => { void load().catch((error: Error) => { setNotice(error.message); setNoticeTone("error"); }); const timer = window.setInterval(() => void load().catch(() => undefined), 60_000); return () => window.clearInterval(timer); }, [discordEnabled]);
+  useEffect(() => { return visiblePoll(load, 60_000, (error) => { setNotice(error.message); setNoticeTone("error"); }, true); }, [discordEnabled]);
   useEffect(() => {
     if (!undo) { window.sessionStorage.removeItem(pendingMeetingDeletionKey); return; }
     // The session entry is a one-navigation handoff. Keeping it out of storage

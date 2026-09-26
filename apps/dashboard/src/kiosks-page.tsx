@@ -1,3 +1,4 @@
+import { visiblePoll } from "./visible-poll";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { api } from "./dashboard-api";
 import { hardwarePairingKey, kioskInstallerUrl } from "./hardware-pairing-key";
@@ -69,9 +70,7 @@ export function KiosksPage({ role, discordConfigured }: { role: "admin" | "opera
     setKiosks(hardware.kiosks); setSimulator(simulated.simulator); if (!preserveNotice) setNotice({ message: "", tone: "neutral" });
   }
   useEffect(() => {
-    void load().catch((error: Error) => setNotice({ message: error.message, tone: "error" }));
-    const timer = window.setInterval(() => void load().catch((error: Error) => setNotice({ message: error.message, tone: "error" })), 30_000);
-    return () => window.clearInterval(timer);
+    return visiblePoll(() => load(), 30_000, (error) => setNotice({ message: error.message, tone: "error" }), true);
   }, [role]);
   const active = kiosks.find((kiosk) => kiosk.active === 1);
   const retired = kiosks.filter((kiosk) => kiosk.active !== 1);

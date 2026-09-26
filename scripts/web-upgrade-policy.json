@@ -182,6 +182,11 @@
       "name": "0036_saved_report_views.sql",
       "sha256": "bae285aa9ede1fb7ce1df2f9a1c81b4b3453c8beff0e28e2ab7e1dc84100e421",
       "forwardCompatible": true
+    },
+    {
+      "name": "0037_report_read_efficiency.sql",
+      "sha256": "07496fbb503e8e520ef977f1454936cbca898bc4e825c4fff29e907dbda21df9",
+      "forwardCompatible": true
     }
   ]
 }

@@ -1,3 +1,4 @@
+import { visiblePoll } from "./visible-poll";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./dashboard-api";
 import { ContestReviewList, type Contest } from "./contest-review-list";
@@ -98,13 +99,13 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   useEffect(() => {
     if (!meeting || !lifecycle) return;
     if (lifecycle === "in_progress" || lifecycle === "late_scan_window") {
-      const timer = window.setInterval(() => {
-        void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message));
+      const stop = visiblePoll(async () => {
+        await refreshAttendance(meeting.id);
         setClock(Date.now());
-      }, 30_000);
+      }, 30_000, (error) => setNotice(error.message));
       const endsTimer = window.setTimeout(() => setClock(Date.now()), Math.max(0, Date.parse(meeting.endsAt) - Date.now() + 1));
       const closesTimer = window.setTimeout(() => setClock(Date.now()), Math.max(0, Date.parse(meeting.attendanceClosesAt) - Date.now() + 1));
-      return () => { window.clearInterval(timer); window.clearTimeout(endsTimer); window.clearTimeout(closesTimer); };
+      return () => { stop(); window.clearTimeout(endsTimer); window.clearTimeout(closesTimer); };
     }
     if (lifecycle === "upcoming") {
       const opensTimer = window.setTimeout(() => setClock(Date.now()), Math.min(2_147_000_000, Math.max(0, Date.parse(meeting.startsAt) - Date.now() + 1)));

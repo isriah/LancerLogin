@@ -307,7 +307,7 @@ test("attendance actions preserve their layout and mute unavailable choices", as
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(attendance, /lifecycle === "in_progress" \|\| lifecycle === "late_scan_window"/);
-  assert.match(attendance, /setInterval\([\s\S]*30_000/);
+  assert.match(attendance, /visiblePoll\([\s\S]*30_000/);
   assert.match(attendance, /disabled=\{row\.disposition === "present"\}/);
   assert.match(attendance, /Optional note for marking \$\{row\.firstName\} present/);
   assert.match(attendance, /disposition !== "present" && !reason\.trim\(\)/);
@@ -560,7 +560,7 @@ test("Kiosks refresh hides redundant success while preserving actionable feedbac
   assert.doesNotMatch(source, /Kiosk status is current\./);
   assert.match(source, /if \(!preserveNotice\) setNotice\(\{ message: "", tone: "neutral" \}\)/);
   assert.match(source, /load\(\{ preserveNotice: true \}\)/);
-  assert.match(source, /setInterval\(\(\) => void load\(\)\.catch\(\(error: Error\) => setNotice\(\{ message: error\.message, tone: "error" \}\)\), 30_000\)/);
+  assert.match(source, /visiblePoll\(\(\) => load\(\), 30_000, \(error\) => setNotice\(\{ message: error\.message, tone: "error" \}\), true\)/);
   assert.match(source, /notice\.message && <p className="setup-status ui-status kiosk-notice"/);
   for (const result of ["Kiosk renamed.", "Kiosk retired.", "queued. The kiosk normally receives it within five seconds.", "Browser simulator stopped."]) {
     assert.match(source, new RegExp(result.replaceAll(".", "\\.")));

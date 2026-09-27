@@ -23,7 +23,7 @@ async function runtime({ redirectPath, redirectStatus = 302, statusRunId = "123"
   const calls = [];
   const worker = new Miniflare(convertV4MiniflareOptions({
     modules: true, script, compatibilityDate: "2026-08-01", d1Databases: ["DB"],
-    bindings: { ALLOWED_ORIGIN: "https://example-dashboard.pages.dev", RELEASE_VERSION: "0.24.0", UPDATE_REPOSITORY: "example/private-install", WEB_UPDATE_TOKEN: "synthetic-runtime-token", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + 86_400_000).toISOString() },
+    bindings: { ALLOWED_ORIGIN: "https://example-dashboard.pages.dev", RELEASE_VERSION: "0.24.0", UPDATE_REPOSITORY: "example/private-install", WEB_UPDATE_TOKEN: "synthetic-runtime-token", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + 2 * 86_400_000).toISOString() },
     outboundService: async (request) => {
       const url = new URL(request.url); const path = url.pathname; calls.push({ path, url: request.url, method: request.method, authorization: request.headers.get("authorization") });
       assert.equal(url.origin, "https://api.github.com", "No provider redirect may be followed");

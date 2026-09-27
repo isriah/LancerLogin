@@ -69,4 +69,4 @@ jobs:
         working-directory: lancerlogin-source
         run: npm ci --no-audit
       - name: Claim, checkpoint, upgrade and verify retained installation
-        run: node deployment-control/scripts/run-web-upgrade.mjs
+        run: node lancerlogin-source/scripts/run-web-upgrade.mjs

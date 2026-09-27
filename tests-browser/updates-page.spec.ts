@@ -4,6 +4,7 @@ import { discovered } from "./release-discovery";
 
 test("Updates shows local information while the release feed stalls, then degrades and recovers", async ({ page }) => {
   await page.route("**/admin/update-info", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ releaseVersion: "0.15.0", workflowUrl: "https://github.example.test/actions/workflows/deploy.yml" }) }));
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: "0.15.0" } }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: new Date().toISOString(), releaseVersion: "0.14.0" }] }) }));
   await page.route("**/admin/kiosks/kiosk-1/commands", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ commands: [] }) }));
 
@@ -37,7 +38,9 @@ test("Updates shows local information while the release feed stalls, then degrad
   const attemptsBeforeCooldown = releaseAttempts;
   await page.clock.runFor(29_000);
   expect(releaseAttempts).toBe(attemptsBeforeCooldown);
-  await page.clock.runFor(31_000);
+  // Stop advancing once the retry starts so its real network response can settle
+  // before another six seconds of simulated time fires the request timeout.
+  for (let second = 0; second < 31 && releaseAttempts === attemptsBeforeCooldown; second++) await page.clock.runFor(1_000);
   await expect(page.getByRole("status").filter({ hasText: "This installation is current" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Read release notes" })).toBeVisible();
   expect(releaseAttempts).toBeGreaterThan(stalledReleaseRoutes.length);
@@ -52,6 +55,7 @@ test("Updates keeps a confirmed kiosk release visible across responsive branded 
   ];
   let installed = "0.21.0";
   await page.route("**/admin/update-info", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ releaseVersion: installed, workflowUrl: "https://github.example.test/actions/workflows/deploy.yml" }) }));
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: installed } }));
   await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: true, installation: { authMode: "local" }, settings: { organizationName: "Reference Arts Collective", subtitle: "Shared operations", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } }) }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: new Date().toISOString(), releaseVersion: "0.22.0" }] }) }));
   await page.route("**/admin/kiosks/kiosk-1/commands", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ commands: [{ id: "update-1", type: "install_latest", createdAt: "2026-09-05T12:00:00.000Z", completedAt: "2026-09-05T12:01:00.000Z", success: 1, requestedReleaseVersion: "v0.22.0", releaseVersionBefore: "0.21.0", resolutionStatus: "succeeded", resolvedReleaseVersion: "0.22.0", resolvedAt: "2026-09-05T12:02:00.000Z" }] }) }));
@@ -99,22 +103,23 @@ test("Updates keeps a confirmed kiosk release visible across responsive branded 
 });
 
 for (const scenario of [
-  { installed: "0.23.0", latest: "v0.23.0", current: true },
-  { installed: "0.24.0", latest: "v0.23.0", current: true },
-  { installed: "Unknown", latest: "v0.23.0", current: false },
-  { installed: "0.22.0", latest: "v0.23.0oops", current: false },
-  { installed: "0.22.0", latest: "v0.23.0-beta.1", current: false },
+  { installed: "0.23.0", latest: "v0.23.0", tone: "success", message: "This installation is current" },
+  { installed: "0.24.0", latest: "v0.23.0", tone: "success", message: "newer than the latest confirmed published release" },
+  { installed: "Unknown", latest: "v0.23.0", tone: "warning", message: "Deployment verification is incomplete" },
+  { installed: "0.22.0", latest: "v0.23.0oops", tone: "error", message: "could not be confirmed" },
+  { installed: "0.22.0", latest: "v0.23.0-beta.1", tone: "error", message: "could not be confirmed" },
 ]) {
   test(`Updates mutes dashboard action for ${scenario.installed} against ${scenario.latest}`, async ({ page }) => {
     await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: scenario.installed, workflowUrl: "https://github.example.test/actions/workflows/deploy.yml" } }));
+    await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: scenario.installed } }));
     await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
     await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: scenario.latest }) }));
     let backups = 0;
     await page.route("**/admin/data/backup?scope=installation", (route) => { backups++; return route.fulfill({ body: "{}" }); });
     await page.goto("/settings/updates");
     const status = page.locator(".settings-notice");
-    await expect(status).toHaveAttribute("data-tone", scenario.current ? "success" : "error");
-    await expect(status).toContainText(scenario.current ? "This installation is current" : "could not be confirmed");
+    await expect(status).toHaveAttribute("data-tone", scenario.tone);
+    await expect(status).toContainText(scenario.message);
     const action = page.getByRole("button", { name: "Back up and begin update" });
     await expect(action).toBeDisabled();
     await action.evaluate((button: HTMLButtonElement) => button.click());
@@ -126,6 +131,7 @@ for (const scenario of [
 test("release checks share15-minute cache across reloads while local status polls, and keyboard manual checks coalesce", async ({ page }) => {
   let installedReads = 0; let releaseReads = 0; let tag = "v0.23.0"; const pending: Route[] = []; let stall = false;
   await page.route("**/admin/update-info", (route) => { installedReads++; return route.fulfill({ json: { releaseVersion: "0.22.0", workflowUrl: "https://github.example.test/deploy" } }); });
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: "0.22.0" } }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
   await page.route("**/admin/releases/latest", async (route) => { releaseReads++; if (stall) { pending.push(route); return; } return route.fulfill({ json: discovered({ tag_name: tag }, await page.evaluate(() => Date.now())) }); });
   await page.clock.install(); await page.goto("/settings/updates");
@@ -145,6 +151,7 @@ test("release checks share15-minute cache across reloads while local status poll
 test("rate-limit cooldown persists on reload and stale data cannot queue an update", async ({ page }) => {
   let limited = false; let releases = 0; let commands = 0;
   await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "0.22.0", workflowUrl: "https://github.example.test/deploy" } }));
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: "0.22.0" } }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [{ id: "kiosk-1", active: 1, name: "Front desk", lastSeenAt: new Date().toISOString(), releaseVersion: "0.22.0" }] } }));
   await page.route("**/admin/kiosks/kiosk-1/commands", (route) => { if (route.request().method() === "POST") commands++; return route.fulfill({ json: { commands: [] } }); });
   await page.route("**/admin/releases/latest", (route) => { releases++; return limited ? route.fulfill({ status: 429, json: { fresh: false, code: "rate_limited", retryAt: Date.now() + 3600_000 }, headers: { "retry-after": "3600" } }) : route.fulfill({ json: discovered({ tag_name: "v0.23.0" }) }); });
@@ -164,6 +171,7 @@ test("browser GitHub blocking and the old saved cooldown do not block API releas
   await page.route("https://api.github.com/**", (route) => { githubReads++; return route.abort("blockedbyclient"); });
   await page.addInitScript(() => localStorage.setItem("lancerlogin-release-cache-v1", JSON.stringify({ failures: 1, checkedAt: Date.now() - 60_000, attemptedAt: Date.now() - 30_000, retryAt: Date.now() + 3_600_000, release: { tag_name: "v1.0.3" } })));
   await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "1.0.3", workflowUrl: "https://github.example.test/private/actions/workflows/upgrade-web.yml" } }));
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: "1.0.3" } }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
   await page.route("**/admin/releases/latest", (route) => { discoveries++; return route.fulfill({ json: discovered({ tag_name: "v1.0.4" }) }); });
   await page.goto("/settings/updates");
@@ -175,19 +183,20 @@ test("browser GitHub blocking and the old saved cooldown do not block API releas
 
 test("small server clock skew keeps the update available across reloads and respects later cooldowns", async ({ page }) => {
   let discoveries = 0; let limited = false;
-  await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "1.2.1", workflowUrl: "https://github.example.test/deploy" } }));
+  await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "0.9.0", workflowUrl: "https://github.example.test/deploy" } }));
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: "0.9.0" } }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
   await page.route("**/admin/releases/latest", async (route) => {
     discoveries++;
     const now = await page.evaluate(() => Date.now());
     return limited
       ? route.fulfill({ status: 429, json: { fresh: false, code: "rate_limited", attemptedAt: now + 1_000, retryAt: now + 120_000 }, headers: { "retry-after": "120" } })
-      : route.fulfill({ json: discovered({ tag_name: "v1.2.2" }, now + 1_000) });
+      : route.fulfill({ json: discovered({ tag_name: "v1.0.8" }, now + 24 * 60 * 60_000) });
   });
   await page.goto("/settings/updates");
   const action = page.getByRole("button", { name: "Back up and begin update" });
   await expect(action).toBeEnabled();
-  await expect(page.locator(".version-grid").first()).toContainText("1.2.2");
+  await expect(page.locator(".version-grid").first()).toContainText("1.0.8");
   await page.reload(); await expect(action).toBeEnabled(); expect(discoveries).toBe(1);
   limited = true;
   const check = page.getByRole("button", { name: "Check for updates", exact: true });

@@ -13,7 +13,9 @@ const pinned = (overrides: Partial<WebUpdateRequest> = {}): WebUpdateRequest => 
 async function setup(page: Page, initial: WebUpdateRequest | null = null) {
   let request = initial; let starts = 0; let prepares = 0; let backups = 0; let backupFailure = false;
   let statusFailure = false; let prepareError = ""; let startError = "";
-  await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: bundledVersion, workflowUrl } }));
+  let installed = bundledVersion; let served = bundledVersion;
+  await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: installed, workflowUrl } }));
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: served } }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
   await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: targetTag }) }));
   const result = () => ({ releaseVersion: bundledVersion, workflowUrl, request });
@@ -33,7 +35,7 @@ async function setup(page: Page, initial: WebUpdateRequest | null = null) {
     if (startError) return route.fulfill({ status: 409, json: { code: startError } });
     request = { ...request!, state: "dispatching", stage: "dispatch" }; return route.fulfill({ status: 202, json: result() });
   });
-  return { get request() { return request; }, set request(value) { request = value; }, get starts() { return starts; }, get prepares() { return prepares; }, get backups() { return backups; }, set backupFailure(value: boolean) { backupFailure = value; }, set statusFailure(value: boolean) { statusFailure = value; }, set prepareError(value: string) { prepareError = value; }, set startError(value: string) { startError = value; } };
+  return { get request() { return request; }, set request(value) { request = value; }, set installed(value: string) { installed = value; }, set served(value: string) { served = value; }, get starts() { return starts; }, get prepares() { return prepares; }, get backups() { return backups; }, set backupFailure(value: boolean) { backupFailure = value; }, set statusFailure(value: boolean) { statusFailure = value; }, set prepareError(value: string) { prepareError = value; }, set startError(value: string) { startError = value; } };
 }
 const webStatus = (page: Page) => page.locator(".web-update-status");
 const refresh = (page: Page) => page.getByRole("button", { name: "Refresh update status", exact: true });
@@ -59,24 +61,20 @@ test("pins release, retries associated backup, requires saved confirmation and t
   await expect(webStatus(page)).toContainText("Dispatch alone does not confirm installation"); expect(state.starts).toBe(1);
   await expect(page.getByRole("button", { name: "Reload updated dashboard" })).toHaveCount(0);
   await page.reload(); await expect(webStatus(page)).toContainText("Submitting"); expect(state.starts).toBe(1); expect(state.prepares).toBe(1);
-  for (const item of [{ state: "queued", text: "Update queued" }, { state: "awaiting_approval", text: "Waiting for production approval in GitHub" }, { state: "running", text: "Update running" }, { state: "verifying", text: "Verifying the API" }, { state: "succeeded", text: "Waiting for verified installation health" }] as const) {
+  for (const item of [{ state: "queued", text: "Update queued" }, { state: "awaiting_approval", text: "Waiting for production approval in GitHub" }, { state: "running", text: "Update running" }, { state: "verifying", text: "Verifying the API" }] as const) {
     state.request = { ...state.request!, state: item.state, stage: "health" }; await refresh(page).click(); await expect(webStatus(page)).toContainText(item.text);
     if (item.state === "awaiting_approval") await expect(page.getByRole("link", { name: "Review approval in GitHub" })).toHaveAttribute("href", workflowUrl);
     await expect(page.getByRole("button", { name: "Reload updated dashboard" })).toHaveCount(0);
   }
-  state.request = { ...state.request!, reloadReady: true }; await refresh(page).click();
-  await expect(webStatus(page)).toContainText("Update verified successfully"); await expect(page.getByRole("button", { name: "Reload updated dashboard" })).toBeVisible();
+  state.request = { ...state.request!, state: "succeeded", reloadReady: true }; state.installed = targetTag.slice(1); state.served = targetTag.slice(1); await page.reload();
+  await expect(webStatus(page)).toContainText("Reload this tab"); await expect(page.getByRole("button", { name: "Reload updated dashboard" })).toBeVisible();
   expect(state.starts).toBe(1); expect(state.backups).toBe(2);
 });
 
 for (const item of [
-  { state: "failed", errorCode: "credential_expired", text: "credential has expired" },
-  { state: "failed", errorCode: "credential_required", text: "credential is missing" },
-  { state: "failed", errorCode: "cooldown", text: "provider limits may take longer" },
   { state: "dispatching", errorCode: "dispatch_ambiguous", text: "response was uncertain" },
   { state: "recovery_required", errorCode: "dispatch_unresolved", text: "Manual investigation is required" },
   { state: "recovery_required", errorCode: null, text: "Recovery required" },
-  { state: "expired", errorCode: null, text: "prepared update expired" },
 ] as const) test(`resumes ${item.state}/${item.errorCode} accurately across reload and tab`, async ({ page, context }) => {
   const state = await setup(page, pinned({ ...item, maintenance: item.state === "recovery_required", stage: "pages_deployment", runUrl: "https://github.example.test/private/actions/runs/1" }));
   await page.goto("/settings/updates"); await expect(webStatus(page)).toContainText(item.text);
@@ -107,9 +105,31 @@ test("unconfirmed status and start error cannot unlock blind dispatch or saved c
 
 test("terminal success for the bundled version does not offer reload or reload on mount", async ({ page }) => {
   await setup(page, pinned({ state: "succeeded", targetTag: `v${bundledVersion}`, releaseUrl: `https://github.com/isriah/LancerLogin/releases/tag/v${bundledVersion}`, reloadReady: true }));
-  await page.goto("/settings/updates"); await expect(webStatus(page)).toContainText("verified successfully");
+  await page.goto("/settings/updates"); await expect(webStatus(page)).toHaveText(`Dashboard ${bundledVersion} is installed.`);
   await expect(page.getByRole("button", { name: "Reload updated dashboard" })).toHaveCount(0);
-  await refresh(page).click(); await expect(webStatus(page)).toContainText("verified successfully");
+  await refresh(page).click(); await expect(webStatus(page)).toHaveText(`Dashboard ${bundledVersion} is installed.`);
+});
+
+test("completed failures stay in history instead of overriding healthy installation status", async ({ page }) => {
+  await setup(page, pinned({ state: "failed", targetTag: "v0.0.0", releaseNotes: "Old failed request notes", errorCode: "preflight_failed" }));
+  await page.goto("/settings/updates");
+  await expect(webStatus(page)).toHaveText(`Dashboard ${bundledVersion} is installed.`);
+  await expect(page.locator(".web-update-notes")).not.toContainText("Old failed request notes");
+  await page.getByText("Diagnostics and manual recovery", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Previous update to v0.0.0", exact: true })).toBeVisible();
+  await expect(page.getByText("Old failed request notes", { exact: true })).toBeVisible();
+});
+
+test("manual deployment offers reload from served and running versions even when durable history targets an older release", async ({ page }) => {
+  await setup(page, pinned({ state: "succeeded", targetTag: "v0.0.0", releaseNotes: "Old completed request notes", reloadReady: true }));
+  const installed = targetTag.slice(1);
+  await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: installed, workflowUrl } }));
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: installed } }));
+  await page.goto("/settings/updates");
+  await expect(webStatus(page)).toContainText(`Dashboard ${installed} is installed. Reload this tab`);
+  await expect(page.getByRole("button", { name: "Reload updated dashboard", exact: true })).toBeVisible();
+  await page.getByText("Diagnostics and manual recovery", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Previous update to v0.0.0", exact: true })).toBeVisible();
 });
 
 test("missing workflow and stalled backup cannot duplicate or start an update", async ({ page }) => {
@@ -158,12 +178,46 @@ for (const updateState of ["prepared", "expired", "succeeded"] as const) test(`c
   await page.route("**/admin/releases/latest", route => route.fulfill({ json: discovered({ tag_name: newerTag, html_url: newerUrl }) }));
   await page.goto("/settings/updates");
   const card = page.locator(".web-update-card");
-  await expect(card.locator(".version-grid")).toContainText("Current");
+  await expect(card.locator(".version-grid")).toContainText("Installed");
   await expect(card.locator(".version-grid")).toContainText("Available");
   await expect(card.locator(".version-grid strong").first()).toHaveText(bundledVersion);
   await expect(card.locator(".version-grid strong").last()).toHaveText(newerTag.slice(1));
   await expect(card.getByRole("link", { name: "Read release notes" })).toHaveAttribute("href", newerUrl);
-  await expect(webStatus(page)).toContainText(`Update to ${targetTag}.`);
-  await expect(card.getByRole("heading", { name: `Release notes for ${targetTag}` })).toBeVisible();
+  if (updateState === "prepared") {
+    await expect(webStatus(page)).toContainText(`Update to ${targetTag}.`);
+    await expect(card.getByRole("heading", { name: `Release notes for ${targetTag}` })).toBeVisible();
+  } else {
+    await expect(webStatus(page)).toHaveText(`Dashboard ${bundledVersion} is installed.`);
+    await expect(card.getByRole("heading", { name: `Release notes for ${newerTag}` })).toBeVisible();
+  }
   await expect(card.getByText("Pinned release", { exact: true })).toHaveCount(0);
+});
+
+
+test("an older completed update stays in history while current release notes and status survive reload", async ({ page }, testInfo) => {
+  await setup(page, pinned({ state: "succeeded", targetTag: "v0.0.0", releaseNotes: "Old completed request notes", reloadReady: true }));
+  await page.route("**/admin/releases/latest", route => route.fulfill({ json: discovered({ tag_name: `v${bundledVersion}`, html_url: `https://github.com/isriah/LancerLogin/releases/tag/v${bundledVersion}`, body: "Current release notes. <img src=x onerror=alert('unsafe')>" }) }));
+  for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
+    await page.setViewportSize({ width, height: width === 1280 ? 900 : 844 });
+    await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), theme);
+    await page.goto("/settings/updates");
+    const card = page.locator(".web-update-card");
+    await expect(webStatus(page)).toHaveText(`Dashboard ${bundledVersion} is installed.`);
+    await expect(page.getByRole("button", { name: "Reload updated dashboard" })).toHaveCount(0);
+    await expect(card.getByRole("heading", { name: `Release notes for v${bundledVersion}` })).toBeVisible();
+    await expect(card.locator(".web-update-notes")).toContainText("Current release notes.");
+    await expect(card.locator(".web-update-notes img")).toHaveCount(0);
+    await expect(card.getByText("Old completed request notes", { exact: true })).toBeHidden();
+    const details = card.locator(".web-update-diagnostics summary");
+    await details.focus(); await page.keyboard.press("Enter");
+    await expect(card.getByText("Previous update to v0.0.0", { exact: true })).toBeVisible();
+    await expect(card.getByText("Old completed request notes", { exact: true })).toBeVisible();
+    await page.keyboard.press("Enter");
+    await refresh(page).click(); await page.reload();
+    await expect(webStatus(page)).toHaveText(`Dashboard ${bundledVersion} is installed.`);
+    await expect(page.getByRole("status", { name: "Update available", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Reload updated dashboard" })).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`completed-${width}-${theme}.png`), fullPage: true });
+  }
 });

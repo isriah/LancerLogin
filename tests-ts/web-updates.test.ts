@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
-import { officialWebRelease, newerRelease, prepareWebUpdate, startWebUpdate, recordUpdateBackup, webUpdateStatus, latestUpdate, fixedWorkflowPath } from "../apps/api/src/web-updates.ts";
+import { officialWebRelease, newerRelease, prepareWebUpdate, startWebUpdate, recordUpdateBackup, webUpdateStatus, latestUpdate, fixedWorkflowPath, updateCredentialMinimumValidityMs } from "../apps/api/src/web-updates.ts";
 import { sendAttendance } from "../apps/kiosk/src/cloud-client.mjs";
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { createReleaseDiscovery, discoveryTtlMs, officialReleaseUrl } from "../apps/api/src/release-discovery.ts";
@@ -38,7 +38,7 @@ const secret = "A".repeat(43);
 function environment(database = new D1()): Env {
   return { APP_MODE: "configured", ALLOWED_ORIGIN: "https://example-dashboard.pages.dev", SESSION_KEY: secret,
     RELEASE_VERSION: "0.24.0", UPDATE_REPOSITORY: "example/private-install", WEB_UPDATE_TOKEN: "synthetic-token",
-    WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + 86_400_000).toISOString(), DB: database } as unknown as Env;
+    WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + 2 * 86_400_000).toISOString(), DB: database } as unknown as Env;
 }
 function release(tag = "v1.0.0") { const version = tag.slice(1); return { tag_name: tag, draft: false, prerelease: false, body: "Synthetic release notes",
   assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => [`lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz.sha256`])].map((name) => ({ name })) }; }
@@ -86,6 +86,7 @@ test("discovery coalesces a fixed authenticated feed and expires without extendi
   finish(Response.json({ ...release("v1.0.4"), html_url: "https://evil.test/notes" }));
   const result = await first;
   assert.equal(result.release?.html_url, "https://github.com/isriah/LancerLogin/releases/tag/v1.0.4");
+  assert.equal(result.release?.body, "Synthetic release notes");
   now += discoveryTtlMs - 1;
   assert.equal((await discovery.check(credential)).checkedAt, 100_000); assert.equal(calls, 1);
   now++;
@@ -221,6 +222,27 @@ test("definite credential rejection retains safe diagnostic and one-way request"
   await withGitHub(async (calls) => { const row = await prepared(env); await recordUpdateBackup(env, row.id); await startWebUpdate(env, { requestId: row.id, backupSaved: true }); await startWebUpdate(env, { requestId: row.id, backupSaved: true }); assert.equal(calls.filter((call) => call.url.endsWith("/dispatches")).length, 1); }, async () => new Response(null, { status: 401 }));
   assert.equal((await latestUpdate(env))?.error_code, "credential_required");
   assert.equal((await latestUpdate(env))?.state, "failed");
+});
+
+test("dispatch permission, rate-limit and validation responses remain distinct definite failures", async () => {
+  for (const scenario of [
+    { status: 403, headers: {}, code: "credential_permission" },
+    { status: 429, headers: { "retry-after": "60" }, code: "cooldown" },
+    { status: 422, headers: {}, code: "workflow_invalid" },
+  ]) {
+    const env = environment(); let result: Awaited<ReturnType<typeof startWebUpdate>> | undefined;
+    await withGitHub(async () => {
+      const row = await prepared(env); await recordUpdateBackup(env, row.id);
+      result = await startWebUpdate(env, { requestId: row.id, backupSaved: true });
+    }, async () => new Response(null, { status: scenario.status, headers: scenario.headers }));
+    assert.equal((await latestUpdate(env))?.state, "failed"); assert.equal((await latestUpdate(env))?.error_code, scenario.code);
+    assert.ok(result); assert.equal(result.activeRequest, null); assert.equal(result.latestCompletedRequest?.errorCode, scenario.code);
+  }
+});
+
+test("prepare requires a full credential safety margin", async () => {
+  const env = environment(); env.WEB_UPDATE_TOKEN_EXPIRES_AT = new Date(Date.now() + updateCredentialMinimumValidityMs - 1_000).toISOString();
+  await assert.rejects(prepareWebUpdate(env), { code: "credential_expiring" });
 });
 test("credential expiry, selectors, expiration and cross-installation IDs fail closed", async () => {
   const env = environment(); await assert.rejects(prepareWebUpdate({ ...env, WEB_UPDATE_TOKEN_EXPIRES_AT: "2020-01-01" }), { code: "credential_expired" });

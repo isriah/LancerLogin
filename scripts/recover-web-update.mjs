@@ -1,24 +1,39 @@
 import { verifyCredentialTarget } from "./refresh-web-update-credential.mjs";
+import { retainedDashboardOrigin } from "./run-web-upgrade.mjs";
+
+function compareStableVersions(left, right) {
+  const stable = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
+  if (!stable.test(left) || !stable.test(right)) throw new Error("recovery_release_mismatch");
+  const a = left.split(".").map(BigInt); const b = right.split(".").map(BigInt);
+  for (let index = 0; index < 3; index++) if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
+  return 0;
+}
 
 /** Deliberate operator recovery, never a dashboard parameter or automatic rollback. */
 export async function recoverWebUpdate(row, io, { confirmation, schemaCompatibilityReviewed = false } = {}) {
   if (!row || row.state !== "recovery_required" || confirmation !== `RECOVER WEB UPDATE ${row.id}` || !schemaCompatibilityReviewed) throw new Error("explicit_recovery_review_required");
   if (!row.run_id || !await io.runCompleted(row.run_id)) throw new Error("workflow_completion_required");
   const version = await io.verifiedHealthyVersion();
-  if (![row.previous_version, row.release_tag.slice(1)].includes(version)) throw new Error("recovery_release_mismatch");
-  await io.finalize(version === row.release_tag.slice(1) ? "succeeded" : "failed");
-  return { state: version === row.release_tag.slice(1) ? "succeeded" : "failed", maintenance: false, automaticDatabaseRestore: false };
+  const target = row.release_tag.slice(1); const targetComparison = compareStableVersions(version, target);
+  if (version !== row.previous_version && targetComparison < 0) throw new Error("recovery_release_mismatch");
+  const state = version === target ? "succeeded" : "failed";
+  const errorCode = targetComparison > 0 ? "superseded_by_later_release" : null;
+  await io.finalize(state, errorCode);
+  return { state, maintenance: false, superseded: Boolean(errorCode), automaticDatabaseRestore: false };
 }
 async function main() {
   const env = process.env; const id = env.RECOVERY_REQUEST_ID;
   if (env.REPOSITORY_PRIVATE !== "true" || !/^[0-9a-f-]{36}$/.test(id ?? "") || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.UPDATE_REPOSITORY ?? "") || env.UPDATE_REPOSITORY.toLowerCase() === "isriah/lancerlogin") throw new Error("fixed_private_recovery_required");
   await verifyCredentialTarget(env);
-  const cfOrigin = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database/${env.DATABASE_ID}/query`;
+  const accountOrigin = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}`;
+  const cfHeaders = { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` };
+  const cfOrigin = `${accountOrigin}/d1/database/${env.DATABASE_ID}/query`;
   const query = async (sql, params) => {
     const response = await fetch(cfOrigin, { method: "POST", headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ sql, params }), redirect: "error", signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error("database_request_failed"); const result = await response.json();
     if (!result.success || result.result?.some((entry) => entry.success === false)) throw new Error("database_request_failed"); return result.result;
   };
+  const cf = async (path) => { const result = await json(`${accountOrigin}${path}`, cfHeaders); if (result.success !== true) throw new Error("provider_request_failed"); return result.result; };
   const row = (await query("SELECT * FROM web_update_requests WHERE installation_id = 'primary' AND id = ?", [id]))[0]?.results?.[0];
   const json = async (url, headers = {}) => { const response = await fetch(url, { headers, redirect: "error", signal: AbortSignal.timeout(20_000) }); if (!response.ok) throw new Error("provider_request_failed"); return response.json(); };
   await recoverWebUpdate(row, {
@@ -31,10 +46,17 @@ async function main() {
       const pagesOrigin = `https://${env.INSTALLATION_SLUG}-dashboard.pages.dev`;
       const pages = await json(`${pagesOrigin}/__lancerlogin-release`); const proxy = await json(`${pagesOrigin}/api/health`);
       if (api.ok !== true || api.mode !== "ready" || proxy.ok !== true || api.releaseVersion !== pages.releaseVersion || pages.releaseVersion !== proxy.releaseVersion) throw new Error("recovery_health_required");
+      const settings = await cf(`/workers/scripts/${env.INSTALLATION_SLUG}-api/settings`);
+      const project = await cf(`/pages/projects/${env.INSTALLATION_SLUG}-dashboard`);
+      const dashboardOrigin = retainedDashboardOrigin(settings, project);
+      if (dashboardOrigin !== pagesOrigin) {
+        const customPages = await json(`${dashboardOrigin}/__lancerlogin-release`); const customProxy = await json(`${dashboardOrigin}/api/health`);
+        if (customPages.releaseVersion !== api.releaseVersion || customProxy.ok !== true || customProxy.releaseVersion !== api.releaseVersion) throw new Error("recovery_health_required");
+      }
       return api.releaseVersion;
     },
-    async finalize(state) {
-      const result = await query("UPDATE web_update_requests SET state = ?, stage = 'operator_recovered', maintenance = 0, error_code = NULL, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state = 'recovery_required'", [state, new Date().toISOString(), id]);
+    async finalize(state, errorCode) {
+      const result = await query("UPDATE web_update_requests SET state = ?, stage = 'operator_recovered', maintenance = 0, error_code = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state = 'recovery_required'", [state, errorCode, new Date().toISOString(), id]);
       if (result[0]?.meta?.changes !== 1) throw new Error("request_state_conflict");
     },
   }, { confirmation: env.RECOVERY_CONFIRMATION, schemaCompatibilityReviewed: env.RECOVERY_SCHEMA_COMPATIBILITY_REVIEWED === "yes" });

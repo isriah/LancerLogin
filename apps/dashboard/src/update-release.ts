@@ -1,4 +1,4 @@
-export type Release = { tag_name?: string; html_url?: string; draft?: boolean; prerelease?: boolean };
+export type Release = { tag_name?: string; html_url?: string; draft?: boolean; prerelease?: boolean; body?: string };
 
 // Compare only complete stable versions; partial or malformed tags are unknown.
 export function hasComparableStableVersions(release: Release | undefined, installed: string) {
@@ -7,6 +7,16 @@ export function hasComparableStableVersions(release: Release | undefined, instal
     && value.replace(/^v/, "").split(".").every((part) => Number.isSafeInteger(Number(part)));
   return Boolean(release && release.draft !== true && release.prerelease !== true
     && valid(release.tag_name) && valid(installed));
+}
+
+export function isNewerRelease(candidate: string, installed: string) {
+  if (!hasComparableStableVersions({ tag_name: candidate }, installed)) return false;
+  const parse = (value: string) => value.replace(/^v/, "").split(".").map(Number);
+  const next = parse(candidate); const current = parse(installed);
+  for (let index = 0; index < 3; index += 1) {
+    if (next[index] !== current[index]) return next[index] > current[index];
+  }
+  return false;
 }
 
 export const latestReleaseUrl = `${(import.meta.env?.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/api"}/admin/releases/latest`;
@@ -54,6 +64,7 @@ export function createSingleFlight<T>(load: () => Promise<T>) {
 // The old direct-browser cache cannot confirm same-origin discovery or block it.
 export const releaseCacheKey = "lancerlogin-release-cache-v2";
 export const releaseCacheTtlMs = 15 * 60_000;
+export const releaseCacheMaximumRetryMs = 60 * 60_000;
 export type ReleaseSnapshot = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; error?: string; code?: string; checking: boolean; fresh: boolean };
 type Stored = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; failures: number; error?: string; code?: string };
 function discoveryMessage(code?: string) {
@@ -68,13 +79,19 @@ function discoveryMessage(code?: string) {
 export class ReleaseCheckError extends Error {
   response: Response;
   discovery?: Discovery;
-  constructor(message: string, response: Response, discovery?: Discovery) { super(message); this.response = response; this.discovery = discovery; }
+  retryAfterMs?: number;
+  constructor(message: string, response: Response, discovery?: Discovery) {
+    super(message); this.response = response; this.discovery = discovery;
+    const after = response.headers.get("retry-after");
+    if (after && /^\d+$/.test(after.trim())) this.retryAfterMs = Math.min(Number(after) * 1000, releaseCacheMaximumRetryMs);
+  }
 }
 function safeRelease(value: unknown): Release | undefined {
   if (!value || typeof value !== "object") return;
   const release = value as Release;
   if (!hasComparableStableVersions(release, "0.0.0") || [release.draft, release.prerelease].some((flag) => flag !== undefined && typeof flag !== "boolean")) return;
   const result: Release = { tag_name: release.tag_name };
+  if (typeof release.body === "string") result.body = release.body.slice(0, 32_000);
   // Never turn persisted or provider-controlled metadata into an unsafe link.
   if (typeof release.html_url === "string") {
     try { const url = new URL(release.html_url); if (url.protocol === "https:" && !url.username && !url.password) result.html_url = url.href; } catch { /* Notes are optional. */ }
@@ -98,11 +115,13 @@ export function createReleaseCache({ load = () => fetchLatestRelease(), now = Da
         const saved = JSON.parse(raw) as Stored;
         if (saved && typeof saved === "object" && Number.isInteger(saved.failures) && saved.failures >= 0 && saved.failures <= 10
           && [saved.checkedAt, saved.attemptedAt, saved.retryAt].every((value) => value === undefined || timestamp(value))
-          && (saved.failures === 0 ? saved.retryAt === undefined : Boolean(saved.attemptedAt && saved.retryAt))
-          && (!saved.checkedAt || saved.checkedAt <= now()) && (!saved.attemptedAt || saved.attemptedAt <= now())) {
+          && (saved.failures === 0 ? saved.retryAt === undefined : Boolean(saved.attemptedAt && saved.retryAt))) {
           const release = safeRelease(saved.release);
-          data = { failures: saved.failures, attemptedAt: saved.attemptedAt, retryAt: saved.retryAt,
-            ...(release && saved.checkedAt ? { release, checkedAt: saved.checkedAt } : {}),
+          const localNow = now();
+          const attemptedAt = saved.attemptedAt ? Math.min(saved.attemptedAt, localNow) : undefined;
+          const retryAt = saved.retryAt ? Math.min(saved.retryAt, localNow + releaseCacheMaximumRetryMs) : undefined;
+          data = { failures: saved.failures, attemptedAt, retryAt,
+            ...(release && saved.checkedAt ? { release, checkedAt: Math.min(saved.checkedAt, localNow) } : {}),
             ...(saved.failures ? { code: saved.code, error: discoveryMessage(saved.code) } : {}) };
         }
       }
@@ -122,35 +141,19 @@ export function createReleaseCache({ load = () => fetchLatestRelease(), now = Da
       const release = safeRelease(value);
       if (!release) throw new Error("A compatible stable release could not be confirmed.");
       const receivedAt = now();
-      const serverCheckedAt = value.checkedAt ?? receivedAt;
-      // Independent browser and server clocks can differ slightly. Clamp a small
-      // future timestamp to receipt time so it cannot extend the cache lifetime.
-      if (!timestamp(serverCheckedAt) || serverCheckedAt - receivedAt > 60_000 || receivedAt - serverCheckedAt >= releaseCacheTtlMs) throw new Error("A compatible stable release could not be confirmed.");
-      const checkedAt = Math.min(serverCheckedAt, receivedAt);
-      const attemptedAt = timestamp(value.attemptedAt) && value.attemptedAt - receivedAt <= 60_000
-        ? Math.min(value.attemptedAt, receivedAt) : data.attemptedAt;
-      data = { release, checkedAt, attemptedAt, failures: 0 };
+      // The authenticated same-origin response is fresh when received. Browser and
+      // server wall clocks never participate in cache freshness or cooldown math.
+      data = { release, checkedAt: receivedAt, attemptedAt: receivedAt, failures: 0 };
       persist(); return release;
     }).catch((error: unknown) => {
       const failures = Math.min(data.failures + 1, 10);
       let retryAt = now() + Math.min(30_000 * 2 ** (failures - 1), releaseCacheTtlMs);
-      if (error instanceof ReleaseCheckError && [403, 429].includes(error.response.status)) {
-        const headers = error.response.headers;
-        const after = headers.get("retry-after");
-        const delay = after && /^\d+$/.test(after.trim()) ? now() + Number(after) * 1000 : after ? Date.parse(after) : NaN;
-        if (Number.isSafeInteger(delay) && delay > now()) retryAt = Math.max(retryAt, delay);
-        const reset = Number(headers.get("x-ratelimit-reset")) * 1000;
-        if (headers.get("x-ratelimit-remaining") === "0" && Number.isSafeInteger(reset) && reset > now()) retryAt = Math.max(retryAt, reset);
-      }
+      if (error instanceof ReleaseCheckError && error.retryAfterMs) retryAt = Math.max(retryAt, now() + error.retryAfterMs);
       const discovery = error instanceof ReleaseCheckError ? error.discovery : undefined;
-      if (timestamp(discovery?.retryAt) && discovery!.retryAt! > now()) retryAt = discovery!.retryAt!;
+      retryAt = Math.min(retryAt, now() + releaseCacheMaximumRetryMs);
       data = { ...data, failures, retryAt, code: discovery?.code, error: error instanceof Error ? error.message : "Latest release is temporarily unavailable." };
-      // Preserve the server's last successful check separately from its failed attempt.
-      if (discovery && timestamp(discovery.attemptedAt) && discovery.attemptedAt <= now()) data.attemptedAt = discovery.attemptedAt;
       const previousRelease = safeRelease(discovery?.release);
-      if (previousRelease && timestamp(discovery?.checkedAt) && discovery!.checkedAt! <= now()) {
-        data.release = previousRelease; data.checkedAt = discovery!.checkedAt;
-      }
+      if (previousRelease) data.release = previousRelease;
       persist(); throw error;
     });
     const tracked = request.finally(() => { inFlight = undefined; publish(); });

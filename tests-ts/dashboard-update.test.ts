@@ -2,12 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createSingleFlight, createReleaseCache, releaseCacheKey, releaseCacheTtlMs, ReleaseCheckError, fetchLatestRelease, latestReleaseUrl } from "../apps/dashboard/src/update-release.ts";
 import { kioskUpdateState, type KioskUpdateCommand } from "../apps/dashboard/src/kiosk-update-status.ts";
-import { canReloadWebUpdate, diagnosticUrl, webUpdateError, webUpdateStatus, type WebUpdateRequest } from "../apps/dashboard/src/web-update.ts";
+import { canReloadWebUpdate, isCompletedWebUpdateHistory, diagnosticUrl, webUpdateError, webUpdateStatus, type WebUpdateRequest } from "../apps/dashboard/src/web-update.ts";
 
-test("web updates require verified finalization and a different bundled version to reload", () => {
+test("web updates require verified finalization and a newer verified target than the bundled version to reload", () => {
   const request = { state: "succeeded", targetTag: "v1.0.0", reloadReady: true, maintenance: false, errorCode: null } as WebUpdateRequest;
   assert.equal(canReloadWebUpdate(request, "0.24.0"), true);
   assert.equal(canReloadWebUpdate(request, "1.0.0"), false);
+  assert.equal(canReloadWebUpdate(request, "1.2.3"), false);
+  assert.equal(canReloadWebUpdate(request, "unknown"), false);
+  assert.equal(canReloadWebUpdate({ ...request, targetTag: "v1.0.0-rc.1" }, "0.24.0"), false);
   assert.equal(canReloadWebUpdate({ ...request, reloadReady: false }, "0.24.0"), false);
   assert.equal(canReloadWebUpdate({ ...request, state: "verifying" }, "0.24.0"), false);
   assert.match(webUpdateStatus({ ...request, state: "recovery_required", maintenance: true }), /Recovery required.*writes are paused/);
@@ -111,16 +114,16 @@ test("rate-limit cooldown survives reload, rejects force and keeps stale release
   const load = async () => { calls++; if (fail) throw new ReleaseCheckError("Unavailable", new Response("{}", { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "3700", "retry-after": "120" } })); return { tag_name: "v0.23.0" }; };
   const cache = createReleaseCache({ load, now: () => now, storage: () => storage });
   await cache.check(); fail = true; await assert.rejects(cache.check(true));
-  assert.equal(cache.snapshot().fresh, false); assert.equal(cache.snapshot().release?.tag_name, "v0.23.0"); assert.equal(cache.snapshot().retryAt, 3_700_000);
+  assert.equal(cache.snapshot().fresh, false); assert.equal(cache.snapshot().release?.tag_name, "v0.23.0"); assert.equal(cache.snapshot().retryAt, 220_000);
   const reloaded = createReleaseCache({ load, now: () => now, storage: () => storage });
   await assert.rejects(reloaded.check(true)); assert.equal(calls, 2); assert.equal(reloaded.snapshot().fresh, false);
-  now = 3_700_000; fail = false; await reloaded.check(true); assert.equal(calls, 3); assert.equal(reloaded.snapshot().fresh, true);
+  now = 220_000; fail = false; await reloaded.check(true); assert.equal(calls, 3); assert.equal(reloaded.snapshot().fresh, true);
 });
-test("Retry-After date and seconds are honored for429, unrelated403 reset does not block for an hour", async () => {
+test("relative Retry-After seconds are honored while absolute provider clocks cannot extend browser cooldown", async () => {
   const now = 1_000_000;
   for (const [status, headers, expected] of [
     [429, { "retry-after": "120" }, now + 120_000],
-    [429, { "retry-after": new Date(now + 180_000).toUTCString() }, now + 180_000],
+    [429, { "retry-after": new Date(now + 180_000).toUTCString() }, now + 30_000],
     [403, { "x-ratelimit-reset": "9000", "x-ratelimit-remaining": "1" }, now + 30_000],
   ] as const) {
     const cache = createReleaseCache({ now: () => now, storage: () => memoryStorage(), load: async () => { throw new ReleaseCheckError("Unavailable", new Response("{}", { status, headers })); } });
@@ -137,11 +140,14 @@ test("transient failures back off increasingly to a bounded15minutes and success
   assert.equal(calls, 7); failing = false; await cache.check(); failing = true; await assert.rejects(cache.check(true)); assert.equal(cache.snapshot().retryAt, now + 30_000);
 });
 test("malformed storage, invalid releases, unsafe notes and storage failures cannot assert current", async () => {
-  for (const raw of ["{", JSON.stringify({ failures: 0, checkedAt: 900_000, release: { tag_name: "v0.23.0" } }), JSON.stringify({ failures: 0, checkedAt: 90_000, release: { tag_name: "v0.23.0oops" } })]) {
+  for (const raw of ["{", JSON.stringify({ failures: 0, checkedAt: 90_000, release: { tag_name: "v0.23.0oops" } })]) {
     const storage = memoryStorage(); storage.setItem(releaseCacheKey, raw);
     const cache = createReleaseCache({ now: () => 100_000, storage: () => storage, load: async () => ({ tag_name: "invalid" }) });
     assert.equal(cache.snapshot().fresh, false); await assert.rejects(cache.check(), /could not be confirmed/); assert.equal(cache.snapshot().fresh, false);
   }
+  const shiftedClockStorage = memoryStorage(); shiftedClockStorage.setItem(releaseCacheKey, JSON.stringify({ failures: 0, checkedAt: 900_000, release: { tag_name: "v0.23.0" } }));
+  const shiftedClock = createReleaseCache({ now: () => 100_000, storage: () => shiftedClockStorage, load: async () => ({ tag_name: "invalid" }) });
+  assert.equal(shiftedClock.snapshot().checkedAt, 100_000); assert.equal(shiftedClock.snapshot().fresh, true);
   const cache = createReleaseCache({ now: () => 100_000, storage: () => { throw new Error("Denied"); }, load: async () => ({ tag_name: "v0.23.0", html_url: "javascript:alert(1)" }) });
   assert.deepEqual(await cache.check(), { tag_name: "v0.23.0" }); assert.equal(cache.snapshot().fresh, true);
 });
@@ -157,15 +163,15 @@ test("existing cache instances adopt another view's persisted success and cooldo
   now += 120_000; failing = false; await second.check(); first.sync(); assert.equal(first.snapshot().fresh, true);
 });
 
-test("server cache timestamps do not gain another15minutes and stale envelopes cannot confirm", async () => {
+test("successful same-origin discovery uses browser receipt time while failed envelopes cannot confirm", async () => {
   const cache = createReleaseCache({ now: () => 1_000_000, storage: () => memoryStorage(), load: async () => ({ tag_name: "v1.0.4", checkedAt: 900_000 }) });
-  await cache.check(); assert.equal(cache.snapshot().checkedAt, 900_000);
+  await cache.check(); assert.equal(cache.snapshot().checkedAt, 1_000_000);
   const stale = createReleaseCache({ now: () => 1_000_000, storage: () => memoryStorage(), load: async () => ({ tag_name: "v1.0.4", checkedAt: 100_000 }) });
-  await assert.rejects(stale.check(), /could not be confirmed/); assert.equal(stale.snapshot().fresh, false);
+  await stale.check(); assert.equal(stale.snapshot().checkedAt, 1_000_000); assert.equal(stale.snapshot().fresh, true);
   await assert.rejects(fetchLatestRelease(async () => Response.json({ fresh: false, checkedAt: 900_000, release: { tag_name: "v1.0.4" } })), /temporarily unavailable/);
 });
 
-test("failed discovery retains server success/attempt times, diagnostic code and exact cooldown on reload", async () => {
+test("failed discovery keeps stale metadata unconfirmed and schedules cooldown from browser receipt time", async () => {
   let now = 1_000_000; let calls = 0; const storage = memoryStorage();
   const load = async () => {
     calls++;
@@ -173,7 +179,7 @@ test("failed discovery retains server success/attempt times, diagnostic code and
   };
   const cache = createReleaseCache({ now: () => now, storage: () => storage, load });
   await assert.rejects(cache.check());
-  assert.equal(cache.snapshot().checkedAt, 100_000); assert.equal(cache.snapshot().attemptedAt, 900_000);
+  assert.equal(cache.snapshot().checkedAt, undefined); assert.equal(cache.snapshot().attemptedAt, 1_000_000);
   assert.equal(cache.snapshot().retryAt, 1_120_000); assert.equal(cache.snapshot().code, "rate_limited"); assert.equal(cache.snapshot().fresh, false);
   const reloaded = createReleaseCache({ now: () => now, storage: () => storage, load });
   assert.match(reloaded.snapshot().error!, /rate limited/); await assert.rejects(reloaded.check(true)); assert.equal(calls, 1);
@@ -205,11 +211,38 @@ test("small server clock differences confirm releases without extending freshnes
   }
 });
 
-test("future clock tolerance cannot confirm stale or implausible release timestamps", async () => {
+test("server clock values never reject an otherwise valid same-origin release", async () => {
   const now = 1_000_000;
   for (const checkedAt of [now + 60_001, now - releaseCacheTtlMs, NaN, Infinity, 0, now + 0.5]) {
     const cache = createReleaseCache({ now: () => now, storage: () => memoryStorage(), load: async () => ({ tag_name: "v1.2.2", checkedAt }) });
-    await assert.rejects(cache.check(), /could not be confirmed/);
-    assert.equal(cache.snapshot().fresh, false);
+    await cache.check();
+    assert.equal(cache.snapshot().checkedAt, now); assert.equal(cache.snapshot().fresh, true);
   }
+});
+
+
+test("completed requests cannot override newer installations or conceal active recovery", () => {
+  const request = { state: "succeeded", targetTag: "v1.2.1", reloadReady: true, maintenance: false } as WebUpdateRequest;
+  assert.equal(isCompletedWebUpdateHistory(request, "1.2.3", "1.2.3"), true);
+  assert.equal(isCompletedWebUpdateHistory(request, "1.2.3", "1.2.0"), true);
+  assert.equal(canReloadWebUpdate(request, "1.2.0", "1.2.3"), false);
+  assert.equal(isCompletedWebUpdateHistory(request, "1.2.1", "1.2.1"), true);
+  assert.equal(isCompletedWebUpdateHistory(request, "1.2.1", "1.2.0"), false);
+  assert.equal(isCompletedWebUpdateHistory(request, "1.2.0", "1.2.0"), false);
+  assert.equal(isCompletedWebUpdateHistory(request, "unknown", "1.2.3"), false);
+  for (const state of ["prepared", "running", "verifying", "failed", "recovery_required", "expired"] as const) {
+    assert.equal(isCompletedWebUpdateHistory({ ...request, state }, "1.2.3", "1.2.3"), false);
+  }
+  assert.equal(isCompletedWebUpdateHistory({ ...request, reloadReady: false }, "1.2.3", "1.2.3"), false);
+  assert.equal(isCompletedWebUpdateHistory({ ...request, maintenance: true }, "1.2.3", "1.2.3"), false);
+});
+
+test("release notes stay attached to their discovered version across cache reload and remain bounded", async () => {
+  const storage = memoryStorage();
+  const body = "<img src=x onerror=alert('unsafe')>" + "x".repeat(32_000);
+  const load = async () => ({ tag_name: "v1.2.3", body });
+  const cache = createReleaseCache({ load, now: () => 100_000, storage: () => storage });
+  assert.equal((await cache.check()).body, body.slice(0, 32_000));
+  const restored = createReleaseCache({ load, now: () => 100_000, storage: () => storage });
+  assert.deepEqual(await restored.check(), { tag_name: "v1.2.3", body: body.slice(0, 32_000) });
 });

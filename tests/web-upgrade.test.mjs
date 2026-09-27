@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { validateUpgradeEnvironment, validateOfficialSource, validateMigrationPolicy, executeWebUpgrade, createLiveUpgradeIO } from "../scripts/run-web-upgrade.mjs";
+import { validateUpgradeEnvironment, validateOfficialSource, validateMigrationPolicy, executeWebUpgrade, createLiveUpgradeIO, retainedDashboardOrigin, controllerCredentialMinimumValidityMs } from "../scripts/run-web-upgrade.mjs";
 import { verifyDispatchCredential, verifyCredentialTarget } from "../scripts/refresh-web-update-credential.mjs";
 import { syntheticUpgradeIO, rehearseSyntheticWebUpgrade } from "../scripts/rehearse-web-upgrade.mjs";
 import { buildPagesProxy } from "../scripts/prepare-pages-proxy.mjs";
@@ -46,6 +46,13 @@ test("live adapter keeps Worker configuration out of the actual Pages CLI invoca
 test("fixed upgrade parameters reject public, malformed and resource substitutions", () => {
   assert.equal(validateUpgradeEnvironment(env).tag, "v1.0.0");
   for (const substitution of [{ REPOSITORY_PRIVATE: "false" }, { UPDATE_REPOSITORY: "isriah/LancerLogin" }, { RELEASE_TAG: "v1.0.0-rc1" }, { RELEASE_SHA: "main" }, { INSTALLATION_SLUG: "example;command" }, { DATABASE_ID: "unknown" }, { API_URL: "https://another-api.account.workers.dev" }, { CLOUDFLARE_API_TOKEN: "unscoped" }]) assert.throws(() => validateUpgradeEnvironment({ ...env, ...substitution }));
+  assert.throws(() => validateUpgradeEnvironment({ ...env, WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + controllerCredentialMinimumValidityMs - 1_000).toISOString() }), /dispatch_credential_expiry_required/);
+});
+
+test("upgrade controller retains only the registered Pages or custom dashboard origin", () => {
+  const pages = { subdomain: "example-dashboard.pages.dev", domains: ["login.example.org"] };
+  for (const origin of ["https://example-dashboard.pages.dev", "https://login.example.org"]) assert.equal(retainedDashboardOrigin({ bindings: [{ name: "ALLOWED_ORIGIN", type: "plain_text", text: origin }] }, pages), origin);
+  for (const origin of ["http://login.example.org", "https://evil.example.org", "https://login.example.org/path"]) assert.throws(() => retainedDashboardOrigin({ bindings: [{ name: "ALLOWED_ORIGIN", type: "plain_text", text: origin }] }, pages));
 });
 test("official stable source is pinned once and requires all release assets", async () => {
   const context = validateUpgradeEnvironment(env);
@@ -82,6 +89,9 @@ test("operator recovery requires completed workflow, schema review and matching 
   await assert.rejects(recoverWebUpdate(row, { ...io, runCompleted: async () => false }, approval), /workflow_completion_required/);
   await assert.rejects(recoverWebUpdate(row, { ...io, verifiedHealthyVersion: async () => "0.23.2" }, approval), /recovery_release_mismatch/);
   assert.equal(finalized, 0); assert.equal((await recoverWebUpdate(row, io, approval)).state, "succeeded"); assert.equal(finalized, 1);
+  let superseded;
+  const result = await recoverWebUpdate(row, { ...io, verifiedHealthyVersion: async () => "1.2.0", finalize: async (...values) => { superseded = values; } }, approval);
+  assert.deepEqual(superseded, ["failed", "superseded_by_later_release"]); assert.equal(result.superseded, true); assert.equal(result.maintenance, false);
 });
 test("credential refresh validates private workflow without exposing/provider-logging token", async () => {
   const calls = []; const credentialEnv = { ...env, LANCERLOGIN_UPDATE_REPOSITORY: "example/private-install", LANCERLOGIN_WEB_UPDATE_TOKEN: "synthetic" };
@@ -107,6 +117,8 @@ test("workflow boundaries and concurrency isolate official publication from priv
   for (const name of ["docs", "release"]) assert.match(await readFile(`.github/workflows/${name}.yml`, "utf8"), /github\.repository == 'isriah\/LancerLogin' && github\.event\.repository\.private == false/);
   const workflow = await readFile(".github/workflows/upgrade-web.yml", "utf8");
   assert.match(workflow, /environment: production/); assert.match(workflow, /repository: isriah\/LancerLogin/);
+  assert.match(workflow, /node lancerlogin-source\/scripts\/run-web-upgrade\.mjs/);
+  assert.doesNotMatch(workflow, /run: node deployment-control\/scripts\/run-web-upgrade\.mjs\s*$/m);
   assert.doesNotMatch(workflow, /inputs\.(?:installation_slug|repository|workflow|command)/);
 });
 

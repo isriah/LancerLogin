@@ -298,7 +298,8 @@ test("update assistant uses backup-confirmed durable web updates and separate ki
   assert.match(source, /<WebUpdateCard/);
   assert.match(card, /updateRequestId=/);
   assert.match(card, /requestId: id, backupSaved: true/);
-  assert.match(card, /canReloadWebUpdate/);
+  assert.match(source, /readDashboardReleaseState/);
+  assert.match(card, /reloadAvailable/);
   assert.doesNotMatch(card, /window\.open|workflow_dispatch|token|localStorage/);
   assert.match(source, /command: "install_latest"/);
 });

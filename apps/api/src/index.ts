@@ -195,8 +195,10 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
 }
 async function updateInfo(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
-  if (!env.UPDATE_WORKFLOW_URL) throw new HttpError(503, "The private deployment workflow is not configured");
-  return response({ releaseVersion: env.RELEASE_VERSION ?? "development", workflowUrl: env.UPDATE_WORKFLOW_URL });
+  const repository = env.UPDATE_REPOSITORY && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.UPDATE_REPOSITORY) && env.UPDATE_REPOSITORY.toLowerCase() !== "isriah/lancerlogin" ? env.UPDATE_REPOSITORY : undefined;
+  const workflowUrl = repository ? `https://github.com/${repository}/actions/workflows/upgrade-web.yml` : env.UPDATE_WORKFLOW_URL;
+  if (!workflowUrl) throw new HttpError(503, "The private deployment workflow is not configured");
+  return response({ releaseVersion: env.RELEASE_VERSION ?? "development", workflowUrl });
 }
 async function discoverRelease(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);

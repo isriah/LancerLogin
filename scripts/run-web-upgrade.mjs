@@ -10,6 +10,7 @@ import { resolveDatabaseName } from "./database-identity.mjs";
 const stable = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?![\s\S])/;
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const shaPattern = /^[0-9a-f]{40}$/;
+export const controllerCredentialMinimumValidityMs = 2 * 60 * 60_000;
 export function validateUpgradeEnvironment(env) {
   if (env.REPOSITORY_PRIVATE !== "true") throw new Error("private_repository_required");
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.UPDATE_REPOSITORY ?? "") || env.UPDATE_REPOSITORY.toLowerCase() === "isriah/lancerlogin") throw new Error("private_repository_required");
@@ -18,7 +19,7 @@ export function validateUpgradeEnvironment(env) {
   const api = new URL(env.API_URL);
   if (api.protocol !== "https:" || api.username || api.password || api.search || api.hash || api.pathname !== "/" || !api.hostname.startsWith(`${env.INSTALLATION_SLUG}-api.`) || !api.hostname.endsWith(".workers.dev")) throw new Error("fixed_api_origin_required");
   if (!/^[0-9a-f]{32}$/.test(env.CLOUDFLARE_ACCOUNT_ID ?? "") || !env.CLOUDFLARE_API_TOKEN?.startsWith("cfat_")) throw new Error("scoped_account_credential_required");
-  if (!(Date.parse(env.WEB_UPDATE_TOKEN_EXPIRES_AT ?? "") > Date.now())) throw new Error("dispatch_credential_expiry_required");
+  if (!(Date.parse(env.WEB_UPDATE_TOKEN_EXPIRES_AT ?? "") - Date.now() >= controllerCredentialMinimumValidityMs)) throw new Error("dispatch_credential_expiry_required");
   return { requestId: env.REQUEST_ID, tag: env.RELEASE_TAG, sha: env.RELEASE_SHA, runId: env.EXECUTOR_RUN_ID,
     slug: env.INSTALLATION_SLUG, databaseName: resolveDatabaseName(env.INSTALLATION_SLUG, env.DATABASE_NAME), databaseId: env.DATABASE_ID, apiUrl: api.origin,
     dashboardUrl: `https://${env.INSTALLATION_SLUG}-dashboard.pages.dev`, repository: env.UPDATE_REPOSITORY };
@@ -89,6 +90,16 @@ function command(program, args, cwd, env, { json = false } = {}) {
   });
 }
 
+export function retainedDashboardOrigin(settings, pages) {
+  const bindings = settings.bindings?.filter((binding) => binding.name === "ALLOWED_ORIGIN") ?? [];
+  if (bindings.length !== 1 || bindings[0].type !== "plain_text") throw new Error("dashboard_origin_required");
+  const value = bindings[0].text;
+  let origin;
+  try { origin = new URL(value); } catch { throw new Error("dashboard_origin_invalid"); }
+  if (origin.protocol !== "https:" || origin.origin !== value || origin.port || ![pages.subdomain, ...(pages.domains ?? [])].includes(origin.hostname)) throw new Error("dashboard_origin_invalid");
+  return value;
+}
+
 export async function createLiveUpgradeIO(context, environment, sourceDirectory) {
   const source = resolve(sourceDirectory); const configPath = resolve(source, ".provision/wrangler.json");
   const databaseName = resolveDatabaseName(context.slug, context.databaseName);
@@ -115,6 +126,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
     return document.result;
   };
   const owned = "installation_id = 'primary' AND id = ? AND executor_run_id = ?";
+  let dashboardOrigin;
   const updateState = async (state, stage, maintenance, error = null) => {
     const result = await sql(`UPDATE web_update_requests SET state = ?, stage = ?, maintenance = ?, error_code = ?, updated_at = ? WHERE ${owned} AND state NOT IN ('succeeded','failed','expired')`, [state, stage, maintenance, error, new Date().toISOString(), context.requestId, context.runId]);
     if (result[0]?.meta?.changes !== 1) throw new Error("request_state_conflict");
@@ -134,6 +146,9 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
       if (!["SESSION_KEY", "INTEGRATION_KEY", "BOOTSTRAP_CODE_HASH", "WEB_UPDATE_TOKEN", "WEB_UPDATE_TOKEN_EXPIRES_AT"].every((name) => secretNames.has(name))) throw new Error("retained_secrets_required");
       const pages = await cf(`/pages/projects/${context.slug}-dashboard`);
       if (pages.name !== `${context.slug}-dashboard` || pages.production_branch !== "main" || pages.subdomain !== `${context.slug}-dashboard.pages.dev`) throw new Error("pages_identity_mismatch");
+      dashboardOrigin = retainedDashboardOrigin(settings, pages);
+      config.vars.ALLOWED_ORIGIN = dashboardOrigin;
+      await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
       const request = (await sql("SELECT previous_version FROM web_update_requests WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ?", [context.requestId, context.tag, context.sha]))[0]?.results?.[0];
       const health = await jsonGet(`${context.apiUrl}/health`);
       if (!request || health.releaseVersion !== request.previous_version || health.ok !== true) throw new Error("installed_release_mismatch");
@@ -180,7 +195,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
     },
     async health() {
       let healthy = false;
-      for (let attempt = 0; attempt < 12; attempt++) {
+      for (let attempt = 0; attempt < 36; attempt++) {
         try {
           const api = await jsonGet(`${context.apiUrl}/health?update=${context.requestId}`);
           const pages = await jsonGet(`${context.dashboardUrl}/__lancerlogin-release?update=${context.requestId}`);
@@ -194,6 +209,12 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
       if (pages.canonical_deployment?.deployment_trigger?.metadata?.commit_hash !== context.sha) throw new Error("pages_commit_mismatch");
       const settings = await cf(`/workers/scripts/${context.slug}-api/settings`);
       if (!settings.bindings?.some((binding) => binding.name === "DB" && binding.id === context.databaseId)) throw new Error("postdeploy_database_mismatch");
+      if (!dashboardOrigin || retainedDashboardOrigin(settings, pages) !== dashboardOrigin) throw new Error("postdeploy_origin_mismatch");
+      if (dashboardOrigin !== context.dashboardUrl) {
+        const customPages = await jsonGet(`${dashboardOrigin}/__lancerlogin-release?update=${context.requestId}`);
+        const customProxy = await jsonGet(`${dashboardOrigin}/api/health?update=${context.requestId}`);
+        if (customPages.releaseVersion !== context.tag.slice(1) || customProxy.ok !== true || customProxy.releaseVersion !== context.tag.slice(1)) throw new Error("custom_dashboard_health_mismatch");
+      }
       const secrets = new Set((await wrangler(["secret", "list", "--format", "json"], { json: true })).map((entry) => entry.name));
       if (!["SESSION_KEY", "INTEGRATION_KEY", "BOOTSTRAP_CODE_HASH", "WEB_UPDATE_TOKEN", "WEB_UPDATE_TOKEN_EXPIRES_AT"].every((name) => secrets.has(name))) throw new Error("postdeploy_secret_missing");
     },

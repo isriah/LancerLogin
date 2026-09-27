@@ -22,19 +22,22 @@ export function fixedWorkflowPath(path: unknown): boolean { return path === `.gi
 const stable = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?![\s\S])/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const terminal = new Set(["succeeded", "failed", "expired"]);
+export const updateCredentialMinimumValidityMs = 24 * 60 * 60_000;
 function fail(status: number, code: string, message: string): never { throw new WebUpdateError(status, code, message); }
 function db(env: WebUpdateEnv): Database { return env.DB ?? fail(503, "not_configured", "D1 is not linked."); }
 function repository(env: WebUpdateEnv): string {
   if (!env.UPDATE_REPOSITORY || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.UPDATE_REPOSITORY) || env.UPDATE_REPOSITORY.toLowerCase() === "isriah/lancerlogin") fail(503, "not_configured", "The private web update workflow is not configured.");
   return env.UPDATE_REPOSITORY;
 }
-function credential(env: WebUpdateEnv): string {
+function credential(env: WebUpdateEnv, minimumValidityMs = 0): string {
   if (!env.WEB_UPDATE_TOKEN) fail(503, "credential_required", "Renew the private deployment credential through GitHub and Cloudflare.");
   const expiry = Date.parse(env.WEB_UPDATE_TOKEN_EXPIRES_AT ?? "");
   if (!Number.isFinite(expiry) || expiry <= Date.now()) fail(503, "credential_expired", "The private deployment credential has expired. Renew it through GitHub and Cloudflare.");
+  if (expiry - Date.now() < minimumValidityMs) fail(503, "credential_expiring", "The private deployment credential expires too soon to start a safe update. Renew it first.");
   return env.WEB_UPDATE_TOKEN;
 }
-async function github(path: string, env?: WebUpdateEnv, init: RequestInit = {}): Promise<Response> {
+type GitHubRequestKind = "public" | "private" | "dispatch";
+async function github(path: string, env?: WebUpdateEnv, init: RequestInit = {}, kind: GitHubRequestKind = "public"): Promise<Response> {
   const headers = new Headers({ accept: "application/vnd.github+json", "user-agent": "LancerLogin", "x-github-api-version": "2026-03-10", "content-type": "application/json" });
   if (env) headers.set("authorization", `Bearer ${credential(env)}`);
   let result: Response;
@@ -42,8 +45,10 @@ async function github(path: string, env?: WebUpdateEnv, init: RequestInit = {}):
   try { result = await fetch(`https://api.github.com${path}`, { ...init, headers, redirect: "manual", signal: AbortSignal.timeout(4_000) }); }
   catch { return fail(503, "provider_unavailable", "GitHub is unavailable. The update request has been retained."); }
   if (result.status >= 300 && result.status < 400) fail(503, "provider_unavailable", "GitHub returned an unexpected redirect. The request was not forwarded.");
-  if (result.status === 401 || env && result.status === 404) fail(503, "credential_required", "The deployment credential cannot access the fixed private workflow.");
-  if (result.status === 403 || result.status === 429) fail(429, "cooldown", "GitHub requires a cooldown or credential approval. Try again later.");
+  if (result.status === 401 || result.status === 404 && kind !== "public") fail(503, "credential_required", "The deployment credential cannot access the fixed private workflow.");
+  if (result.status === 429 || result.status === 403 && (result.headers.get("x-ratelimit-remaining") === "0" || result.headers.has("retry-after"))) fail(429, "cooldown", "GitHub requires a cooldown. Try again later.");
+  if (result.status === 403) fail(503, "credential_permission", "The deployment credential is missing a required repository permission.");
+  if (result.status === 422 && kind === "dispatch") fail(503, "workflow_invalid", "GitHub rejected the fixed update workflow dispatch. The workflow or its main branch must be repaired before retrying.");
   return result;
 }
 export function officialWebRelease(value: unknown): { tag: string; notes: string } | undefined {
@@ -69,26 +74,29 @@ async function requestRow(env: WebUpdateEnv, id: unknown): Promise<UpdateRow> {
   return await db(env).prepare("SELECT * FROM web_update_requests WHERE installation_id = 'primary' AND id = ?").bind(id).first<UpdateRow>() ?? fail(404, "request_missing", "The update request is unavailable.");
 }
 export function updateView(row: UpdateRow | null, env: WebUpdateEnv) {
+  const request = row ? { requestId: row.id, targetTag: row.release_tag, targetCommit: row.release_sha, releaseNotes: row.release_notes,
+    releaseUrl: `https://github.com/isriah/LancerLogin/releases/tag/${row.release_tag}`, previousVersion: row.previous_version,
+    state: row.state, stage: row.stage, createdAt: row.created_at, expiresAt: row.expires_at, updatedAt: row.updated_at,
+    backupExported: Boolean(row.backup_exported_at), maintenance: Boolean(row.maintenance), errorCode: row.error_code ?? null,
+    runUrl: row.run_id ? `https://github.com/${repository(env)}/actions/runs/${row.run_id}` : null,
+    reloadReady: row.state === "succeeded" } : null;
   return {
     releaseVersion: env.RELEASE_VERSION ?? "development",
     workflowUrl: env.UPDATE_REPOSITORY ? `https://github.com/${repository(env)}/actions/workflows/${WEB_UPDATE_WORKFLOW}` : env.UPDATE_WORKFLOW_URL,
-    request: row ? { requestId: row.id, targetTag: row.release_tag, targetCommit: row.release_sha, releaseNotes: row.release_notes,
-      releaseUrl: `https://github.com/isriah/LancerLogin/releases/tag/${row.release_tag}`, previousVersion: row.previous_version,
-      state: row.state, stage: row.stage, createdAt: row.created_at, expiresAt: row.expires_at, updatedAt: row.updated_at,
-      backupExported: Boolean(row.backup_exported_at), maintenance: Boolean(row.maintenance), errorCode: row.error_code ?? null,
-      runUrl: row.run_id ? `https://github.com/${repository(env)}/actions/runs/${row.run_id}` : null,
-      reloadReady: row.state === "succeeded" } : null,
+    request,
+    activeRequest: request && !terminal.has(row!.state) ? request : null,
+    latestCompletedRequest: request && terminal.has(row!.state) ? request : null,
   };
 }
 export async function prepareWebUpdate(env: WebUpdateEnv, actorId?: string) {
-  const repo = repository(env); credential(env); const now = new Date().toISOString();
+  const repo = repository(env); credential(env, updateCredentialMinimumValidityMs); const now = new Date().toISOString();
   await db(env).prepare("UPDATE web_update_requests SET state = 'expired', updated_at = ? WHERE installation_id = 'primary' AND state = 'prepared' AND expires_at <= ?").bind(now, now).run();
   const prior = await latestUpdate(env);
   if (prior && !terminal.has(prior.state)) return updateView(prior, env);
   if (prior?.started_at && Date.now() - Date.parse(prior.started_at) < 120_000) fail(429, "cooldown", "Wait two minutes before preparing another update.");
-  const metadata = await github(`/repos/${repo}`, env);
+  const metadata = await github(`/repos/${repo}`, env, {}, "private");
   if (!metadata.ok || (await metadata.json() as { private?: boolean }).private !== true) fail(503, "not_private", "Web updates require the configured private deployment repository.");
-  const workflow = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}`, env);
+  const workflow = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}`, env, {}, "private");
   const info = workflow.ok ? await workflow.json() as { state?: string; path?: string } : undefined;
   if (info?.state !== "active" || info.path !== `.github/workflows/${WEB_UPDATE_WORKFLOW}`) fail(503, "workflow_required", "Install the reviewed private web upgrade workflow before updating.");
   const response = await github("/repos/isriah/LancerLogin/releases/latest", env);
@@ -116,12 +124,12 @@ export async function startWebUpdate(env: WebUpdateEnv, input: Record<string, un
   if (row.state !== "prepared") return updateView(row, env); // Never redispatch, even after failure or lost response.
   if (Date.parse(row.expires_at) <= Date.now()) fail(409, "request_expired", "The prepared update expired. Prepare it again.");
   if (input.backupSaved !== true || !row.backup_exported_at) fail(409, "backup_required", "Download this update's entire-installation backup and confirm it was saved.");
-  credential(env); const repo = repository(env); const now = new Date().toISOString();
+  credential(env, updateCredentialMinimumValidityMs); const repo = repository(env); const now = new Date().toISOString();
   // RETURNING identifies the atomic winner; D1 meta.changes also counts the started audit trigger.
   const claim = await db(env).prepare("UPDATE web_update_requests SET state = 'dispatching', stage = 'dispatching', started_at = ?, started_by = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state = 'prepared' RETURNING id").bind(now, actorId ?? null, now, row.id).first<{ id: string }>();
   if (claim?.id !== row.id) return updateView(await requestRow(env, row.id), env);
   try {
-    const response = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}/dispatches`, env, { method: "POST", body: JSON.stringify({ ref: "main", inputs: { request_id: row.id, release_tag: row.release_tag, release_sha: row.release_sha } }) });
+    const response = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}/dispatches`, env, { method: "POST", body: JSON.stringify({ ref: "main", inputs: { request_id: row.id, release_tag: row.release_tag, release_sha: row.release_sha } }) }, "dispatch");
     const data = response.status === 200 ? await response.json() as { workflow_run_id?: number } : undefined;
     if (data?.workflow_run_id && Number.isSafeInteger(data.workflow_run_id) && data.workflow_run_id > 0) {
       await db(env).prepare("UPDATE web_update_requests SET run_id = ?, state = CASE WHEN state = 'dispatching' THEN 'queued' ELSE state END, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND run_id IS NULL").bind(String(data.workflow_run_id), now, row.id).run();
@@ -130,7 +138,7 @@ export async function startWebUpdate(env: WebUpdateEnv, input: Record<string, un
     }
   } catch (error) {
     // Timeouts, rejection and crashes all retain the one-way dispatch claim. Reconcile only.
-    const definiteRejection = error instanceof WebUpdateError && ["credential_required", "credential_expired", "cooldown"].includes(error.code);
+    const definiteRejection = error instanceof WebUpdateError && ["credential_required", "credential_expired", "credential_expiring", "credential_permission", "workflow_invalid", "cooldown"].includes(error.code);
     const code = definiteRejection ? (error as WebUpdateError).code : "dispatch_ambiguous";
     await db(env).prepare("UPDATE web_update_requests SET state = ?, error_code = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state = 'dispatching'").bind(definiteRejection ? "failed" : "dispatching", code, now, row.id).run();
   }
@@ -149,9 +157,14 @@ export async function webUpdateStatus(env: WebUpdateEnv) {
   if (poll.meta?.changes !== 1) return updateView(row, env);
   const repo = repository(env);
   if (!row.run_id) {
-    const result = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}/runs?event=workflow_dispatch&per_page=100&created=${encodeURIComponent(`>=${row.started_at ?? row.created_at}`)}`, env);
-    if (!result.ok) fail(503, "provider_unavailable", "GitHub update status is unavailable.");
-    const runs = (await result.json() as { workflow_runs?: Array<{ id: number; display_title?: string; path?: string }> }).workflow_runs ?? [];
+    const runs: Array<{ id: number; display_title?: string; path?: string }> = [];
+    for (let page = 1; page <= 5; page++) {
+      const result = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}/runs?event=workflow_dispatch&per_page=100&page=${page}&created=${encodeURIComponent(`>=${row.started_at ?? row.created_at}`)}`, env, {}, "private");
+      if (!result.ok) fail(503, "provider_unavailable", "GitHub update status is unavailable.");
+      const batch = (await result.json() as { workflow_runs?: Array<{ id: number; display_title?: string; path?: string }> }).workflow_runs ?? [];
+      runs.push(...batch);
+      if (batch.length < 100) break;
+    }
     const matches = runs.filter((run) => run.display_title === `LancerLogin web update ${row!.id}` && fixedWorkflowPath(run.path));
     if (matches.length === 1 && Number.isSafeInteger(matches[0]!.id) && matches[0]!.id > 0) {
       await db(env).prepare("UPDATE web_update_requests SET run_id = ?, error_code = NULL, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND run_id IS NULL").bind(String(matches[0]!.id), now, row.id).run();
@@ -162,7 +175,7 @@ export async function webUpdateStatus(env: WebUpdateEnv) {
     }
   }
   if (row.run_id) {
-    const result = await github(`/repos/${repo}/actions/runs/${row.run_id}`, env);
+    const result = await github(`/repos/${repo}/actions/runs/${row.run_id}`, env, {}, "private");
     if (!result.ok) fail(503, "provider_unavailable", "GitHub update status is unavailable.");
     const run = await result.json() as { status?: string; conclusion?: string; path?: string; display_title?: string; event?: string };
     if (!fixedWorkflowPath(run.path) || run.display_title !== `LancerLogin web update ${row.id}` || run.event !== "workflow_dispatch") fail(503, "run_mismatch", "The workflow run identity could not be verified.");

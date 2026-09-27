@@ -2,7 +2,8 @@ import { officialWebRelease } from "./web-updates.ts";
 
 export const officialReleaseUrl = "https://api.github.com/repos/isriah/LancerLogin/releases/latest";
 export const discoveryTtlMs = 15 * 60_000;
-export type DiscoveryRelease = { tag_name: string; html_url: string; draft: false; prerelease: false };
+export const discoveryMaximumRetryMs = 60 * 60_000;
+export type DiscoveryRelease = { tag_name: string; html_url: string; body: string; draft: false; prerelease: false };
 export type DiscoveryCode = "rate_limited" | "timeout" | "network" | "provider_unavailable" | "invalid_release";
 export type DiscoverySnapshot = {
   release?: DiscoveryRelease; checkedAt?: number; attemptedAt?: number; retryAt?: number;
@@ -40,10 +41,11 @@ export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeou
     if (response) {
       const after = response.headers.get("retry-after");
       const delay = after && /^\d+$/.test(after.trim()) ? now() + Number(after) * 1000 : after ? Date.parse(after) : NaN;
-      if (Number.isSafeInteger(delay) && delay > now()) retryAt = Math.max(retryAt, delay);
+      if (Number.isSafeInteger(delay) && delay > now()) retryAt = Math.max(retryAt, Math.min(delay, now() + discoveryMaximumRetryMs));
       const reset = Number(response.headers.get("x-ratelimit-reset")) * 1000;
-      if (response.headers.get("x-ratelimit-remaining") === "0" && Number.isSafeInteger(reset) && reset > now()) retryAt = Math.max(retryAt, reset);
+      if (response.headers.get("x-ratelimit-remaining") === "0" && Number.isSafeInteger(reset) && reset > now()) retryAt = Math.max(retryAt, Math.min(reset, now() + discoveryMaximumRetryMs));
     }
+    retryAt = Math.min(retryAt, now() + discoveryMaximumRetryMs);
     data = { ...data, fresh: false, code, error: messages[code], retryAt };
     return snapshot();
   }
@@ -59,7 +61,7 @@ export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeou
       }
       const release = officialWebRelease(await result.json().catch(() => undefined));
       if (!release || !release.tag.slice(1).split(".").every((part) => Number.isSafeInteger(Number(part)))) return fail("invalid_release");
-      data = { release: { tag_name: release.tag, html_url: `https://github.com/isriah/LancerLogin/releases/tag/${release.tag}`, draft: false, prerelease: false }, checkedAt: now(), attemptedAt: data.attemptedAt, fresh: true };
+      data = { release: { tag_name: release.tag, html_url: `https://github.com/isriah/LancerLogin/releases/tag/${release.tag}`, body: release.notes, draft: false, prerelease: false }, checkedAt: now(), attemptedAt: data.attemptedAt, fresh: true };
       failures = 0;
       return snapshot();
     } catch {

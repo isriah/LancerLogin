@@ -210,6 +210,7 @@ test("setup and a pending Undo take precedence over the invitation", async ({ pa
 test("an available update is hidden during the tour and restored afterward", async ({ page }) => {
   await account(page, fresh(), "admin", true);
   await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "1.0.0" } }));
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: "1.0.0" } }));
   await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: { release: { tag_name: "v1.0.1", draft: false, prerelease: false, html_url: "https://github.com/isriah/LancerLogin/releases/tag/v1.0.1", body: "Sample release" }, checkedAt: Date.now(), fresh: true } }));
   await page.goto("/dashboard"); await expect(panel(page)).toBeVisible();
   await panel(page).getByRole("button", { name: "Not now" }).click();

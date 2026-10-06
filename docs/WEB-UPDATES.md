@@ -78,7 +78,7 @@ Operational rows are excluded from dashboard category backups/restores and have 
 
 ## Current release and migration evidence
 
-The stable public release is v1.2.4. Each installation must verify its own data, session, migrations, update tracking, and maintenance state. Web-update evidence does not establish physical-kiosk operation, and physical-kiosk evidence does not establish web-update completion.
+The stable public release is v1.2.5. Each installation must verify its own data, session, migrations, update tracking, and maintenance state. Web-update evidence does not establish physical-kiosk operation, and physical-kiosk evidence does not establish web-update completion.
 
 The private deployment repository has an inherited CI assertion failure. Do not describe all private CI as green. The earlier waived physical checks remain evidence limits, not reasons to bypass the fixed web-update controls.
 

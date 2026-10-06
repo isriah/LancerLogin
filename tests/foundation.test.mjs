@@ -82,7 +82,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22\]\.includes\(Number\(value\.schemaVersion\)\)/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES/);
@@ -141,6 +141,13 @@ test("Discord channel manager migration tracks only owned messages and expiry st
 test("Discord attendance thread creation is tracked for retry", async () => {
   const migration = await readFile("apps/api/migrations/0033_discord_attendance_threads.sql", "utf8");
   assert.match(migration, /ADD COLUMN thread_created_at TEXT/);
+});
+
+test("Discord attendance delivery batches support chunk retries", async () => {
+  const migration = await readFile("apps/api/migrations/0039_discord_attendance_delivery_batches.sql", "utf8");
+  assert.equal((migration.match(/ADD COLUMN delivery_id TEXT/g) ?? []).length, 2);
+  assert.match(migration, /idx_discord_attendance_recipients_delivery/);
+  assert.doesNotMatch(migration, /fingerprint|biometric/i);
 });
 
 test("attendance anomaly thresholds migrate with safe ten-minute defaults", async () => {

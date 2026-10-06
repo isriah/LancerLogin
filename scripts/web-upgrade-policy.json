@@ -192,6 +192,11 @@
       "name": "0038_page_walkthroughs.sql",
       "sha256": "10dd32647713e26134fc73ae9b7ab80fb93196ca93870e6a328085c036c0757d",
       "forwardCompatible": true
+    },
+    {
+      "name": "0039_discord_attendance_delivery_batches.sql",
+      "sha256": "02f65d4352ffd52f20398eb46aa09a5e3a8d80bb3ecce487a78a718bb6aacc0f",
+      "forwardCompatible": true
     }
   ]
 }

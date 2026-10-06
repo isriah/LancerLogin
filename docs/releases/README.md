@@ -2,8 +2,9 @@
 
 Every Git tag must have a matching `vX.Y.Z.md` file in this directory. The release workflow fails if the file is missing and publishes it as the GitHub Release body. Start with a plain-English summary, followed by Bugs fixed, Features added, and Features removed. Include update or repair instructions only when the release requires a specific user action.
 
-> Historical index. [v1.2.4](v1.2.4.md) is the stable public release. Release notes record what was true when a version shipped. For a current procedure, use the linked guide rather than applying an older transition step out of context.
+> Historical index. [v1.2.5](v1.2.5.md) is the stable public release. Release notes record what was true when a version shipped. For a current procedure, use the linked guide rather than applying an older transition step out of context.
 
+- [v1.2.5](v1.2.5.md) - Reliable Discord absence notices for large recipient lists
 - [v1.2.4](v1.2.4.md) - Reliable updates, current release notes, and accurate reload prompts
 - [v1.2.3](v1.2.3.md) - Reliable release checks with small clock differences
 - [v1.2.2](v1.2.2.md) - Page walkthroughs, member-history actions, and report fixes

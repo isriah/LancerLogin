@@ -2,7 +2,7 @@
   "name": "lancerlogin",
   "private": true,
   "type": "module",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "Self-hosted single-kiosk attendance",
   "license": "Apache-2.0",
   "workspaces": [
@@ -45,11 +45,12 @@
     "verify:release-ci": "npm run verify:migrations && npm run typecheck && npm run test:release-ci && npm run build"
   },
   "overrides": {
-    "sharp": "0.35.4"
+    "sharp": "0.35.4",
+    "source-map-js": "1.2.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "typescript": "^5.7.3",
-    "wrangler": "4.127.1"
+    "wrangler": "4.147.0"
   }
 }

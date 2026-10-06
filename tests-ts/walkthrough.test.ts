@@ -79,7 +79,7 @@ test("entire-installation backups round-trip progress, older backups reset it, a
   try {
     await call(db, endpoint, "admin", { ...progress, status: "completed", stepId: "recurrence" });
     const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
-    assert.equal(backup.schemaVersion, 21);
+    assert.equal(backup.schemaVersion, 22);
     assert.equal(backup.tables.user_walkthroughs.length, 1);
     const restore = async (scope: string, source: unknown) => call(db, "/admin/data/restore", "admin", { scope, confirmation: `RESTORE ${scope.toUpperCase()}`, backup: source });
     let result = await restore("installation", backup); assert.equal(result.status, 200, await result.clone().text());

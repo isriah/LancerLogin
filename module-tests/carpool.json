@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "module": "carpool",
+  "label": "Carpool",
+  "fast": {
+    "javascript": [],
+    "typescript": [
+      "tests-ts/carpool-module.test.ts",
+      "tests-ts/carpool-d1.test.ts",
+      "tests-ts/carpool-meeting-links.test.ts",
+      "tests-ts/module-platform.test.ts",
+      "tests-ts/module-lifecycle.test.ts"
+    ],
+    "browser": [],
+    "typecheckWorkspaces": [],
+    "buildWorkspaces": []
+  },
+  "acceptance": {
+    "javascript": [
+      "tests/worker.test.mjs"
+    ],
+    "typescript": [
+      "tests-ts/carpool-module.test.ts",
+      "tests-ts/carpool-d1.test.ts",
+      "tests-ts/carpool-meeting-links.test.ts",
+      "tests-ts/module-platform.test.ts",
+      "tests-ts/module-lifecycle.test.ts",
+      "tests-ts/worker-runtime.test.ts"
+    ],
+    "browser": [
+      "tests-browser/carpool-workflow.spec.ts",
+      "tests-browser/carpool-meeting-links.spec.ts",
+      "tests-browser/module-platform.spec.ts"
+    ],
+    "typecheckWorkspaces": [
+      "@lancerlogin/shared",
+      "@lancerlogin/api",
+      "@lancerlogin/dashboard"
+    ],
+    "buildWorkspaces": [
+      "@lancerlogin/api",
+      "@lancerlogin/dashboard"
+    ]
+  }
+}

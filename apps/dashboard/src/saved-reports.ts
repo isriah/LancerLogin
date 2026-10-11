@@ -1,0 +1,19 @@
+export type ReportScope = "personal" | "shared";
+export type ReportPeriod = { type: "all" | "baseline" | "current_month" | "current_year" } | { type: "last_days"; days: 7 | 30 | 60 | 90 } | { type: "fixed"; from: string; to: string };
+export type ReportDurationUnit = "minutes" | "hours";
+export type ReportColumn = { key: string; labelId?: string; unit?: ReportDurationUnit };
+export type ReportColumnFilter = { column: ReportColumn; operator: "contains" | "minimum"; value: string };
+export type ReportDefinition = { version: 2; dataset: string; groupBy: string[]; period: ReportPeriod; roster: "active" | "all"; meetingType: "all" | "required" | "optional"; labelIds: string[]; labelMatch: "any" | "all"; outreachLabelIds: string[]; outreachLabelMatch: "any" | "all"; membership: "current" | "historical"; columns: ReportColumn[]; columnFilters?: ReportColumnFilter[]; sort: { column: ReportColumn; direction: "asc" | "desc" } };
+export type ReportColumnCatalogItem = { key: string; label: string; group: string; sortable: boolean; filterKind: "text" | "number"; requiresLabel?: boolean; durationUnits?: ReportDurationUnit[]; defaultDurationUnit?: ReportDurationUnit; datasets: string[] };
+export type ReportDataset = { id: string; label: string; description: string; available: boolean; rowIdentity: string; capability: string; fields: { id: string; label: string; group: string; kind: "dimension" | "measure"; valueType: "text" | "number" | "date"; sortable: boolean; filterOperators: ("contains" | "minimum")[]; requiresLabel?: boolean; durationUnits?: ReportDurationUnit[]; defaultDurationUnit?: ReportDurationUnit; sourceDataset: string; available: boolean; explanation?: string }[]; filters: ("period" | "roster" | "meeting-type" | "labels" | "membership" | "outreach-labels")[]; groupBy: string[]; defaultColumns: string[]; defaultSort: { field: string; direction: "asc" | "desc" }; relationships: { dataset: string; localField: string; foreignField: string }[] };
+export type ReportCatalog = { datasets: ReportDataset[]; columns: ReportColumnCatalogItem[]; labels: { id: string; name: string; active: boolean | number }[]; outreachLabels: { id: string; name: string; archived: boolean }[]; baseline: string | null; timeZone: string; defaultDefinition: ReportDefinition; role: "admin" | "operator"; attendanceAvailable: boolean };
+export type SavedReport = { id: string; ownerUserId: string; scope: ReportScope; name: string; definition: ReportDefinition; revision: number; createdAt: string; updatedAt: string; pinnedPosition: number | null; warnings: string[]; errors: string[] };
+export type ReportCell = { text: string; sortValue: string | number | null; dates?: string[]; unavailable?: boolean; explanation?: string };
+export type ReportQueryResult = { state: "ready" | "paused"; pausedReasons: string[]; definition: ReportDefinition; warnings: string[]; resolvedPeriod: { from?: string; to: string }; columns: { id: string; key: string; label: string; labelId?: string; unit?: ReportDurationUnit; available: boolean; sourceDataset: string; explanation?: string }[]; rows: { id: string; label: string; href?: string; cells: Record<string, ReportCell> }[]; pagination: { page: number; pageSize: 25 | 50 | 100 | "all"; totalRows: number; totalPages: number; rangeStart: number; rangeEnd: number } };
+
+export const reportColumnId = (column: ReportColumn) => `${column.key}${column.labelId ? `:${column.labelId}` : ""}`;
+export function reportColumnLabel(column: ReportColumn, base: string): string {
+  return column.unit === "hours" ? base === "Minutes" ? "Hours" : base.endsWith(" minutes") ? `${base.slice(0, -8)} hours` : `${base} (hours)` : base;
+}
+export const sameReportDefinition = (left: ReportDefinition, right: ReportDefinition) => JSON.stringify(left) === JSON.stringify(right);
+export const cloneReportDefinition = (definition: ReportDefinition): ReportDefinition => JSON.parse(JSON.stringify(definition)) as ReportDefinition;

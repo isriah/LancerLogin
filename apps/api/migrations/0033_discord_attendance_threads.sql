@@ -1,0 +1,1 @@
+ALTER TABLE discord_attendance_notifications ADD COLUMN thread_created_at TEXT;

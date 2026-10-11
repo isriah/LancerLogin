@@ -1,0 +1,13 @@
+{
+  "name": "@lancerlogin/shared",
+  "version": "0.10.5",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./civil-time": "./src/civil-time.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

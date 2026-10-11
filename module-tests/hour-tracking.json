@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "module": "hour-tracking",
+  "label": "Outreach Participation",
+  "fast": {
+    "javascript": [
+      "tests/outreach-dashboard.test.mjs"
+    ],
+    "typescript": [
+      "tests-ts/module-platform.test.ts",
+      "tests-ts/dashboard-module-fixture.test.ts",
+      "tests-ts/module-lifecycle.test.ts",
+      "tests-ts/outreach-catalogs.test.ts",
+      "tests-ts/platform-scheduler.test.ts",
+      "tests-ts/report-builder.test.ts"
+    ],
+    "browser": [],
+    "typecheckWorkspaces": [],
+    "buildWorkspaces": []
+  },
+  "acceptance": {
+    "javascript": [
+      "tests/outreach-dashboard.test.mjs",
+      "tests/integration-workflows.test.mjs",
+      "tests/worker.test.mjs"
+    ],
+    "typescript": [
+      "tests-ts/module-platform.test.ts",
+      "tests-ts/dashboard-module-fixture.test.ts",
+      "tests-ts/module-lifecycle.test.ts",
+      "tests-ts/outreach-catalogs.test.ts",
+      "tests-ts/platform-scheduler.test.ts",
+      "tests-ts/report-builder.test.ts",
+      "tests-ts/integration-runtime.test.ts",
+      "tests-ts/walkthrough.test.ts",
+      "tests-ts/worker-runtime.test.ts"
+    ],
+    "browser": [
+      "tests-browser/module-platform.spec.ts",
+      "tests-browser/outreach-workflow.spec.ts",
+      "tests-browser/modular-reporting.spec.ts",
+      "tests-browser/settings-conformance.spec.ts",
+      "tests-browser/dashboard-walkthrough.spec.ts"
+    ],
+    "typecheckWorkspaces": [
+      "@lancerlogin/shared",
+      "@lancerlogin/api",
+      "@lancerlogin/dashboard"
+    ],
+    "buildWorkspaces": [
+      "@lancerlogin/api",
+      "@lancerlogin/dashboard"
+    ]
+  }
+}

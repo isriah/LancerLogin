@@ -1,0 +1,1 @@
+export const discovered = (release: { tag_name: string; html_url?: string; body?: string; prerelease?: boolean }, checkedAt = Date.now(), channel: "stable" | "beta" = "stable") => ({ channel, fresh: true, checkedAt, attemptedAt: checkedAt, release });

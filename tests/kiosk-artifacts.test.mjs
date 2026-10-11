@@ -49,9 +49,10 @@ test("both shipped archives load and serve their isolated runtime; missing impor
       const extracted = join(scratch, arch);
       await mkdir(extracted);
       execFileSync("tar", ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`), "-C", extracted]);
-      const expected = (await readdir("apps/kiosk/src")).filter(name => name.endsWith(".mjs")).sort();
+      const expected = [...(await readdir("apps/kiosk/src")).filter(name => name.endsWith(".mjs")), "release-policy.mjs"].sort();
       assert.deepEqual((await readdir(join(extracted, "src"))).sort(), expected);
-      for (const missing of ["update-command.mjs", "kiosk-presentation.mjs"]) {
+      assert.equal(await readFile(join(extracted, "src/release-policy.mjs"), "utf8"), await readFile("packages/shared/src/release-policy.mjs", "utf8"));
+      for (const missing of ["update-command.mjs", "kiosk-presentation.mjs", "release-policy.mjs", "resolve-kiosk-release.mjs"]) {
         // Re-extract between failures so each missing direct/transitive import is tested alone.
         execFileSync("tar", ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`), "-C", extracted]);
         await rm(join(extracted, "src", missing));

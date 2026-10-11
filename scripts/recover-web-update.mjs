@@ -1,12 +1,11 @@
 import { verifyCredentialTarget } from "./refresh-web-update-credential.mjs";
 import { retainedDashboardOrigin } from "./run-web-upgrade.mjs";
+import { compareReleaseVersions } from "../packages/shared/src/release-policy.mjs";
 
 function compareStableVersions(left, right) {
-  const stable = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
-  if (!stable.test(left) || !stable.test(right)) throw new Error("recovery_release_mismatch");
-  const a = left.split(".").map(BigInt); const b = right.split(".").map(BigInt);
-  for (let index = 0; index < 3; index++) if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
-  return 0;
+  const comparison = compareReleaseVersions(left, right);
+  if (comparison === undefined) throw new Error("recovery_release_mismatch");
+  return comparison;
 }
 
 /** Deliberate operator recovery, never a dashboard parameter or automatic rollback. */

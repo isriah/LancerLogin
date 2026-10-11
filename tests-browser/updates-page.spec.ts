@@ -135,10 +135,10 @@ test("release checks share15-minute cache across reloads while local status poll
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
   await page.route("**/admin/releases/latest", async (route) => { releaseReads++; if (stall) { pending.push(route); return; } return route.fulfill({ json: discovered({ tag_name: tag }, await page.evaluate(() => Date.now())) }); });
   await page.clock.install(); await page.goto("/settings/updates");
-  await expect(page.locator(".settings-notice")).toContainText("newer community release"); expect(releaseReads).toBe(1);
+  await expect(page.locator(".settings-notice")).toContainText("newer release on this update track"); expect(releaseReads).toBe(1);
   const initialInstalledReads = installedReads;
   await page.clock.runFor(60_000); expect(releaseReads).toBe(1); expect(installedReads).toBeGreaterThan(initialInstalledReads);
-  await page.reload(); await expect(page.locator(".settings-notice")).toContainText("newer community release"); expect(releaseReads).toBe(1);
+  await page.reload(); await expect(page.locator(".settings-notice")).toContainText("newer release on this update track"); expect(releaseReads).toBe(1);
   stall = true; tag = "v0.24.0";
   const check = page.getByRole("button", { name: "Check for updates", exact: true }); await check.focus(); await page.keyboard.press("Enter");
   await expect.poll(() => pending.length).toBe(1); await expect(page.getByRole("button", { name: "Checking for updates…", exact: true })).toBeDisabled();
@@ -175,7 +175,7 @@ test("browser GitHub blocking and the old saved cooldown do not block API releas
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
   await page.route("**/admin/releases/latest", (route) => { discoveries++; return route.fulfill({ json: discovered({ tag_name: "v1.0.4" }) }); });
   await page.goto("/settings/updates");
-  await expect(page.locator(".settings-notice")).toContainText("newer community release");
+  await expect(page.locator(".settings-notice")).toContainText("newer release on this update track");
   await expect(page.getByRole("button", { name: "Back up and begin update" })).toBeEnabled();
   expect(discoveries).toBe(1); expect(githubReads).toBe(0);
 });

@@ -152,7 +152,7 @@ test("prepared backup confirmation follows native keyboard, branded theme and re
   for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
     await page.setViewportSize({ width, height: width === 1280 ? 900 : 844 }); await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), theme);
     await page.goto("/settings/updates"); await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
-    await expect(page.locator(".settings-notice")).toContainText("newer community release");
+    await expect(page.locator(".settings-notice")).toContainText("newer release on this update track");
     const dismiss = page.getByRole("button", { name: "Dismiss update notice" }); if (await dismiss.isVisible()) await dismiss.click();
     await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary); await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
     const checkbox = backupConfirmation(page); await expect(checkbox).toBeVisible(); await checkbox.focus(); await page.keyboard.press("Space"); await expect(checkbox).toBeChecked();

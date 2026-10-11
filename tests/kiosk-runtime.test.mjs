@@ -20,6 +20,7 @@ import { networkApp, networkStyles } from "../apps/kiosk/src/network-ui.mjs";
 import { maintenanceApp, maintenanceHtml, maintenanceLayoutStyles, maintenanceStyles } from "../apps/kiosk/src/maintenance-ui.mjs";
 import { recoveryApp } from "../apps/kiosk/src/recovery-ui.mjs";
 import { startVerifiedKioskUpdate } from "../apps/kiosk/src/update-command.mjs";
+import { resolveKioskRelease } from "../apps/kiosk/src/resolve-kiosk-release.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 
@@ -81,15 +82,13 @@ test("systemd configures the R503 serial link on every service start", async () 
   assert.ok(unit.indexOf("ExecStartPre=") < unit.indexOf("ExecStart=/usr/bin/node"));
 });
 
-test("kiosk update unit permits only a checksum-verified latest stable release", async () => {
+test("kiosk update unit permits only a checksum-verified official target and no arbitrary arguments", async () => {
   const [helper, unit, policy] = await Promise.all([
     readFile("apps/kiosk/scripts/lancerlogin-install-release.sh", "utf8"),
     readFile("apps/kiosk/systemd/lancerlogin-update.service", "utf8"),
     readFile("apps/kiosk/polkit/49-lancerlogin-update.rules", "utf8"),
   ]);
-  assert.match(helper, /repos\/isriah\/LancerLogin\/releases\/latest/);
-  assert.match(helper, /release\.draft !== false/);
-  assert.match(helper, /release\.prerelease !== false/);
+  assert.match(helper, /\/usr\/bin\/node \/opt\/lancerlogin\/src\/resolve-kiosk-release\.mjs/);
   assert.match(helper, /accepts no arguments/);
   assert.match(helper, /install-lancerlogin\.sh\.sha256/);
   assert.match(helper, /sha256sum --check install-lancerlogin\.sh\.sha256/);
@@ -754,27 +753,16 @@ test("kiosk footer shows the release version without masking reader failures", (
 
 test("root helper executes strict release validation before any download", async () => {
   const helper = await readFile("apps/kiosk/scripts/lancerlogin-install-release.sh", "utf8");
-  const validator = helper.split("/usr/bin/node -e '")[1].split("' \"$temporary/release.json\"")[0];
-  assert.ok(validator.includes("required.every"));
-  const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-release-validation-"));
-  const path = join(scratch, "release.json");
   const release = tag => ({ tag_name: tag, draft: false, prerelease: false, assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap(arch => {
     const archive = `lancerlogin-kiosk-${tag.slice(1)}-linux-${arch}.tar.gz`;
     return [archive, `${archive}.sha256`];
   })].map(name => ({ name })) });
-  try {
-    for (const tag of ["v0.24.0", "v1.0.0", "v12.3.45", "v01.0.0", "v1.00.0", "v1.0.00", "v1.0.0-beta", "v1.0.0+build", "v1.0.0\n", "v1.0.0/evil"]) {
-      await writeFile(path, JSON.stringify(release(tag)));
-      const result = spawnSync(process.execPath, ["-e", validator, path], { encoding: "utf8" });
-      const valid = ["v0.24.0", "v1.0.0", "v12.3.45"].includes(tag);
-      assert.equal(result.status, valid ? 0 : 2, tag);
-      assert.equal(result.stdout, valid ? tag.slice(1) : "");
-    }
-    const good = release("v1.0.0");
-    for (const payload of [{ ...good, draft: true }, { ...good, prerelease: true }, { ...good, draft: undefined }, { ...good, prerelease: "false" }, { ...good, assets: undefined }, ...good.assets.map(missing => ({ ...good, assets: good.assets.filter(asset => asset !== missing) }))]) {
-      await writeFile(path, JSON.stringify(payload));
-      assert.equal(spawnSync(process.execPath, ["-e", validator, path]).status, 2);
-    }
-    assert.equal((helper.match(/curl .*GITHUB_API/g) || []).length, 1);
-  } finally { await rm(scratch, { recursive: true, force: true }); }
+  const resolve = async (payload) => resolveKioskRelease({ installedVersion: "0.1.0", fetcher: async (url) => Response.json(url.includes("/commits/") ? { sha: "b".repeat(40) } : payload) });
+  for (const tag of ["v0.24.0", "v1.0.0", "v12.3.45", "v01.0.0", "v1.00.0", "v1.0.00", "v1.0.0-beta", "v1.0.0+build", "v1.0.0\n", "v1.0.0/evil"]) {
+    if (["v0.24.0", "v1.0.0", "v12.3.45"].includes(tag)) assert.equal((await resolve(release(tag))).version, tag.slice(1));
+    else await assert.rejects(resolve(release(tag)), /newer_official_release_required/);
+  }
+  const good = release("v1.0.0");
+  for (const payload of [{ ...good, draft: true }, { ...good, prerelease: true }, { ...good, draft: undefined }, { ...good, prerelease: "false" }, { ...good, assets: undefined }, ...good.assets.map(missing => ({ ...good, assets: good.assets.filter(asset => asset !== missing) }))]) await assert.rejects(resolve(payload), /newer_official_release_required/);
+  assert.ok(helper.indexOf("/opt/lancerlogin/src/resolve-kiosk-release.mjs") < helper.indexOf('curl --fail'));
 });

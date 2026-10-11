@@ -1,23 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { transform } from "esbuild";
+import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
 const requestId = "11111111-1111-1111-1111-111111111111";
 const sha = "b".repeat(40);
 const release = { tag_name: "v1.0.0", draft: false, prerelease: false, body: "Synthetic notes", assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => [`lancerlogin-kiosk-1.0.0-linux-${arch}.tar.gz`, `lancerlogin-kiosk-1.0.0-linux-${arch}.tar.gz.sha256`])].map((name) => ({ name })) };
 // Run the actual updater module inside workerd; only its outbound provider is synthetic.
-const updater = (await transform(await readFile("apps/api/src/web-updates.ts", "utf8"), { loader: "ts", format: "esm" })).code.replace(/\nexport \{[\s\S]*?\};\s*$/, "");
-const discovery = (await transform(await readFile("apps/api/src/release-discovery.ts", "utf8"), { loader: "ts", format: "esm" })).code.replace(/^import .*web-updates\.ts.*;\n/m, "").replace(/\nexport \{[\s\S]*?\};\s*$/, "");
-const script = `${updater}\n${discovery}
+const script = (await build({ bundle: true, write: false, format: "esm", platform: "browser", stdin: { resolveDir: process.cwd(), contents: `
+import { prepareWebUpdate, startWebUpdate, webUpdateStatus } from './apps/api/src/web-updates.ts';
+import { releaseDiscovery } from './apps/api/src/release-discovery.ts';
 export default { async fetch(request, env) {
   const path = new URL(request.url).pathname;
   if (path === '/runtime') return Response.json({ manual: new Request('https://example.invalid', { redirect: 'manual' }).redirect, timeout: typeof AbortSignal.timeout });
   if (path === '/discover') return Response.json(await releaseDiscovery.check(env));
   try { const result = path === '/prepare' ? await prepareWebUpdate(env, 'synthetic-admin') : path === '/start' ? await startWebUpdate(env, await request.json(), 'synthetic-admin') : await webUpdateStatus(env); return Response.json(result); }
   catch(error) { return Response.json({ code: error.code, error: error.message }, { status: error.status || 500 }); }
-} };`;
+} };` } })).outputFiles[0].text;
 
 async function runtime({ redirectPath, redirectStatus = 302, statusRunId = "123", discoveryStatus = 200 } = {}) {
   const calls = [];
@@ -41,6 +41,8 @@ async function runtime({ redirectPath, redirectStatus = 302, statusRunId = "123"
     const database = await worker.getD1Database("DB");
     await database.exec("CREATE TABLE audit_log (id TEXT PRIMARY KEY, installation_id TEXT, actor_user_id TEXT, action TEXT, target_type TEXT, target_id TEXT, metadata_json TEXT, created_at TEXT)");
     await database.exec((await readFile("apps/api/migrations/0029_web_updates.sql", "utf8")).replace(/^--.*$/gm, "").replaceAll("\n", " "));
+    await database.exec("CREATE TABLE kiosk_commands(id TEXT, installation_id TEXT, command_type TEXT, completed_at TEXT, created_at TEXT, success INTEGER, resolution_status TEXT); CREATE TABLE kiosks(id TEXT)");
+    await database.exec((await readFile("apps/api/migrations/0061_update_channels.sql", "utf8")).replace(/^--.*$/gm, "").replaceAll("\n", " "));
     const fetch = (path, body) => worker.dispatchFetch(`http://localhost${path}`, body ? { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {});
     const seed = async ({ state = "prepared", runId = null } = {}) => database.prepare("INSERT INTO web_update_requests (id, installation_id, release_tag, release_sha, release_notes, previous_version, state, created_at, expires_at, updated_at, backup_exported_at, started_at, run_id) VALUES (?, 'primary', 'v1.0.0', ?, '', '0.24.0', ?, ?, ?, ?, ?, ?, ?)").bind(requestId, sha, state, new Date().toISOString(), new Date(Date.now() + 3_600_000).toISOString(), new Date().toISOString(), new Date().toISOString(), state === "prepared" ? null : new Date().toISOString(), runId).run();
     return { worker, database, fetch, seed, calls };

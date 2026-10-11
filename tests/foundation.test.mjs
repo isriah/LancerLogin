@@ -336,8 +336,10 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");
   assert.match(releaseWorkflow, /actions: read/);
   assert.match(releaseWorkflow, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$commit&status=success/);
-  assert.match(releaseWorkflow, /\.event == "push"/);
-  assert.match(releaseWorkflow, /\.head_branch == "main"/);
+  assert.match(releaseWorkflow, /\.event == \\"push\\"/);
+  assert.match(releaseWorkflow, /SOURCE_BRANCH: \$\{\{ steps\.channel\.outputs\.branch \}\}/);
+  assert.match(releaseWorkflow, /\.head_branch == \\"\$SOURCE_BRANCH\\"/);
+  assert.match(releaseWorkflow, /release-channel\.mjs "\$GITHUB_REF_NAME" "\$latest_tag"/);
   assert.doesNotMatch(releaseWorkflow, /npm (?:ci|test|audit)|npm run (?:verify:migrations|typecheck|build)/);
   assert.match(releaseWorkflow, /docs\/releases\/\$GITHUB_REF_NAME\.md/);
   assert.match(releaseWorkflow, /--notes-file/);

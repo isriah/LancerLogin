@@ -5,6 +5,7 @@ export type WebUpdateRequest = {
   previousVersion: string; state: "prepared" | "dispatching" | "queued" | "awaiting_approval" | "running" | "verifying" | "succeeded" | "failed" | "recovery_required" | "expired";
   stage: string; createdAt: string; expiresAt: string; updatedAt: string; backupExported: boolean;
   maintenance: boolean; errorCode: string | null; runUrl: string | null; reloadReady: boolean;
+  channel?: "stable" | "beta";
 };
 export type WebUpdateResponse = { releaseVersion: string; workflowUrl: string; request: WebUpdateRequest | null; activeRequest?: WebUpdateRequest | null; latestCompletedRequest?: WebUpdateRequest | null };
 
@@ -21,7 +22,9 @@ const errors: Record<string, string> = {
   workflow_invalid: "GitHub rejected the private web update workflow. Your installation operator must repair its main branch or dispatch inputs before retrying.",
   cooldown: "GitHub or this installation is limiting update requests. Try again after the cooldown clears. If an update was recently started, wait at least two minutes from that start; provider limits may take longer.",
   already_current: "This installation is current.",
-  release_unavailable: "A complete official stable release is unavailable. Try preparing again later.",
+  release_unavailable: "A complete official release on this update track is unavailable. Try preparing again later.",
+  controller_upgrade_required: "Your installation maintainer must install the reviewed update-channel controller before a beta update can start. See Web updates in the installation guide.",
+  channel_changed: "The update track changed. Prepare a new update and download its associated backup.",
   invalid_request: "The update request is invalid. Refresh status before continuing.",
   request_missing: "The prepared update could not be found. Refresh status before preparing again.",
   request_expired: "This prepared update expired. Prepare a new update and download its associated backup.",
@@ -51,16 +54,16 @@ export function webUpdateStatus(request: WebUpdateRequest) {
 export function canReloadWebUpdate(request: WebUpdateRequest, bundledVersion: string, installedVersion = request.targetTag) {
   return request.state === "succeeded" && request.reloadReady === true && !request.maintenance
     && isNewerRelease(request.targetTag, bundledVersion)
-    && hasComparableStableVersions({ tag_name: request.targetTag }, installedVersion)
+    && hasComparableStableVersions({ tag_name: request.targetTag, channel: request.channel, prerelease: request.targetTag.includes("-beta.") }, installedVersion)
     && !isNewerRelease(installedVersion, request.targetTag);
 }
 export function isCompletedWebUpdateHistory(request: WebUpdateRequest, installedVersion: string, bundledVersion: string) {
   if (request.state !== "succeeded" || !request.reloadReady || request.maintenance
-    || !hasComparableStableVersions({ tag_name: request.targetTag }, installedVersion)) return false;
+    || !hasComparableStableVersions({ tag_name: request.targetTag, channel: request.channel, prerelease: request.targetTag.includes("-beta.") }, installedVersion)) return false;
   // A later manual deployment can supersede the last durable update request.
   return isNewerRelease(installedVersion, request.targetTag)
     || (installedVersion.replace(/^v/, "") === request.targetTag.replace(/^v/, "")
-      && hasComparableStableVersions({ tag_name: request.targetTag }, bundledVersion)
+      && hasComparableStableVersions({ tag_name: request.targetTag, channel: request.channel, prerelease: request.targetTag.includes("-beta.") }, bundledVersion)
       && !isNewerRelease(request.targetTag, bundledVersion));
 }
 export function diagnosticUrl(value?: string | null) {

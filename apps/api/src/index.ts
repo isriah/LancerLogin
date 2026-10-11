@@ -2,7 +2,9 @@ import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, typ
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
 import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance } from "./web-updates.ts";
-import { releaseDiscovery, releaseRequestHeaders } from "./release-discovery.ts";
+import { discoveryForChannel, releaseRequestHeaders, resolveOfficialRelease } from "./release-discovery.ts";
+import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
+import { compareReleaseVersions } from "../../../packages/shared/src/release-policy.mjs";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
 import { buildReportRows, defaultReportDefinition, reportColumnCatalog, reportColumnId, reportColumnLabel, reportLabelsMatch, resolveReportPeriod, validateReportDefinition, type ReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
@@ -28,34 +30,16 @@ type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; end
 type MeetingWeightCategory = { id: string; name: string; weight: number; minimumDurationMinutes?: number | null; position: number; active: number | boolean };
 type MeetingWeightCategoryInput = { name?: string; weight?: number; minimumDurationMinutes?: number | null; active?: boolean };
 type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
-const latestKioskReleaseUrl = "https://api.github.com/repos/isriah/LancerLogin/releases/latest";
-const compatibleKioskRelease = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?![\s\S])/;
-type GitHubRelease = { tag_name?: unknown; draft?: unknown; prerelease?: unknown; assets?: unknown };
-function compatibleReleaseTag(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const release = value as GitHubRelease;
-  if (release.draft !== false || release.prerelease !== false || typeof release.tag_name !== "string") return undefined;
-  if (!compatibleKioskRelease.test(release.tag_name) || !Array.isArray(release.assets)) return undefined;
-  const names = new Set(release.assets.map((asset) => asset?.name));
-  const version = release.tag_name.slice(1);
-  const required = ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => {
-    const archive = `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`;
-    return [archive, `${archive}.sha256`];
-  })];
-  return required.every((name) => names.has(name)) ? release.tag_name : undefined;
-}
-async function latestCompatibleKioskRelease(env: Env): Promise<string> {
+async function latestCompatibleKioskRelease(env: Env, channel: "stable" | "beta") {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 4_000);
   try {
     const request = { headers: releaseRequestHeaders(env), redirect: "manual" as const, signal: controller.signal };
-    const latest = await fetch(latestKioskReleaseUrl, request);
-    if (!latest.ok) throw new Error("Latest release feed unavailable");
-    const latestTag = compatibleReleaseTag(await latest.json().catch(() => undefined));
-    if (latestTag) return latestTag;
-
-    // Match the no-argument root helper: one latest resolution, no fallback
-    // to a different release and no dashboard-supplied tag or response URL.
-    throw new Error("No compatible release");
+    const target = await resolveOfficialRelease(channel, (path) => fetch(`https://api.github.com${path}`, request));
+    if (!target) throw new Error("No compatible release");
+    const commit = await fetch(`https://api.github.com/repos/isriah/LancerLogin/commits/${target.tag}`, request);
+    const value = commit.ok ? await commit.json() as { sha?: string } : undefined;
+    if (!value?.sha || !/^[0-9a-f]{40}$/.test(value.sha)) throw new Error("Release commit unavailable");
+    return { ...target, sha: value.sha };
   } catch {
     throw new HttpError(503, "No compatible official kiosk release is currently available. Try again after checking the release feed.");
   } finally { clearTimeout(timer); }
@@ -202,9 +186,18 @@ async function updateInfo(request: Request, env: Env): Promise<Response> {
 }
 async function discoverRelease(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
-  const result = await releaseDiscovery.check(env);
-  return response(result, result.fresh ? 200 : result.code === "rate_limited" ? 429 : 503,
+  const { channel } = await readUpdateChannel(env);
+  const result = await discoveryForChannel(channel).check(env);
+  return response({ ...result, channel }, result.fresh ? 200 : result.code === "rate_limited" ? 429 : 503,
     result.retryAt ? { "retry-after": String(Math.max(1, Math.ceil((result.retryAt - Date.now()) / 1000))) } : undefined);
+}
+async function updateChannel(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]);
+  if (request.method === "GET") return response(await readUpdateChannel(env));
+  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Update settings require the dashboard origin");
+  const input = await parseJson<Record<string, unknown>>(request, 2_048);
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "Invalid update setting");
+  return response(await changeUpdateChannel(env, input, principal.userId));
 }
 async function webUpdates(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]);
@@ -631,11 +624,13 @@ async function kioskFor(request: Request, env: Env): Promise<{ id: string; name:
   return kiosk;
 }
 async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; releaseVersion?: string; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string | null; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null }>(request);
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; releaseVersion?: string; updatePolicyVersion?: number; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string | null; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null }>(request);
+  if (input.updatePolicyVersion !== undefined && ![1, 2].includes(input.updatePolicyVersion)) throw new HttpError(400, "Unsupported kiosk update policy");
   const pendingEvents = input.pendingEvents ?? 0;
   if (typeof input.readerOnline !== "boolean" || !input.releaseVersion?.trim() || input.releaseVersion.length > 40 || input.uptimeSeconds !== undefined && (!Number.isInteger(input.uptimeSeconds) || input.uptimeSeconds < 0 || input.uptimeSeconds > 2_147_483_647) || input.networkType !== undefined && !["wifi", "ethernet", "offline"].includes(input.networkType) || input.networkSignal !== undefined && input.networkSignal !== null && (!Number.isInteger(input.networkSignal) || input.networkSignal < 0 || input.networkSignal > 100) || input.lastWifiScanAt && !validTimestamp(input.lastWifiScanAt) || !Number.isInteger(pendingEvents) || pendingEvents < 0 || pendingEvents > 100_000 || input.lastSyncAt && !validTimestamp(input.lastSyncAt) || input.errorCategory && !["cloud_sync", "reader", "offline_queue"].includes(input.errorCategory)) throw new HttpError(400, "Reader status and approved operational diagnostics are required");
   const now = new Date().toISOString();
   const db = requireDatabase(env); const reportedRelease = input.releaseVersion.trim();
+  await db.prepare("UPDATE kiosks SET update_policy_version = ? WHERE installation_id = 'primary' AND id = ?").bind(input.updatePolicyVersion ?? 1, kiosk.id).run();
   await db.prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, reportedRelease, input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, input.errorCategory || null, kiosk.id).run();
   const update = await db.prepare("SELECT id, completed_at AS completedAt, requested_release_version AS requestedReleaseVersion, release_version_before AS releaseVersionBefore FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? AND command_type = 'install_latest' AND completed_at IS NOT NULL AND success = 1 AND resolution_status IS NULL ORDER BY created_at DESC LIMIT 1").bind(kiosk.id).first<{ id: string; completedAt: string; requestedReleaseVersion?: string; releaseVersionBefore?: string }>();
   if (update?.requestedReleaseVersion) {
@@ -652,7 +647,7 @@ async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContex
 }
 async function kioskStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]);
-  const result = await requireDatabase(env).prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
+  const result = await requireDatabase(env).prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
   return response({ kiosks: result.results ?? [] });
 }
 async function kioskConfiguration(request: Request, env: Env): Promise<Response> {
@@ -681,18 +676,26 @@ async function manageKiosk(request: Request, env: Env, kioskId: string): Promise
   return response({ retired: true, kioskId });
 }
 async function queueKioskCommand(request: Request, env: Env, kioskId: string): Promise<Response> {
+  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Kiosk commands require the dashboard origin");
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ command?: KioskCommandType }>(request);
   const supported: KioskCommandType[] = ["reload_display", "restart_service", "reboot", "reset_network_pin", "install_latest"];
-  if (!input.command || !supported.includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command");
-  const kiosk = await db.prepare("SELECT id, name, release_version AS releaseVersion FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string; releaseVersion?: string }>();
+  if (!isObject(input) || Object.keys(input).some((key) => key !== "command") || !input.command || !supported.includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command without additional arguments");
+  const kiosk = await db.prepare("SELECT id, name, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string; releaseVersion?: string; updatePolicyVersion?: number }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
   let requestedReleaseVersion: string | null = null;
-  if (input.command === "install_latest") requestedReleaseVersion = await latestCompatibleKioskRelease(env);
+  const setting = await readUpdateChannel(env);
+  const target = input.command === "install_latest" ? await latestCompatibleKioskRelease(env, setting.channel) : undefined;
+  if (target) {
+    if (target.prerelease && kiosk.updatePolicyVersion !== 2) throw new HttpError(409, "Install the stable update-channel bridge on this kiosk before updating it to Beta.");
+    if (compareReleaseVersions(target.tag, kiosk.releaseVersion ?? "") !== 1) throw new HttpError(409, "This kiosk has no newer release on the selected track. Downgrades are not supported.");
+    requestedReleaseVersion = target.tag;
+  }
   const id = crypto.randomUUID(); const now = new Date().toISOString();
   await db.batch([
-    db.prepare("INSERT INTO kiosk_commands (id, installation_id, kiosk_id, command_type, created_by, created_at, requested_release_version, release_version_before) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, kioskId, input.command, principal.userId, now, requestedReleaseVersion, input.command === "install_latest" ? kiosk.releaseVersion ?? null : null),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'kiosk.command_queued', 'kiosk', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, kioskId, JSON.stringify({ commandId: id, command: input.command, requestedReleaseVersion }), now),
+    db.prepare("INSERT INTO kiosk_commands (id, installation_id, kiosk_id, command_type, created_by, created_at, requested_release_version, release_version_before, update_channel, requested_release_sha) SELECT ?, 'primary', ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM installation_update_settings WHERE installation_id = 'primary' AND update_channel_revision = ?) AND (? <> 'install_latest' OR NOT EXISTS (SELECT 1 FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? AND command_type = 'install_latest' AND (completed_at IS NULL OR success = 1 AND resolution_status IS NULL) AND created_at >= ?))").bind(id, kioskId, input.command, principal.userId, now, requestedReleaseVersion, input.command === "install_latest" ? kiosk.releaseVersion ?? null : null, setting.channel, target?.sha ?? null, setting.revision, input.command, kioskId, new Date(Date.now() - 15 * 60_000).toISOString()),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, 'kiosk.command_queued', 'kiosk', ?, ?, ? WHERE EXISTS (SELECT 1 FROM kiosk_commands WHERE installation_id = 'primary' AND id = ?)").bind(crypto.randomUUID(), principal.userId, kioskId, JSON.stringify({ commandId: id, command: input.command, requestedReleaseVersion, channel: setting.channel, targetCommit: target?.sha }), now, id),
   ]);
+  if (!await db.prepare("SELECT id FROM kiosk_commands WHERE installation_id = 'primary' AND id = ?").bind(id).first()) throw new HttpError(409, "The update track changed or a kiosk update is already pending. Refresh its status before trying again.");
   return response({ command: { id, type: input.command, kioskId, queuedAt: now, ...(requestedReleaseVersion ? { requestedReleaseVersion } : {}) } }, 202);
 }
 async function kioskCommandStatus(request: Request, env: Env, kioskId: string): Promise<Response> {
@@ -703,7 +706,7 @@ async function kioskCommandStatus(request: Request, env: Env, kioskId: string): 
   return response({ commands: commands.results ?? [] });
 }
 async function pendingKioskCommand(request: Request, env: Env): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const notBefore = new Date(Date.now() - 15 * 60_000).toISOString(); const command = await requireDatabase(env).prepare("SELECT id, command_type AS type, created_at AS createdAt FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? AND completed_at IS NULL AND created_at >= ? ORDER BY created_at LIMIT 1").bind(kiosk.id, notBefore).first();
+  const kiosk = await kioskFor(request, env); const notBefore = new Date(Date.now() - 15 * 60_000).toISOString(); const command = await requireDatabase(env).prepare("SELECT id, command_type AS type, created_at AS createdAt, requested_release_version AS targetTag, requested_release_sha AS targetCommit, update_channel AS channel FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? AND completed_at IS NULL AND created_at >= ? ORDER BY created_at LIMIT 1").bind(kiosk.id, notBefore).first();
   return response({ command: command ?? null });
 }
 async function completeKioskCommand(request: Request, env: Env, commandId: string): Promise<Response> {
@@ -2991,12 +2994,13 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   if (usage) env = { ...env, DB: usage.database };
   try {
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !["/auth/local", "/auth/logout", "/auth/google/callback"].includes(url.pathname) && await webUpdateMaintenance(env)) return withCors(response({ error: "An installation update requires temporary write suspension. Retry after recovery or completion.", code: "update_maintenance" }, 503, { "retry-after": "30" }), request, env);
-    if (request.method === "OPTIONS") result = new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "authorization, content-type", "access-control-allow-credentials": "true" } });
+    if (request.method === "OPTIONS") result = new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "authorization, content-type", "access-control-allow-credentials": "true" } });
     else if (url.pathname === "/health" && request.method === "GET") result = response({ ok: true, service: "lancerlogin-api", mode: env.DB ? "ready" : "unconfigured", releaseVersion: env.RELEASE_VERSION ?? "development" });
     else if (url.pathname === "/setup/status" && request.method === "GET") result = await setupStatus(env);
     else if (url.pathname === "/setup/bootstrap" && request.method === "POST") result = await bootstrap(request, env);
     else if (url.pathname === "/admin/update-info" && request.method === "GET") result = await updateInfo(request, env);
     else if (url.pathname === "/admin/releases/latest" && request.method === "GET") result = await discoverRelease(request, env);
+    else if (url.pathname === "/admin/update-channel" && ["GET", "PUT"].includes(request.method)) result = await updateChannel(request, env);
     else if (url.pathname === "/admin/web-updates/status" && request.method === "GET" || ["/admin/web-updates/prepare", "/admin/web-updates/start"].includes(url.pathname) && request.method === "POST") result = await webUpdates(request, env);
     else if (url.pathname === "/auth/local" && request.method === "POST") result = await localLogin(request, env);
     else if (url.pathname === "/auth/session" && request.method === "GET") result = await authSession(request, env);

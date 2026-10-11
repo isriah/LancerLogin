@@ -65,6 +65,8 @@ export async function smokeKioskDirectory(directory, { requireUnprivileged = fal
         assert.notEqual((await stat(".")).uid, process.getuid(), "runtime must be owned by a different account");
       }
       const { server } = await import(${JSON.stringify(pathToFileURL(join(directory, "src/service.mjs")).href)});
+      const { resolveKioskRelease } = await import(${JSON.stringify(pathToFileURL(join(directory, "src/resolve-kiosk-release.mjs")).href)});
+      await assert.rejects(resolveKioskRelease({ request: { targetTag: "v2.0.0-beta.1", channel: "stable" }, installedVersion: "1.2.6", fetcher: () => { throw new Error("No provider access for invalid targets"); } }), /invalid_update_request/);
       await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
       try {
         const base = "http://127.0.0.1:" + server.address().port;
@@ -91,7 +93,7 @@ export async function verifyKioskArtifacts({ artifacts, version, requireUnprivil
     try {
       execFileSync("tar", ["-xzf", join(artifacts, name), "-C", extracted], { stdio: "pipe" });
       await checkPackageModes(extracted);
-      for (const path of ["scripts/lancerlogin-install-release.sh", "systemd/lancerlogin-kiosk.service", "systemd/lancerlogin-update.service", "polkit/49-lancerlogin-network.rules", "polkit/49-lancerlogin-recovery.rules", "polkit/49-lancerlogin-update.rules"]) await readFile(join(extracted, path));
+      for (const path of ["src/release-policy.mjs", "src/resolve-kiosk-release.mjs", "scripts/lancerlogin-install-release.sh", "systemd/lancerlogin-kiosk.service", "systemd/lancerlogin-update.service", "polkit/49-lancerlogin-network.rules", "polkit/49-lancerlogin-recovery.rules", "polkit/49-lancerlogin-update.rules"]) await readFile(join(extracted, path));
       await smokeKioskDirectory(extracted, { requireUnprivileged });
     } finally {
       await rm(extracted, { recursive: true, force: true });
@@ -113,9 +115,13 @@ export async function packageKioskArtifacts({ output, version, sourceRoot = repo
     for (const directory of ["src", "scripts", "systemd", "polkit"]) await mkdir(join(staging, directory));
     const kiosk = join(sourceRoot, "apps/kiosk");
     for (const entry of await readdir(join(kiosk, "src"), { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith(".mjs")) await copyFile(join(kiosk, "src", entry.name), join(staging, "src", entry.name));
+      if (entry.isFile() && entry.name.endsWith(".mjs")) {
+        if (entry.name === "resolve-kiosk-release.mjs") await writeFile(join(staging, "src", entry.name), (await readFile(join(kiosk, "src", entry.name), "utf8")).replace("../../../packages/shared/src/release-policy.mjs", "./release-policy.mjs"));
+        else await copyFile(join(kiosk, "src", entry.name), join(staging, "src", entry.name));
+      }
       if (entry.isDirectory()) throw new Error("Kiosk runtime subdirectories require explicit packaging support");
     }
+    await copyFile(join(sourceRoot, "packages/shared/src/release-policy.mjs"), join(staging, "src/release-policy.mjs"));
     await copyFile(join(kiosk, "scripts/lancerlogin-install-release.sh"), join(staging, "scripts/lancerlogin-install-release.sh"));
     for (const [directory, suffix] of [["systemd", ".service"], ["polkit", ".rules"]]) {
       for (const name of await readdir(join(kiosk, directory))) if (name.endsWith(suffix)) await copyFile(join(kiosk, directory, name), join(staging, directory, name));

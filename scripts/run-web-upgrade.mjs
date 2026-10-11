@@ -6,15 +6,15 @@ import { buildProvisionConfig } from "./prepare-cloudflare-provision.mjs";
 import { buildPagesProxy } from "./prepare-pages-proxy.mjs";
 
 import { resolveDatabaseName } from "./database-identity.mjs";
+import { parseReleaseVersion, releaseAllowed, compareReleaseVersions } from "../packages/shared/src/release-policy.mjs";
 
-const stable = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?![\s\S])/;
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const shaPattern = /^[0-9a-f]{40}$/;
 export const controllerCredentialMinimumValidityMs = 2 * 60 * 60_000;
 export function validateUpgradeEnvironment(env) {
   if (env.REPOSITORY_PRIVATE !== "true") throw new Error("private_repository_required");
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.UPDATE_REPOSITORY ?? "") || env.UPDATE_REPOSITORY.toLowerCase() === "isriah/lancerlogin") throw new Error("private_repository_required");
-  if (!idPattern.test(env.REQUEST_ID ?? "") || !stable.test(env.RELEASE_TAG ?? "") || !shaPattern.test(env.RELEASE_SHA ?? "") || !/^[1-9][0-9]*$/.test(env.EXECUTOR_RUN_ID ?? "")) throw new Error("invalid_request");
+  if (!idPattern.test(env.REQUEST_ID ?? "") || !env.RELEASE_TAG?.startsWith("v") || !parseReleaseVersion(env.RELEASE_TAG) || !shaPattern.test(env.RELEASE_SHA ?? "") || !/^[1-9][0-9]*$/.test(env.EXECUTOR_RUN_ID ?? "")) throw new Error("invalid_request");
   if (!/^[a-z][a-z0-9-]{2,40}$/.test(env.INSTALLATION_SLUG ?? "") || !idPattern.test(env.DATABASE_ID ?? "")) throw new Error("fixed_resources_required");
   const api = new URL(env.API_URL);
   if (api.protocol !== "https:" || api.username || api.password || api.search || api.hash || api.pathname !== "/" || !api.hostname.startsWith(`${env.INSTALLATION_SLUG}-api.`) || !api.hostname.endsWith(".workers.dev")) throw new Error("fixed_api_origin_required");
@@ -26,7 +26,7 @@ export function validateUpgradeEnvironment(env) {
 }
 export async function validateOfficialSource(context, get) {
   const release = await get(`https://api.github.com/repos/isriah/LancerLogin/releases/tags/${context.tag}`);
-  if (release.tag_name !== context.tag || release.draft !== false || release.prerelease !== false || !Array.isArray(release.assets)) throw new Error("official_release_required");
+  if (release.tag_name !== context.tag || release.draft !== false || !releaseAllowed(context.tag, "beta", release.prerelease) || release.prerelease === true && release.immutable !== true || !Array.isArray(release.assets)) throw new Error("official_release_required");
   const version = context.tag.slice(1); const names = new Set(release.assets.map((asset) => asset.name));
   const required = ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => [`lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz.sha256`])];
   if (!required.every((name) => names.has(name))) throw new Error("complete_release_required");
@@ -34,10 +34,15 @@ export async function validateOfficialSource(context, get) {
   if (commit.sha !== context.sha) throw new Error("release_commit_mismatch");
 }
 export async function validateMigrationPolicy(policy, files, applied, previousVersion, targetTag) {
-  const compare = (left, right) => { const a = left.split(".").map(BigInt); const b = right.split(".").map(BigInt); for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i] ? 1 : -1; return 0; };
-  if (policy.format !== 1 || policy.automaticCodeRollback !== false || !stable.test(`v${previousVersion}`) || !stable.test(`v${policy.minimumInstalledVersion}`) || compare(previousVersion, policy.minimumInstalledVersion) < 0 || compare(targetTag.slice(1), previousVersion) <= 0) throw new Error("migration_compatibility_review_required");
+  if (policy.format !== 1 || policy.automaticCodeRollback !== false || !parseReleaseVersion(previousVersion) || !parseReleaseVersion(policy.minimumInstalledVersion) || !targetTag.startsWith("v") || compareReleaseVersions(previousVersion, policy.minimumInstalledVersion) === undefined || compareReleaseVersions(previousVersion, policy.minimumInstalledVersion) < 0 || compareReleaseVersions(targetTag, previousVersion) !== 1) throw new Error("migration_compatibility_review_required");
   const reviewed = policy.reviewedMigrations;
-  if (!Array.isArray(reviewed) || reviewed.length !== files.length || applied.some((name, index) => files[index]?.name !== name)) throw new Error("migration_path_review_required");
+  // Only an explicitly reviewed, independent bridge can have been applied before
+  // Modular's existing sequence. All other migrations retain exact-prefix order.
+  const bridges = policy.independentBridgeMigrations ?? [];
+  if (!Array.isArray(bridges) || bridges.some((name) => name !== "0061_update_channels.sql") || new Set(bridges).size !== bridges.length) throw new Error("migration_path_review_required");
+  const ordinary = files.filter((file) => !bridges.includes(file.name));
+  const installed = applied.filter((name) => !bridges.includes(name));
+  if (!Array.isArray(reviewed) || reviewed.length !== files.length || new Set(applied).size !== applied.length || bridges.some((name) => !files.some((file) => file.name === name)) || installed.some((name, index) => ordinary[index]?.name !== name)) throw new Error("migration_path_review_required");
   for (const [index, file] of files.entries()) {
     if (reviewed[index]?.name !== file.name || reviewed[index]?.sha256 !== createHash("sha256").update(file.content.replaceAll("\r\n", "\n")).digest("hex") || reviewed[index]?.forwardCompatible !== true) throw new Error("migration_hash_review_required");
   }
@@ -127,6 +132,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
   };
   const owned = "installation_id = 'primary' AND id = ? AND executor_run_id = ?";
   let dashboardOrigin;
+  let channelPolicyInstalled = false;
   const updateState = async (state, stage, maintenance, error = null) => {
     const result = await sql(`UPDATE web_update_requests SET state = ?, stage = ?, maintenance = ?, error_code = ?, updated_at = ? WHERE ${owned} AND state NOT IN ('succeeded','failed','expired')`, [state, stage, maintenance, error, new Date().toISOString(), context.requestId, context.runId]);
     if (result[0]?.meta?.changes !== 1) throw new Error("request_state_conflict");
@@ -149,7 +155,11 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
       dashboardOrigin = retainedDashboardOrigin(settings, pages);
       config.vars.ALLOWED_ORIGIN = dashboardOrigin;
       await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
-      const request = (await sql("SELECT previous_version FROM web_update_requests WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ?", [context.requestId, context.tag, context.sha]))[0]?.results?.[0];
+      channelPolicyInstalled = (await sql("PRAGMA table_info(web_update_requests)"))[0]?.results?.some((column) => column.name === "update_channel") ?? false;
+      const request = (await sql(`SELECT previous_version${channelPolicyInstalled ? ", update_channel" : ""} FROM web_update_requests WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ?`, [context.requestId, context.tag, context.sha]))[0]?.results?.[0];
+      const setting = channelPolicyInstalled ? (await sql("SELECT update_channel FROM installation_update_settings WHERE installation_id = 'primary'"))[0]?.results?.[0] : { update_channel: "stable" };
+      const channel = channelPolicyInstalled ? request?.update_channel : "stable";
+      if (!request || channel !== setting?.update_channel || !releaseAllowed(context.tag, channel, parseReleaseVersion(context.tag)?.beta !== undefined)) throw new Error("update_channel_consent_required");
       const health = await jsonGet(`${context.apiUrl}/health`);
       if (!request || health.releaseVersion !== request.previous_version || health.ok !== true) throw new Error("installed_release_mismatch");
       const currentPages = await jsonGet(`${context.dashboardUrl}/__lancerlogin-release`);
@@ -163,7 +173,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
       await validateMigrationPolicy(policy, files, applied, health.releaseVersion, context.tag);
     },
     async claim() {
-      const result = await sql("UPDATE web_update_requests SET executor_run_id = ?, run_id = ?, state = 'running', stage = 'preflight', updated_at = ? WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ? AND backup_exported_at IS NOT NULL AND executor_run_id IS NULL AND state IN ('dispatching','queued','awaiting_approval','running') AND (run_id IS NULL OR run_id = ?)", [context.runId, context.runId, new Date().toISOString(), context.requestId, context.tag, context.sha, context.runId]);
+      const result = await sql(`UPDATE web_update_requests SET executor_run_id = ?, run_id = ?, state = 'running', stage = 'preflight', updated_at = ? WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ? AND backup_exported_at IS NOT NULL AND executor_run_id IS NULL AND state IN ('dispatching','queued','awaiting_approval','running') AND (run_id IS NULL OR run_id = ?)${channelPolicyInstalled ? " AND update_channel = (SELECT update_channel FROM installation_update_settings WHERE installation_id = 'primary')" : ""}`, [context.runId, context.runId, new Date().toISOString(), context.requestId, context.tag, context.sha, context.runId]);
       return result[0]?.meta?.changes === 1;
     },
     state: updateState,

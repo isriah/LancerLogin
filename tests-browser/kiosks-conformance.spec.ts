@@ -85,7 +85,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.locator("main h1")).toHaveCount(1);
       await expect(page.getByRole("heading", { level: 1, name: "Kiosks" })).toBeVisible();
       await expect(page.getByText("Healthy", { exact: true })).toHaveAttribute("data-tone", "success");
-      await expect(page.getByText("Latest stable", { exact: true })).toBeVisible();
+      await expect(page.getByText("Available on selected track", { exact: true })).toBeVisible();
       await expect(page.getByText("Update available", { exact: true })).toBeVisible();
       await expect(page.getByRole("table", { name: "Retired kiosk history" })).toContainText("Retired workshop kiosk");
       await expect(page.getByRole("link", { name: "Open simulator" })).toHaveAttribute("href", "/simulator");

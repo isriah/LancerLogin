@@ -25,6 +25,8 @@ The Worker request boundary allows unauthenticated health and CORS preflight onl
 
 Web updates use Admin-only prepare/start/status control and an installation-scoped D1 request/executor lock. A fixed private GitHub Actions controller owns exact-release deployment, preserved-resource checks and recovery checkpoints. Worker dispatch credentials are secrets, excluded from D1/API/backups. Maintenance returns retryable kiosk errors while queued scans remain local. See [WEB-UPDATES.md](WEB-UPDATES.md).
 
+Server-owned update-track consent lives in a separate operational table with revision-based atomic changes and audit records. Stable is the default. Web requests and kiosk commands retain the selected track, official tag and exact commit. Discovery and browser hint caches are partitioned by track. The canonical release policy is packaged with the kiosk resolver so it does not depend on a source checkout. See [UPDATE-TRACKS.md](UPDATE-TRACKS.md).
+
 | Location | May store | Must not store |
 | --- | --- | --- |
 | R503 sensor | fingerprint templates | cloud credentials |

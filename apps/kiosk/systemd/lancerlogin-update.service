@@ -1,5 +1,5 @@
 [Unit]
-Description=Install the latest stable LancerLogin kiosk release
+Description=Install a verified official LancerLogin kiosk release
 After=network-online.target
 Wants=network-online.target
 

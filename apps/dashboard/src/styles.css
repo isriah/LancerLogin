@@ -419,6 +419,12 @@ main[aria-busy="true"] .setup-progress { display: none; }
 .version-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .8rem; margin-bottom: 1rem; }
 .version-grid a { color: var(--primary); font-weight: 800; }
 .ui-card,.empty-page { min-width: 0; padding: var(--card-padding); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface); border-radius: var(--radius-panel); }
+.update-channel-card { display: grid; gap: var(--space-3); }
+.update-channel-card h2,.update-channel-card p { margin: 0; }
+.update-channel-card > label { margin: 0; }
+.update-channel-card > .checkbox-field { min-height: var(--control-min-block-size); }
+.update-channel-card select { width: min(100%, 22rem); min-height: var(--control-min-block-size); margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-control); color: var(--ui-text); background: var(--ui-surface-subtle); font: inherit; }
+.update-channel-card .checkbox-field input { flex: 0 0 auto; width: 1.15rem; height: 1.15rem; min-height: 1.15rem; margin: 0; padding: 0; accent-color: var(--primary); }
 .ui-form { display: grid; gap: var(--space-3); }
 .ui-form > label { min-width: 0; margin: 0; }
 .ui-control,.ui-form input,.ui-form select,.ui-form textarea { width: 100%; min-height: var(--control-min-block-size); padding: var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background-color: var(--ui-surface-subtle); border-radius: var(--radius-control); }

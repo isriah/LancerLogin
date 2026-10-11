@@ -18,7 +18,9 @@ CSV export prefixes formula-like values as text before quoting. This prevents ro
 
 ## Updates and recovery
 
-Web updates require current Administrator authorization, an exact dashboard origin, a pinned official stable release, an entire-installation backup, and a durable update request. The browser cannot choose deployment resources. Refreshing update status does not dispatch another update. Recovery retains a deployment lock until an explicit review confirms the next action and API/Pages health.
+Web updates require current Administrator authorization, an exact dashboard origin, a pinned official release allowed by the server-owned track, an entire-installation backup, and a durable request. Stable is the default; Beta requires explicit audited consent. The browser cannot choose deployment resources, tags or commits. Refreshing status never redispatches. Recovery retains a deployment lock until explicit review confirms the next action and API/Pages health.
+
+Tracks never install or downgrade software. Started web updates and recent pending kiosk updates lock the track. Beta preparation requires the reviewed private controller; a kiosk needs its installed channel-aware root helper. Execution independently checks release flags, complete assets, exact tag/commit and immutable beta metadata. See [UPDATE-TRACKS.md](UPDATE-TRACKS.md).
 
 Physical kiosk updates are separate from web updates. Do not treat a simulator or dashboard state as proof of a physical update. The completed 1.0.2 kiosk update was run with the terminal updater through Raspberry Pi Connect remote shell; dashboard kiosk release lookup acceptance remains unproven. See [KIOSK.md](KIOSK.md) and [WEB-UPDATES.md](WEB-UPDATES.md).
 

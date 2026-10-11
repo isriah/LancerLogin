@@ -1,9 +1,9 @@
-import { officialWebRelease } from "./web-updates.ts";
+import { completeOfficialRelease, newestOfficialRelease, type UpdateChannel, type OfficialRelease } from "../../../packages/shared/src/release-policy.mjs";
 
 export const officialReleaseUrl = "https://api.github.com/repos/isriah/LancerLogin/releases/latest";
 export const discoveryTtlMs = 15 * 60_000;
 export const discoveryMaximumRetryMs = 60 * 60_000;
-export type DiscoveryRelease = { tag_name: string; html_url: string; body: string; draft: false; prerelease: false };
+export type DiscoveryRelease = { tag_name: string; html_url: string; body: string; draft: false; prerelease: boolean };
 export type DiscoveryCode = "rate_limited" | "timeout" | "network" | "provider_unavailable" | "invalid_release";
 export type DiscoverySnapshot = {
   release?: DiscoveryRelease; checkedAt?: number; attemptedAt?: number; retryAt?: number;
@@ -15,8 +15,26 @@ const messages: Record<DiscoveryCode, string> = {
   timeout: "Latest release check timed out.",
   network: "The server could not reach GitHub release discovery.",
   provider_unavailable: "Latest release is temporarily unavailable.",
-  invalid_release: "A complete stable official release could not be confirmed.",
+  invalid_release: "A complete official release on the selected track could not be confirmed.",
 };
+
+// Stable stays on GitHub Latest. Beta considers stable and beta releases by SemVer,
+// not publication date. A truncated feed cannot prove a newest release, so fail closed.
+export async function resolveOfficialRelease(channel: UpdateChannel, get: (path: string) => Promise<Response>): Promise<OfficialRelease | undefined> {
+  if (channel === "stable") {
+    const response = await get("/repos/isriah/LancerLogin/releases/latest");
+    return response.ok ? completeOfficialRelease(await response.json().catch(() => undefined)) : undefined;
+  }
+  const releases: unknown[] = [];
+  for (let page = 1; page <= 5; page++) {
+    const response = await get(`/repos/isriah/LancerLogin/releases?per_page=100&page=${page}`);
+    if (!response.ok) return;
+    const values: unknown = await response.json().catch(() => undefined);
+    if (!Array.isArray(values)) return;
+    releases.push(...values);
+    if (values.length < 100) return newestOfficialRelease(releases, channel);
+  }
+}
 
 export function releaseRequestHeaders(credential?: ReleaseCredential, now = Date.now()): Headers {
   const headers = new Headers({ accept: "application/vnd.github+json", "user-agent": "LancerLogin", "x-github-api-version": "2026-03-10" });
@@ -27,8 +45,9 @@ export function releaseRequestHeaders(credential?: ReleaseCredential, now = Date
 
 // One fixed public feed with optional fixed Worker credentials and no browser-selected URLs.
 // Cache/coalescing is bounded to this Worker isolate, not a global provider lock.
-export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeoutMs = 4_000 }: {
+export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeoutMs = 4_000, channel = "stable" }: {
   fetcher?: typeof fetch; now?: () => number; timeoutMs?: number;
+  channel?: UpdateChannel;
 } = {}) {
   let data: DiscoverySnapshot = { fresh: false };
   let failures = 0;
@@ -54,14 +73,18 @@ export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeou
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const result = await fetcher(officialReleaseUrl, { headers: releaseRequestHeaders(credential, now()), redirect: "manual", signal: controller.signal, cache: "no-store" });
-      if (!result.ok) {
-        const limited = result.status === 429 || result.status === 403 && (result.headers.has("retry-after") || result.headers.get("x-ratelimit-remaining") === "0");
-        return fail(limited ? "rate_limited" : "provider_unavailable", result);
-      }
-      const release = officialWebRelease(await result.json().catch(() => undefined));
-      if (!release || !release.tag.slice(1).split(".").every((part) => Number.isSafeInteger(Number(part)))) return fail("invalid_release");
-      data = { release: { tag_name: release.tag, html_url: `https://github.com/isriah/LancerLogin/releases/tag/${release.tag}`, body: release.notes, draft: false, prerelease: false }, checkedAt: now(), attemptedAt: data.attemptedAt, fresh: true };
+      let failure: DiscoverySnapshot | undefined;
+      const release = await resolveOfficialRelease(channel, async (path) => {
+        const result = await fetcher(`https://api.github.com${path}`, { headers: releaseRequestHeaders(credential, now()), redirect: "manual", signal: controller.signal, cache: "no-store" });
+        if (!result.ok) {
+          const limited = result.status === 429 || result.status === 403 && (result.headers.has("retry-after") || result.headers.get("x-ratelimit-remaining") === "0");
+          failure = fail(limited ? "rate_limited" : "provider_unavailable", result);
+        }
+        return result;
+      });
+      if (failure) return failure;
+      if (!release) return fail("invalid_release");
+      data = { release: { tag_name: release.tag, html_url: `https://github.com/isriah/LancerLogin/releases/tag/${release.tag}`, body: release.notes, draft: false, prerelease: release.prerelease }, checkedAt: now(), attemptedAt: data.attemptedAt, fresh: true };
       failures = 0;
       return snapshot();
     } catch {
@@ -78,3 +101,5 @@ export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeou
   return { check, snapshot };
 }
 export const releaseDiscovery = createReleaseDiscovery({ fetcher: (...args) => fetch(...args) });
+export const betaReleaseDiscovery = createReleaseDiscovery({ channel: "beta", fetcher: (...args) => fetch(...args) });
+export function discoveryForChannel(channel: UpdateChannel) { return channel === "beta" ? betaReleaseDiscovery : releaseDiscovery; }

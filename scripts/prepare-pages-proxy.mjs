@@ -1,11 +1,12 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { parseReleaseVersion } from "../packages/shared/src/release-policy.mjs";
 
 export function buildPagesProxy(apiUrl, releaseVersion) {
   const upstream = new URL(apiUrl);
   if (upstream.protocol !== "https:" || upstream.username || upstream.password || upstream.search || upstream.hash || upstream.pathname !== "/") throw new Error("Worker API URL must be an HTTPS origin");
   const origin = upstream.origin;
-  if (releaseVersion !== undefined && !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?![\s\S])/.test(releaseVersion)) throw new Error("Invalid release version");
+  if (releaseVersion !== undefined && (!parseReleaseVersion(releaseVersion) || releaseVersion.startsWith("v"))) throw new Error("Invalid release version");
   return `const API_ORIGIN = ${JSON.stringify(origin)};
 const RELEASE_VERSION = ${JSON.stringify(releaseVersion ?? "development")};
 export default {

@@ -78,16 +78,20 @@ test("kiosk update reporting keeps terminal outcomes stable and distinguishes bo
 });
 
 // incomplete version data must never be classified as current.
-test("dashboard release comparison requires confirmed stable versions", async () => {
+test("dashboard release comparison rejects malformed versions and permits a stable catch-up from beta", async () => {
   const { hasComparableStableVersions } = await import("../apps/dashboard/src/update-release.ts");
   for (const installed of ["0.22.0", "v0.23.0", "0.24.0"]) {
     assert.equal(hasComparableStableVersions({ tag_name: "v0.23.0" }, installed), true);
   }
-  for (const value of ["", "Unavailable", "0.23", "0.23.0oops", "0.23.0-beta.1", "01.23.0", "9007199254740992.0.0"]) {
+  for (const value of ["", "Unavailable", "0.23", "0.23.0oops", "01.23.0", "9007199254740992.0.0"]) {
     assert.equal(hasComparableStableVersions({ tag_name: value }, "0.22.0"), false);
     assert.equal(hasComparableStableVersions({ tag_name: "v0.23.0" }, value), false);
   }
   assert.equal(hasComparableStableVersions(undefined, "0.22.0"), false);
+  assert.equal(hasComparableStableVersions({ tag_name: "v0.23.0-beta.1" }, "0.22.0"), false);
+  assert.equal(hasComparableStableVersions({ tag_name: "v0.23.0" }, "0.23.0-beta.1"), true);
+  assert.equal(hasComparableStableVersions({ tag_name: "v0.23.0-beta.2", prerelease: true, channel: "beta" }, "0.23.0-beta.1"), true);
+  assert.equal(hasComparableStableVersions({ tag_name: "v0.23.0-beta.2", prerelease: false, channel: "beta" }, "0.23.0-beta.1"), false);
   assert.equal(hasComparableStableVersions({ tag_name: "v0.23.0", draft: true }, "0.22.0"), false);
   assert.equal(hasComparableStableVersions({ tag_name: "v0.23.0", prerelease: true }, "0.22.0"), false);
 });

@@ -117,7 +117,9 @@ export async function publishRelease(tag, runId, { publish = false, gh = github 
     || artifact.workflow_run?.id !== Number(runId) || artifact.workflow_run?.head_sha !== run.head_sha
     || !Number.isSafeInteger(artifact.size_in_bytes) || artifact.size_in_bytes <= 0 || artifact.size_in_bytes > 64 * 1024 * 1024
     || !/^sha256:[0-9a-f]{64}$/.test(artifact.digest)) throw new Error("valid_release_bundle_artifact_required");
-  const zip = gh(["api", "--hostname", "github.com", `repos/${repository}/actions/artifacts/${artifact.id}/zip`], true);
+  // Preserve ZIP bytes in a captured buffer, never a terminal. CLI text guards
+  // must not reject or transform binary content before its digest is checked.
+  const zip = gh(["api", "--allow-escape-sequences", "--hostname", "github.com", `repos/${repository}/actions/artifacts/${artifact.id}/zip`], true);
   if (`sha256:${hash(zip)}` !== artifact.digest) throw new Error("release_bundle_download_digest_mismatch");
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-publication-"));
   try {

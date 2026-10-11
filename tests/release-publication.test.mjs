@@ -41,7 +41,7 @@ async function fixture(tag = "v1.2.6", changes = {}) {
       else if (endpoint === "immutable-releases") { immutableReads++; result = { enabled: changes.immutable === undefined ? true : changes.immutable && immutableReads < 3 }; }
       else if (endpoint === `releases/tags/${tag}`) { if (changes.published) result = { draft: false }; else if (!release) { const missing = new Error("not_found"); missing.status = 404; throw missing; } else result = release; }
       else if (endpoint === "actions/runs/11/artifacts?per_page=100") result = { total_count: 1, artifacts: [artifact], ...changes.artifactList };
-      else if (endpoint === "actions/artifacts/13/zip") { assert.equal(binary, true); return changes.zip ?? zip; }
+      else if (endpoint === "actions/artifacts/13/zip") { assert.equal(binary, true); assert.ok(args.includes("--allow-escape-sequences")); return changes.zip ?? zip; }
       else if (endpoint === "actions/artifacts/13") result = { ...artifact, ...changes.retained };
       else if (endpoint === `contents/docs/releases/${tag}.md?ref=${sha}`) result = { content: notes.toString("base64"), encoding: "base64", size: notes.length };
       else throw new Error(`Unexpected endpoint ${endpoint}`);

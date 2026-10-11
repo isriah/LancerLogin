@@ -64,4 +64,4 @@ jobs:
           retention-days: 7
       - name: Explain the maintainer publication step
         run: |
-          printf 'Run `node scripts/release-publication.mjs publish %s %s --publish` from the reviewed publication-tools checkout with your existing GitHub CLI login. No release has been published by this workflow.\n' "$RELEASE_TAG" "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Run node scripts/release-publication.mjs publish %s %s --publish from the reviewed publication-tools checkout with your existing GitHub CLI login. No release has been published by this workflow.\n' "$RELEASE_TAG" "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"

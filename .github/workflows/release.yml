@@ -2,75 +2,66 @@ name: Build LancerLogin release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing canonical release tag with successful trusted-branch Verify
+        required: true
+        type: string
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 concurrency:
-  group: lancerlogin-release-publication
+  group: lancerlogin-release-packaging
   cancel-in-progress: false
 
 jobs:
-  verify-and-release:
-    if: github.repository == 'isriah/LancerLogin' && github.event.repository.private == false
+  package-release:
+    if: >-
+      github.repository == 'isriah/LancerLogin' && github.event.repository.private == false &&
+      (github.event_name == 'push' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out the reviewed publication tools
+        uses: actions/checkout@v7
+        with:
+          path: publication-control
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with: { node-version: 24.21.0 }
-      - name: Select trusted release channel and source branch
-        id: channel
-        shell: bash
-        run: node scripts/release-channel.mjs "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-      - name: Require the tag to match the package version
-        shell: bash
-        run: |
-          package_version=$(jq -r .version package.json)
-          test "$GITHUB_REF_NAME" = "v$package_version"
       - name: Require successful source-branch verification for this exact commit
+        id: source
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_BRANCH: ${{ steps.channel.outputs.branch }}
-        shell: bash
-        run: |
-          commit=$(git rev-list -n 1 "$GITHUB_REF_NAME")
-          subject=$(git show -s --format=%s "$commit")
-          [[ "$subject" == Release\ v* ]] || { echo "The release source must select complete Verify coverage." >&2; exit 1; }
-          successful_runs=$(gh api \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$commit&status=success&per_page=100" \
-            --jq "[.workflow_runs[] | select(.event == \"push\" and .head_branch == \"$SOURCE_BRANCH\" and .conclusion == \"success\")] | length")
-          test "$successful_runs" -gt 0 || {
-            echo "The tagged commit must first pass the complete Verify workflow on its trusted source branch." >&2
-            exit 1
-          }
+        run: node publication-control/scripts/release-publication.mjs resolve "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Check out the exact verified release source
+        uses: actions/checkout@v7
+        with:
+          repository: isriah/LancerLogin
+          ref: ${{ steps.source.outputs.sha }}
+          path: release-source
+          persist-credentials: false
       - name: Package and validate both kiosk release archives
-        run: sudo "$(command -v node)" scripts/package-kiosk.mjs release/artifacts --require-unprivileged
-      - name: Assemble draft and publish complete immutable release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PRERELEASE: ${{ steps.channel.outputs.prerelease }}
-          MAKE_LATEST: ${{ steps.channel.outputs.latest }}
-        shell: bash
         run: |
-          notes_file="docs/releases/$GITHUB_REF_NAME.md"
-          test -f "$notes_file" || { echo "Missing required meaningful patch notes: $notes_file" >&2; exit 1; }
-          enabled=$(gh api -H "X-GitHub-Api-Version: 2026-03-10" "repos/$GITHUB_REPOSITORY/immutable-releases" --jq .enabled)
-          test "$enabled" = true || { echo "Immutable releases must be enabled." >&2; exit 1; }
-          if test "$MAKE_LATEST" = true; then
-            latest_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
-            node scripts/release-channel.mjs "$GITHUB_REF_NAME" "$latest_tag" > /dev/null
-          fi
-          if gh release view "$GITHUB_REF_NAME" --json isDraft > "$RUNNER_TEMP/release-draft.json" 2>/dev/null; then
-            test "$(jq -r .isDraft "$RUNNER_TEMP/release-draft.json")" = true || { echo "A published release is never replaced." >&2; exit 1; }
-          else
-            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --prerelease="$PRERELEASE" --latest=false --notes-file "$notes_file" --title "LancerLogin $GITHUB_REF_NAME"
-          fi
-          gh release upload "$GITHUB_REF_NAME" release/artifacts/* --clobber
-          count=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')
-          test "$count" -eq 6 || { echo "Expected exactly six validated release assets before publication." >&2; exit 1; }
-          gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease="$PRERELEASE" --latest="$MAKE_LATEST" --notes-file "$notes_file" --title "LancerLogin $GITHUB_REF_NAME"
-          test "$(gh release view "$GITHUB_REF_NAME" --json isImmutable --jq .isImmutable)" = true
+          mkdir -p release
+          sudo "$(command -v node)" release-source/scripts/package-kiosk.mjs release/artifacts --require-unprivileged
+      - name: Bind the verified assets and notes to their source and run
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: node publication-control/scripts/release-publication.mjs bundle "$RELEASE_TAG" "$SOURCE_SHA" release-source release
+      - name: Preserve the verified release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: lancerlogin-release-${{ env.RELEASE_TAG }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Explain the maintainer publication step
+        run: |
+          printf 'Run `node scripts/release-publication.mjs publish %s %s --publish` from the reviewed publication-tools checkout with your existing GitHub CLI login. No release has been published by this workflow.\n' "$RELEASE_TAG" "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"

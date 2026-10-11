@@ -1,4 +1,4 @@
-name: Upgrade LancerLogin web
+name: Upgrade LancerLogin web (update channels v2)
 run-name: LancerLogin web update ${{ inputs.request_id }}
 
 on:
@@ -9,7 +9,7 @@ on:
         required: true
         type: string
       release_tag:
-        description: Official stable release pinned by the application
+        description: Official release pinned under the installation's selected update track
         required: true
         type: string
       release_sha:
@@ -55,7 +55,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24.21.0
       - name: Validate fixed resources and official release before checkout
         run: node deployment-control/scripts/run-web-upgrade.mjs --validate
       - name: Check out the exact official release commit

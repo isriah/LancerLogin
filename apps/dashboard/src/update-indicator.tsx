@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { releaseCache, hasComparableStableVersions, isNewerRelease, createSingleFlight } from "./update-release";
-import { useReleaseCheck } from "./use-release-check";
+import { releaseCacheForChannel, hasComparableStableVersions, isNewerRelease, createSingleFlight } from "./update-release";
+import { useReleaseCheck, readUpdateChannelSetting } from "./use-release-check";
 import { visiblePoll } from "./visible-poll";
 import { readDashboardReleaseState } from "./dashboard-release";
 
@@ -12,6 +12,7 @@ export const formatVersion = (value?: string) => value ? value.replace(/^v/, "")
 
 export const checkForUpdate = createSingleFlight(async (): Promise<Check> => {
   const state = await readDashboardReleaseState();
+  const { channel } = await readUpdateChannelSetting(); const releaseCache = releaseCacheForChannel(channel);
   let release;
   try { release = await releaseCache.check(); } catch { release = releaseCache.snapshot().release; }
   const latest = formatVersion(release?.tag_name); const current = formatVersion(state.worker);

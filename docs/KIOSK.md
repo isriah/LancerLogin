@@ -117,7 +117,7 @@ Operators can monitor the active kiosk's online state, reader state, pending sca
 - **Restart software** restarts the sandboxed systemd service.
 - **Reboot Pi** requests a device reboot after explicit confirmation.
 - **Reset network PIN** removes only the local salted PIN record after explicit confirmation; the next local visit creates a new one.
-- **Update to latest stable** starts a fixed, root-owned update unit. It resolves the official latest release once, accepts strict stable `vMAJOR.MINOR.PATCH` versions across majors, rejects draft or prerelease releases and missing installer, archive, or checksum assets, verifies the installer and kiosk archive checksums, then restarts the kiosk service. It does not accept an Administrator-provided URL, tag, shell command, or argument.
+- **Update kiosk** starts a fixed, root-owned update unit. The server pins a newer complete official release and exact commit allowed by the installation track. The channel-aware helper independently verifies that target, consent proof and expiry, immutable beta metadata, and installer/archive checksums before restarting. It accepts no Administrator-provided URL, tag, shell command or argument. An older kiosk must install the stable bridge before Beta.
 
 The paired kiosk polls for these commands every five seconds. Commands expire from polling after 15 minutes. The API accepts no shell text or arbitrary arguments, and the service account receives only narrow NetworkManager, reboot, and one-unit update permissions.
 
@@ -125,11 +125,11 @@ The paired kiosk polls for these commands every five seconds. Commands expire fr
 
 The kiosk update is separate from a web update. It changes the Raspberry Pi software only. It does not create a dashboard backup, deploy the web installation, or repair a failed web update.
 
-1. As an Administrator, open **Kiosks** or **Settings → Updates**. Confirm that the physical kiosk is online and that a newer compatible stable release is shown.
-2. Choose **Update to latest stable**. The kiosk normally receives the fixed command within five seconds, then the update card reports its result and the kiosk returns online with its installed release.
+1. As an Administrator, open **Kiosks** or **Settings → Updates**. Confirm that the physical kiosk is online and that a newer compatible release on the selected installation track is shown.
+2. Choose **Update kiosk**. The kiosk normally receives the fixed command within five seconds, then the update card reports its result and the kiosk returns online with its installed release.
 3. If the release lookup is unavailable or the card does not show a successful installed version, do not assume an update was queued or completed. Check the kiosk status and use the approved on-device recovery path instead of repeatedly submitting the command.
 
-Use the Administrator's available access method for an approved on-device recovery procedure. Raspberry Pi Connect remote shell, SSH, and direct local access are all compatible with LancerLogin when the installation permits them. An authorized operator can start the existing no-argument `lancerlogin-update.service` when an operational recovery procedure calls for it. The unit invokes only the installed verified helper, which resolves the official stable release and accepts no user-supplied arguments.
+Use the Administrator's available access method for an approved on-device recovery procedure. Raspberry Pi Connect remote shell, SSH, and direct local access are all compatible with LancerLogin when the installation permits them. An authorized operator can start the existing no-argument `lancerlogin-update.service` when an operational recovery procedure calls for it. The unit invokes only the installed verified helper, which defaults to the official stable release when no authenticated target proof exists and accepts no user-supplied arguments. Beta requires a fresh server-pinned command; starting the unit manually cannot opt in.
 
 Before manual recovery, preserve a private checkpoint of the local state and retain the installation's web backup through approved secure storage. The local state directory includes pairing credentials, mappings, PIN state, pending attendance, and retained scan outcomes. Do not copy it into source control, chat, or a support ticket. Do not delete local state, re-pair, recreate resources, restore D1, or restore an old queue automatically. Restoring a historical queue can duplicate or discard attendance.
 
@@ -137,7 +137,7 @@ If checksum, helper, or health verification fails, stop and keep the checkpoint.
 
 ### Historical V1 migration context
 
-v1.2.5 is the stable public release. The earlier v0.24.0 bridge and its exact-release bootstrap were historical migration procedures, not current update instructions. A dashboard release lookup can be unavailable, so treat a missing completion status as unconfirmed and use an approved recovery procedure rather than guessing the cause.
+v1.2.6 is the Community update-channel bridge. See [UPDATE-TRACKS.md](UPDATE-TRACKS.md) before opting in to Modular Beta. The earlier v0.24.0 bridge and its exact-release bootstrap were historical migration procedures, not current update instructions. A dashboard release lookup can be unavailable, so treat a missing completion status as unconfirmed and use an approved recovery procedure rather than guessing the cause.
 
 An isolated rehearsal can retain a stale reload card after a manual version change. Simulator, source, and rehearsal results do not establish physical kiosk acceptance for an installation.
 

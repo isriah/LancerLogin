@@ -1,5 +1,6 @@
 import { api } from "./dashboard-api";
-import { hasComparableStableVersions, isNewerRelease } from "./update-release";
+import { isNewerRelease } from "./update-release";
+import { compareReleaseVersions } from "../../../packages/shared/src/release-policy.mjs";
 
 export type DashboardReleaseState = {
   worker: string;
@@ -11,8 +12,7 @@ export type DashboardReleaseState = {
 };
 
 const normalize = (value: string | undefined) => value?.replace(/^v/, "") ?? "";
-export const sameStableVersion = (left: string, right: string) => hasComparableStableVersions({ tag_name: left }, right)
-  && normalize(left) === normalize(right);
+export const sameStableVersion = (left: string, right: string) => compareReleaseVersions(left, right) === 0;
 
 export async function readDashboardReleaseState(fetcher: typeof fetch = fetch): Promise<DashboardReleaseState> {
   const [installation, servedResponse] = await Promise.all([

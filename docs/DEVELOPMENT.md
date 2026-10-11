@@ -28,7 +28,7 @@ For a combined web candidate, use `npm run verify:dev`. It validates local migra
 
 Run `npm run verify:kiosk` as well when changing kiosk runtime, installation, packaging, kiosk dependencies or contracts consumed by the kiosk, including pairing, scan delivery, offline queues and maintenance responses. Assess shared code and dependency changes for their consumers. The web gate selects a fixed scope, not an automatic changed-file analysis.
 
-Before publication, retain the affected private checks and compare the exported product content with the accepted source. Do not repeat `verify:release` or the unfiltered browser suite solely because an unchanged candidate was exported. The exact public `main` commit whose message starts with `Release v` runs the one complete release gate, including all source tests, the unfiltered browser suite, strict audit and Linux kiosk artifact checks.
+Before publication, retain the affected private checks and compare the exported product content with the accepted source. Do not repeat `verify:release` or the unfiltered browser suite solely because an unchanged candidate was exported. The exact public trusted-branch commit whose message starts with `Release v` runs the one complete release gate, including all source tests, the unfiltered browser suite, strict audit and Linux kiosk artifact checks.
 
 ### Documentation changes
 
@@ -46,11 +46,11 @@ Reuse shared UI tokens and controls; verify keyboard focus, themes, desktop and 
 
 Use the affected verification commands, focused browser files and product review to accept the private candidate. `npm run verify:all` and `npm run verify:release` remain available for an explicitly requested local preflight, but routine release preparation does not rerun them after equivalent scoped evidence has passed.
 
-The GitHub **Verify** workflow uses two scopes. Pull requests and ordinary `main` pushes run `verify:dev`, adding `verify:kiosk` only when kiosk code, packaging, shared contracts or root dependencies changed. A manual run and an exact `main` commit whose message starts with `Release v` run the complete release gate. `verify:release-ci` executes migration verification, every workspace typecheck and build, all web tests and the kiosk runtime suite. The root-owned Linux kiosk artifact test runs separately so it is not repeated inside that command.
+The GitHub **Verify** workflow uses two scopes. Pull requests and ordinary `main` or `modular` pushes run `verify:dev`, adding `verify:kiosk` only when kiosk code, packaging, shared contracts or root dependencies changed. A manual run and an exact trusted-branch commit whose message starts with `Release v` run the complete release gate. `verify:release-ci` executes migration verification, every workspace typecheck and build, all web tests and the kiosk runtime suite. The root-owned Linux kiosk artifact test runs separately so it is not repeated inside that command.
 
 The complete gate runs the unfiltered browser suite across four CI jobs with one Playwright worker each; the `browser-smoke` check passes only when every shard passes. It also runs the strict dependency audit. Verification and browser jobs install with `npm ci --no-audit`; security findings come from the one explicit audit job rather than duplicate implicit audits. Dependency-manifest changes and scheduled monitoring can still run that audit before a release. No tag may be created until the exact public release commit's complete Verify run passes.
 
-The tag workflow does not repeat the full gate. It requires a successful **Verify** run on `main` for the exact tagged commit, checks the version and patch-notes file, packages and validates both kiosk archives with the same utility tested by `verify:kiosk` and `verify:all`, and publishes the immutable release. A tag created before its exact commit passes CI fails closed and may be retried after verification succeeds.
+The tag workflow does not repeat the full gate. It requires a successful **Verify** run on the selected trusted source branch for the exact tagged commit, checks the version and patch-notes file, packages and validates both kiosk archives with the same utility tested by `verify:kiosk` and `verify:all`, and publishes the immutable release. A tag created before its exact commit passes CI fails closed and may be retried after verification succeeds.
 
 ## Kiosk artifact verification
 

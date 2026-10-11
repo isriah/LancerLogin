@@ -1,7 +1,10 @@
 /** Only fixed server configuration reaches GitHub. Operational D1 state contains no token. */
+import { completeOfficialRelease, compareReleaseVersions, type UpdateChannel } from "../../../packages/shared/src/release-policy.mjs";
+import { readUpdateChannel } from "./update-channel.ts";
+import { resolveOfficialRelease } from "./release-discovery.ts";
 type Result<T = unknown> = { results?: T[]; meta?: { changes?: number } };
 interface Statement { bind(...values: unknown[]): Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<Result<T>>; run(): Promise<Result>; }
-interface Database { prepare(sql: string): Statement; }
+interface Database { prepare(sql: string): Statement; batch?(statements: Statement[]): Promise<unknown[]>; }
 export interface WebUpdateEnv {
   DB?: Database; ALLOWED_ORIGIN: string; RELEASE_VERSION?: string;
   UPDATE_REPOSITORY?: string; UPDATE_WORKFLOW_URL?: string; WEB_UPDATE_TOKEN?: string;
@@ -15,11 +18,10 @@ export type UpdateRow = {
   id: string; release_tag: string; release_sha: string; release_notes: string; previous_version: string;
   state: string; stage: string; created_at: string; expires_at: string; updated_at: string;
   backup_exported_at?: string; started_at?: string; last_poll_at?: string; run_id?: string;
-  executor_run_id?: string; maintenance: number; error_code?: string; recovery_json?: string;
+  executor_run_id?: string; maintenance: number; error_code?: string; recovery_json?: string; update_channel?: UpdateChannel;
 };
 export const WEB_UPDATE_WORKFLOW = "upgrade-web.yml";
 export function fixedWorkflowPath(path: unknown): boolean { return path === `.github/workflows/${WEB_UPDATE_WORKFLOW}` || path === `.github/workflows/${WEB_UPDATE_WORKFLOW}@main`; }
-const stable = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?![\s\S])/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const terminal = new Set(["succeeded", "failed", "expired"]);
 export const updateCredentialMinimumValidityMs = 24 * 60 * 60_000;
@@ -51,30 +53,19 @@ async function github(path: string, env?: WebUpdateEnv, init: RequestInit = {}, 
   if (result.status === 422 && kind === "dispatch") fail(503, "workflow_invalid", "GitHub rejected the fixed update workflow dispatch. The workflow or its main branch must be repaired before retrying.");
   return result;
 }
-export function officialWebRelease(value: unknown): { tag: string; notes: string } | undefined {
-  if (!value || typeof value !== "object") return;
-  const release = value as { tag_name?: unknown; draft?: unknown; prerelease?: unknown; assets?: Array<{ name?: string }>; body?: unknown };
-  if (typeof release.tag_name !== "string" || !stable.test(release.tag_name) || release.draft !== false || release.prerelease !== false || !Array.isArray(release.assets)) return;
-  const version = release.tag_name.slice(1); const names = new Set(release.assets.map((entry) => entry?.name));
-  const required = ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => [`lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz.sha256`])];
-  if (!required.every((name) => names.has(name))) return;
-  return { tag: release.tag_name, notes: typeof release.body === "string" ? release.body.slice(0, 32_000) : "" };
-}
+export const officialWebRelease = completeOfficialRelease;
 export function newerRelease(tag: string, current: string): boolean {
-  if (!stable.test(tag) || !stable.test(`v${current}`)) return false;
-  const left = tag.slice(1).split(".").map(BigInt); const right = current.split(".").map(BigInt);
-  for (let index = 0; index < 3; index++) if (left[index] !== right[index]) return left[index]! > right[index]!;
-  return false;
+  return compareReleaseVersions(tag, current) === 1;
 }
 export async function latestUpdate(env: WebUpdateEnv): Promise<UpdateRow | null> {
-  return db(env).prepare("SELECT * FROM web_update_requests WHERE installation_id = 'primary' ORDER BY created_at DESC LIMIT 1").first<UpdateRow>();
+  return db(env).prepare("SELECT * FROM web_update_requests WHERE installation_id = 'primary' ORDER BY created_at DESC, rowid DESC LIMIT 1").first<UpdateRow>();
 }
 async function requestRow(env: WebUpdateEnv, id: unknown): Promise<UpdateRow> {
   if (typeof id !== "string" || !uuid.test(id)) fail(400, "invalid_request", "Choose the prepared update request.");
   return await db(env).prepare("SELECT * FROM web_update_requests WHERE installation_id = 'primary' AND id = ?").bind(id).first<UpdateRow>() ?? fail(404, "request_missing", "The update request is unavailable.");
 }
 export function updateView(row: UpdateRow | null, env: WebUpdateEnv) {
-  const request = row ? { requestId: row.id, targetTag: row.release_tag, targetCommit: row.release_sha, releaseNotes: row.release_notes,
+  const request = row ? { requestId: row.id, targetTag: row.release_tag, targetCommit: row.release_sha, releaseNotes: row.release_notes, channel: row.update_channel ?? "stable",
     releaseUrl: `https://github.com/isriah/LancerLogin/releases/tag/${row.release_tag}`, previousVersion: row.previous_version,
     state: row.state, stage: row.stage, createdAt: row.created_at, expiresAt: row.expires_at, updatedAt: row.updated_at,
     backupExported: Boolean(row.backup_exported_at), maintenance: Boolean(row.maintenance), errorCode: row.error_code ?? null,
@@ -97,20 +88,23 @@ export async function prepareWebUpdate(env: WebUpdateEnv, actorId?: string) {
   const metadata = await github(`/repos/${repo}`, env, {}, "private");
   if (!metadata.ok || (await metadata.json() as { private?: boolean }).private !== true) fail(503, "not_private", "Web updates require the configured private deployment repository.");
   const workflow = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}`, env, {}, "private");
-  const info = workflow.ok ? await workflow.json() as { state?: string; path?: string } : undefined;
+  const info = workflow.ok ? await workflow.json() as { state?: string; path?: string; name?: string } : undefined;
   if (info?.state !== "active" || info.path !== `.github/workflows/${WEB_UPDATE_WORKFLOW}`) fail(503, "workflow_required", "Install the reviewed private web upgrade workflow before updating.");
-  const response = await github("/repos/isriah/LancerLogin/releases/latest", env);
-  const target = response.ok ? officialWebRelease(await response.json()) : undefined;
-  if (!target) fail(503, "release_unavailable", "A complete stable official release is unavailable.");
-  if (!newerRelease(target.tag, env.RELEASE_VERSION ?? "")) fail(409, "already_current", "This installation already has the latest stable release.");
+  const setting = await readUpdateChannel(env);
+  const target = await resolveOfficialRelease(setting.channel, (path) => github(path, env));
+  if (!target) fail(503, "release_unavailable", "A complete official release on this track is unavailable.");
+  if (target.prerelease && info?.name !== "Upgrade LancerLogin web (update channels v2)") fail(503, "controller_upgrade_required", "The maintainer must install the reviewed update-channel controller in the private deployment repository before this beta can be prepared.");
+  if (!newerRelease(target.tag, env.RELEASE_VERSION ?? "")) fail(409, "already_current", "No newer release is available on this track. Switching tracks never downgrades an installation.");
   const commitResponse = await github(`/repos/isriah/LancerLogin/commits/${target.tag}`, env);
   const commit = commitResponse.ok ? await commitResponse.json() as { sha?: string } : undefined;
   if (!commit?.sha || !/^[0-9a-f]{40}$/.test(commit.sha)) fail(503, "release_unavailable", "The official release commit could not be pinned.");
   const id = crypto.randomUUID(); const expires = new Date(Date.now() + 30 * 60_000).toISOString();
   // INSERT OR IGNORE respects the partial unique index under simultaneous Admin requests.
-  await db(env).prepare("INSERT OR IGNORE INTO web_update_requests (id, installation_id, release_tag, release_sha, release_notes, previous_version, prepared_by, state, created_at, expires_at, updated_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, 'prepared', ?, ?, ?)")
-    .bind(id, target.tag, commit.sha, target.notes, env.RELEASE_VERSION, actorId ?? null, now, expires, now).run();
-  return updateView(await latestUpdate(env), env);
+  await db(env).prepare("INSERT OR IGNORE INTO web_update_requests (id, installation_id, release_tag, release_sha, release_notes, previous_version, prepared_by, state, created_at, expires_at, updated_at, update_channel) SELECT ?, 'primary', ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM installation_update_settings WHERE installation_id = 'primary' AND update_channel = ? AND update_channel_revision = ?)")
+    .bind(id, target.tag, commit.sha, target.notes, env.RELEASE_VERSION, actorId ?? null, now, expires, now, setting.channel, setting.channel, setting.revision).run();
+  const prepared = await latestUpdate(env);
+  if (!prepared || terminal.has(prepared.state)) fail(409, "channel_changed", "The update track changed during release preparation. Prepare again.");
+  return updateView(prepared, env);
 }
 export async function recordUpdateBackup(env: WebUpdateEnv, id: string): Promise<void> {
   const row = await requestRow(env, id);
@@ -126,7 +120,7 @@ export async function startWebUpdate(env: WebUpdateEnv, input: Record<string, un
   if (input.backupSaved !== true || !row.backup_exported_at) fail(409, "backup_required", "Download this update's entire-installation backup and confirm it was saved.");
   credential(env, updateCredentialMinimumValidityMs); const repo = repository(env); const now = new Date().toISOString();
   // RETURNING identifies the atomic winner; D1 meta.changes also counts the started audit trigger.
-  const claim = await db(env).prepare("UPDATE web_update_requests SET state = 'dispatching', stage = 'dispatching', started_at = ?, started_by = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state = 'prepared' RETURNING id").bind(now, actorId ?? null, now, row.id).first<{ id: string }>();
+  const claim = await db(env).prepare("UPDATE web_update_requests SET state = 'dispatching', stage = 'dispatching', started_at = ?, started_by = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state = 'prepared' AND update_channel = (SELECT update_channel FROM installation_update_settings WHERE installation_id = 'primary') RETURNING id").bind(now, actorId ?? null, now, row.id).first<{ id: string }>();
   if (claim?.id !== row.id) return updateView(await requestRow(env, row.id), env);
   try {
     const response = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}/dispatches`, env, { method: "POST", body: JSON.stringify({ ref: "main", inputs: { request_id: row.id, release_tag: row.release_tag, release_sha: row.release_sha } }) }, "dispatch");

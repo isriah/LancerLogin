@@ -2,7 +2,7 @@
 
 LancerLogin is standalone, open-source, self-hosted attendance software for clubs, classrooms, teams, and arts groups. Each installation uses one Raspberry Pi fingerprint kiosk and a dashboard in the organization's own Cloudflare account.
 
-The current stable public release is **1.2.5**. The public repository contains source, reviewed releases, and public documentation. Create a separate **private** repository from the template for an installation. That private repository holds deployment history and secrets.
+The current stable public release is **1.2.6**. The public repository contains source, reviewed releases, and public documentation. Create a separate **private** repository from the template for an installation. That private repository holds deployment history and secrets.
 
 ## What it does
 
@@ -25,6 +25,8 @@ One physical kiosk is supported per installation: a Raspberry Pi 3B+, 4, or 5 wi
 5. Complete Guided Setup, then pair the physical kiosk or use the browser simulator for a software-only check.
 
 For a routine web update, an Admin opens **Settings → Updates**, reviews the pinned release, downloads an entire-installation backup, and uses **Start update** only after confirming the backup was saved. Physical-kiosk updating is separate. See [web updates](docs/WEB-UPDATES.md) and [kiosk operations](docs/KIOSK.md).
+
+Stable is the default update track. Admins can explicitly opt in to Beta without starting an update. Install the Community bridge and update the private controller and kiosks first. See [Stable and Beta update tracks](docs/UPDATE-TRACKS.md).
 
 ## Documentation
 

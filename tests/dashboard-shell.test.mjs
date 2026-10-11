@@ -526,7 +526,7 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(source, /<div className="page-intro"><h1 id="kiosks-title">Kiosks<\/h1><\/div>/);
   assert.match(source, /<div className="kiosk-card-heading"[^>]*><h2>Physical kiosk<\/h2>\{role === "admin" && <button className="primary-button"/);
   assert.match(source, /Retire kiosk/);
-  assert.match(source, /Update to latest stable/);
+  assert.match(source, /Update kiosk/);
   assert.match(source, /Device history/);
   assert.match(source, /Reload display/);
   assert.match(source, /Restart software/);

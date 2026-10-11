@@ -28,6 +28,11 @@ class FakeDatabase {
   async batch(statements: FakeStatement[]) { this.batches.push(statements); return statements.map(() => ({ success: true })); }
   firstResult(sql: string, values: unknown[]) {
     for (const [fragment, value] of this.rows) if (sql.includes(fragment)) return typeof value === "function" ? (value as (sql: string, values: unknown[]) => unknown)(sql, values) : value;
+    if (sql.includes("FROM installation_update_settings")) return { channel: "stable", revision: 0 };
+    if (sql.includes("SELECT id FROM kiosk_commands") && sql.includes("AND id = ?")) {
+      const insert = this.batches.flat().find((call) => call.sql.includes("INSERT INTO kiosk_commands") && call.values[0] === values[0]);
+      return insert ? { id: values[0] } : undefined;
+    }
     if (sql.includes("SELECT id, role FROM users") && sql.includes("active = 1")) {
       const id = String(values[0]);
       return { id, role: id.startsWith("operator") ? "operator" : "admin" };
@@ -61,7 +66,7 @@ const setupCode = "private setup code 1234";
 const setupCodeHash = createHash("sha256").update(setupCode).digest("base64url");
 const request = (path: string, body?: unknown, options: { method?: string; cookie?: string } = {}) => new Request(`https://api.example.test${path}`, {
   method: options.method ?? (body ? "POST" : "GET"),
-  headers: { ...(body ? { "content-type": "application/json" } : {}), ...(options.cookie ? { cookie: options.cookie } : {}) },
+  headers: { ...(body ? { "content-type": "application/json" } : {}), ...(options.cookie ? { cookie: options.cookie } : {}), ...(/^\/admin\/kiosks\/[^/]+\/commands$/.test(path) && body ? { origin: "https://dashboard.example.test" } : {}) },
   body: body ? JSON.stringify(path === "/setup/bootstrap" && typeof body === "object" ? { setupCode, ...body } : body) : undefined,
 });
 const sessionSecret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -428,13 +433,16 @@ test("Admin queues only fixed recovery and latest-stable update commands", async
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("'kiosk.command_queued'")));
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
+    if (String(input) === "https://api.github.com/repos/isriah/LancerLogin/commits/v0.22.0") return Response.json({ sha: "b".repeat(40) });
     assert.equal(String(input), "https://api.github.com/repos/isriah/LancerLogin/releases/latest");
     // GitHub rejects requests without an application User-Agent before returning releases.
     if (!new Headers(init?.headers).get("user-agent")) return new Response("User-Agent required", { status: 403 });
     return new Response(JSON.stringify({ tag_name: "v0.22.0", draft: false, prerelease: false, assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", "lancerlogin-kiosk-0.22.0-linux-arm64.tar.gz", "lancerlogin-kiosk-0.22.0-linux-arm64.tar.gz.sha256", "lancerlogin-kiosk-0.22.0-linux-armv7.tar.gz", "lancerlogin-kiosk-0.22.0-linux-armv7.tar.gz.sha256"].map(name => ({ name })) }), { headers: { "content-type": "application/json" } });
   };
   try {
-    const update = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest", targetVersion: "v9.9.9", shell: "must-not-store" }, { cookie: await sessionCookie("admin") }), env);
+    const rejected = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest", targetVersion: "v9.9.9", shell: "must-not-store" }, { cookie: await sessionCookie("admin") }), env);
+    assert.equal(rejected.status, 400);
+    const update = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie: await sessionCookie("admin") }), env);
     assert.equal(update.status, 202);
     const insert = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO kiosk_commands"));
     assert.ok(insert?.values.includes("install_latest"));
@@ -475,10 +483,10 @@ test("latest kiosk update accepts strict stable majors and rejects incomplete re
       database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1, releaseVersion: "0.23.2" });
       const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, WEB_UPDATE_TOKEN: "synthetic-token", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + 86_400_000).toISOString(), DB: database } as unknown as Env;
       let calls = 0;
-      globalThis.fetch = async (input, init) => { calls++; assert.equal(String(input), "https://api.github.com/repos/isriah/LancerLogin/releases/latest"); assert.equal(new Headers(init?.headers).get("authorization"), "Bearer synthetic-token"); assert.equal(init?.redirect, "manual"); return Response.json(item.payload); };
-      const result = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest", targetVersion: "v9.9.9", url: "https://evil.test" }, { cookie }), env);
+      globalThis.fetch = async (input, init) => { calls++; assert.equal(String(input), calls === 1 ? "https://api.github.com/repos/isriah/LancerLogin/releases/latest" : `https://api.github.com/repos/isriah/LancerLogin/commits/${item.payload.tag_name}`); assert.equal(new Headers(init?.headers).get("authorization"), "Bearer synthetic-token"); assert.equal(init?.redirect, "manual"); return Response.json(calls === 1 ? item.payload : { sha: "b".repeat(40) }); };
+      const result = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie }), env);
       assert.equal(result.status, item.status, JSON.stringify(item.payload));
-      assert.equal(calls, 1);
+      assert.equal(calls, item.status === 202 ? 2 : 1);
       const insert = database.batches.at(-1)?.find(call => call.sql.includes("INSERT INTO kiosk_commands"));
       if (item.status === 202) assert.ok(insert?.values.includes(item.payload.tag_name));
       else assert.equal(insert, undefined);

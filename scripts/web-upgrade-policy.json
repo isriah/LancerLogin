@@ -1,5 +1,6 @@
 {
   "format": 1,
+  "independentBridgeMigrations": ["0061_update_channels.sql"],
   "minimumInstalledVersion": "0.23.2",
   "automaticCodeRollback": false,
   "reviewedMigrations": [
@@ -196,6 +197,11 @@
     {
       "name": "0039_discord_attendance_delivery_batches.sql",
       "sha256": "02f65d4352ffd52f20398eb46aa09a5e3a8d80bb3ecce487a78a718bb6aacc0f",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0061_update_channels.sql",
+      "sha256": "1e2e02c7891c05179423a6f78737e2e1e2d221a7d8054339b733953eed9a9192",
       "forwardCompatible": true
     }
   ]

@@ -1,6 +1,6 @@
 # Installation setup
 
-This guide is for the Administrator creating a new organization-owned LancerLogin installation. It describes a fresh installation, not a migration or a recovery. The current stable public release is 1.2.5.
+This guide is for the Administrator creating a new organization-owned LancerLogin installation. It describes a fresh installation, not a migration or a recovery. Start with the current official stable release, then review [update tracks](UPDATE-TRACKS.md) before opting in to Beta.
 
 ## Before you start
 

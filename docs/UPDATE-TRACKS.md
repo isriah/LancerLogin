@@ -44,7 +44,11 @@ The bridge checks the private workflow's capability before preparing Beta. The e
 
 Stable source is reviewed on public `main`; beta source on public `modular`. Use canonical tags such as `v1.2.6` and `v2.0.0-beta.1`. Package version, notes file and tag must agree.
 
-The exact source commit must pass complete **Verify** coverage on its trusted branch before tagging. The release workflow validates both kiosk archives, creates a draft, attaches all six installer/archive/checksum assets, then publishes an immutable release. A published release is never replaced.
+The exact source commit must pass complete **Verify** coverage on its trusted branch before tagging. **Build LancerLogin release** validates both kiosk archives on Linux as an unprivileged service account and preserves one source-bound bundle. CI has read-only repository access and publishes nothing.
+
+From the reviewed publication-tools checkout, a maintainer with an existing GitHub CLI login runs `node scripts/release-publication.mjs publish TAG RUN_ID` to verify the bundle without writing a release. Add `--publish` for the explicit final step. The command independently checks the tag and complete trusted-branch CI, verifies the downloaded bundle digest and all six assets, checks that immutable releases are enabled, assembles or resumes a draft, then publishes and verifies its flags, hashes and immutable status. GitHub requires repository Administration-read access for the immutability check and Contents-write access for publication; no additional token is stored in Actions.
+
+For an existing verified tag whose packaging run failed, run **Build LancerLogin release** manually from `main` with that exact `release_tag`. This rebuilds its accepted source without moving the tag. Use the resulting run ID for the maintainer command. Published releases are never replaced. An uncertain publication result requires checking the release before any retry; the command refuses to overwrite a published release.
 
 Beta releases are GitHub prereleases and never GitHub Latest. Stable publication advances Latest only to a higher stable version. Track discovery accepts only complete official releases with matching canonical tags and prerelease flags; beta releases must also be immutable.
 

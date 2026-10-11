@@ -136,12 +136,18 @@ test("both shipped archives load and serve their isolated runtime; missing impor
 
 test("release publication requires shared artifact validation after exact-commit CI", async () => {
   const workflow = await readFile(".github/workflows/release.yml", "utf8");
-  const gate = workflow.indexOf('run: sudo "$(command -v node)" scripts/package-kiosk.mjs release/artifacts --require-unprivileged');
-  assert.ok(gate > workflow.indexOf("successful_runs="));
-  assert.ok(gate < workflow.indexOf("gh release create"));
+  const gate = workflow.indexOf('sudo "$(command -v node)" release-source/scripts/package-kiosk.mjs release/artifacts --require-unprivileged');
+  const sourceGate = workflow.indexOf('release-publication.mjs resolve "$RELEASE_TAG"');
+  const bundleGate = workflow.indexOf('release-publication.mjs bundle "$RELEASE_TAG"');
+  const uploadGate = workflow.indexOf("actions/upload-artifact@v4");
+  assert.ok(sourceGate >= 0 && gate > sourceGate);
+  assert.ok(bundleGate > gate && uploadGate > bundleGate);
+  assert.doesNotMatch(workflow, /contents: write|gh release create|gh release edit/);
   assert.doesNotMatch(workflow, /continue-on-error|if: always\(\)|cp apps\/kiosk\/src/);
   assert.match(workflow, /actions\/setup-node@/);
-  assert.match(workflow, /GITHUB_REF_NAME.*v\$package_version/);
+  const publisher = await readFile("scripts/release-publication.mjs", "utf8");
+  assert.match(publisher, /v\$\{version\}.*!== tag/);
+  assert.match(publisher, /linux_verified_artifacts_required/);
   const manifest = JSON.parse(await readFile("package.json", "utf8"));
   assert.match(manifest.scripts["test:kiosk"], /tests\/kiosk-artifacts\.test\.mjs/);
   assert.match(manifest.scripts.test, /tests\/\*\*\/\*\.test\.mjs/);

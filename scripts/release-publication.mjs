@@ -87,7 +87,18 @@ export async function validateBundle(directory, context, run, notes) {
   return digests;
 }
 function existingRelease(gh, tag) {
-  try { return api(gh, `releases/tags/${tag}`); } catch (error) { if (error.status === 404) return; throw error; }
+  try { return api(gh, `releases/tags/${tag}`); } catch (error) { if (error.status !== 404) throw error; }
+  // The tag endpoint excludes unpublished drafts. Authenticated release lists
+  // include owner-visible drafts, which must be found before creating/resuming.
+  for (let page = 1; page <= 10; page++) {
+    const releases = api(gh, `releases?per_page=100&page=${page}`);
+    if (!Array.isArray(releases)) throw new Error("release_lookup_failed");
+    const matches = releases.filter((release) => release.tag_name === tag);
+    if (matches.length > 1) throw new Error("ambiguous_release_identity");
+    if (matches.length === 1) return matches[0];
+    if (releases.length < 100) return;
+  }
+  throw new Error("release_lookup_limit_exceeded");
 }
 function assertAssets(release, digests) {
   if (!Array.isArray(release.assets) || JSON.stringify(release.assets.map((asset) => asset.name).sort()) !== JSON.stringify(Object.keys(digests).sort())

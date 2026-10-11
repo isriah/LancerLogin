@@ -1,0 +1,11 @@
+.carpool-meeting-marker { display: inline-flex; align-items: center; vertical-align: middle; gap: var(--space-1); margin-inline-start: var(--space-2); color: currentColor; }
+.carpool-meeting-marker svg { width: var(--text-card-heading); height: var(--text-card-heading); fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.carpool-meeting-links { display: grid; gap: var(--space-3); padding: var(--card-padding); }
+.carpool-meeting-links h2 { margin: 0; }
+.carpool-meeting-links nav { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.carpool-meeting-links .ui-button,.carpool-related-meeting-link { display: inline-flex; align-items: center; gap: var(--space-2); width: fit-content; max-width: 100%; min-height: var(--control-min-block-size); padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-control); color: var(--ui-text); background: var(--ui-surface-subtle); font-family: var(--font-body); font-size: var(--text-body); font-weight: 750; text-decoration: none; }
+.carpool-meeting-links .carpool-meeting-marker { margin-inline-start: 0; }
+.calendar-day button .carpool-meeting-title { display: block; font-size: inherit; font-weight: inherit; opacity: 1; }
+.calendar-day button .carpool-meeting-marker { display: inline-flex; font-size: inherit; opacity: 1; }
+.app .carpool-workspace .carpool-meeting-selector { font-family: var(--font-body); font-size: var(--text-body); font-weight: 750; }
+.app .carpool-workspace .carpool-meeting-selector small { font-size: var(--text-small); font-weight: 400; color: var(--muted); }

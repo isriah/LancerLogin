@@ -1,0 +1,164 @@
+name: Verify
+on:
+  pull_request:
+  push:
+    branches: [main, modular]
+  schedule:
+    - cron: "23 10 * * 1"
+  workflow_dispatch:
+jobs:
+  actionlint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
+  verify:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v7
+        with: { node-version: 24.21.0, cache: npm }
+      - run: npm ci --no-audit
+      - name: Select verification scope
+        id: verification-scope
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          full=false
+          kiosk=false
+          reason="scoped change"
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            full=true
+            reason="manual complete verification"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$HEAD_COMMIT_MESSAGE" == Release\ v* ]]; then
+            full=true
+            reason="exact release commit"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            full=true
+            reason="new branch history"
+          fi
+
+          if [[ "$full" == "true" ]]; then
+            kiosk=true
+          else
+            changed_files="$RUNNER_TEMP/changed-files.txt"
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+              git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
+            elif [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+              git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" > "$changed_files"
+            else
+              : > "$changed_files"
+            fi
+
+            while IFS= read -r file; do
+              case "$file" in
+                apps/kiosk/*|packages/shared/*|scripts/package-kiosk.mjs|scripts/install-kiosk.sh|tests/kiosk-runtime.test.mjs|tests/kiosk-artifacts.test.mjs|package.json|package-lock.json)
+                  kiosk=true
+                  ;;
+              esac
+            done < "$changed_files"
+          fi
+
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "kiosk=$kiosk" >> "$GITHUB_OUTPUT"
+          echo "Verification scope: $reason (full=$full, kiosk=$kiosk)"
+      - name: Verify root-owned kiosk artifacts as an unprivileged service account
+        if: steps.verification-scope.outputs.full == 'true'
+        run: sudo "$(command -v node)" --test tests/kiosk-artifacts.test.mjs
+      - name: Run complete release verification once
+        if: steps.verification-scope.outputs.full == 'true'
+        run: npm run verify:release-ci
+      - name: Run web-scoped verification
+        if: steps.verification-scope.outputs.full != 'true'
+        run: npm run verify:dev
+      - name: Run affected kiosk verification
+        if: steps.verification-scope.outputs.full != 'true' && steps.verification-scope.outputs.kiosk == 'true'
+        run: npm run verify:kiosk
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - name: Select dependency-audit runs
+        id: audit-policy
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          run_audit=false
+          reason="ordinary change"
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            run_audit=true
+            reason="scheduled default-branch audit"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            run_audit=true
+            reason="manual exact-commit audit"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$HEAD_COMMIT_MESSAGE" == Release\ v* ]]; then
+            run_audit=true
+            reason="release candidate"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            run_audit=true
+            reason="new branch history"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" ]] && ! git diff --quiet "$BEFORE_SHA" "$GITHUB_SHA" -- package.json package-lock.json ':(glob)**/package.json' ':(glob)**/package-lock.json'; then
+            run_audit=true
+            reason="dependency manifest changed"
+          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] && ! git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- package.json package-lock.json ':(glob)**/package.json' ':(glob)**/package-lock.json'; then
+            run_audit=true
+            reason="dependency manifest changed"
+          fi
+          echo "run=$run_audit" >> "$GITHUB_OUTPUT"
+          echo "Dependency audit policy: $reason (run=$run_audit)"
+      - uses: actions/setup-node@v7
+        if: steps.audit-policy.outputs.run == 'true'
+        with: { node-version: 24, cache: npm }
+      - name: Materialize the audited dependency tree without lifecycle scripts
+        if: steps.audit-policy.outputs.run == 'true'
+        run: npm ci --ignore-scripts --no-audit
+      - name: Audit the complete dependency lockfile
+        if: steps.audit-policy.outputs.run == 'true'
+        run: npm run audit:release
+  browser-shard:
+    name: Browser shard ${{ matrix.shard }}/4
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Release v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: 24.21.0, cache: npm }
+      - run: npm ci --no-audit
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser -- --shard=${{ matrix.shard }}/4
+  browser-smoke:
+    if: >-
+      !cancelled() &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Release v')))
+    needs: browser-shard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every browser shard to pass
+        env:
+          SHARD_RESULT: ${{ needs.browser-shard.result }}
+        run: test "$SHARD_RESULT" = success

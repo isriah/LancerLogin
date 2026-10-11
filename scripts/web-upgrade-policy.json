@@ -1,0 +1,308 @@
+{
+  "format": 1,
+  "independentBridgeMigrations": ["0061_update_channels.sql"],
+  "minimumInstalledVersion": "0.23.2",
+  "automaticCodeRollback": false,
+  "reviewedMigrations": [
+    {
+      "name": "0001_initial.sql",
+      "sha256": "909de63502092f3c3df2d51cad8a2fcc88498698fbaf91e9a0bf6fcfc2a671a4",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0002_branding_and_kiosk_health.sql",
+      "sha256": "f2811b4f4f452ac3a5caf85fdfa5cb4ba196d744965c53118eed455b0c92f59e",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0003_guided_setup_simulator.sql",
+      "sha256": "d8ee733ffef4eca4b7c68612baa6564d4152cf398cf705df6411679893e1f9cb",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0004_roster_accounts.sql",
+      "sha256": "1adcbea48cb4244921663eced4a76861667632ad0e0d0c3e238f9b167db4a4ec",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0005_attendance_lifecycle.sql",
+      "sha256": "e0572875ff710278fa5837f68a2ed19cf097c8807b49a8bb25bc59a193124022",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0006_recurring_meetings.sql",
+      "sha256": "0578ea975ed5f6f1de66652c3dce038c5d882aa7639fdcbf49a1219baa315573",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0007_integration_verification.sql",
+      "sha256": "c12587dc3bec123fe7d3f3622db2564be9b8b864cbab631be39153715aa67aff",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0008_kiosk_operations.sql",
+      "sha256": "04d1080e977aee6c6f7bf028d98fe62fcdc606ecc3dc28bd3c7b053e7aa53eb3",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0009_kiosk_commands.sql",
+      "sha256": "cb62f712f0eef94c040dc362a2264f4a314b267f9bcba1297af40a51c9c09a85",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0010_meeting_soft_delete.sql",
+      "sha256": "1513d90470533fdd59e934ca5d634f5916ae55651385a7742254fbb73e33c23e",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0011_discord_notice_history.sql",
+      "sha256": "02c9ee2683799fa1e6d89d5a5c7c1ef9c28058b070e0c00357fb9720132303c6",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0012_discord_contest_window.sql",
+      "sha256": "6f08f42a03bacd3eb00412c8d212ad72fb0334a576550ab633c17f9a71898745",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0013_roster_operations.sql",
+      "sha256": "bf5a6bb2f1a10caab2715b4fecd7343d63f348f168743d86fb6bad36b95c8dae",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0014_kiosk_update_commands.sql",
+      "sha256": "9fe04361be191b0ef71ae53ead3fe9e7761bfa249ebbf55d1e976d02b0915a7e",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0015_attendance_reporting_baseline.sql",
+      "sha256": "79165744a42977faa6bcb7ec9b664e10f7c957a24e7d7c2b59fd9e1ffc2c555c",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0016_kiosk_diagnostics.sql",
+      "sha256": "12db83b02b8be876f08c75a0766fa769c41f328c7fd6ea1ae37db62c621c4d22",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0017_meeting_templates.sql",
+      "sha256": "55ed65868a5312363df1f700948aea9b27a108360d90028c55693eb71a5aae5b",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0018_simulator_attendance_origin.sql",
+      "sha256": "0543793ead995b35d421a3209d38bce06715a74ebee90fb9799fc7ff294971fb",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0019_member_participation_start_dates.sql",
+      "sha256": "0cd2d4d1629c062b7349f956fefd88f105560a1755e2979fec1947e8f99b8538",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0020_discord_member_pairing.sql",
+      "sha256": "111716797eb3a9af26dbc63182f1e1428d3757925d667a94310e78dd80907dff",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0021_integration_enablement.sql",
+      "sha256": "d37487c7d9780cb21951b6ff71dc17976bb45e910af84df24512baca85c3bed2",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0022_discord_channel_manager.sql",
+      "sha256": "e6b6691d163b85e0ecc80a7e914b9d9a43316bd2fa141e375fcb4909aa21b42d",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0023_attendance_anomaly_thresholds.sql",
+      "sha256": "c58f6d1cec93b131e2a2e207992f135225fc442696b953df04e1166c701898de",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0024_discord_anomaly_reports.sql",
+      "sha256": "3098451264d5ebb6f7958f3727711b7fb759de2a0b254b1abadb38e98fbcdb32",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0025_meeting_weights.sql",
+      "sha256": "d4b02e205e59e19d22b075835c9a94c3b644d3836e94a1d7bdab3e8c63c08051",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0026_google_calendar_sync.sql",
+      "sha256": "41ba41c105ee04313d1906a25588e8f4f27207ed3786a3e177dfe98a807c3c23",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0027_kiosk_update_outcomes.sql",
+      "sha256": "0a71b9dede539cf38bf524f1c72a089a33723212111f0df61d6ce8cdb402e32e",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0028_discord_calendar_delivery.sql",
+      "sha256": "2933292c642aee13c74f69f3f909f218163183b7c13af69cb448c541c41998ca",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0029_web_updates.sql",
+      "sha256": "1dddba4650a82be88d6f4f6c01796ae5dc29d6522e51d410005d664838eca324",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0030_member_labels.sql",
+      "sha256": "25abf0dbc8c5bb3f1e9bc4c1727b22bb4e781c9a4467e45a9279a7e2ab571c4d",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0031_configurable_attendance.sql",
+      "sha256": "27daf405c483ce13fb6fd11ec0b080080d8d1f11173488425fbb863b998915ff",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0032_discord_label_roles.sql",
+      "sha256": "210aa49509b01caddefa9d538a019405ca916974fed48d05dcdfd8327668701c",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0033_discord_attendance_threads.sql",
+      "sha256": "4605293fc66c1829c7b468682ec29828916746e9a275adb07c05c483f05c155c",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0034_attendance_excused_handling.sql",
+      "sha256": "fc030966dc0768a09a2ef10ae0dd6feafc120aded36165d81c9efdbe9b8bb550",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0035_user_debug_mode.sql",
+      "sha256": "c97650e1fc2686b62dd129bc5a1d3ec824dbbf3f30cfe5ccb09f890374f1c56b",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0036_saved_report_views.sql",
+      "sha256": "bae285aa9ede1fb7ce1df2f9a1c81b4b3453c8beff0e28e2ab7e1dc84100e421",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0037_report_read_efficiency.sql",
+      "sha256": "07496fbb503e8e520ef977f1454936cbca898bc4e825c4fff29e907dbda21df9",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0038_page_walkthroughs.sql",
+      "sha256": "10dd32647713e26134fc73ae9b7ab80fb93196ca93870e6a328085c036c0757d",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0039_discord_attendance_delivery_batches.sql",
+      "sha256": "02f65d4352ffd52f20398eb46aa09a5e3a8d80bb3ecce487a78a718bb6aacc0f",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0039_module_platform.sql",
+      "sha256": "7ca7cc5ec1a0ea65699364cc086da48b06a91da54888ce63123170ef1e154dda",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0040_attendance_module_lifecycle.sql",
+      "sha256": "836502ea3b8ace2657750418c78b5f47a38b3880b2235c749bf00034981eeee0",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0041_admin_developer_preferences.sql",
+      "sha256": "daad3e3f7daa84ad425ba77d24b58111a4ffd734a58c02ebb7169747974bd272",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0042_outreach_participation.sql",
+      "sha256": "76acb249628126d657a346c57beed88ad88c5e7bc33235dcde7743391876ba6e",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0043_outreach_member_participation.sql",
+      "sha256": "68c8bf2f2b05aef63e839fc530ccdc45b5f334f378638f3fcf00e0d94b6fb90a",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0044_outreach_entry_review_guards.sql",
+      "sha256": "346d1750809cd90c653a55595c436a8f9afdbb7ce76c03dd83ecf1d8ee689e02",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0045_outreach_publication.sql",
+      "sha256": "f3bbb24a3b0ef2fd6f6800221e0c5cc05bb1df1632021539473767faa260bdf9",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0046_kiosk_pairing_authority.sql",
+      "sha256": "fa13c4e5e947ffecf159f36d0bd148e0e6a6cced6f5aee3c0ec67a18fda36171",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0047_outreach_activity_labels.sql",
+      "sha256": "04b802fe9ddd70544378f0e64022113935d7e7db30eb71133cdfd8a5b7caebcb",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0048_outreach_publication_setting.sql",
+      "sha256": "a64ebb5ddd39f705c556b314c7752625006cded8fc667aa597b736b354abb9b6",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0049_carpool_module.sql",
+      "sha256": "f2d29889c04be0d7902875792965a65d085a980a4bae1d7d78d9cf9727108bdf",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0050_kiosk_auth_methods.sql",
+      "sha256": "c0d7fd63ca91e2f86b280fb30bf1e9c25d8e82701c450e92b681a373ae9256db",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0053_multi_kiosk.sql",
+      "sha256": "98484869d4c8c6fb3657ae6c47904f1d2096f429a8bdab4ec12e142978df9798",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0054_multi_kiosk_authority.sql",
+      "sha256": "18f6ede87a7a87d20e2097b400c6130e2a95951268a455bb8e9a6464388c8257",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0055_fingerprint_sync.sql",
+      "sha256": "1ffaf47e87dde961ac93774fd2a1bd2ae925a577deb28c902cd791d7d38fd056",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0056_outreach_public_workflow.sql",
+      "sha256": "7b60187b4936b1f7b0e09bbd86309dc3d489f2bc71725fbd528dc3d325b51d84",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0057_fingerprint_vault.sql",
+      "sha256": "e4f2f7e00c98a703dce665d709afe5ba7eadebe7894248e9d4dc14feb21066d1",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0058_carpool_meeting_links.sql",
+      "sha256": "b00b3f0288d267ea21019d8076dc46b0435821a6b6d0a10343152c041d9ffb0e",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0059_fingerprint_review.sql",
+      "sha256": "7d32bc5ce76b3b98fe87a53a1d4d36db4b0672f0dc1aced44ba6d159a0b6370d",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0060_retire_fingerprint_review.sql",
+      "sha256": "d4536e3d3cc7a3c247f296c322a9d45366c58ac2694d62d2192d4c345f6200a1",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0061_update_channels.sql",
+      "sha256": "1e2e02c7891c05179423a6f78737e2e1e2d221a7d8054339b733953eed9a9192",
+      "forwardCompatible": true
+    }
+  ]
+}

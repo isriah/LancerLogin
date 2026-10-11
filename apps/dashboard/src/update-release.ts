@@ -1,0 +1,163 @@
+import { parseReleaseVersion, compareReleaseVersions, releaseAllowed, type UpdateChannel } from "../../../packages/shared/src/release-policy.mjs";
+export type Release = { tag_name?: string; html_url?: string; draft?: boolean; prerelease?: boolean; body?: string; channel?: UpdateChannel };
+
+// Compare only complete stable versions; partial or malformed tags are unknown.
+export function hasComparableStableVersions(release: Release | undefined, installed: string) {
+  const tag = release?.tag_name;
+  return Boolean(release && release.draft !== true && typeof tag === "string" && releaseAllowed(tag.startsWith("v") ? tag : `v${tag}`, release.channel ?? "stable", release.prerelease ?? false) && parseReleaseVersion(installed));
+}
+
+export function isNewerRelease(candidate: string, installed: string) {
+  return compareReleaseVersions(candidate, installed) === 1;
+}
+
+export const latestReleaseUrl = `${(import.meta.env?.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/api"}/admin/releases/latest`;
+export const latestReleaseTimeoutMs = 6_000;
+type CheckedRelease = Release & { checkedAt?: number; attemptedAt?: number };
+type Discovery = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; fresh?: boolean; code?: string; error?: string; channel?: UpdateChannel };
+
+export async function fetchLatestRelease(
+  fetcher: typeof fetch = fetch,
+  timeoutMs = latestReleaseTimeoutMs,
+  channel: UpdateChannel = "stable",
+): Promise<CheckedRelease> {
+  const controller = new AbortController();
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetcher(latestReleaseUrl, {
+      headers: { accept: "application/json" }, credentials: "include", cache: "no-store",
+      signal: controller.signal,
+    });
+    const result = await response.json().catch(() => ({})) as Discovery;
+    if ((result.channel ?? "stable") !== channel) throw new ReleaseCheckError("The update track changed. Refresh its setting.", response, { ...result, code: "channel_changed" });
+    if (!response.ok || result.fresh !== true || !result.release || typeof result.checkedAt !== "number") {
+      throw new ReleaseCheckError(discoveryMessage(result.code), response, result);
+    }
+    return { ...result.release, ...(channel === "beta" ? { channel } : {}), checkedAt: result.checkedAt, attemptedAt: result.attemptedAt };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("Latest release check timed out.");
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timer);
+  }
+}
+
+export function createSingleFlight<T>(load: () => Promise<T>) {
+  let inFlight: Promise<T> | undefined;
+  return () => {
+    if (inFlight) return inFlight;
+    const request = Promise.resolve().then(load);
+    const tracked = request.finally(() => {
+      if (inFlight === tracked) inFlight = undefined;
+    });
+    inFlight = tracked;
+    return tracked;
+  };
+}
+
+// The old direct-browser cache cannot confirm same-origin discovery or block it.
+export const releaseCacheKey = "lancerlogin-release-cache-v3:stable";
+export const releaseCacheKeyForChannel = (channel: UpdateChannel) => releaseCacheKey.replace(/stable$/, channel);
+export const releaseCacheTtlMs = 15 * 60_000;
+export const releaseCacheMaximumRetryMs = 60 * 60_000;
+export type ReleaseSnapshot = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; error?: string; code?: string; checking: boolean; fresh: boolean };
+type Stored = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; failures: number; error?: string; code?: string };
+function discoveryMessage(code?: string) {
+  switch (code) {
+    case "rate_limited": return "GitHub release discovery is rate limited.";
+    case "timeout": return "Latest release check timed out.";
+    case "network": return "The server could not reach GitHub release discovery.";
+    case "invalid_release": return "A compatible stable release could not be confirmed.";
+    default: return "Latest release is temporarily unavailable.";
+  }
+}
+export class ReleaseCheckError extends Error {
+  response: Response;
+  discovery?: Discovery;
+  retryAfterMs?: number;
+  constructor(message: string, response: Response, discovery?: Discovery) {
+    super(message); this.response = response; this.discovery = discovery;
+    const after = response.headers.get("retry-after");
+    if (after && /^\d+$/.test(after.trim())) this.retryAfterMs = Math.min(Number(after) * 1000, releaseCacheMaximumRetryMs);
+  }
+}
+function safeRelease(value: unknown, channel: UpdateChannel = "stable"): Release | undefined {
+  if (!value || typeof value !== "object") return;
+  const release = value as Release;
+  if (!hasComparableStableVersions({ ...release, channel }, "0.0.0") || [release.draft, release.prerelease].some((flag) => flag !== undefined && typeof flag !== "boolean")) return;
+  const result: Release = { tag_name: release.tag_name, ...(channel === "beta" ? { prerelease: release.prerelease ?? false, channel } : {}) };
+  if (typeof release.body === "string") result.body = release.body.slice(0, 32_000);
+  // Never turn persisted or provider-controlled metadata into an unsafe link.
+  if (typeof release.html_url === "string") {
+    try { const url = new URL(release.html_url); if (url.protocol === "https:" && !url.username && !url.password) result.html_url = url.href; } catch { /* Notes are optional. */ }
+  }
+  return result;
+}
+export function createReleaseCache({ channel = "stable", load = () => fetchLatestRelease(fetch, latestReleaseTimeoutMs, channel), now = Date.now, storage = () => globalThis.localStorage }: {
+  load?: () => Promise<CheckedRelease>; now?: () => number; storage?: () => Pick<Storage, "getItem" | "setItem">;
+  channel?: UpdateChannel;
+} = {}) {
+  const cacheKey = releaseCacheKeyForChannel(channel);
+  let data: Stored = { failures: 0 };
+  let inFlight: Promise<Release> | undefined;
+  const listeners = new Set<() => void>();
+  const timestamp = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 8_640_000_000_000_000;
+  let lastSaved: string | null | undefined;
+  function sync() {
+    try {
+      const raw = storage().getItem(cacheKey);
+      if (raw === lastSaved) return;
+      lastSaved = raw;
+      if (raw) {
+        const saved = JSON.parse(raw) as Stored;
+        if (saved && typeof saved === "object" && Number.isInteger(saved.failures) && saved.failures >= 0 && saved.failures <= 10
+          && [saved.checkedAt, saved.attemptedAt, saved.retryAt].every((value) => value === undefined || timestamp(value))
+          && (saved.failures === 0 ? saved.retryAt === undefined : Boolean(saved.attemptedAt && saved.retryAt))) {
+          const release = safeRelease(saved.release, channel);
+          const localNow = now();
+          const attemptedAt = saved.attemptedAt ? Math.min(saved.attemptedAt, localNow) : undefined;
+          const retryAt = saved.retryAt ? Math.min(saved.retryAt, localNow + releaseCacheMaximumRetryMs) : undefined;
+          data = { failures: saved.failures, attemptedAt, retryAt,
+            ...(release && saved.checkedAt ? { release, checkedAt: Math.min(saved.checkedAt, localNow) } : {}),
+            ...(saved.failures ? { code: saved.code, error: discoveryMessage(saved.code) } : {}) };
+        }
+      }
+    } catch { /* In-memory checks work when storage is unavailable or malformed. */ }
+  }
+  sync();
+  const snapshot = (): ReleaseSnapshot => ({ ...data, checking: Boolean(inFlight), fresh: Boolean(data.release && data.checkedAt && now() >= data.checkedAt && now() - data.checkedAt < releaseCacheTtlMs && !data.error) });
+  function publish() { for (const listener of listeners) listener(); }
+  function persist() { try { const raw = JSON.stringify(data); storage().setItem(cacheKey, raw); lastSaved = raw; } catch { /* Storage is optional. */ } }
+  function check(force = false): Promise<Release> {
+    if (inFlight) return inFlight;
+    sync();
+    if (data.retryAt && now() < data.retryAt) return Promise.reject(new Error(data.error ?? "Latest release is temporarily unavailable."));
+    if (!force && snapshot().fresh) return Promise.resolve(data.release!);
+    data.attemptedAt = now();
+    const request = Promise.resolve().then(load).then((value) => {
+      const release = safeRelease(value, channel);
+      if (!release) throw new Error("A compatible stable release could not be confirmed.");
+      const receivedAt = now();
+      // The authenticated same-origin response is fresh when received. Browser and
+      // server wall clocks never participate in cache freshness or cooldown math.
+      data = { release, checkedAt: receivedAt, attemptedAt: receivedAt, failures: 0 };
+      persist(); return release;
+    }).catch((error: unknown) => {
+      const failures = Math.min(data.failures + 1, 10);
+      let retryAt = now() + Math.min(30_000 * 2 ** (failures - 1), releaseCacheTtlMs);
+      if (error instanceof ReleaseCheckError && error.retryAfterMs) retryAt = Math.max(retryAt, now() + error.retryAfterMs);
+      const discovery = error instanceof ReleaseCheckError ? error.discovery : undefined;
+      retryAt = Math.min(retryAt, now() + releaseCacheMaximumRetryMs);
+      data = { ...data, failures, retryAt, code: discovery?.code, error: error instanceof Error ? error.message : "Latest release is temporarily unavailable." };
+      const previousRelease = safeRelease(discovery?.release, channel);
+      if (previousRelease) data.release = previousRelease;
+      persist(); throw error;
+    });
+    const tracked = request.finally(() => { inFlight = undefined; publish(); });
+    inFlight = tracked; publish(); return tracked;
+  }
+  return { check, snapshot, sync, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+}
+export const releaseCache = createReleaseCache();
+const betaReleaseCache = createReleaseCache({ channel: "beta" });
+export const releaseCacheForChannel = (channel: UpdateChannel) => channel === "beta" ? betaReleaseCache : releaseCache;

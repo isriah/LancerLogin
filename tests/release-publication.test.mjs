@@ -27,7 +27,8 @@ async function fixture(tag = "v1.2.6", changes = {}) {
     head_branch: "main", event: "workflow_dispatch", path: ".github/workflows/release.yml", status: "completed", conclusion: "success", ...changes.run };
   const zip = Buffer.from("Synthetic ZIP bytes bound by GitHub artifact digest");
   const artifact = { id: 13, name: `lancerlogin-release-${tag}`, expired: false, workflow_run: { id: 11, head_sha: producerSha }, size_in_bytes: zip.length, digest: `sha256:${digest(zip)}`, ...changes.artifact };
-  const calls = []; let release, latest = "v1.2.5", immutableReads = 0, tagReads = 0;
+  const calls = []; let release = changes.draft ? { tag_name: tag, draft: true, assets: [] } : undefined;
+  let latest = "v1.2.5", immutableReads = 0, tagReads = 0;
   function gh(args, binary) {
     calls.push(args);
     if (args[0] === "api") {
@@ -39,7 +40,8 @@ async function fixture(tag = "v1.2.6", changes = {}) {
       else if (endpoint === "actions/runs/11/jobs?per_page=100") result = { jobs: [{ conclusion: "success", labels: ["ubuntu-latest"], steps: [{ name: "Package and validate both kiosk release archives", conclusion: "success" }], ...changes.packageJob }] };
       else if (endpoint === "releases/latest") result = { tag_name: changes.latest ?? latest };
       else if (endpoint === "immutable-releases") { immutableReads++; result = { enabled: changes.immutable === undefined ? true : changes.immutable && immutableReads < 3 }; }
-      else if (endpoint === `releases/tags/${tag}`) { if (changes.published) result = { draft: false }; else if (!release) { const missing = new Error("not_found"); missing.status = 404; throw missing; } else result = release; }
+      else if (endpoint === `releases/tags/${tag}`) { if (changes.published) result = { draft: false }; else if (!release || release.draft) { const missing = new Error("not_found"); missing.status = 404; throw missing; } else result = release; }
+      else if (endpoint === "releases?per_page=100&page=1") result = changes.duplicateRelease ? [{ tag_name: tag, draft: true }, { tag_name: tag, draft: true }] : release ? [release] : [];
       else if (endpoint === "actions/runs/11/artifacts?per_page=100") result = { total_count: 1, artifacts: [artifact], ...changes.artifactList };
       else if (endpoint === "actions/artifacts/13/zip") { assert.equal(binary, true); assert.ok(args.includes("--allow-escape-sequences")); return changes.zip ?? zip; }
       else if (endpoint === "actions/artifacts/13") result = { ...artifact, ...changes.retained };
@@ -80,6 +82,7 @@ test("preview is read-only; explicit publication assembles a draft and advances 
     assert.deepEqual(f.calls.filter((args) => args[0] === "release").map((args) => args[1]), ["create", "upload", "edit"]);
     assert.ok(f.calls.find((args) => args[1] === "create").includes("--latest=false"));
     assert.ok(f.calls.find((args) => args[1] === "edit").includes("--latest=true"));
+    assert.ok(f.calls.some((args) => args.at(-1).endsWith("releases?per_page=100&page=1")), "draft lookup uses authenticated release lists when tag lookup returns 404");
   } finally { await f.cleanup(); }
 });
 test("Beta stays a prerelease and cannot become Latest", async () => {
@@ -88,13 +91,19 @@ test("Beta stays a prerelease and cannot become Latest", async () => {
     const edit = f.calls.find((args) => args[1] === "edit"); assert.ok(edit.includes("--prerelease=true")); assert.ok(edit.includes("--latest=false"));
   } finally { await f.cleanup(); }
 });
+test("owner-visible draft is resumed without creating a second release", async () => {
+  const f = await fixture("v1.2.6", { draft: true });
+  try { assert.equal((await publishRelease("v1.2.6", 11, { gh: f.gh, publish: true })).published, true);
+    assert.deepEqual(f.calls.filter((args) => args[0] === "release").map((args) => args[1]), ["upload", "edit"]);
+  } finally { await f.cleanup(); }
+});
 test("identity, permissions and artifact failures prevent publication", async () => {
   const failures = [
     { jobs: jobs.slice(1) }, { published: true }, { immutable: false }, { run: { event: "pull_request" } }, { run: { head_repository: { full_name: "other/repo" } } },
     { run: { head_branch: "modular" } }, { packageJob: { labels: ["windows-latest"] } }, { packageJob: { steps: [] } }, { artifact: { expired: true } },
     { artifact: { digest: "sha256:invalid" } }, { artifactList: { total_count: 2 } }, { zip: Buffer.from("modified") }, { retained: { digest: `sha256:${"0".repeat(64)}` } },
     { artifact: { size_in_bytes: 0 } }, { artifact: { size_in_bytes: null } }, { artifact: { size_in_bytes: 65 * 1024 * 1024 } },
-    { damage: true }, { latest: "v1.2.6" }, { tagChanged: true },
+    { damage: true }, { latest: "v1.2.6" }, { tagChanged: true }, { duplicateRelease: true },
   ];
   for (const changes of failures) {
     const f = await fixture("v1.2.6", changes);

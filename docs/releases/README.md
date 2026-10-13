@@ -4,7 +4,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 > Release notes record what was true when a version shipped. For current procedures, use the linked guide rather than applying older transition steps out of context.
 
-- [v2.0.1-beta.1](v2.0.1-beta.1.md) - Preserve inactive periods in attendance reporting
+- [v2.0.0-beta.2](v2.0.0-beta.2.md) - Preserve inactive periods in attendance reporting
 - [v2.0.0-beta.1](v2.0.0-beta.1.md) - Optional modules, multiple kiosks and Beta updates
 - [v1.2.6](v1.2.6.md) - Stable and Beta update tracks with a Community upgrade bridge
 - [v1.2.5](v1.2.5.md) - Reliable Discord absence notices for large rosters

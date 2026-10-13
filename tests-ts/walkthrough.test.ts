@@ -72,7 +72,7 @@ test("Outreach schema33 restores privacy and event corrections while older owner
       INSERT INTO hours_correction_requests(installation_id,id,channel,attribution,requester_member_id,entry_id,claimed_service_date,message,key_hash,fingerprint,status,revision,created_at,activity_id)
         VALUES('primary','synthetic-request','public','self_asserted','synthetic-member',NULL,'2026-09-28','Please review the morning entry.','synthetic-key','synthetic-fingerprint','open',0,'2026-09-28T18:00:00Z','synthetic-event');`);
     const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
-    assert.equal(backup.schemaVersion, 33); assert.equal(backup.tables.hours_public_form_settings[0].member_validation, "name");
+    assert.equal(backup.schemaVersion, 34); assert.equal(backup.tables.hours_public_form_settings[0].member_validation, "name");
     assert.equal(backup.tables.hours_correction_requests[0].activity_id, "synthetic-event"); assert.equal(backup.tables.hours_public_lookup_limits, undefined);
     const restore = (source: unknown) => call(db, "/admin/data/restore", "admin", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: source });
     const invalid = structuredClone(backup); invalid.tables.hours_public_form_settings[0].member_validation = "roster";
@@ -83,6 +83,7 @@ test("Outreach schema33 restores privacy and event corrections while older owner
     assert.equal(db.sqlite.prepare("SELECT activity_id FROM hours_correction_requests").get()?.activity_id, "synthetic-event");
     assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS count FROM hours_public_lookup_limits").get()?.count, 0);
     const previous = structuredClone(backup); previous.schemaVersion = 32; delete previous.tables.hours_public_form_settings;
+    for (const row of previous.tables.members) delete row.inactive_periods_json;
     previous.ownership.modules.find((module: any) => module.id === "hour-tracking").tables = previous.ownership.modules.find((module: any) => module.id === "hour-tracking").tables.filter((table: string) => table !== "hours_public_form_settings");
     for (const row of previous.tables.hours_correction_requests) delete row.activity_id;
     result = await restore(previous); assert.equal(result.status, 200, await result.clone().text());
@@ -138,7 +139,7 @@ test("entire-installation backups round-trip progress, older backups reset it, a
     await call(db, endpoint, "admin", { ...progress, status: "completed", stepId: "recurrence" });
     db.sqlite.exec("INSERT INTO hours_publication_settings(installation_id,automatic,revision,created_at,updated_at) VALUES('primary',0,0,'2026-09-28','2026-09-28'); INSERT INTO hours_activities(installation_id,id,category_id,mode,service_date,title,event_start_local,event_end_local,created_at,updated_at) VALUES('primary','scheduled-event','event','event','2026-10-10','Scheduled event','17:00','18:00','2026-09-28','2026-09-28'); INSERT INTO carpool_plans(installation_id,id,title,destination,radius_miles,preferred_radius_miles,notes,archived,revision,created_at,updated_at) VALUES('primary','schema-30-plan','Schema 30 plan','Competition venue',12,4,'',0,0,'2026-09-28','2026-09-28')");
     const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
-    assert.equal(backup.schemaVersion, 33);
+    assert.equal(backup.schemaVersion, 34);
     assert.equal(backup.tables.organization_settings[0].kiosk_authentication_method, "fingerprint");
     assert.deepEqual(backup.tables.hours_publication_settings.map((item: any) => [item.automatic, item.revision]), [[0, 0]]);
     assert.equal(backup.tables.hours_activities.find((item: any) => item.id === "scheduled-event")?.event_start_local, "17:00");

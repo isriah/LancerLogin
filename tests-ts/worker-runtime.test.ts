@@ -692,7 +692,7 @@ test("replace roster deactivates omitted members without changing dashboard user
   assert.equal(body.deactivated, 1);
   assert.equal(body.mode, "replace");
   const batch = database.batches.at(-1) ?? [];
-  assert.ok(batch.some((call) => call.sql.includes("UPDATE members SET active = 0")));
+  assert.ok(batch.some((call) => call.sql.includes("UPDATE members SET inactive_periods_json") && call.sql.includes("active = 0")));
   assert.equal(batch.some((call) => call.sql.includes("UPDATE users")), false);
 });
 
@@ -2864,7 +2864,7 @@ test("bulk roster status requires Admin preview and rejects a changed roster", a
   database.lists.set("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, active FROM members", people);
   const applied = await worker.fetch(request("/admin/members/bulk/apply", { ...input, previewToken: body.previewToken }, { cookie: await sessionCookie("admin") }), env);
   assert.equal(applied.status, 200); assert.equal((await applied.json() as { applied: number }).applied, 1);
-  assert.equal(database.batches.at(-1)?.filter((item) => item.sql.startsWith("UPDATE members SET active")).length, 1);
+  assert.equal(database.batches.at(-1)?.filter((item) => item.sql.startsWith("UPDATE members SET inactive_periods_json")).length, 1);
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("roster.bulk_status_changed")));
 });
 
@@ -2990,7 +2990,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 33); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 34); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
@@ -3010,7 +3010,7 @@ test("installation backup retains Discord role mappings while roster backup omit
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 33); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 34); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(installation.tables.saved_report_views.length, 1); assert.equal(installation.tables.saved_report_tabs.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   assert.equal(Object.hasOwn(roster.tables, "saved_report_views"), false);
@@ -3053,7 +3053,7 @@ test("Carpool meeting links survive strict schema33 recovery and older archives 
   database.lists.set("FROM carpool_plans WHERE", [{ installation_id: "primary", id: "plan-1", title: "Synthetic navigation", destination: "", event_reference: null, event_title_snapshot: null, event_starts_at_snapshot: null, radius_miles: 12, preferred_radius_miles: 4, notes: "", archived: 0, revision: 0, created_by: "admin-1", created_at: savedAt, updated_at: savedAt, meeting_id: "unavailable-meeting" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Record<string, any>;
-  assert.equal(current.schemaVersion, 33); assert.equal(current.tables.carpool_plans[0].meeting_id, "unavailable-meeting");
+  assert.equal(current.schemaVersion, 34); assert.equal(current.tables.carpool_plans[0].meeting_id, "unavailable-meeting");
   const restore = (backup: unknown) => worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
   const missing = structuredClone(current); delete missing.tables.carpool_plans[0].meeting_id;
   assert.equal((await restore(missing)).status, 400);

@@ -146,7 +146,14 @@ VALUES('primary','meeting-1','member-1','synthetic-discord-user','synthetic-mess
     const before = await captureCommunityState(execute);
     await writeFile(configPath, `${JSON.stringify(config(databaseName, "../apps/api/migrations"), null, 2)}\n`, { mode: 0o600 });
     await wrangler(workspace, temporary, configPath, stateDirectory, ["d1", "migrations", "apply", databaseName, "--local"]);
-    await assertCommunityStateRetained(execute, before);
+    // Initializing inactivity history invalidates cached reports once per inactive member.
+    const expected = structuredClone(before);
+    if (candidateMigrations.includes("0062_member_inactive_periods.sql")) {
+      for (const row of expected.find((table) => table.name === "report_data_revision")?.rows ?? []) {
+        row.revision += before.find((table) => table.name === "members")?.rows.filter((member) => member.installation_id === row.installation_id && member.active === 0).length ?? 0;
+      }
+    }
+    await assertCommunityStateRetained(execute, expected);
     const results = await wrangler(workspace, temporary, configPath, stateDirectory, ["d1", "execute", databaseName, "--local", "--json", "--command", `
       SELECT organization_name AS organizationName,time_zone AS timeZone,late_scan_minutes AS lateScanMinutes,appearance,logo_backdrop AS logoBackdrop,attendance_recent_days AS attendanceRecentDays FROM organization_settings WHERE installation_id='primary';
       SELECT id,external_id AS externalId,first_name AS firstName,last_name AS lastName,attendance_required_from AS attendanceRequiredFrom FROM members WHERE id='member-1';

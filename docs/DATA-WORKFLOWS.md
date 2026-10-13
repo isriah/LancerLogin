@@ -8,7 +8,7 @@ Administrators add a member in **Roster** or select **Add member** and choose CS
 
 Choose **Add to or update the current roster** to merge rows. Choose **Replace the active roster** only when that is intentional: omitted active members become inactive, while their attendance history and dashboard accounts remain preserved. An attendance-required date excludes earlier meetings from that person's attendance obligation and reporting denominator; it does not remove earlier scans or corrections.
 
-Roster membership is separate from dashboard access. Use **Settings → Access** to create or link an Admin or Operator account. Deactivating a member preserves history. Permanent deletion is available only when no attendance history references the member.
+Roster membership is separate from dashboard access. Use **Settings → Access** to create or link an Admin or Operator account. Deactivating a member preserves history. Meetings that start while the member is inactive do not count as absences or attendance opportunities, including after reactivation. This applies to individual and bulk status changes and CSV replacement. Each inactive period is retained in roster and installation backups. Inactive periods from before this feature was installed cannot be reconstructed; already inactive members are tracked from installation of the update. Permanent deletion is available only when no attendance history references the member.
 
 ## Meetings and attendance
 

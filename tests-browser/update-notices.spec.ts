@@ -5,20 +5,27 @@ import { discovered } from "./release-discovery";
 const bundledVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version as string;
 
 async function setup(page: Page) {
-  let installed = "0.9.0"; let releaseCalls = 0;
+  let installed = "0.9.0"; let releaseCalls = 0; let installationReads = 0;
   const channel = bundledVersion.includes("-beta.") ? "beta" : "stable";
   await page.route("**/admin/update-channel", route => route.fulfill({ json: { channel, revision: 1 } }));
-  await page.route("**/admin/update-info", route => route.fulfill({ json: { releaseVersion: installed, workflowUrl: "https://github.example.test/actions/workflows/upgrade-web.yml" } }));
+  await page.route("**/admin/update-info", route => {
+    installationReads++;
+    return route.fulfill({ json: { releaseVersion: installed, workflowUrl: "https://github.example.test/actions/workflows/upgrade-web.yml" } });
+  });
   await page.route("**/__lancerlogin-release", route => route.fulfill({ json: { releaseVersion: installed } }));
   await page.route("**/admin/releases/latest", async route => { releaseCalls++; await route.fulfill({ json: discovered({ tag_name: `v${bundledVersion}`, prerelease: channel === "beta" }, await page.evaluate(() => Date.now()), channel) }); });
-  return { set installed(value: string) { installed = value; }, get releaseCalls() { return releaseCalls; } };
+  return { set installed(value: string) { installed = value; }, get releaseCalls() { return releaseCalls; }, get installationReads() { return installationReads; } };
 }
 const popup = (page: Page) => page.getByRole("status", { name: "Update available", exact: true });
 
 test("update notices clear after installation changes without another release lookup or reload", async ({ page }) => {
   const state = await setup(page); await page.clock.install(); await page.goto("/dashboard");
   await expect(popup(page)).toBeVisible();
-  state.installed = bundledVersion; await page.clock.runFor(31_000);
+  const readsBeforeUpdate = state.installationReads;
+  state.installed = bundledVersion;
+  // Let the next poll's real network response settle before advancing more simulated time.
+  for (let second = 0; second < 31 && state.installationReads === readsBeforeUpdate; second++) await page.clock.runFor(1_000);
+  expect(state.installationReads).toBeGreaterThan(readsBeforeUpdate);
   await expect(popup(page)).toHaveCount(0);
   await expect(page.getByRole("button", { name: `LancerLogin ${bundledVersion} is available. Open Updates.`, exact: true })).toHaveCount(0);
   expect(state.releaseCalls).toBe(1);

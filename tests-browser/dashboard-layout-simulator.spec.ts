@@ -15,7 +15,8 @@ for (const viewport of references.viewports) for (const theme of references.them
     await page.setViewportSize(viewport);
     await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
     await context(page);
-    await page.route("**/admin/members", route => route.fulfill({ json: { members: [{ id: "member-1", memberId: "MEMBER-12345678901234567890", firstName: "Alexandria-Catherine", lastName: "Montgomery-Wellington", email: "member@example.test", attendanceRequiredFrom: "2026-09-01", active: 1 }] } }));
+    await page.route("**/admin/members", route => route.fulfill({ json: { members: [{ id: "member-1", memberId: "MEMBER-12345678901234567890", firstName: "Alexandria-Catherine", lastName: "Montgomery-Wellington", email: "member@example.test", active: 1 }] } }));
+    await page.route("**/admin/attendance/members", route => route.fulfill({ json: { members: [{ memberId: "MEMBER-12345678901234567890", attendanceRequiredFrom: "2026-09-01" }] } }));
     await page.goto("/roster");
     const header = page.locator(".dashboard-toolbar");
     await expect(header.getByRole("link", { name: "Go to Dashboard" })).toBeVisible();
@@ -41,7 +42,7 @@ for (const viewport of references.viewports) for (const theme of references.them
     const title = await identityLink.locator("strong").boundingBox();
     const email = await identityLink.locator("small").first().boundingBox();
     expect(email!.y - title!.y - title!.height).toBeLessThanOrEqual(1);
-    await expect(header.locator(".primary-navigation a")).toHaveText(["Dashboard", "Roster", "Reports", "Kiosks", "Settings"]);
+    await expect(header.locator(".primary-navigation a")).toHaveText(["Meetings", "Roster", "Reports", "Kiosks", "Settings"]);
     await row.getByRole("button", { name: "Edit", exact: true }).click();
     const editor = page.getByRole("dialog", { name: "Edit roster member" });
     await expect(editor.getByLabel("Attendance required from")).toHaveValue("2026-09-01");

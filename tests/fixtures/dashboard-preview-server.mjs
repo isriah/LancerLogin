@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { defaultModuleSnapshot } from "./default-module-snapshot.mjs";
 
 const port = Number(process.env.LANCERLOGIN_MOCK_PORT ?? 8787);
 const now = Date.now();
@@ -19,20 +20,27 @@ const labels = [{ id: "mentor", name: "Mentor", active: 1, formulaEnabled: 1 }];
 const labelData = { labels, history: [], periods: [], today: new Date().toISOString().slice(0, 10) };
 const completedMeetings = meetings.slice(0, 2).map((meeting) => ({ ...meeting, attendanceWeight: 1, audienceMode: "all", audienceLabelIds: [] }));
 const report = { meetings: completedMeetings, members: members.map((member, index) => ({ member, currentLabelIds: [], rows: completedMeetings.map((meeting) => ({ meetingId: meeting.id, memberId: member.id, disposition: index ? "absent" : "present", eligibility: meeting.required ? "required" : "optional", policy: "standard", rateEligible: Boolean(meeting.required), regularEligible: Boolean(meeting.required), attended: !index, weight: 1, regularWeight: 1, audience: "All", memberLabelIds: [] })), regularAttendance: { rate: index ? 0 : 100, attended: index ? 0 : 1, required: 1, from: member.attendanceRequiredFrom ?? member.createdAt?.slice(0, 10) ?? null, to: new Date().toISOString().slice(0, 10) }, currentCompliances: [], currentCompliance: { labelId: null, labelName: null, ruleId: null, ruleType: null, excusedHandling: null, status: "no_rule", threshold: null, from: new Date(now - 29 * 24 * 60 * 60_000).toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10), rate: null, unadjustedRate: null, attended: 0, required: 0 }, historySummaries: [], policy: "standard", present: index ? 0 : 1, primaryTotal: 1, adjustedTotal: 1, rate: index ? 0 : 100, adjustedRate: index ? 0 : 100, pooledRate: null, weeks: [], belowTargetWeeks: [] })), labels, baseline: null, timeZone: "UTC" };
-const defaultReportDefinition = { version: 1, period: { type: "all" }, roster: "active", meetingType: "all", labelIds: [], labelMatch: "any", membership: "current", columns: [{ key: "member" }, { key: "regular_attendance" }, { key: "assigned_policies" }], columnFilters: [], sort: { column: { key: "member" }, direction: "asc" } };
 const reportColumns = [
-  { key: "member", label: "Member", group: "Roster", sortable: true, filterKind: "text" },
-  { key: "member_id", label: "Member ID", group: "Roster", sortable: true, filterKind: "text" },
-  { key: "email", label: "Email", group: "Roster", sortable: true, filterKind: "text" },
-  { key: "regular_attendance", label: "Regular attendance", group: "Regular attendance", sortable: true, filterKind: "number" },
-  { key: "assigned_policies", label: "Assigned policies", group: "Policies", sortable: false, filterKind: "text" },
-  { key: "absent_dates", label: "Absent dates", group: "Attendance detail", sortable: false, filterKind: "text" },
-];
+  { key: "core.member.identity", label: "Member record ID", group: "Roster", sortable: true, filterKind: "text" },
+  { key: "core.member.name", label: "Member", group: "Roster", sortable: true, filterKind: "text" },
+  { key: "core.member.id", label: "Member ID", group: "Roster", sortable: true, filterKind: "text" },
+  { key: "core.member.email", label: "Email", group: "Roster", sortable: true, filterKind: "text" },
+  { key: "attendance.member.regular-rate", label: "Regular attendance", group: "Regular attendance", sortable: true, filterKind: "number" },
+  { key: "attendance.member.assigned-policies", label: "Assigned policies", group: "Policies", sortable: false, filterKind: "text" },
+  { key: "attendance.detail.absent-dates", label: "Absent dates", group: "Attendance detail", sortable: false, filterKind: "text" },
+].map((column) => ({ ...column, datasets: ["attendance.members"] }));
+const attendanceDataset = {
+  id: "attendance.members", label: "Members - Attendance", description: "Member-level Attendance measures with Community roster fields.", available: true,
+  rowIdentity: "core.member.identity", capability: "attendance.manage",
+  fields: reportColumns.map((column) => ({ id: column.key, label: column.label, group: column.group, kind: column.filterKind === "number" ? "measure" : "dimension", valueType: column.filterKind, sortable: column.sortable, filterOperators: [column.filterKind === "number" ? "minimum" : "contains"] })),
+  filters: ["period", "roster", "meeting-type", "labels", "membership"], groupBy: ["core.member.identity"],
+  defaultColumns: ["core.member.name", "attendance.member.regular-rate", "attendance.member.assigned-policies"], defaultSort: { field: "core.member.name", direction: "asc" }, relationships: [],
+};
+const defaultReportDefinition = { version: 2, dataset: "attendance.members", groupBy: ["core.member.identity"], period: { type: "all" }, roster: "active", meetingType: "all", labelIds: [], labelMatch: "any", membership: "current", columns: attendanceDataset.defaultColumns.map((key) => ({ key })), columnFilters: [], sort: { column: { key: "core.member.name" }, direction: "asc" } };
 const leaderboardReport = { ...report, pagination: { page: 1, pageSize: 25, totalRows: report.members.length, totalPages: 1, rangeStart: 1, rangeEnd: report.members.length }, insights: { policyAlerts: [], trend: completedMeetings.filter((meeting) => meeting.required).map((meeting) => ({ meetingId: meeting.id, title: meeting.title, startsAt: meeting.startsAt, rate: 50 })) } };
-const customReport = { definition: defaultReportDefinition, warnings: [], resolvedPeriod: { to: new Date().toISOString().slice(0, 10) }, columns: [{ id: "member", key: "member", label: "Member" }, { id: "regular_attendance", key: "regular_attendance", label: "Regular attendance" }, { id: "assigned_policies", key: "assigned_policies", label: "Assigned policies" }], rows: report.members.map((item) => ({ member: { id: item.member.id, memberId: item.member.memberId, name: `${item.member.firstName} ${item.member.lastName}` }, cells: { member: { text: `${item.member.firstName} ${item.member.lastName}`, sortValue: item.member.lastName }, regular_attendance: { text: `${item.regularAttendance.rate}%`, sortValue: item.regularAttendance.rate }, assigned_policies: { text: "No assigned policy", sortValue: null } } })), pagination: { page: 1, pageSize: 25, totalRows: report.members.length, totalPages: 1, rangeStart: 1, rangeEnd: report.members.length } };
+const customReport = { definition: defaultReportDefinition, warnings: [], resolvedPeriod: { to: new Date().toISOString().slice(0, 10) }, columns: [{ id: "core.member.name", key: "core.member.name", label: "Member" }, { id: "attendance.member.regular-rate", key: "attendance.member.regular-rate", label: "Regular attendance" }, { id: "attendance.member.assigned-policies", key: "attendance.member.assigned-policies", label: "Assigned policies" }], rows: report.members.map((item) => ({ id: item.member.id, label: `${item.member.firstName} ${item.member.lastName}`, href: `/roster/${item.member.memberId}`, cells: { "core.member.name": { text: `${item.member.firstName} ${item.member.lastName}`, sortValue: item.member.lastName }, "attendance.member.regular-rate": { text: `${item.regularAttendance.rate}%`, sortValue: item.regularAttendance.rate }, "attendance.member.assigned-policies": { text: "No assigned policy", sortValue: null } } })), pagination: { page: 1, pageSize: 25, totalRows: report.members.length, totalPages: 1, rangeStart: 1, rangeEnd: report.members.length } };
 const memberDetail = (member) => ({ member, labels, labelHistory: [], attendancePolicy: report.members.find((item) => item.member.id === member.id), history: [{ meetingId: "past-regular", title: "Completed build session", startsAt: meetings[0].startsAt, endsAt: meetings[0].endsAt, checkedInAt: iso(-4 * 24 * 60 + 5), checkedOutAt: iso(-4 * 24 * 60 + 115), disposition: "present", eligibility: "required", audience: "All", policy: "standard" }] });
-const walkthroughLastSteps = { dashboard: "recurrence", roster: "bulk-tools", member: "member-actions", reports: "report-actions", meeting: "corrections", kiosks: "history", simulator: "simulate" };
-
+const walkthroughLastSteps = { dashboard: "recurrence", roster: "bulk-tools", member: "member-actions", outreach: "reports-handoff", reports: "report-actions", meeting: "corrections", kiosks: "history", simulator: "simulate" };
 const server = createServer((request, response) => {
   const origin = request.headers.origin ?? "http://127.0.0.1:5173";
   response.setHeader("access-control-allow-origin", origin); response.setHeader("access-control-allow-credentials", "true"); response.setHeader("content-type", "application/json");
@@ -43,11 +51,13 @@ const server = createServer((request, response) => {
   const payload = path === "/setup/status" ? { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Nova Arts Collective", subtitle: "Make things together", logoData: logo, primaryColor: "#8b2f72", secondaryColor: "#e9b949", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } }
     : Object.hasOwn(walkthroughLastSteps, walkthroughPage) ? { progress: { pageId: walkthroughPage, version: 1, status: "completed", stepId: walkthroughLastSteps[walkthroughPage] } }
     : path === "/auth/session" ? { user: { id: "admin-1", role: "admin", debugMode: false } }
+    : path === "/platform/modules" ? defaultModuleSnapshot
+    : path.startsWith("/admin/modules/assignments/") ? { userId: decodeURIComponent(path.split("/")[4]), revision: 0, capabilities: [] }
     : path === "/admin/setup/progress" ? { completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }
     : path === "/integrations/capabilities" ? { integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: true } } }
     : path === "/meetings" ? { meetings, lateScanMinutes: 30 }
     : path === "/labels" ? labelData
-    : path === "/reports/catalog" ? { columns: reportColumns, labels, baseline: null, timeZone: "UTC", defaultDefinition: defaultReportDefinition, role: "admin" }
+    : path === "/reports/catalog" ? { datasets: [attendanceDataset], columns: reportColumns, labels, outreachLabels: [], baseline: null, timeZone: "UTC", defaultDefinition: defaultReportDefinition, role: "admin", attendanceAvailable: true }
     : path === "/reports/views" ? { reports: [] }
     : path === "/reports/tabs" ? { reportIds: [] }
     : path === "/reports/leaderboard" ? leaderboardReport
@@ -60,8 +70,12 @@ const server = createServer((request, response) => {
     : path === "/attendance" ? { finalized: false, attendanceClosesAt: iso(90), attendance: [{ memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", disposition: "active", checkedInAt: iso(-20) }, { memberId: "member-2", externalId: "A-102", firstName: "Morgan", lastName: "Diaz", disposition: "present", checkedInAt: iso(-25), checkedOutAt: iso(-2) }, { memberId: "member-3", externalId: "A-103", firstName: "Jordan", lastName: "Lee", disposition: "absent" }] }
     : path === "/admin/members/A-101/history" ? memberDetail(members[0])
     : path === "/admin/members/A-102/history" ? memberDetail(members[1])
+    : path === "/admin/attendance/members" ? { members: members.map((member) => ({ memberId: member.memberId, attendanceRequiredFrom: new Date().toISOString().slice(0, 10) })) }
     : path === "/admin/members" ? request.method === "POST" ? { imported: 1, deactivated: 0, warnings: [] } : { members }
     : path === "/admin/users" ? { users: [{ id: "user-1", localUsername: "admin", role: "admin", active: 1, memberId: "member-1", memberExternalId: "A-101", memberFirstName: "Avery", memberLastName: "Stone", createdAt: iso(-30 * 24 * 60) }] }
+    : path === "/admin/kiosks/fingerprint-sync" && request.method === "GET" ? { enabled: false }
+    : path === "/admin/kiosks/fingerprint-vault" && request.method === "GET" ? { enabled: false, keyStatus: "ready", storedFingerprints: 0, serverManagedKeys: true }
+    : path === "/admin/kiosks/fingerprint-reset" && request.method === "GET" ? { resetCommands: [] }
     : path === "/admin/kiosks" ? { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.8.0", pairedAt: iso(-1440) }] }
     : path === "/admin/web-updates/status" ? { releaseVersion: "0.23.2", workflowUrl: "https://github.example.test/private/actions/workflows/upgrade-web.yml", request: null }
     : path === "/admin/releases/latest" ? { channel: "stable", fresh: true, checkedAt: Date.now(), attemptedAt: Date.now(), release: { tag_name: "v0.8.0" } }

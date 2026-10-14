@@ -1,4 +1,5 @@
-export type PolicyMember = { id: string; memberId: string; firstName: string; lastName: string; email?: string | null; discordUserId?: string | null; active: number | boolean; attendanceRequiredFrom?: string | null; rosterAddedAt?: string | null };
+import { inactiveAt } from "./member-participation.ts";
+export type PolicyMember = { id: string; memberId: string; firstName: string; lastName: string; email?: string | null; discordUserId?: string | null; active: number | boolean; attendanceRequiredFrom?: string | null; rosterAddedAt?: string | null; inactivePeriodsJson?: string };
 export type PolicyLabel = { id: string; name: string; active: number | boolean; formulaEnabled: number | boolean };
 export type LabelChange = { memberId: string; labelId: string; action: "add" | "remove"; effectiveDate: string; createdAt?: string };
 export type WeeklyTarget = { id: string; labelId: string; startsOn: string; endsOn: string; meetingsPerWeek: number };
@@ -78,6 +79,7 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
     const rows: PolicyRow[] = [];
     const weekBuckets = new Map<string, { rule: AttendanceRule; labelId: string; weekStartsOn: string; segmentStartsOn: string; segmentEndsOn: string; target: number; legacy: boolean; opportunities: number; attended: number; excused: number; pending: boolean }>();
     for (const meeting of meetings) {
+      if (inactiveAt(member.inactivePeriodsJson, meeting.startsAt)) continue;
       const date = meetingDates.get(meeting.id)!;
       const activeLabels = labelsAt(date);
       if (historicalLabelIds.length && (input.historicalLabelMatch === "all" ? !historicalLabelIds.every((id) => activeLabels.has(id)) : !historicalLabelIds.some((id) => activeLabels.has(id)))) continue;
@@ -154,7 +156,7 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
       const date = localDate(meeting.startsAt, input.timeZone);
       const activeLabels = labelsAt(date);
       const historicalMatch = !historicalLabelIds.length || (input.historicalLabelMatch === "all" ? historicalLabelIds.every((id) => activeLabels.has(id)) : historicalLabelIds.some((id) => activeLabels.has(id)));
-      if (!historicalMatch || from && date < from || !activeLabels.has(labelId) || ruleOn(rules, labelId, date)?.id !== rule.id || participationStart && date < participationStart || Date.parse(meeting.attendanceClosesAt) > now || !meeting.required || meeting.audienceMode === "labels" && !meeting.audienceLabelIds.some((id) => activeLabels.has(id))) return [];
+      if (inactiveAt(member.inactivePeriodsJson, meeting.startsAt) || !historicalMatch || from && date < from || !activeLabels.has(labelId) || ruleOn(rules, labelId, date)?.id !== rule.id || participationStart && date < participationStart || Date.parse(meeting.attendanceClosesAt) > now || !meeting.required || meeting.audienceMode === "labels" && !meeting.audienceLabelIds.some((id) => activeLabels.has(id))) return [];
       const observation = observations.get(meeting.id + ":" + member.id);
       const disposition = observation?.disposition === "active" ? "absent" : observation?.disposition ?? "absent";
       return [{ disposition, attended: disposition === "present", weight: Number(meeting.attendanceWeight ?? 1) }];

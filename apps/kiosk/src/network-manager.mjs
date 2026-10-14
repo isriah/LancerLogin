@@ -31,7 +31,9 @@ export function createNetworkManager({ run = defaultRun, connectSecure = secureC
     },
     async wifi() {
       const status = await this.status(); const device = status.devices.find((item) => item.type === "wifi")?.device;
-      await run(["radio", "wifi", "on"]); await run(["device", "wifi", "rescan", ...(device ? ["ifname", device] : [])]); const output = await run(["-t", "--escape", "yes", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "no", ...(device ? ["ifname", device] : [])]); const seen = new Set(); const networks = [];
+      await run(["radio", "wifi", "on"]);
+      // Wait for fresh scan results instead of reading the cache just after requesting a scan.
+      const output = await run(["-t", "--escape", "yes", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes", ...(device ? ["ifname", device] : [])]); const seen = new Set(); const networks = [];
       for (const line of output.trim().split(/\r?\n/).filter(Boolean)) { const [active, ssid, signal, security] = splitNmcli(line); if (!ssid || seen.has(ssid)) continue; seen.add(ssid); networks.push({ ssid, signal: Number(signal) || 0, secured: Boolean(security && security !== "--"), active: active === "*" }); }
       return networks.sort((left, right) => Number(right.active) - Number(left.active) || right.signal - left.signal);
     },

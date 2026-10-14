@@ -1,3 +1,4 @@
+import { inactiveAt, inactivePeriodsUpdateSql, validateInactivePeriods } from "./member-participation.ts";
 import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough.ts";
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
@@ -7,11 +8,37 @@ import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
 import { compareReleaseVersions } from "../../../packages/shared/src/release-policy.mjs";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
-import { buildReportRows, defaultReportDefinition, reportColumnCatalog, reportColumnId, reportColumnLabel, reportLabelsMatch, resolveReportPeriod, validateReportDefinition, type ReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
+import { buildReportRows, combinedMemberDataset, defaultReportDefinition, filterAndSortReportRows, reportColumnCatalog, reportColumnId, reportColumnLabel, reportDatasetCatalog, reportDatasetDefinition, reportFieldSourceDataset, reportFilterSourceDataset, reportLabelsMatch, resolveReportPeriod, validateReportDefinition, type NormalizedReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
+import { createModuleReportDispatcher, outreachReportHandlers, projectCoreMembers, type ReportProjectionContext } from "./module-reporting.ts";
 
 import { databaseIdentity, measureD1, usageCategory, type D1Database, type D1Statement } from "./d1-usage.ts";
 import { ReportDataCache } from "./report-data-cache.ts";
-export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DB?: D1Database; }
+import { HttpError } from "./http-error.ts";
+import { fingerprintRelayRoute } from "./fingerprint-relay.ts";
+import { fingerprintVaultRoute } from "./fingerprint-vault.ts";
+import { fingerprintResetRoute } from "./fingerprint-reset.ts";
+import { bundledModuleRegistry } from "../../../packages/shared/src/module-platform.ts";
+import { configureModulePlatform, readModuleAssignments, readModulePlatformSnapshot, readModuleSetup, requireModuleService, requireModuleSetup, requireModuleWorkspace, setModuleAssignments, updateModuleSetup } from "./module-platform.ts";
+import { captureModuleServiceDatabase, captureModuleSetupDatabase, captureModuleWorkspaceDatabase } from "./module-database-scope.ts";
+import { attendanceSetupRoute } from "./attendance-module-setup.ts";
+import { outreachCatalogRoute, outreachSetupRoute } from "./outreach-catalogs.ts";
+import { outreachEntryRoute } from "./outreach-entries.ts";
+import { outreachPublicRoute } from "./outreach-public.ts";
+import { publicFormSettingsRoute } from "./outreach-public-settings.ts";
+import { outreachReviewRoute } from "./outreach-review.ts";
+import { dispatchModuleDiscordCommand } from "./module-discord.ts";
+import { outreachPublicationRoute, processOutreachPublicationOperations, parseOutreachPublicationEvent, outreachGoogleEventPayload, type OutreachPublicationEvent, type OutreachPublicationProvider, type OutreachPublicationProviders } from "./outreach-publication.ts";
+import { attendanceMemberSettings } from "./attendance-member-settings.ts";
+import { runModuleCleanup } from "./module-cleanup.ts";
+import { carpoolRoute, createCarpoolPlan } from "./carpool-api.ts";
+import { createMeetingReferenceAccess } from "./attendance-meeting-reference.ts";
+import { carpoolSettingsRoute, readCarpoolGeocoder } from "./carpool-settings.ts";
+import { validateCarpoolBackupTables } from "./carpool-backup.ts";
+import { moduleSchedulerJobs, schedulerClass, type SchedulerJob, type SchedulerNamespace } from "./platform-scheduler.ts";
+type ModuleProviderAuthority = () => Promise<void>;
+const moduleProviderAuthority = Symbol("module-provider-authority");
+type ProviderConfiguration = Record<string, string> & { [moduleProviderAuthority]?: ModuleProviderAuthority };
+export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; FINGERPRINT_VAULT_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; CARPOOL_GEOAPIFY_KEY?: string; DB?: D1Database; PLATFORM_SCHEDULER_MODE?: string; PLATFORM_SCHEDULER?: SchedulerNamespace; moduleProviderAuthority?: ModuleProviderAuthority; }
 type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
 type ScheduledController = { cron?: string };
 
@@ -24,12 +51,14 @@ type BrandingInput = { organizationName?: string; subtitle?: string | null; logo
 type DiscordChannelManagerInput = { enabled?: boolean; contestWindowHours?: number };
 type DiscordAnomalyReportsInput = { enabled?: boolean; channelId?: string | null };
 type GoogleCalendarSecret = { clientId: string; clientSecret: string; refreshToken?: string; calendarId?: string; calendarLabel?: string };
-type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null; attendanceRequiredFrom?: string | null };
+type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null };
 type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; weightCategoryId?: string | null; audienceMode?: "all" | "labels"; audienceLabelIds?: string[]; impactToken?: string; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
 type MeetingWeightCategory = { id: string; name: string; weight: number; minimumDurationMinutes?: number | null; position: number; active: number | boolean };
 type MeetingWeightCategoryInput = { name?: string; weight?: number; minimumDurationMinutes?: number | null; active?: boolean };
 type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
+type KioskAuthenticationMethod = "fingerprint" | "rfid" | "nfc" | "member_id" | "qr";
+const kioskAuthenticationMethods = new Set<KioskAuthenticationMethod>(["fingerprint", "rfid", "nfc", "member_id", "qr"]);
 async function latestCompatibleKioskRelease(env: Env, channel: "stable" | "beta") {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 4_000);
   try {
@@ -65,11 +94,6 @@ function withCors(result: Response, request: Request, env: Env): Response {
   if (origin && origin === env.ALLOWED_ORIGIN) { headers.set("access-control-allow-origin", origin); headers.set("access-control-allow-credentials", "true"); headers.set("vary", "origin"); }
   return new Response(result.body, { status: result.status, headers });
 }
-class HttpError extends Error {
-  readonly status: number;
-  readonly details?: string[];
-  constructor(status: number, message: string, details?: string[]) { super(message); this.status = status; this.details = details; }
-}
 class DiscordPermissionError extends HttpError {
   constructor(kind: "calendar" | "pin" | "commands" | "channel" | "roles" | "members" = "channel") { super(502, kind === "calendar" ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." : kind === "pin" ? "Discord denied this request because the bot is missing Pin Messages permission in the configured attendance channel." : kind === "commands" ? "Discord denied command management. Confirm the saved application ID belongs to this bot and install the bot in the selected server before trying command setup again." : kind === "roles" ? "Discord denied a role change. Confirm the bot has Manage Roles and its highest role is above the mapped role." : kind === "members" ? "Discord denied the full server member list. Enable the privileged Guild Members intent for this bot before syncing roles." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
 }
@@ -96,6 +120,15 @@ async function parseJson<T>(request: Request, maxBytes = 262_144): Promise<T> {
   try { return JSON.parse(text) as T; } catch { throw new HttpError(400, "Request body must be valid JSON"); }
 }
 function requireDatabase(env: Env): D1Database { if (!env.DB) throw new HttpError(503, "D1 is not linked"); return env.DB; }
+async function requireProviderAuthority(env: Env): Promise<void> { await env.moduleProviderAuthority?.(); }
+function providerConfiguration(value: Record<string, string>, env: Env): ProviderConfiguration {
+  const config = { ...value } as ProviderConfiguration;
+  if (env.moduleProviderAuthority) Object.defineProperty(config, moduleProviderAuthority, { value: env.moduleProviderAuthority });
+  return config;
+}
+function moduleScopedEnvironment(env: Env, db: D1Database): Env {
+  return { ...env, DB: db, moduleProviderAuthority: async () => { await db.prepare("SELECT 1").first(); } };
+}
 function cookie(request: Request, name: string): string | undefined { return request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1); }
 async function principalFor(request: Request, env: Env): Promise<Principal> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
@@ -166,6 +199,21 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO organization_settings (installation_id, organization_name, time_zone) VALUES (?, ?, ?)").bind("primary", input.organizationName!.trim(), input.timeZone),
     db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, 'admin', ?)").bind(adminId, "primary", input.adminEmail?.toLowerCase() ?? null, input.localUsername?.trim().toLowerCase() ?? null, passwordHash, now),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), "primary", adminId, "installation.created", "installation", "primary", now),
+    db.prepare("INSERT INTO platform_module_administration (installation_id, revision, selection_completed) VALUES ('primary', 0, 0)"),
+    db.prepare("INSERT INTO platform_module_administration_epochs (installation_id, revision) VALUES ('primary', 0)"),
+    db.prepare("INSERT INTO platform_module_epochs (installation_id, module_id, generation) VALUES ('primary', 'attendance', 1)"),
+    db.prepare("INSERT INTO platform_modules (installation_id, module_id, contract_version, generation, phase, setup_version, setup_complete) VALUES ('primary', 'attendance', 1, 1, 'disabled', 2, 0)"),
+    db.prepare("INSERT INTO platform_module_epochs (installation_id, module_id, generation) VALUES ('primary', 'hour-tracking', 1)"),
+    db.prepare("INSERT INTO platform_modules (installation_id, module_id, contract_version, generation, phase, setup_version, setup_complete) VALUES ('primary', 'hour-tracking', 1, 1, 'disabled', 1, 0)"),
+    db.prepare("INSERT INTO platform_module_epochs (installation_id, module_id, generation) VALUES ('primary', 'carpool', 1)"),
+    db.prepare("INSERT INTO platform_modules (installation_id, module_id, contract_version, generation, phase, setup_version, setup_complete) VALUES ('primary', 'carpool', 1, 1, 'disabled', 1, 0)"),
+    db.prepare("INSERT INTO hours_entry_settings (installation_id) VALUES ('primary')"),
+    db.prepare("INSERT INTO hours_publication_settings (installation_id, automatic, revision, created_at, updated_at) VALUES ('primary', 0, 0, ?, ?)").bind(now, now),
+    db.prepare("INSERT INTO hours_categories(installation_id,id,name,mode,impact_default,created_at,updated_at) VALUES ('primary','event','Event','event',1,?,?)").bind(now, now),
+    db.prepare("INSERT INTO hours_categories(installation_id,id,name,mode,impact_default,created_at,updated_at) VALUES ('primary','team-support','Team Support','team',1,?,?)").bind(now, now),
+    db.prepare("INSERT INTO hours_categories(installation_id,id,name,mode,impact_default,created_at,updated_at) VALUES ('primary','other-service','Other Service','task',1,?,?)").bind(now, now),
+    db.prepare("INSERT INTO platform_module_assignment_epochs (installation_id, user_id, revision) VALUES ('primary', ?, 0)").bind(adminId),
+    db.prepare("INSERT INTO platform_module_assignment_revisions (installation_id, user_id, revision) VALUES ('primary', ?, 0)").bind(adminId),
   ];
   if (mode === "google" || mode === "both") {
     const encrypted = await encryptIntegration({ clientId: input.googleClientId!.trim(), clientSecret: input.googleClientSecret!.trim() }, env.INTEGRATION_KEY!);
@@ -176,6 +224,26 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   }
   await db.batch(statements);
   return response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, telemetryAccepted: false }, 201);
+}
+
+async function modulePlatform(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, request.method === "GET" ? ["admin", "operator"] : ["admin"]);
+  const db = requireDatabase(env);
+  if (request.method === "GET") return response(await readModulePlatformSnapshot(db, principal.userId));
+  return response(await configureModulePlatform(db, principal.userId, await parseJson(request)));
+}
+
+async function moduleAssignments(request: Request, env: Env, userId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]);
+  const db = requireDatabase(env);
+  if (request.method === "GET") return response(await readModuleAssignments(db, principal.userId, userId));
+  return response(await setModuleAssignments(db, principal.userId, userId, await parseJson(request)));
+}
+async function moduleSetup(request: Request, env: Env, moduleId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (request.method === "GET") return response(await readModuleSetup(db, principal.userId, moduleId));
+  if (request.method === "PUT") return response(await updateModuleSetup(db, principal.userId, moduleId, await parseJson(request)));
+  throw new HttpError(405, "Use GET or PUT for module setup");
 }
 async function updateInfo(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
@@ -239,6 +307,30 @@ async function authPreferences(request: Request, env: Env): Promise<Response> {
   await db.prepare("UPDATE users SET debug_mode = ? WHERE installation_id = 'primary' AND id = ?").bind(input.debugMode ? 1 : 0, principal.userId).run();
   await writeAudit(db, principal, "user.preferences_updated", "user", principal.userId, { debugMode: input.debugMode });
   return response({ debugMode: input.debugMode });
+}
+
+async function adminPreferences(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const current = await db.prepare("SELECT developer_scheduler_enabled AS developerSchedulerEnabled, revision FROM user_preferences WHERE installation_id = 'primary' AND user_id = ?").bind(principal.userId).first<{ developerSchedulerEnabled: number; revision: number }>();
+  if (request.method === "GET") return response({ developerSchedulerEnabled: Boolean(current?.developerSchedulerEnabled), revision: Number(current?.revision ?? 0) });
+  const input = await parseJson<{ developerSchedulerEnabled?: unknown; expectedRevision?: unknown }>(request, 2_048);
+  if (typeof input.developerSchedulerEnabled !== "boolean" || !Number.isSafeInteger(input.expectedRevision) || Number(input.expectedRevision) < 0) throw new HttpError(400, "Provide the current developer preference revision and scheduler visibility");
+  const revision = Number(input.expectedRevision); const next = input.developerSchedulerEnabled ? 1 : 0; const now = new Date().toISOString();
+  const results = await db.batch([
+    db.prepare(`INSERT INTO user_preferences(installation_id,user_id,developer_scheduler_enabled,revision,updated_at)
+      SELECT 'primary',?,?,1,? WHERE EXISTS(SELECT 1 FROM users WHERE installation_id='primary' AND id=? AND active=1 AND role='admin')
+      AND (?=0 OR EXISTS(SELECT 1 FROM user_preferences WHERE installation_id='primary' AND user_id=? AND revision=?))
+      ON CONFLICT(installation_id,user_id) DO UPDATE SET developer_scheduler_enabled=excluded.developer_scheduler_enabled,
+      revision=user_preferences.revision+1,updated_at=excluded.updated_at WHERE user_preferences.revision=?
+      AND EXISTS(SELECT 1 FROM users WHERE installation_id='primary' AND id=? AND active=1 AND role='admin')`)
+      .bind(principal.userId, next, now, principal.userId, revision, principal.userId, revision, revision, principal.userId),
+    db.prepare(`INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,metadata_json,created_at)
+      SELECT ?,'primary',?,'user.developer_preferences_updated','user',?,?,? WHERE EXISTS(
+        SELECT 1 FROM user_preferences WHERE installation_id='primary' AND user_id=? AND revision=?)`)
+      .bind(crypto.randomUUID(), principal.userId, principal.userId, JSON.stringify({ developerSchedulerEnabled: input.developerSchedulerEnabled }), now, principal.userId, revision + 1),
+  ]);
+  if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) throw new HttpError(409, "Developer options changed in another session; reload before saving");
+  return response({ developerSchedulerEnabled: input.developerSchedulerEnabled, revision: revision + 1 });
 }
 
 async function authWalkthrough(request: Request, env: Env, pageId: string): Promise<Response> {
@@ -509,42 +601,42 @@ async function attendancePolicies(request: Request, env: Env, apply?: boolean): 
 }
 async function members(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, request.method === "GET" ? ["admin", "operator"] : ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const result = await db.prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.email, m.discord_user_id AS discordUserId, m.active, m.created_at AS rosterAddedAt, m.attendance_required_from AS attendanceRequiredFrom, EXISTS(SELECT 1 FROM users u WHERE u.installation_id = m.installation_id AND u.member_id = m.id AND u.active = 1) AS hasDashboardAccess FROM members m WHERE m.installation_id = 'primary' ORDER BY m.last_name, m.first_name").all(); const discord = await integrationRecord(env, "discord"); const discordConfigured = Boolean(discord?.verifiedAt && discord.enabled !== 0); return response({ members: result.results ?? [], discordConfigured }); }
+  if (request.method === "GET") { const result = await db.prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.email, m.discord_user_id AS discordUserId, m.active, m.created_at AS rosterAddedAt, EXISTS(SELECT 1 FROM users u WHERE u.installation_id = m.installation_id AND u.member_id = m.id AND u.active = 1) AS hasDashboardAccess FROM members m WHERE m.installation_id = 'primary' ORDER BY m.last_name, m.first_name").all(); const discord = await integrationRecord(env, "discord"); const discordConfigured = Boolean(discord?.verifiedAt && discord.enabled !== 0); return response({ members: result.results ?? [], discordConfigured }); }
   const input = await parseJson<{ members?: MemberInput[]; mode?: "merge" | "replace" }>(request); const mode = input.mode ?? "merge";
   if (!["merge", "replace"].includes(mode)) throw new HttpError(400, "Roster import mode must be merge or replace");
   if (!Array.isArray(input.members) || !input.members.length || input.members.length > 500) throw new HttpError(400, "Provide between 1 and 500 roster members");
   const seen = new Set<string>(); const errors: string[] = []; const warnings: string[] = [];
-  input.members.forEach((member, index) => { const prefix = `Member ${index + 1}`; if (!member.memberId?.trim() || !member.firstName?.trim() || !member.lastName?.trim()) errors.push(`${prefix} requires memberId, firstName, and lastName`); if (member.memberId && seen.has(member.memberId.trim())) errors.push(`${prefix} duplicates memberId ${member.memberId.trim()}`); if (member.memberId) seen.add(member.memberId.trim()); if (member.email && !validEmail(member.email)) errors.push(`${prefix} has an invalid email`); if (member.discordUserId && !/^\d{10,24}$/.test(member.discordUserId)) warnings.push(`${prefix} Discord user ID was ignored; link Discord later from Optional integrations.`); if (member.attendanceRequiredFrom !== undefined && member.attendanceRequiredFrom !== null && !/^\d{4}-\d{2}-\d{2}$/.test(member.attendanceRequiredFrom)) errors.push(`${prefix} has an invalid participation start date`); });
+  input.members.forEach((member, index) => { const prefix = `Member ${index + 1}`; if (!member.memberId?.trim() || !member.firstName?.trim() || !member.lastName?.trim()) errors.push(`${prefix} requires memberId, firstName, and lastName`); if (member.memberId && seen.has(member.memberId.trim())) errors.push(`${prefix} duplicates memberId ${member.memberId.trim()}`); if (member.memberId) seen.add(member.memberId.trim()); if (member.email && !validEmail(member.email)) errors.push(`${prefix} has an invalid email`); if (member.discordUserId && !/^\d{10,24}$/.test(member.discordUserId)) warnings.push(`${prefix} Discord user ID was ignored; link Discord later from Optional integrations.`); });
   if (errors.length) throw new HttpError(400, "Invalid roster", errors);
   const now = new Date().toISOString();
   const importedIds = input.members.map((member) => member.memberId!.trim());
   const existing = await db.prepare("SELECT external_id AS memberId, active FROM members WHERE installation_id = 'primary'").all<{ memberId: string; active: number }>();
   const incoming = new Set(importedIds); const deactivated = mode === "replace" ? (existing.results ?? []).filter((member) => member.active && !incoming.has(member.memberId)).length : 0;
-  const statements: D1Statement[] = mode === "replace" ? [db.prepare("UPDATE members SET active = 0 WHERE installation_id = 'primary'")] : [];
-  statements.push(...input.members.map((member) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at, attendance_required_from) VALUES (?, 'primary', ?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = 1, attendance_required_from = COALESCE(excluded.attendance_required_from, members.attendance_required_from)").bind(crypto.randomUUID(), member.memberId!.trim(), member.firstName!.trim(), member.lastName!.trim(), member.email?.trim().toLowerCase() || null, member.discordUserId && /^\d{10,24}$/.test(member.discordUserId) ? member.discordUserId.trim() : null, now, member.attendanceRequiredFrom ?? now.slice(0, 10))));
+  const statements: D1Statement[] = mode === "replace" ? [db.prepare(`UPDATE members SET inactive_periods_json = ${inactivePeriodsUpdateSql("0")}, active = 0 WHERE installation_id = 'primary' AND external_id NOT IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(importedIds))] : [];
+  statements.push(...input.members.map((member) => db.prepare(`INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, 1, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, inactive_periods_json = ${inactivePeriodsUpdateSql("1")}, active = 1`).bind(crypto.randomUUID(), member.memberId!.trim(), member.firstName!.trim(), member.lastName!.trim(), member.email?.trim().toLowerCase() || null, member.discordUserId && /^\d{10,24}$/.test(member.discordUserId) ? member.discordUserId.trim() : null, now)));
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, metadata_json, created_at) VALUES (?, 'primary', ?, 'roster.imported', 'member', ?, ?)").bind(crypto.randomUUID(), principal.userId, JSON.stringify({ count: input.members.length, mode, deactivated }), now));
   await db.batch(statements); return response({ imported: input.members.length, deactivated, mode, warnings }, 201);
 }
 async function manageMember(request: Request, env: Env, memberId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-  const member = await db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, active, created_at AS rosterAddedAt, attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id = 'primary' AND id = ?").bind(memberId).first<{ id: string; memberId: string; firstName: string; lastName: string; email?: string; active: number; rosterAddedAt?: string; attendanceRequiredFrom?: string }>();
+  const member = await db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, active, created_at AS rosterAddedAt FROM members WHERE installation_id = 'primary' AND id = ?").bind(memberId).first<{ id: string; memberId: string; firstName: string; lastName: string; email?: string; active: number; rosterAddedAt?: string }>();
   if (!member) throw new HttpError(404, "Member not found");
   if (request.method === "DELETE") {
     const input = await parseJson<{ confirmation?: string }>(request);
     if (input.confirmation !== `DELETE MEMBER ${member.memberId}`) throw new HttpError(400, `Type DELETE MEMBER ${member.memberId} exactly to continue`);
-    const references = await db.prepare("SELECT (SELECT COUNT(*) FROM attendance_events WHERE member_id = ?) + (SELECT COUNT(*) FROM attendance_corrections WHERE member_id = ?) AS count").bind(member.id, member.id).first<{ count: number }>();
-    if (references?.count) throw new HttpError(409, "This member has attendance history. Deactivate them instead to preserve the record.");
+    const references = await db.prepare("SELECT (SELECT COUNT(*) FROM attendance_events WHERE member_id = ?) + (SELECT COUNT(*) FROM attendance_corrections WHERE member_id = ?) + (SELECT COUNT(*) FROM hours_entries WHERE installation_id='primary' AND member_id = ?) + (SELECT COUNT(*) FROM hours_correction_requests WHERE installation_id='primary' AND requester_member_id = ?) AS count").bind(member.id, member.id, member.id, member.id).first<{ count: number }>();
+    if (references?.count) throw new HttpError(409, "This member has Attendance or Outreach history. Deactivate them instead to preserve the record.");
     await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id = ?").bind(member.id), db.prepare("DELETE FROM members WHERE installation_id = 'primary' AND id = ?").bind(member.id)]);
     await writeAudit(db, principal, "roster.member_deleted", "member", member.id, { memberId: member.memberId }); return response({ deleted: true, memberId: member.id });
   }
-  const input = await parseJson<{ firstName?: string; lastName?: string; email?: string | null; active?: boolean; attendanceRequiredFrom?: string | null }>(request);
+  const input = await parseJson<{ firstName?: string; lastName?: string; email?: string | null; active?: boolean }>(request);
+  if (input.active !== undefined && typeof input.active !== "boolean") throw new HttpError(400, "Active must be a boolean");
   if (input.firstName !== undefined && (!input.firstName.trim() || input.firstName.length > 100)) throw new HttpError(400, "First name must be 1 to 100 characters");
   if (input.lastName !== undefined && (!input.lastName.trim() || input.lastName.length > 100)) throw new HttpError(400, "Last name must be 1 to 100 characters");
   if (input.email !== undefined && input.email !== null && !validEmail(input.email.trim())) throw new HttpError(400, "Email must be valid");
-  if (input.attendanceRequiredFrom !== undefined && (input.attendanceRequiredFrom === null || !/^\d{4}-\d{2}-\d{2}$/.test(input.attendanceRequiredFrom))) throw new HttpError(400, "Participation start date must be YYYY-MM-DD");
-  const next = { firstName: input.firstName?.trim() ?? member.firstName, lastName: input.lastName?.trim() ?? member.lastName, email: input.email === undefined ? member.email ?? null : input.email?.trim().toLowerCase() || null, active: input.active === undefined ? member.active : input.active ? 1 : 0, attendanceRequiredFrom: input.attendanceRequiredFrom === undefined ? member.attendanceRequiredFrom ?? member.rosterAddedAt?.slice(0, 10) ?? null : input.attendanceRequiredFrom };
-  await db.prepare("UPDATE members SET first_name = ?, last_name = ?, email = ?, active = ?, attendance_required_from = ? WHERE installation_id = 'primary' AND id = ?").bind(next.firstName, next.lastName, next.email, next.active, next.attendanceRequiredFrom, member.id).run();
-  await writeAudit(db, principal, "roster.member_updated", "member", member.id, { active: Boolean(next.active), attendanceRequiredFrom: next.attendanceRequiredFrom }); return response({ member: { ...member, ...next, active: Boolean(next.active) } });
+  const next = { firstName: input.firstName?.trim() ?? member.firstName, lastName: input.lastName?.trim() ?? member.lastName, email: input.email === undefined ? member.email ?? null : input.email?.trim().toLowerCase() || null, active: input.active === undefined ? member.active : input.active ? 1 : 0 };
+  await db.prepare(`UPDATE members SET first_name = ?, last_name = ?, email = ?, inactive_periods_json = ${inactivePeriodsUpdateSql("COALESCE(?, active)")}, active = COALESCE(?, active) WHERE installation_id = 'primary' AND id = ?`).bind(next.firstName, next.lastName, next.email, input.active === undefined ? null : Number(input.active), input.active === undefined ? null : Number(input.active), input.active === undefined ? null : Number(input.active), member.id).run();
+  await writeAudit(db, principal, "roster.member_updated", "member", member.id, { active: Boolean(next.active) }); return response({ member: { ...member, ...next, active: Boolean(next.active) } });
 }
 async function bulkMemberStatus(request: Request, env: Env, apply: boolean): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -560,13 +652,13 @@ async function bulkMemberStatus(request: Request, env: Env, apply: boolean): Pro
   if (!apply) return response({ members: members.map((member) => ({ memberId: member.memberId, name: `${member.firstName} ${member.lastName}`, active: Boolean(member.active), willChange: Boolean(member.active) !== input.active })), changed: changed.length, previewToken });
   if (input.previewToken !== previewToken) throw new HttpError(409, "The roster changed since the preview. Preview again before applying.");
   const now = new Date().toISOString();
-  await db.batch([...changed.map((member) => db.prepare("UPDATE members SET active = ? WHERE installation_id = 'primary' AND id = ? AND active = ?").bind(input.active ? 1 : 0, member.id, member.active)), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, metadata_json, created_at) VALUES (?, 'primary', ?, 'roster.bulk_status_changed', 'member', ?, ?)").bind(crypto.randomUUID(), principal.userId, JSON.stringify({ memberIds: members.map((member) => member.memberId), active: input.active, changed: changed.length }), now)]);
+  await db.batch([...changed.map((member) => db.prepare(`UPDATE members SET inactive_periods_json = ${inactivePeriodsUpdateSql("?")}, active = ? WHERE installation_id = 'primary' AND id = ? AND active = ?`).bind(Number(input.active), Number(input.active), Number(input.active), member.id, member.active)), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, metadata_json, created_at) VALUES (?, 'primary', ?, 'roster.bulk_status_changed', 'member', ?, ?)").bind(crypto.randomUUID(), principal.userId, JSON.stringify({ memberIds: members.map((member) => member.memberId), active: input.active, changed: changed.length }), now)]);
   return response({ applied: changed.length, selected: members.length, active: input.active });
 }
 async function memberHistory(request: Request, env: Env, externalId: string): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const [member, settings] = await Promise.all([
-    db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active, created_at AS rosterAddedAt, attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id = 'primary' AND external_id = ?").bind(externalId).first<{ id: string; memberId: string; firstName: string; lastName: string; email?: string; discordUserId?: string; active: number; rosterAddedAt?: string; attendanceRequiredFrom?: string }>(),
+    db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active, inactive_periods_json AS inactivePeriodsJson, created_at AS rosterAddedAt, attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id = 'primary' AND external_id = ?").bind(externalId).first<{ id: string; memberId: string; firstName: string; lastName: string; email?: string; discordUserId?: string; active: number; inactivePeriodsJson?: string; rosterAddedAt?: string; attendanceRequiredFrom?: string }>(),
     db.prepare("SELECT anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number }>(),
   ]);
   if (!member) throw new HttpError(404, "Member not found");
@@ -575,10 +667,10 @@ async function memberHistory(request: Request, env: Env, externalId: string): Pr
   const history = (rows.results ?? []).filter((row) => row.startsAt.slice(0, 10) >= participationStartsOn).map((row) => {
     const events = [{ action: "check_in" as const, occurredAt: row.checkedInAt }, ...(row.checkedOutAt ? [{ action: "check_out" as const, occurredAt: row.checkedOutAt }] : [])].filter((event) => event.occurredAt);
     const derived = attendanceDisposition(events, row.correction);
-    return { ...row, disposition: derived === "active" ? "absent" : derived };
+    return { ...row, disposition: inactiveAt(member.inactivePeriodsJson, row.startsAt) ? "not_required" : derived === "active" ? "absent" : derived };
   });
   const meanAnomalyMinutes = meanAnomalousMinutes(history, settings?.anomalyLateThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES, settings?.anomalyEarlyThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES);
-  const { rosterAddedAt: _rosterAddedAt, ...memberResponse } = member;
+  const { rosterAddedAt: _rosterAddedAt, inactivePeriodsJson: _inactivePeriodsJson, ...memberResponse } = member;
   const [labelResult, policy] = await Promise.all([labels(new Request(request.url, { headers: request.headers }), env), policyReport(db, { meetingType: "all", roster: "all", membership: "current", memberId: member.id, useBaseline: true })]);
   const labelData = await labelResult.json() as { labels: PolicyLabel[]; history: ({ memberId: string; labelId: string; action: string; effectiveDate: string; createdAt: string })[] };
   const ownHistory = labelData.history.filter((item) => item.memberId === member.id);
@@ -588,16 +680,18 @@ async function memberHistory(request: Request, env: Env, externalId: string): Pr
 async function pairingCodes(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") { const active = await db.prepare("SELECT id, expires_at AS expiresAt FROM pairing_codes WHERE installation_id = 'primary' AND redeemed_at IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT 1").bind(new Date().toISOString()).first(); return response({ active }); }
-  const input = await parseJson<{ kioskName?: string; replaceExisting?: boolean; purpose?: "hardware" | "simulator" }>(request); const kioskName = input.kioskName?.trim(); const purpose = input.purpose ?? "hardware";
+  const input = await parseJson<{ kioskName?: string; purpose?: "hardware" | "simulator" }>(request); const kioskName = input.kioskName?.trim(); const purpose = input.purpose ?? "hardware";
   if (!kioskName || kioskName.length > 80) throw new HttpError(400, "Kiosk name is required and must be at most 80 characters");
   if (!["hardware", "simulator"].includes(purpose)) throw new HttpError(400, "Pairing purpose must be hardware or simulator");
-  const activeKiosk = purpose === "hardware" ? await db.prepare("SELECT id, name FROM kiosks WHERE installation_id = 'primary' AND active = 1 LIMIT 1").first<{ id: string; name: string }>() : null;
-  if (activeKiosk && input.replaceExisting !== true) throw new HttpError(409, `This single-kiosk installation is already paired to ${activeKiosk.name}. Confirm replacement to continue.`);
+  if (purpose === "hardware") {
+    const duplicate = await db.prepare("SELECT id FROM kiosks WHERE installation_id = 'primary' AND active = 1 AND lower(name) = lower(?) LIMIT 1").bind(kioskName).first<{ id: string }>();
+    if (duplicate) throw new HttpError(409, "An active kiosk already uses that name. Choose a distinct device name.");
+  }
   const code = randomToken(9).slice(0, 12).toUpperCase(); const id = crypto.randomUUID(); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
   await db.batch([
     db.prepare("DELETE FROM pairing_codes WHERE installation_id = 'primary' AND redeemed_at IS NULL AND purpose = ?").bind(purpose),
     db.prepare("INSERT INTO pairing_codes (id, installation_id, code_hash, expires_at, created_by, created_at, purpose) VALUES (?, 'primary', ?, ?, ?, ?, ?)").bind(id, await sha256(code), expiresAt, principal.userId, now.toISOString(), purpose),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'pairing_code.created', 'pairing_code', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ kioskName, purpose, replacesKioskId: activeKiosk?.id ?? null }), now.toISOString()),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'pairing_code.created', 'pairing_code', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ kioskName, purpose }), now.toISOString()),
   ]);
   return response({ code, expiresAt, kioskName, workerApiUrl: new URL(request.url).origin }, 201);
 }
@@ -608,30 +702,29 @@ async function redeemPairingCode(request: Request, env: Env): Promise<Response> 
   if (!pairing) throw new HttpError(401, "Pairing code is invalid or expired");
   const kioskId = crypto.randomUUID(); const kioskToken = randomToken();
   const results = await db.batch([
-    db.prepare("UPDATE pairing_codes SET redeemed_at = ? WHERE id = ? AND redeemed_at IS NULL AND expires_at > ?").bind(now, pairing.id, now),
-    db.prepare("UPDATE kiosks SET active = 0 WHERE installation_id = 'primary' AND active = 1 AND EXISTS (SELECT 1 FROM pairing_codes WHERE id = ? AND redeemed_at = ?)").bind(pairing.id, now),
-    db.prepare("INSERT INTO kiosks (id, installation_id, pairing_code_id, name, token_hash, created_at) SELECT ?, 'primary', ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM pairing_codes WHERE id = ? AND redeemed_at = ?)").bind(kioskId, pairing.id, kioskName, await sha256(kioskToken), now, pairing.id, now),
+    db.prepare("UPDATE pairing_codes SET redeemed_at = ? WHERE id = ? AND redeemed_at IS NULL AND expires_at > ? AND NOT EXISTS (SELECT 1 FROM kiosks WHERE installation_id = 'primary' AND active = 1 AND lower(name) = lower(?))").bind(now, pairing.id, now, kioskName),
+    db.prepare("INSERT INTO kiosks (id, installation_id, pairing_code_id, name, token_hash, created_at, pairing_bound) SELECT ?, 'primary', ?, ?, ?, ?, 1 WHERE EXISTS (SELECT 1 FROM pairing_codes WHERE id = ? AND redeemed_at = ?) AND NOT EXISTS (SELECT 1 FROM kiosks WHERE installation_id = 'primary' AND pairing_code_id = ?)").bind(kioskId, pairing.id, kioskName, await sha256(kioskToken), now, pairing.id, now, pairing.id),
     db.prepare("INSERT INTO audit_log (id, installation_id, action, target_type, target_id, created_at) SELECT ?, 'primary', 'kiosk.paired', 'kiosk', ?, ? WHERE EXISTS (SELECT 1 FROM kiosks WHERE id = ?)").bind(crypto.randomUUID(), kioskId, now, kioskId),
   ]);
-  if ((results[2]?.meta?.changes ?? 1) < 1) throw new HttpError(409, "Pairing code was already used");
-  return response({ kioskId, kioskToken, name: kioskName }, 201);
+  if ((results[1]?.meta?.changes ?? 1) < 1) throw new HttpError(409, "Pairing code was already used or that kiosk name is already active");
+  return response({ kioskId, kioskToken, pairingId: pairing.id, name: kioskName }, 201);
 }
-async function kioskFor(request: Request, env: Env): Promise<{ id: string; name: string }> {
+async function kioskFor(request: Request, env: Env): Promise<{ id: string; name: string; pairingId: string; pairingBound: boolean }> {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
-  const kiosk = await requireDatabase(env).prepare("SELECT id, name FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1").bind(await sha256(authorization.slice(7))).first<{ id: string; name: string }>();
+  const kiosk = await requireDatabase(env).prepare("SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1").bind(await sha256(authorization.slice(7))).first<{ id: string; name: string; pairingId: string; pairingBound: number }>();
   if (!kiosk) throw new HttpError(401, "Kiosk credential is invalid");
-  return kiosk;
+  return { ...kiosk, pairingBound: Boolean(kiosk.pairingBound) };
 }
 async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; releaseVersion?: string; updatePolicyVersion?: number; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string | null; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null }>(request);
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; authenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; updatePolicyVersion?: number; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string | null; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null }>(request);
   if (input.updatePolicyVersion !== undefined && ![1, 2].includes(input.updatePolicyVersion)) throw new HttpError(400, "Unsupported kiosk update policy");
   const pendingEvents = input.pendingEvents ?? 0;
-  if (typeof input.readerOnline !== "boolean" || !input.releaseVersion?.trim() || input.releaseVersion.length > 40 || input.uptimeSeconds !== undefined && (!Number.isInteger(input.uptimeSeconds) || input.uptimeSeconds < 0 || input.uptimeSeconds > 2_147_483_647) || input.networkType !== undefined && !["wifi", "ethernet", "offline"].includes(input.networkType) || input.networkSignal !== undefined && input.networkSignal !== null && (!Number.isInteger(input.networkSignal) || input.networkSignal < 0 || input.networkSignal > 100) || input.lastWifiScanAt && !validTimestamp(input.lastWifiScanAt) || !Number.isInteger(pendingEvents) || pendingEvents < 0 || pendingEvents > 100_000 || input.lastSyncAt && !validTimestamp(input.lastSyncAt) || input.errorCategory && !["cloud_sync", "reader", "offline_queue"].includes(input.errorCategory)) throw new HttpError(400, "Reader status and approved operational diagnostics are required");
+  if (typeof input.readerOnline !== "boolean" || input.authenticationMethod !== undefined && !kioskAuthenticationMethods.has(input.authenticationMethod) || !input.releaseVersion?.trim() || input.releaseVersion.length > 40 || input.uptimeSeconds !== undefined && (!Number.isInteger(input.uptimeSeconds) || input.uptimeSeconds < 0 || input.uptimeSeconds > 2_147_483_647) || input.networkType !== undefined && !["wifi", "ethernet", "offline"].includes(input.networkType) || input.networkSignal !== undefined && input.networkSignal !== null && (!Number.isInteger(input.networkSignal) || input.networkSignal < 0 || input.networkSignal > 100) || input.lastWifiScanAt && !validTimestamp(input.lastWifiScanAt) || !Number.isInteger(pendingEvents) || pendingEvents < 0 || pendingEvents > 100_000 || input.lastSyncAt && !validTimestamp(input.lastSyncAt) || input.errorCategory && !["cloud_sync", "reader", "offline_queue"].includes(input.errorCategory)) throw new HttpError(400, "Authentication input status and approved operational diagnostics are required");
   const now = new Date().toISOString();
   const db = requireDatabase(env); const reportedRelease = input.releaseVersion.trim();
   await db.prepare("UPDATE kiosks SET update_policy_version = ? WHERE installation_id = 'primary' AND id = ?").bind(input.updatePolicyVersion ?? 1, kiosk.id).run();
-  await db.prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, reportedRelease, input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, input.errorCategory || null, kiosk.id).run();
+  await db.prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, authentication_method = COALESCE(?, authentication_method), release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.authenticationMethod ?? null, reportedRelease, input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, input.errorCategory || null, kiosk.id).run();
   const update = await db.prepare("SELECT id, completed_at AS completedAt, requested_release_version AS requestedReleaseVersion, release_version_before AS releaseVersionBefore FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? AND command_type = 'install_latest' AND completed_at IS NOT NULL AND success = 1 AND resolution_status IS NULL ORDER BY created_at DESC LIMIT 1").bind(kiosk.id).first<{ id: string; completedAt: string; requestedReleaseVersion?: string; releaseVersionBefore?: string }>();
   if (update?.requestedReleaseVersion) {
     const normalizedReported = reportedRelease.replace(/^v/, ""); const normalizedRequested = update.requestedReleaseVersion.replace(/^v/, ""); const normalizedBefore = update.releaseVersionBefore?.replace(/^v/, "");
@@ -647,15 +740,19 @@ async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContex
 }
 async function kioskStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]);
-  const result = await requireDatabase(env).prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
-  return response({ kiosks: result.results ?? [] });
+  const db = requireDatabase(env);
+  const [result, settings] = await Promise.all([
+    db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all(),
+    db.prepare("SELECT kiosk_authentication_method AS authenticationMethod FROM organization_settings WHERE installation_id = 'primary'").first<{ authenticationMethod: KioskAuthenticationMethod }>(),
+  ]);
+  return response({ kiosks: result.results ?? [], authenticationMethod: settings?.authenticationMethod ?? "fingerprint" });
 }
 async function kioskConfiguration(request: Request, env: Env): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const settings = await requireDatabase(env).prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop FROM organization_settings WHERE installation_id = 'primary'").first();
+  const kiosk = await kioskFor(request, env); const settings = await requireDatabase(env).prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop, kiosk_authentication_method AS authenticationMethod FROM organization_settings WHERE installation_id = 'primary'").first();
   return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings });
 }
 async function kioskRoster(request: Request, env: Env): Promise<Response> {
-  await kioskFor(request, env); const result = await requireDatabase(env).prepare("SELECT external_id AS memberId, first_name AS firstName, last_name AS lastName FROM members WHERE installation_id = 'primary' AND active = 1 ORDER BY last_name, first_name").all();
+  await kioskFor(request, env); const result = await requireDatabase(env).prepare("SELECT id AS rosterId, external_id AS memberId, first_name AS firstName, last_name AS lastName FROM members WHERE installation_id = 'primary' AND active = 1 ORDER BY last_name, first_name").all();
   return response({ members: result.results ?? [] });
 }
 async function manageKiosk(request: Request, env: Env, kioskId: string): Promise<Response> {
@@ -665,6 +762,10 @@ async function manageKiosk(request: Request, env: Env, kioskId: string): Promise
   if (request.method === "PATCH") {
     const input = await parseJson<{ name?: string }>(request); const name = input.name?.trim();
     if (!name || name.length > 80) throw new HttpError(400, "Kiosk name is required and must be at most 80 characters");
+    if (kiosk.active) {
+      const duplicate = await db.prepare("SELECT id FROM kiosks WHERE installation_id = 'primary' AND active = 1 AND id <> ? AND lower(name) = lower(?) LIMIT 1").bind(kioskId, name).first<{ id: string }>();
+      if (duplicate) throw new HttpError(409, "An active kiosk already uses that name. Choose a distinct device name.");
+    }
     await db.prepare("UPDATE kiosks SET name = ? WHERE installation_id = 'primary' AND id = ?").bind(name, kioskId).run();
     await writeAudit(db, principal, "kiosk.renamed", "kiosk", kioskId, { previousName: kiosk.name, name });
     return response({ kiosk: { ...kiosk, name } });
@@ -674,6 +775,15 @@ async function manageKiosk(request: Request, env: Env, kioskId: string): Promise
   await db.prepare("UPDATE kiosks SET active = 0 WHERE installation_id = 'primary' AND id = ?").bind(kioskId).run();
   await writeAudit(db, principal, "kiosk.retired", "kiosk", kioskId, { name: kiosk.name });
   return response({ retired: true, kioskId });
+}
+async function kioskAuthenticationConfiguration(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const input = await parseJson<{ authenticationMethod?: KioskAuthenticationMethod }>(request);
+  if (!input.authenticationMethod || !kioskAuthenticationMethods.has(input.authenticationMethod)) throw new HttpError(400, "Choose fingerprint, RFID badge, NFC badge, member ID entry, or QR code");
+  const previous = await db.prepare("SELECT kiosk_authentication_method AS authenticationMethod FROM organization_settings WHERE installation_id = 'primary'").first<{ authenticationMethod: KioskAuthenticationMethod }>();
+  await db.prepare("UPDATE organization_settings SET kiosk_authentication_method = ? WHERE installation_id = 'primary'").bind(input.authenticationMethod).run();
+  await writeAudit(db, principal, "kiosk.authentication_method_updated", "organization_settings", "primary", { previousMethod: previous?.authenticationMethod ?? "fingerprint", authenticationMethod: input.authenticationMethod });
+  return response({ authenticationMethod: input.authenticationMethod });
 }
 async function queueKioskCommand(request: Request, env: Env, kioskId: string): Promise<Response> {
   if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Kiosk commands require the dashboard origin");
@@ -925,7 +1035,7 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   const meeting = input.meetingId
     ? await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string; startsAt: string; endsAt: string }>()
     : await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND starts_at <= ? ORDER BY starts_at DESC LIMIT 1").bind(input.occurredAt).first<{ id: string; title: string; startsAt: string; endsAt: string }>();
-  if (!member) throw new HttpError(404, "This fingerprint is not linked to an active roster member");
+  if (!member) throw new HttpError(404, "This identity is not linked to an active roster member");
   if (!meeting) throw new HttpError(409, "No meeting is accepting attendance scans at this time");
   if (member.attendanceRequiredFrom && meeting.startsAt.slice(0, 10) < member.attendanceRequiredFrom) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${member.attendanceRequiredFrom}`);
   const window = scanWindowState(meeting, input.occurredAt, settings?.lateScanMinutes ?? 30);
@@ -941,7 +1051,11 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   const result = await db.prepare("INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by, action) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, member.id, meeting.id, source, input.occurredAt, input.eventId.trim(), actorId ?? null, transition.action).run();
   return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt, meeting: { id: meeting.id, title: meeting.title }, member: { id: member.id, externalId: member.externalId, displayName: `${member.firstName} ${member.lastName}`.trim() } }, 202);
 }
-async function kioskAttendance(request: Request, env: Env): Promise<Response> { await kioskFor(request, env); return recordAttendance(requireDatabase(env), await parseJson(request), "kiosk"); }
+async function kioskAttendance(request: Request, env: Env): Promise<Response> {
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string }>(request);
+  if ((kiosk.pairingBound || input.pairingId !== undefined) && input.pairingId !== kiosk.pairingId) throw new HttpError(409, "This queued scan belongs to a different kiosk pairing and was not attached to the current kiosk");
+  return recordAttendance(requireDatabase(env), input, "kiosk");
+}
 async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") {
@@ -990,7 +1104,7 @@ async function attendance(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET") {
     const meetingId = url.searchParams.get("meetingId"); const includeInactive = url.searchParams.get("includeInactive") === "1"; if (!meetingId) throw new HttpError(400, "meetingId is required");
     const [rows, meeting, settings, audiences, labelResult, changeResult, targetResult] = await Promise.all([
-      db.prepare("SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, m.attendance_required_from AS attendanceRequiredFrom, m.created_at AS rosterAddedAt, (SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt FROM members m WHERE m.installation_id = 'primary' AND (m.active = 1 OR ? = 1) ORDER BY m.last_name, m.first_name").bind(meetingId, meetingId, meetingId, meetingId, includeInactive ? 1 : 0).all<{ memberId: string; externalId: string; firstName: string; lastName: string; discordUserId?: string; attendanceRequiredFrom?: string; rosterAddedAt?: string; correction?: "present" | "absent" | "excused"; reason?: string; checkedInAt?: string; checkedOutAt?: string }>(),
+      db.prepare("SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, m.attendance_required_from AS attendanceRequiredFrom, m.inactive_periods_json AS inactivePeriodsJson, m.created_at AS rosterAddedAt, (SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = m.id AND c.meeting_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt FROM members m WHERE m.installation_id = 'primary' AND (m.active = 1 OR ? = 1) ORDER BY m.last_name, m.first_name").bind(meetingId, meetingId, meetingId, meetingId, includeInactive ? 1 : 0).all<{ memberId: string; externalId: string; firstName: string; lastName: string; discordUserId?: string; attendanceRequiredFrom?: string; inactivePeriodsJson?: string; rosterAddedAt?: string; correction?: "present" | "absent" | "excused"; reason?: string; checkedInAt?: string; checkedOutAt?: string }>(),
       db.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt, required, audience_mode AS audienceMode FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(meetingId).first<{ startsAt: string; endsAt: string; required: number; audienceMode: "all" | "labels" }>(),
       db.prepare("SELECT late_scan_minutes AS lateScanMinutes, time_zone AS timeZone, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number; timeZone: string; policyActivatedOn: string | null }>(),
       meetingAudienceIds(db, [meetingId]),
@@ -1010,7 +1124,9 @@ async function attendance(request: Request, env: Env): Promise<Response> {
       const weekly = selected?.ruleType === "weekly_count";
       const legacy = Boolean(selected?.id.startsWith("legacy:") && settings?.policyActivatedOn && meetingDate < settings.policyActivatedOn);
       const eligibility = meetingEligibility({ date: meetingDate, participationStart: row.attendanceRequiredFrom ?? row.rosterAddedAt?.slice(0, 10), activeLabels: legacy && policyLabel ? new Set([policyLabel]) : activeLabels, formulaLabel: weekly || !selected ? policyLabel : undefined, hasWeeklyTarget: weekly, meeting: { required: meeting.required, audienceMode: meeting.audienceMode ?? "all", audienceLabelIds: audienceIds } });
-      return { ...row, disposition: Date.now() < Date.parse(meeting.startsAt) && derived === "absent" ? "upcoming" : finalized && derived === "active" ? "absent" : derived, eligibility, rateEligible: eligibility === "required" || eligibility === "weekly", policy: weekly ? "weekly" : "standard", audience };
+      const { inactivePeriodsJson, ...visibleRow } = row;
+      if (inactiveAt(inactivePeriodsJson, meeting.startsAt)) return { ...visibleRow, disposition: "not_required", eligibility: "inactive", rateEligible: false, policy: weekly ? "weekly" : "standard", audience };
+      return { ...visibleRow, disposition: Date.now() < Date.parse(meeting.startsAt) && derived === "absent" ? "upcoming" : finalized && derived === "active" ? "absent" : derived, eligibility, rateEligible: eligibility === "required" || eligibility === "weekly", policy: weekly ? "weekly" : "standard", audience };
     }), audience, attendanceClosesAt: closesAt, finalized });
   }
   return recordAttendance(db, await parseJson(request), "manual", principal.userId);
@@ -1046,7 +1162,7 @@ function csvCell(value: unknown): string {
 async function loadPolicyData(db: D1Database, memberId?: string, meetingId?: string): Promise<{ members: PolicyMember[]; labels: PolicyLabel[]; changes: LabelChange[]; rules: AttendanceRule[]; meetings: PolicyMeeting[]; observations: Observation[]; timeZone: string; baseline: string | null; recentDays: number; policyActivatedOn: string | null }> {
   const scoped = (sql: string, column: string, value?: string) => value ? db.prepare(sql.replace(" ORDER BY", ` AND ${column} = ? ORDER BY`)).bind(value) : db.prepare(sql);
   const [memberResult, labelResult, changeResult, ruleResult, meetingResult, audienceResult, eventResult, correctionResult, settings] = await Promise.all([
-    scoped("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active, attendance_required_from AS attendanceRequiredFrom, created_at AS rosterAddedAt FROM members WHERE installation_id = 'primary' ORDER BY last_name, first_name", "id", memberId).all<PolicyMember>(),
+    scoped("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active, inactive_periods_json AS inactivePeriodsJson, attendance_required_from AS attendanceRequiredFrom, created_at AS rosterAddedAt FROM members WHERE installation_id = 'primary' ORDER BY last_name, first_name", "id", memberId).all<PolicyMember>(),
     db.prepare("SELECT id, name, active, formula_enabled AS formulaEnabled FROM member_labels WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE").all<PolicyLabel>(),
     scoped("SELECT member_id AS memberId, label_id AS labelId, action, effective_date AS effectiveDate, created_at AS createdAt FROM member_label_changes WHERE installation_id = 'primary' ORDER BY effective_date, created_at, id", "member_id", memberId).all<LabelChange>(),
     db.prepare("SELECT id, label_id AS labelId, starts_on AS startsOn, ends_on AS endsOn, rule_type AS ruleType, threshold_percent AS thresholdPercent, meetings_per_week AS meetingsPerWeek, excused_handling AS excusedHandling FROM label_attendance_rules WHERE installation_id = 'primary' ORDER BY label_id, starts_on").all<AttendanceRule>(),
@@ -1100,7 +1216,7 @@ async function attendanceReport(request: Request, env: Env): Promise<Response> {
 }
 type SavedReportRow = { id: string; ownerUserId: string; scope: ReportScope; name: string; definitionJson: string; revision: number; createdBy: string; updatedBy: string; createdAt: string; updatedAt: string; pinnedPosition?: number | null };
 type ReportQueryInput = { definition?: unknown; page?: unknown; pageSize?: unknown };
-type ReportRun = { definition: ReportDefinition; warnings: string[]; resolvedPeriod: { from?: string; to: string }; columns: { id: string; key: string; label: string; labelId?: string }[]; rows: ReportResultRow[]; periodMembers: PolicyMemberResult[]; officialMembers: PolicyMemberResult[]; meetings: PolicyMeeting[]; labels: PolicyLabel[]; rules: AttendanceRule[]; timeZone: string };
+type ReportRun = { state: "ready" | "paused"; pausedReasons: string[]; definition: NormalizedReportDefinition; warnings: string[]; resolvedPeriod: { from?: string; to: string }; columns: { id: string; key: string; label: string; labelId?: string; available: boolean; sourceDataset: string; explanation?: string }[]; rows: ReportResultRow[]; periodMembers: PolicyMemberResult[]; officialMembers: PolicyMemberResult[]; meetings: PolicyMeeting[]; labels: PolicyLabel[]; rules: AttendanceRule[]; timeZone: string };
 function reportName(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(value)) throw new HttpError(400, "Report name is required and must be at most 80 characters");
   return value.trim();
@@ -1123,29 +1239,43 @@ async function accessibleReport(db: D1Database, principal: Principal, id: string
   if (!item) throw new HttpError(404, "Report not found");
   return item;
 }
-async function reportMetadata(db: D1Database): Promise<{ labels: PolicyLabel[]; baseline: string | null; timeZone: string }> {
-  const [labels, settings] = await Promise.all([
+async function reportMetadata(db: D1Database): Promise<{ labels: PolicyLabel[]; outreachLabels: Array<{ id: string; name: string; archived: boolean }>; baseline: string | null; timeZone: string }> {
+  const [labels, outreachLabels, settings] = await Promise.all([
     db.prepare("SELECT id, name, active, formula_enabled AS formulaEnabled FROM member_labels WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE").all<PolicyLabel>(),
+    db.prepare("SELECT id,name,archived FROM hours_labels WHERE installation_id='primary' ORDER BY name COLLATE NOCASE,id").all<{ id: string; name: string; archived: number }>(),
     db.prepare("SELECT attendance_reporting_starts_on AS baseline, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ baseline: string | null; timeZone: string }>(),
   ]);
-  return { labels: labels.results ?? [], baseline: settings?.baseline ?? null, timeZone: settings?.timeZone ?? "UTC" };
+  return { labels: labels.results ?? [], outreachLabels: (outreachLabels.results ?? []).map((label) => ({ ...label, archived: Boolean(label.archived) })), baseline: settings?.baseline ?? null, timeZone: settings?.timeZone ?? "UTC" };
+}
+async function accessibleReportDatasets(db: D1Database, principal: Principal): Promise<Set<string>> {
+  const accessible = new Set(["core.members", combinedMemberDataset.id]);
+  for (const module of bundledModuleRegistry.modules) {
+    try { await requireModuleWorkspace(db, principal.userId, module.id); for (const dataset of module.reportDatasets ?? []) accessible.add(dataset.id); }
+    catch (error) { if (!(error instanceof HttpError) || ![403, 409, 503].includes(error.status)) throw error; }
+  }
+  return accessible;
+}
+function reportSourceExplanation(datasetId: string): string {
+  const owner = bundledModuleRegistry.reportDatasetOwner(datasetId);
+  return `${owner?.label ?? reportDatasetDefinition(datasetId)?.label ?? "This report source"} is unavailable for your current module access. It will return when access is restored.`;
 }
 async function reportCatalog(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); const data = await reportMetadata(requireDatabase(env));
-  return response({ columns: reportColumnCatalog, labels: data.labels, baseline: data.baseline, timeZone: data.timeZone, defaultDefinition: defaultReportDefinition(Boolean(data.baseline)), role: principal.role });
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const [data, accessible] = await Promise.all([reportMetadata(db), accessibleReportDatasets(db, principal)]);
+  const datasets = reportDatasetCatalog.map((dataset) => ({ ...dataset, available: accessible.has(dataset.id), fields: dataset.fields.map((field) => { const sourceDataset = reportFieldSourceDataset(dataset.id, field.id) ?? dataset.id; const available = accessible.has(sourceDataset); return { ...field, sourceDataset, available, explanation: available ? undefined : reportSourceExplanation(sourceDataset) }; }) })); const defaultDataset = accessible.has("attendance.members") ? "attendance.members" : accessible.has("outreach.members") ? "outreach.members" : "core.members";
+  return response({ datasets, columns: reportColumnCatalog, labels: data.labels, outreachLabels: [...accessible].some((datasetId) => datasetId.startsWith("outreach.")) ? data.outreachLabels : [], baseline: data.baseline, timeZone: data.timeZone, defaultDefinition: defaultReportDefinition(Boolean(data.baseline), defaultDataset), role: principal.role, attendanceAvailable: accessible.has("attendance.members") });
 }
-function savedReportResponse(item: SavedReportRow, labels: PolicyLabel[]) {
-  const validation = validateReportDefinition(parseStoredReportDefinition(item.definitionJson), labels, { allowMissingLabels: true });
+function savedReportResponse(item: SavedReportRow, labels: PolicyLabel[], outreachLabels: Array<{ id: string }>) {
+  const validation = validateReportDefinition(parseStoredReportDefinition(item.definitionJson), labels, { allowMissingLabels: true, outreachLabels });
   return { id: item.id, ownerUserId: item.ownerUserId, scope: item.scope, name: item.name, definition: validation.definition ?? parseStoredReportDefinition(item.definitionJson), revision: Number(item.revision), createdBy: item.createdBy, updatedBy: item.updatedBy, createdAt: item.createdAt, updatedAt: item.updatedAt, pinnedPosition: item.pinnedPosition ?? null, warnings: validation.warnings, errors: validation.errors };
 }
 async function savedReports(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const data = await reportMetadata(db);
   if (request.method === "GET") {
     const result = await db.prepare("SELECT v.id, v.owner_user_id AS ownerUserId, v.scope, v.name, v.definition_json AS definitionJson, v.revision, v.created_by AS createdBy, v.updated_by AS updatedBy, v.created_at AS createdAt, v.updated_at AS updatedAt, t.position AS pinnedPosition FROM saved_report_views v LEFT JOIN saved_report_tabs t ON t.installation_id = v.installation_id AND t.report_view_id = v.id AND t.user_id = ? WHERE v.installation_id = 'primary' AND (v.scope = 'shared' OR v.owner_user_id = ?) ORDER BY CASE WHEN t.position IS NULL THEN 1 ELSE 0 END, t.position, v.name COLLATE NOCASE, v.id").bind(principal.userId, principal.userId).all<SavedReportRow>();
-    return response({ reports: (result.results ?? []).map((item) => savedReportResponse(item, data.labels)) });
+    return response({ reports: (result.results ?? []).map((item) => savedReportResponse(item, data.labels, data.outreachLabels)) });
   }
   const input = await parseJson<{ name?: unknown; scope?: unknown; definition?: unknown }>(request); const name = reportName(input.name); const scope = reportScope(input.scope);
-  const validation = validateReportDefinition(input.definition, data.labels); if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
+  const validation = validateReportDefinition(input.definition, data.labels, { outreachLabels: data.outreachLabels }); if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
   await ensureUniqueReportName(db, scope, name, principal.userId);
   const id = crypto.randomUUID(), now = new Date().toISOString();
   const position = await db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM saved_report_tabs WHERE installation_id = 'primary' AND user_id = ?").bind(principal.userId).first<{ position: number }>();
@@ -1154,7 +1284,7 @@ async function savedReports(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO saved_report_tabs (installation_id, user_id, report_view_id, position, pinned_at) VALUES ('primary', ?, ?, ?, ?)").bind(principal.userId, id, Number(position?.position ?? 0), now),
   ]);
   await writeAudit(db, principal, "report.created", "saved_report", id, { name, scope });
-  const created = await accessibleReport(db, principal, id); return response({ report: savedReportResponse({ ...created, pinnedPosition: Number(position?.position ?? 0) }, data.labels) }, 201);
+  const created = await accessibleReport(db, principal, id); return response({ report: savedReportResponse({ ...created, pinnedPosition: Number(position?.position ?? 0) }, data.labels, data.outreachLabels) }, 201);
 }
 async function manageSavedReport(request: Request, env: Env, id: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const current = await accessibleReport(db, principal, id);
@@ -1168,13 +1298,13 @@ async function manageSavedReport(request: Request, env: Env, id: string): Promis
   if (!Number.isInteger(revision) || revision !== Number(current.revision)) throw new HttpError(409, "This report changed after you opened it. Reload and reapply your changes.");
   const name = reportName(input.name); const scope = reportScope(input.scope);
   if (current.scope === "shared" && scope === "personal" && current.ownerUserId !== principal.userId) throw new HttpError(403, "Save a personal copy instead of converting another user's shared report");
-  const data = await reportMetadata(db); const validation = validateReportDefinition(input.definition, data.labels);
+  const data = await reportMetadata(db); const validation = validateReportDefinition(input.definition, data.labels, { outreachLabels: data.outreachLabels });
   if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
   await ensureUniqueReportName(db, scope, name, current.ownerUserId, id); const now = new Date().toISOString();
   const result = await db.prepare("UPDATE saved_report_views SET scope = ?, name = ?, definition_json = ?, revision = revision + 1, updated_by = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND revision = ?").bind(scope, name, JSON.stringify(validation.definition), principal.userId, now, id, revision).run();
   if (!result.meta?.changes) throw new HttpError(409, "This report changed after you opened it. Reload and reapply your changes.");
   await writeAudit(db, principal, "report.updated", "saved_report", id, { name, scope, revision: revision + 1 }); const updated = await accessibleReport(db, principal, id);
-  return response({ report: savedReportResponse(updated, data.labels) });
+  return response({ report: savedReportResponse(updated, data.labels, data.outreachLabels) });
 }
 async function savedReportTabs(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ reportIds?: unknown }>(request);
@@ -1198,22 +1328,111 @@ function reportPagination(pageValue: unknown, pageSizeValue: unknown, total: num
   const safePage = Math.min(page, totalPages); const from = pageSize === "all" ? 0 : (safePage - 1) * pageSize; const to = pageSize === "all" ? total : Math.min(total, from + pageSize);
   return { page: safePage, pageSize: pageSize as 25 | 50 | 100 | "all", from, to, totalPages };
 }
-async function runReportDefinition(db: D1Database, value: unknown): Promise<ReportRun> {
-  const data = await policyData(db); const validation = validateReportDefinition(value, data.labels, { allowMissingLabels: true });
-  if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
-  const definition = validation.definition; const today = policyLocalDate(new Date().toISOString(), data.timeZone); const resolved = resolveReportPeriod(definition.period, today, data.baseline); const warnings = [...validation.warnings];
-  if (resolved.warning) warnings.push(resolved.warning);
+async function attendanceReportProjection(db: D1Database, definition: NormalizedReportDefinition, context: ReportProjectionContext) {
+  const data = await policyData(db);
+  const resolved = { from: context.from, to: context.to };
   const meetings = data.meetings.filter((meeting) => definition.meetingType === "all" || Boolean(meeting.required) === (definition.meetingType === "required"));
   const officialMembers = evaluateAttendance(data); const columnLabelIds = definition.columns.flatMap((column) => column.labelId ? [column.labelId] : []); const summaryLabelIds = [...new Set([...definition.labelIds, ...columnLabelIds])];
-  const periodMembers = evaluateAttendance({ ...data, meetings, from: resolved.from, to: resolved.to ?? today, membership: definition.membership, historicalLabelIds: definition.membership === "historical" ? definition.labelIds : [], historicalLabelMatch: definition.labelMatch, summaryLabelIds })
+  const periodMembers = evaluateAttendance({ ...data, meetings, from: resolved.from, to: resolved.to, membership: definition.membership, historicalLabelIds: definition.membership === "historical" ? definition.labelIds : [], historicalLabelMatch: definition.labelMatch, summaryLabelIds })
     .filter((item) => (definition.roster === "all" || Boolean(item.member.active)) && (definition.membership === "historical" ? !definition.labelIds.length || item.rows.length > 0 : reportLabelsMatch(item.currentLabelIds, definition.labelIds, definition.labelMatch)));
-  const rows = buildReportRows({ definition, official: officialMembers, period: periodMembers, meetings, labels: data.labels, rules: data.rules, timeZone: data.timeZone, from: resolved.from, to: resolved.to ?? today }); const labelNames = new Map(data.labels.map((label) => [label.id, label.name]));
-  const matchingMemberIds = new Set(rows.map((row) => row.member.id));
-  return { definition, warnings: [...new Set(warnings)], resolvedPeriod: { from: resolved.from, to: resolved.to ?? today }, columns: definition.columns.map((column) => ({ id: reportColumnId(column), key: column.key, label: reportColumnLabel(column, labelNames), labelId: column.labelId })), rows, periodMembers: periodMembers.filter((member) => matchingMemberIds.has(member.member.id)), officialMembers, meetings, labels: data.labels, rules: data.rules, timeZone: data.timeZone };
+  const rows = buildReportRows({ definition, official: officialMembers, period: periodMembers, meetings, labels: data.labels, rules: data.rules, timeZone: data.timeZone, from: resolved.from, to: resolved.to });
+  const matchingMemberIds = new Set(rows.map((row) => row.id));
+  return { rows, periodMembers: periodMembers.filter((member) => matchingMemberIds.has(member.member.id)), officialMembers, meetings, labels: data.labels, rules: data.rules, timeZone: data.timeZone };
+}
+
+const moduleReportDispatcher = createModuleReportDispatcher(bundledModuleRegistry, [
+  { moduleId: "attendance", handlers: { "attendance.members": async (db, definition, context) => (await attendanceReportProjection(db, definition, context)).rows } },
+  { moduleId: "hour-tracking", handlers: outreachReportHandlers },
+]);
+
+async function moduleReportDatabase(db: D1Database, principal: Principal, datasetId: string): Promise<D1Database | undefined> {
+  const owner = moduleReportDispatcher.owner(datasetId); const dataset = reportDatasetDefinition(datasetId);
+  if (!owner || !dataset) return;
+  try {
+    const generation = await requireModuleWorkspace(db, principal.userId, owner.id);
+    return captureModuleWorkspaceDatabase(db, owner.id, generation, principal.userId, dataset.capability);
+  } catch (error) {
+    if (error instanceof HttpError && [403, 409, 503].includes(error.status)) return;
+    throw error;
+  }
+}
+
+function projectionDefinition(definition: NormalizedReportDefinition, datasetId: string): NormalizedReportDefinition {
+  const dataset = reportDatasetDefinition(datasetId)!;
+  const requested = definition.columns.filter((column) => reportFieldSourceDataset(definition.dataset, column.key) === datasetId);
+  const columns = [{ key: dataset.defaultColumns[0]! }, ...requested].filter((column, index, values) => values.findIndex((candidate) => reportColumnId(candidate) === reportColumnId(column)) === index);
+  if (!columns.some((column) => column.key === dataset.defaultSort.field)) columns.push({ key: dataset.defaultSort.field });
+  return { ...definition, dataset: dataset.id, groupBy: [...dataset.groupBy], columns, columnFilters: [], sort: { column: { key: dataset.defaultSort.field }, direction: dataset.defaultSort.direction } };
+}
+
+async function combinedMemberRows(db: D1Database, principal: Principal, definition: NormalizedReportDefinition, context: ReportProjectionContext, accessible: Set<string>): Promise<ReportResultRow[]> {
+  const coreDefinition = projectionDefinition(definition, "core.members");
+  if (definition.membership === "historical") coreDefinition.labelIds = [];
+  let rows = await projectCoreMembers(db, coreDefinition, context); const indexed = new Map(rows.map((row) => [row.id, row]));
+  const historicalSource = definition.membership === "historical" && definition.labelIds.length ? reportFilterSourceDataset(definition.dataset, "membership") : undefined;
+  const outreachLabelSource = definition.outreachLabelIds.length ? reportFilterSourceDataset(definition.dataset, "outreach-labels") : undefined;
+  const sources = [...new Set([...definition.columns.map((column) => reportFieldSourceDataset(definition.dataset, column.key)), historicalSource, outreachLabelSource].filter((source): source is string => Boolean(source) && source !== "core.members"))];
+  let historicalMemberIds: Set<string> | undefined;
+  for (const source of sources) {
+    if (!accessible.has(source)) continue;
+    const scoped = await moduleReportDatabase(db, principal, source);
+    if (!scoped) { accessible.delete(source); continue; }
+    const sourceDefinition = projectionDefinition(definition, source);
+    if (definition.membership === "historical" && source !== "attendance.members") sourceDefinition.labelIds = [];
+    const projected = source === "attendance.members" ? (await attendanceReportProjection(scoped, sourceDefinition, context)).rows : await moduleReportDispatcher.run(source, scoped, sourceDefinition, context);
+    if (source === "attendance.members" && definition.membership === "historical" && definition.labelIds.length) historicalMemberIds = new Set(projected.map((row) => row.id));
+    for (const sourceRow of projected) {
+      const target = indexed.get(sourceRow.id);
+      if (target) Object.assign(target.cells, sourceRow.cells);
+    }
+  }
+  if (historicalMemberIds) rows = rows.filter((row) => historicalMemberIds!.has(row.id));
+  for (const row of rows) for (const column of definition.columns) {
+    const id = reportColumnId(column); const source = reportFieldSourceDataset(definition.dataset, column.key);
+    if (source && !accessible.has(source)) row.cells[id] = { text: "Unavailable", sortValue: null, unavailable: true, explanation: reportSourceExplanation(source) };
+  }
+  return filterAndSortReportRows(definition, rows);
+}
+
+async function runReportDefinition(db: D1Database, principal: Principal, value: unknown): Promise<ReportRun> {
+  const metadata = await reportMetadata(db); const validation = validateReportDefinition(value, metadata.labels, { allowMissingLabels: true, outreachLabels: metadata.outreachLabels });
+  if (!validation.definition || validation.definition.version !== 2 || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
+  const definition = validation.definition; const today = policyLocalDate(new Date().toISOString(), metadata.timeZone); const resolved = resolveReportPeriod(definition.period, today, metadata.baseline); const warnings = [...validation.warnings];
+  if (resolved.warning) warnings.push(resolved.warning);
+  const context = { from: resolved.from, to: resolved.to ?? today, today }; const accessible = await accessibleReportDatasets(db, principal);
+  const controllingFields = [...definition.groupBy, definition.sort.column.key, ...(definition.columnFilters ?? []).map((filter) => filter.column.key)];
+  const filterControls = [
+    ...(definition.meetingType !== "all" ? [reportFilterSourceDataset(definition.dataset, "meeting-type")] : []),
+    ...(definition.membership === "historical" && definition.labelIds.length ? [reportFilterSourceDataset(definition.dataset, "membership")] : []),
+    ...(definition.labelIds.length ? [reportFilterSourceDataset(definition.dataset, "labels")] : []),
+    ...(definition.outreachLabelIds.length ? [reportFilterSourceDataset(definition.dataset, "outreach-labels")] : []),
+  ];
+  const unavailableControls = [...new Set([...controllingFields.map((field) => reportFieldSourceDataset(definition.dataset, field)), ...filterControls].filter((source): source is string => typeof source === "string" && !accessible.has(source)))];
+  const pausedReasons = !accessible.has(definition.dataset) ? [reportSourceExplanation(definition.dataset)] : unavailableControls.map((source) => `${reportSourceExplanation(source)} Results are paused because this source controls grouping, filtering, or sorting.`);
+  let rows: ReportResultRow[] = []; let detail = { periodMembers: [] as PolicyMemberResult[], officialMembers: [] as PolicyMemberResult[], meetings: [] as PolicyMeeting[], labels: metadata.labels, rules: [] as AttendanceRule[], timeZone: metadata.timeZone };
+  if (!pausedReasons.length) {
+    if (definition.dataset === "core.members") rows = await projectCoreMembers(db, definition, context);
+    else if (definition.dataset === combinedMemberDataset.id) {
+      rows = await combinedMemberRows(db, principal, definition, context, accessible);
+      const revokedControls = [...new Set([...controllingFields.map((field) => reportFieldSourceDataset(definition.dataset, field)), ...filterControls].filter((source): source is string => typeof source === "string" && !accessible.has(source)))];
+      if (revokedControls.length) { rows = []; for (const source of revokedControls) pausedReasons.push(`${reportSourceExplanation(source)} Results are paused because this source controls grouping, filtering, or sorting.`); }
+    }
+    else {
+      const scoped = await moduleReportDatabase(db, principal, definition.dataset);
+      if (!scoped) pausedReasons.push(reportSourceExplanation(definition.dataset));
+      else if (definition.dataset === "attendance.members") { const projection = await attendanceReportProjection(scoped, definition, context); rows = projection.rows; detail = projection; }
+      else rows = await moduleReportDispatcher.run(definition.dataset, scoped, definition, context);
+    }
+  }
+  const labelNames = new Map(metadata.labels.map((label) => [label.id, label.name]));
+  const columns = definition.columns.map((column) => { const sourceDataset = reportFieldSourceDataset(definition.dataset, column.key) ?? definition.dataset; const available = accessible.has(sourceDataset); return { id: reportColumnId(column), key: column.key, label: reportColumnLabel(column, labelNames), labelId: column.labelId, unit: column.unit, sourceDataset, available, explanation: available ? undefined : reportSourceExplanation(sourceDataset) }; });
+  const mutedSources = [...new Set(columns.filter((column) => !column.available).map((column) => column.sourceDataset))];
+  if (!pausedReasons.length) for (const source of mutedSources) warnings.push(`${reportSourceExplanation(source)} Affected columns are muted without cached or zero values.`);
+  return { state: pausedReasons.length ? "paused" : "ready", pausedReasons: [...new Set(pausedReasons)], definition, warnings: [...new Set(warnings)], resolvedPeriod: { from: resolved.from, to: resolved.to ?? today }, columns, rows, ...detail };
 }
 async function customReportQuery(request: Request, env: Env): Promise<Response> {
-  await requireRole(request, env, ["admin", "operator"]); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(requireDatabase(env), input.definition); const pagination = reportPagination(input.page, input.pageSize, run.rows.length);
-  return response({ definition: run.definition, warnings: run.warnings, resolvedPeriod: run.resolvedPeriod, columns: run.columns, rows: run.rows.slice(pagination.from, pagination.to), pagination: { page: pagination.page, pageSize: pagination.pageSize, totalRows: run.rows.length, totalPages: pagination.totalPages, rangeStart: run.rows.length ? pagination.from + 1 : 0, rangeEnd: pagination.to } });
+  const principal = await requireRole(request, env, ["admin", "operator"]); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(requireDatabase(env), principal, input.definition); const pagination = reportPagination(input.page, input.pageSize, run.rows.length);
+  return response({ state: run.state, pausedReasons: run.pausedReasons, definition: run.definition, warnings: run.warnings, resolvedPeriod: run.resolvedPeriod, columns: run.columns, rows: run.rows.slice(pagination.from, pagination.to), pagination: { page: pagination.page, pageSize: pagination.pageSize, totalRows: run.rows.length, totalPages: pagination.totalPages, rangeStart: run.rows.length ? pagination.from + 1 : 0, rangeEnd: pagination.to } });
 }
 async function leaderboardReport(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const url = new URL(request.url); const report = await policyReport(requireDatabase(env), reportFilters(url)); const sort = url.searchParams.get("sort") ?? "regular-desc";
@@ -1228,13 +1447,14 @@ async function leaderboardReport(request: Request, env: Env): Promise<Response> 
   const pagination = reportPagination(url.searchParams.get("page") ?? 1, url.searchParams.get("pageSize") ?? 25, report.members.length); return response({ ...report, members: report.members.slice(pagination.from, pagination.to), insights: { policyAlerts, trend }, pagination: { page: pagination.page, pageSize: pagination.pageSize, totalRows: report.members.length, totalPages: pagination.totalPages, rangeStart: report.members.length ? pagination.from + 1 : 0, rangeEnd: pagination.to } });
 }
 async function reportCsvExport(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(db, input.definition);
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(db, principal, input.definition);
+  if (run.state === "paused") throw new HttpError(409, "Report export is paused until its unavailable source returns or the report is edited", run.pausedReasons);
   const csv = [run.columns.map((column) => csvCell(column.label)).join(","), ...run.rows.map((row) => run.columns.map((column) => csvCell(row.cells[column.id]?.text ?? "")).join(","))].join("\r\n") + "\r\n";
   await writeAudit(db, principal, "report.exported", "saved_report", null, { format: "summary", rows: run.rows.length, columns: run.columns.map((column) => column.id) });
   return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-report-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
 }
 async function reportDetailCsvExport(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(db, input.definition); const meetingMap = new Map(run.meetings.map((meeting) => [meeting.id, meeting])); const official = new Map(run.officialMembers.map((item) => [item.member.id, item])); const labelNames = new Map(run.labels.map((label) => [label.id, label.name]));
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(db, principal, input.definition); if (run.definition.dataset !== "attendance.members") throw new HttpError(400, "Detailed attendance export requires an Attendance member report"); if (run.state === "paused") throw new HttpError(409, "Detailed attendance export is paused until Attendance access returns", run.pausedReasons); const meetingMap = new Map(run.meetings.map((meeting) => [meeting.id, meeting])); const official = new Map(run.officialMembers.map((item) => [item.member.id, item])); const labelNames = new Map(run.labels.map((label) => [label.id, label.name]));
   const headers = ["meeting", "meetingStart", "meetingEnd", "audience", "required", "attendanceWeight", "memberId", "firstName", "lastName", "memberLabels", "disposition", "eligibility", "regularEligible", "regularWeight", "regularWeightedPresent", "regularRate", "regularAttended", "regularRequired", "regularFrom", "regularTo", "policyEligible", "policyWeight", "policyWeightedPresent", "policyLabel", "policyRuleType", "policyExcusedHandling", "policyStatus", "policyTarget", "policyAttended", "policyRequired", "policyRate", "policyFrom", "policyTo", "policyResults", "policyHistory", "weeklyTarget", "weekStartsOn", "weekSegmentStartsOn", "weekSegmentEndsOn", "checkedInAt", "checkedOutAt", "reason"];
   const rows: Record<string, unknown>[] = run.periodMembers.flatMap((period) => { const item = official.get(period.member.id) ?? period; return period.rows.flatMap((row) => { const meeting = meetingMap.get(row.meetingId); if (!meeting) return []; const date = policyLocalDate(meeting.startsAt, run.timeZone); const week = period.weeks.find((candidate) => candidate.segmentStartsOn <= date && date <= candidate.segmentEndsOn); const policy = item.currentCompliance; return [{ meeting: meeting.title, meetingStart: meeting.startsAt, meetingEnd: meeting.endsAt, audience: row.audience, required: Boolean(meeting.required), attendanceWeight: meeting.attendanceWeight, memberId: period.member.memberId, firstName: period.member.firstName, lastName: period.member.lastName, memberLabels: row.memberLabelIds.map((labelId) => labelNames.get(labelId) ?? "Retired label").join("; "), disposition: row.disposition, eligibility: row.eligibility, regularEligible: row.regularEligible, regularWeight: row.regularWeight, regularWeightedPresent: row.regularEligible && row.attended ? row.regularWeight : 0, regularRate: period.regularAttendance.rate ?? "", regularAttended: period.regularAttendance.attended, regularRequired: period.regularAttendance.required, regularFrom: period.regularAttendance.from ?? "", regularTo: period.regularAttendance.to, policyEligible: row.rateEligible, policyWeight: row.weight, policyWeightedPresent: row.rateEligible && row.attended ? row.weight : 0, policyLabel: policy.labelName ?? "", policyRuleType: policy.ruleType ?? "", policyExcusedHandling: policy.excusedHandling ?? "", policyStatus: policy.status, policyTarget: policy.threshold ?? "", policyAttended: policy.attended, policyRequired: policy.required, policyRate: policy.rate ?? "", policyFrom: policy.status === "no_rule" ? "" : policy.from, policyTo: policy.status === "no_rule" ? "" : policy.to, policyResults: JSON.stringify(item.currentCompliances), policyHistory: JSON.stringify(item.historySummaries), weeklyTarget: week?.target ?? "", weekStartsOn: week?.weekStartsOn ?? "", weekSegmentStartsOn: week?.segmentStartsOn ?? "", weekSegmentEndsOn: week?.segmentEndsOn ?? "", checkedInAt: row.checkedInAt, checkedOutAt: row.checkedOutAt, reason: row.reason }]; }); });
   const csv = [headers.join(","), ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(","))].join("\r\n") + "\r\n"; await writeAudit(db, principal, "report.exported", "saved_report", null, { format: "detail", rows: rows.length });
@@ -1420,6 +1640,7 @@ async function startResendVerification(request: Request, env: Env): Promise<Resp
   if (!target || !validEmail(target)) throw new HttpError(400, "Enter a valid email address that you can open now");
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured"); const record = await integrationRecord(env, "resend"); if (!record) throw new HttpError(404, "Save Resend credentials before verification"); const secret = await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
   const digits = crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000; const code = digits.toString().padStart(6, "0"); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
+  await requireProviderAuthority(env);
   const result = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${secret.apiKey}`, "content-type": "application/json", "idempotency-key": `lancerlogin-verify-${crypto.randomUUID()}` }, body: JSON.stringify({ from: secret.fromEmail, to: [target], subject: "Your LancerLogin verification code", text: `Your LancerLogin verification code is ${code}. It expires in 10 minutes.`, html: `<p>Your LancerLogin verification code is:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>It expires in 10 minutes.</p>` }) });
   if (!result.ok) throw new HttpError(502, "Resend could not deliver the verification email"); const body = await result.json().catch(() => ({})) as { id?: string };
   await db.prepare("INSERT INTO integration_verification_challenges (installation_id, provider, challenge_hash, target, external_id, expires_at, created_by, created_at) VALUES ('primary', 'resend', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET challenge_hash = excluded.challenge_hash, target = excluded.target, external_id = excluded.external_id, expires_at = excluded.expires_at, created_by = excluded.created_by, created_at = excluded.created_at").bind(await sha256(code), target, body.id ?? null, expiresAt, principal.userId, now.toISOString()).run();
@@ -1496,7 +1717,8 @@ function googleCalendarRetryAfter(response: Response): number | undefined {
   const seconds = Number(response.headers.get("retry-after"));
   return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds * 1_000, 3_600_000) : undefined;
 }
-async function googleCalendarProviderRequest(accessToken: string, path: string, init: RequestInit = {}): Promise<{ response: Response; body: Record<string, unknown> }> {
+async function googleCalendarProviderRequest(accessToken: string, path: string, init: RequestInit = {}, current?: ModuleProviderAuthority): Promise<{ response: Response; body: Record<string, unknown> }> {
+  await current?.();
   const result = await fetch(`https://www.googleapis.com/calendar/v3${path}`, { ...init, headers: { authorization: `Bearer ${accessToken}`, accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
   const body = await result.json().catch(() => ({})) as Record<string, unknown>;
   if (result.ok) return { response: result, body };
@@ -1508,6 +1730,7 @@ async function googleCalendarProviderRequest(accessToken: string, path: string, 
 async function googleCalendarAccessToken(env: Env, requireVerified = false): Promise<{ accessToken: string; secret: GoogleCalendarSecret }> {
   const { secret } = await googleCalendarSecret(env, requireVerified);
   if (!secret.refreshToken) throw new HttpError(409, "Authorize Google Calendar before selecting a calendar");
+  await requireProviderAuthority(env);
   const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: secret.clientId, client_secret: secret.clientSecret, refresh_token: secret.refreshToken, grant_type: "refresh_token" }) });
   const body = await result.json().catch(() => ({})) as { access_token?: string };
   if (!result.ok || !body.access_token) {
@@ -1559,11 +1782,11 @@ async function googleCalendarCallback(request: Request, env: Env): Promise<Respo
   if (!code || !state || state !== savedState || !signed) throw new HttpError(400, "Google Calendar authorization state is invalid or expired");
   const principal = await requireDatabase(env).prepare("SELECT id AS userId, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND role = 'admin'").bind(signed.userId).first<{ userId: string; role: Role }>();
   if (!principal) throw new HttpError(403, "Only an active Admin can authorize Google Calendar");
-  const { secret } = await googleCalendarSecret(env); const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: secret.clientId, client_secret: secret.clientSecret, redirect_uri: googleCalendarRedirectUri(env), grant_type: "authorization_code" }) });
+  const { secret } = await googleCalendarSecret(env); await requireProviderAuthority(env); const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: secret.clientId, client_secret: secret.clientSecret, redirect_uri: googleCalendarRedirectUri(env), grant_type: "authorization_code" }) });
   const tokens = await result.json().catch(() => ({})) as { access_token?: string; refresh_token?: string };
   if (!result.ok || !tokens.access_token || !(tokens.refresh_token || secret.refreshToken)) throw new HttpError(401, "Google did not return durable Calendar access. Try authorizing again and approve Calendar access.");
   const next: GoogleCalendarSecret = { ...secret, refreshToken: tokens.refresh_token ?? secret.refreshToken }; let verifiedAt: string | null = null;
-  if (next.calendarId) try { const { body } = await googleCalendarProviderRequest(tokens.access_token, `/users/me/calendarList/${encodeURIComponent(next.calendarId)}`); if (writableCalendarRole(body.accessRole)) { next.calendarLabel = String(body.summary ?? next.calendarLabel ?? "Selected calendar").slice(0, 200); verifiedAt = new Date().toISOString(); } } catch { /* The Admin can choose another writable calendar after return. */ }
+  if (next.calendarId) try { const { body } = await googleCalendarProviderRequest(tokens.access_token, `/users/me/calendarList/${encodeURIComponent(next.calendarId)}`, {}, env.moduleProviderAuthority); if (writableCalendarRole(body.accessRole)) { next.calendarLabel = String(body.summary ?? next.calendarLabel ?? "Selected calendar").slice(0, 200); verifiedAt = new Date().toISOString(); } } catch { /* The Admin can choose another writable calendar after return. */ }
   const encrypted = await encryptIntegration(next, env.INTEGRATION_KEY); const now = new Date().toISOString(); const db = requireDatabase(env);
   await db.batch([
     db.prepare("UPDATE google_calendar_authorizations SET ciphertext = ?, iv = ?, authorized_at = ?, verified_at = ?, updated_at = ? WHERE installation_id = 'primary'").bind(encrypted.ciphertext, encrypted.iv, now, verifiedAt, now),
@@ -1574,14 +1797,14 @@ async function googleCalendarCallback(request: Request, env: Env): Promise<Respo
   return new Response(null, { status: 302, headers });
 }
 async function listGoogleCalendars(request: Request, env: Env): Promise<Response> {
-  await requireRole(request, env, ["admin"]); const { accessToken } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, "/users/me/calendarList?minAccessRole=writer&showHidden=false&maxResults=250");
+  await requireRole(request, env, ["admin"]); const { accessToken } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, "/users/me/calendarList?minAccessRole=writer&showHidden=false&maxResults=250", {}, env.moduleProviderAuthority);
   const items = Array.isArray(body.items) ? body.items as Array<Record<string, unknown>> : [];
   return response({ calendars: items.filter((item) => writableCalendarRole(item.accessRole) && typeof item.id === "string").map((item) => ({ id: String(item.id), name: String(item.summary ?? "Writable calendar").slice(0, 200), primary: Boolean(item.primary), accessRole: item.accessRole })) });
 }
 async function selectGoogleCalendar(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ calendarId?: string }>(request); const calendarId = input.calendarId?.trim();
   if (!calendarId || calendarId.length > 1_024) throw new HttpError(400, "Choose one writable Google Calendar");
-  const { accessToken, secret } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, `/users/me/calendarList/${encodeURIComponent(calendarId)}`);
+  const { accessToken, secret } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, `/users/me/calendarList/${encodeURIComponent(calendarId)}`, {}, env.moduleProviderAuthority);
   if (!writableCalendarRole(body.accessRole)) throw new HttpError(400, "Choose a Google Calendar where this account can edit events");
   const changed = Boolean(secret.calendarId && secret.calendarId !== calendarId); const next = { ...secret, calendarId, calendarLabel: String(body.summary ?? "Selected calendar").slice(0, 200) }; const encrypted = await encryptIntegration(next, env.INTEGRATION_KEY!); const now = new Date().toISOString(); const db = requireDatabase(env);
   await db.batch([
@@ -1682,18 +1905,18 @@ async function processGoogleCalendarOperations(env: Env, eventIds?: string[]): P
   for (const operation of operations) {
     try {
       if (operation.action === "delete") {
-        try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "DELETE" }); }
+        try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "DELETE" }, env.moduleProviderAuthority); }
         catch (error) { if (!(error instanceof GoogleCalendarProviderError) || ![404, 410].includes(error.providerStatus)) throw error; }
       } else {
         const meeting = await db.prepare("SELECT title, notes, required, attendance_weight AS attendanceWeight FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(operation.meetingId).first<{ title: string; notes: string | null; required: number; attendanceWeight: number }>();
         if (!meeting) throw new GoogleCalendarProviderError(409, "The meeting is no longer available for calendar sync", false);
         const timing = { summary: meeting.title, description: calendarAttendanceDetails(meeting, await meetingAudienceText(db, operation.meetingId)), start: { dateTime: operation.startsAt }, end: { dateTime: operation.endsAt } };
         if (operation.syncedAt) {
-          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }); }
+          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }, env.moduleProviderAuthority); }
           catch (error) { if (error instanceof GoogleCalendarProviderError && [404, 410].includes(error.providerStatus)) { await replaceMissingGoogleCalendarEvent(db, operation); queued += 1; continue; } throw error; }
         } else {
-          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId), { method: "POST", body: JSON.stringify({ id: operation.eventId, ...timing }) }); }
-          catch (error) { if (error instanceof GoogleCalendarProviderError && error.providerStatus === 409) await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }); else throw error; }
+          try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId), { method: "POST", body: JSON.stringify({ id: operation.eventId, ...timing }) }, env.moduleProviderAuthority); }
+          catch (error) { if (error instanceof GoogleCalendarProviderError && error.providerStatus === 409) await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }, env.moduleProviderAuthority); else throw error; }
         }
       }
       const completedAt = new Date().toISOString(); await db.batch([
@@ -1751,6 +1974,8 @@ async function users(request: Request, env: Env): Promise<Response> {
   const id = crypto.randomUUID(); const now = new Date().toISOString(); const passwordHash = username ? await hashPassword(input.localPassword!) : null;
   await db.batch([
     db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, member_id, role, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, email, username, passwordHash, memberId, input.role, now),
+    db.prepare("INSERT INTO platform_module_assignment_epochs (installation_id, user_id, revision) VALUES ('primary', ?, 0)").bind(id),
+    db.prepare("INSERT INTO platform_module_assignment_revisions (installation_id, user_id, revision) VALUES ('primary', ?, 0)").bind(id),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.created', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ role: input.role, hasGoogle: Boolean(email), hasLocal: Boolean(username), memberId }), now),
   ]);
   return response({ user: { id, email, localUsername: username, memberId, role: input.role, active: true, createdAt: now } }, 201);
@@ -1783,7 +2008,7 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const input = await parseJson<{ kind?: "missed-meeting" | "individual-report"; memberId?: string; meetingId?: string }>(request);
   if (!input.kind || !input.memberId || (input.kind === "missed-meeting" && !input.meetingId)) throw new HttpError(400, "Email kind, member, and meeting are required");
-  const member = await db.prepare("SELECT id, first_name AS firstName, last_name AS lastName, email FROM members WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.memberId).first<{ id: string; firstName: string; lastName: string; email?: string }>();
+  const member = await db.prepare("SELECT id, first_name AS firstName, last_name AS lastName, email, inactive_periods_json AS inactivePeriodsJson FROM members WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.memberId).first<{ id: string; firstName: string; lastName: string; email?: string; inactivePeriodsJson?: string }>();
   if (!member?.email) throw new HttpError(400, "This member does not have an email address");
   let subject: string; let content: string; let deliveryKey: string;
   if (input.kind === "missed-meeting") {
@@ -1800,6 +2025,7 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
   if (await db.prepare("SELECT id FROM integration_deliveries WHERE installation_id = 'primary' AND provider = 'resend' AND delivery_key = ? AND status IN ('pending', 'delivered')").bind(deliveryKey).first()) throw new HttpError(409, "This email was already sent or is currently sending");
   const config = await resendConfiguration(env); const id = crypto.randomUUID(); const now = new Date().toISOString();
   await db.prepare("INSERT INTO integration_deliveries (id, installation_id, provider, delivery_key, status, created_at, updated_at) VALUES (?, 'primary', 'resend', ?, 'pending', ?, ?)").bind(id, deliveryKey, now, now).run();
+  await requireProviderAuthority(env);
   const delivery = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", "idempotency-key": deliveryKey }, body: JSON.stringify({ from: config.fromEmail, to: [member.email], subject, html: content }) });
   const deliveryBody = await delivery.json().catch(() => ({})) as { id?: string };
   await db.prepare("UPDATE integration_deliveries SET status = ?, external_id = ?, updated_at = ? WHERE id = ?").bind(delivery.ok ? "delivered" : "failed", deliveryBody.id ?? null, new Date().toISOString(), id).run();
@@ -1807,17 +2033,17 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
   if (!delivery.ok) throw new HttpError(502, "Resend rejected the email");
   return response({ sent: true, kind: input.kind, memberId: member.id }, 202);
 }
-async function discordConfiguration(env: Env, allowUnverified = false): Promise<Record<string, string>> {
+async function discordConfiguration(env: Env, allowUnverified = false): Promise<ProviderConfiguration> {
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const record = await integrationRecord(env, "discord"); if (!record || record.enabled === 0) throw new HttpError(503, "Discord is not enabled");
   if (!allowUnverified && !record.verifiedAt) throw new HttpError(503, "Discord verification is required before using attendance workflows");
-  return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
+  return providerConfiguration(await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY), env);
 }
-async function discordInteractionConfiguration(env: Env): Promise<{ config: Record<string, string>; record: IntegrationRecord }> {
+async function discordInteractionConfiguration(env: Env): Promise<{ config: ProviderConfiguration; record: IntegrationRecord }> {
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const record = await integrationRecord(env, "discord");
   if (!record) throw new HttpError(503, "Discord credentials are not configured");
-  return { config: await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY), record };
+  return { config: providerConfiguration(await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY), env), record };
 }
 const discordRetryDelay = (response: Response, body: Record<string, unknown>) => {
   const bodyValue = body.retry_after;
@@ -1825,9 +2051,10 @@ const discordRetryDelay = (response: Response, body: Record<string, unknown>) =>
   return Number.isFinite(retryAfter) && retryAfter >= 0 ? Math.ceil(retryAfter * 1_000) : 1_000;
 };
 const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
-async function discordRequest<T = Record<string, unknown>>(config: Record<string, string>, path: string, init: RequestInit): Promise<{ response: globalThis.Response; body: T }> {
+async function discordRequest<T = Record<string, unknown>>(config: ProviderConfiguration, path: string, init: RequestInit): Promise<{ response: globalThis.Response; body: T }> {
   const managesCommands = path.includes("/commands");
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    await config[moduleProviderAuthority]?.();
     const result = await fetch(`https://discord.com/api/v10${path}`, { ...init, headers: { authorization: `Bot ${config.botToken}`, "content-type": "application/json", ...init.headers } });
     const body = await result.json().catch(() => ({})) as T;
     if (result.ok) return { response: result, body };
@@ -1849,12 +2076,56 @@ async function discordRequest<T = Record<string, unknown>>(config: Record<string
   }
   throw new HttpError(502, "Discord request did not complete");
 }
-type DiscordApplicationCommand = { id?: string; application_id?: string; guild_id?: string; name?: string; type?: number; description?: string; options?: { name?: string; description?: string; type?: number; required?: boolean }[] };
-const discordManagedCommands: DiscordApplicationCommand[] = [
+
+function outreachPublicationProviders(env: Env): OutreachPublicationProviders {
+  return {
+    async status() { return { google_calendar: await googleCalendarIsReady(env), discord: await discordCalendarIsReady(env) }; },
+    async publish(provider: OutreachPublicationProvider, event: OutreachPublicationEvent, savedExternalId?: string) {
+      if (provider === "google_calendar") {
+        const { accessToken, secret } = await googleCalendarAccessToken(env, true); if (!secret.calendarId) throw new HttpError(409, "Select a writable Google Calendar before publication"); const eventId = savedExternalId ?? `llo${(await sha256Hex(`outreach:primary:${event.activityId}`)).slice(0, 48)}`;
+        const path = googleCalendarOperationPath(secret.calendarId, eventId); const payload = outreachGoogleEventPayload(event);
+        if (savedExternalId) try { await googleCalendarProviderRequest(accessToken, path, { method: "PATCH", body: JSON.stringify(payload) }, env.moduleProviderAuthority); return eventId; } catch (error) { if (!(error instanceof GoogleCalendarProviderError) || error.providerStatus !== 404) throw error; }
+        try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId), { method: "POST", body: JSON.stringify({ id: eventId, ...payload }) }, env.moduleProviderAuthority); }
+        catch (error) { if (error instanceof GoogleCalendarProviderError && error.providerStatus === 409) await googleCalendarProviderRequest(accessToken, path, { method: "PATCH", body: JSON.stringify(payload) }, env.moduleProviderAuthority); else throw error; }
+        return eventId;
+      }
+      const config = await discordConfiguration(env); if (event.title.length > 100) throw new HttpError(400, "Discord event names are limited to 100 characters");
+      const correlation = `LancerLogin Outreach · ${(await sha256(`outreach:primary:${event.activityId}`)).slice(0, 24)}`;
+      const description = [event.description, event.location ? `Location: ${event.location}` : "", "Published from LancerLogin Outreach."].filter(Boolean).join("\n");
+      if (description.length > 1_000) throw new HttpError(400, "Discord event descriptions are limited to 1,000 characters");
+      const payload = { name: event.title, description, privacy_level: 2, entity_type: 3, scheduled_start_time: event.startsAt, scheduled_end_time: event.endsAt, entity_metadata: { location: correlation } };
+      let eventId = savedExternalId;
+      if (eventId) try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }); return eventId; } catch (error) { if (!(error instanceof DiscordResponseError) || error.discordStatus !== 404) throw error; eventId = undefined; }
+      const listed = await discordRequest<DiscordScheduledEvent[]>(config, `/guilds/${config.guildId}/scheduled-events`, { method: "GET" });
+      if (!Array.isArray(listed.body)) throw new HttpError(502, "Discord did not return a scheduled event list");
+      eventId = listed.body.find((item) => item.entity_metadata?.location === correlation)?.id;
+      if (eventId) { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }); return eventId; }
+      const created = await discordRequest(config, `/guilds/${config.guildId}/scheduled-events`, { method: "POST", body: JSON.stringify(payload) }); eventId = String(created.body.id ?? "");
+      if (!eventId) throw new HttpError(502, "Discord did not return a scheduled event ID");
+      return eventId;
+    },
+    async remove(provider: OutreachPublicationProvider, externalId: string) {
+      if (provider === "google_calendar") {
+        const { accessToken, secret } = await googleCalendarAccessToken(env, true);
+        if (!secret.calendarId) throw new HttpError(409, "Select a writable Google Calendar before publication cleanup");
+        try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, externalId), { method: "DELETE" }, env.moduleProviderAuthority); }
+        catch (error) { if (!(error instanceof GoogleCalendarProviderError) || ![404, 410].includes(error.providerStatus)) throw error; }
+        return;
+      }
+      const config = await discordConfiguration(env);
+      try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${externalId}`, { method: "DELETE" }); }
+      catch (error) { if (!(error instanceof DiscordResponseError) || error.discordStatus !== 404) throw error; }
+    },
+  };
+}
+type DiscordApplicationCommand = { id?: string; application_id?: string; guild_id?: string; name?: string; type?: number; description?: string; options?: readonly { name?: string; description?: string; type?: number; required?: boolean }[] };
+const coreDiscordManagedCommands: DiscordApplicationCommand[] = [
   { name: "pair", type: 1, description: "Link your Discord account to your LancerLogin member ID", options: [{ name: "member-id", description: "Your LancerLogin member ID", type: 3, required: true }] },
   { name: "attendance-report", type: 1, description: "Privately view your current LancerLogin attendance report" },
   { name: "label", type: 1, description: "Associate a Discord role with a matching LancerLogin label", options: [{ name: "role", description: "Discord role to associate", type: 8, required: true }] },
 ];
+const discordManagedCommands: DiscordApplicationCommand[] = [...coreDiscordManagedCommands, ...bundledModuleRegistry.modules.flatMap((module) => module.discordCommands)];
+if (new Set(discordManagedCommands.map((command) => command.name)).size !== discordManagedCommands.length) throw new Error("Discord command registration collision");
 function discordCommandMatches(actual: DiscordApplicationCommand, expected: DiscordApplicationCommand, config: Record<string, string>): boolean {
   const optionShape = (option: NonNullable<DiscordApplicationCommand["options"]>[number]) => ({ name: option.name, description: option.description, type: option.type, required: Boolean(option.required) });
   return actual.application_id === config.applicationId && actual.guild_id === config.guildId && actual.name === expected.name && actual.type === expected.type && actual.description === expected.description && JSON.stringify((actual.options ?? []).map(optionShape)) === JSON.stringify((expected.options ?? []).map(optionShape));
@@ -2236,6 +2507,10 @@ async function discordAttendanceReport(db: D1Database, discordUserId: string): P
   if (summary.belowTargetWeeks.length) { const line = `\n\nBelow-target weeks: ${summary.belowTargetWeeks.map((week) => week.weekStartsOn).join(", ")}`; if ((content + line).length <= 2000) content += line; }
   return content;
 }
+async function attendanceDiscordDatabase(db: D1Database) {
+  const generation = await requireModuleService(db, "attendance");
+  return captureModuleServiceDatabase(db, "attendance", generation);
+}
 type DiscordLabelMapping = { labelId: string; labelName: string; active: number; guildId: string; roleId: string; roleName: string; createdAt: string };
 type DiscordGuildRole = { id: string; name: string; position: number; permissions: string; managed?: boolean };
 type DiscordGuildMember = { user?: { id?: string; username?: string }; nick?: string | null; roles?: string[] };
@@ -2448,7 +2723,7 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
   let parsed: unknown;
   try { parsed = JSON.parse(raw); } catch { return discordEphemeral("This Discord request is malformed. Try the command again, or ask an Operator for help."); }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return discordEphemeral("This Discord request is malformed. Try the command again, or ask an Operator for help.");
-  const interaction = parsed as { type?: number; guild_id?: string; channel_id?: string; data?: { custom_id?: string; name?: string; options?: { name?: string; value?: string }[] }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
+  const interaction = parsed as { id?: string; type?: number; guild_id?: string; channel_id?: string; data?: { custom_id?: string; name?: string; options?: { name?: string; value?: string }[] }; member?: { user?: { id?: string } }; user?: { id?: string }; message?: { id?: string } };
   if (interaction.type === 1) return response({ type: 1 });
   const customId = interaction.data?.custom_id ?? ""; const rawDiscordUserId = interaction.member?.user?.id ?? interaction.user?.id; const discordUserId = typeof rawDiscordUserId === "string" && /^\d{10,24}$/.test(rawDiscordUserId) ? rawDiscordUserId : undefined; const messageId = interaction.message?.id; const db = requireDatabase(env);
   if (record.enabled === 0) return discordEphemeral("LancerLogin's Discord integration is disabled. Ask an Admin to enable and verify it before trying again.");
@@ -2460,6 +2735,15 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
     return discordEphemeral("LancerLogin is verified. You can return to the dashboard.");
   }
   if (!record?.verifiedAt) return discordEphemeral("This LancerLogin Discord integration has not been verified by an Admin.");
+  if (interaction.type === 2 && interaction.data?.name && bundledModuleRegistry.discordCommandOwner(interaction.data.name)) {
+    if (interaction.guild_id !== config.guildId) return discordEphemeral("Use this command in the Discord server configured for this LancerLogin installation.");
+    try {
+      const content = await dispatchModuleDiscordCommand(db, interaction);
+      if (content) return discordEphemeral(content);
+    } catch (error) {
+      return discordEphemeral(error instanceof HttpError ? error.message : "This module command could not be completed. Try again or ask an Operator for help.");
+    }
+  }
   if (interaction.type === 2 && interaction.data?.name === "label") {
     if (interaction.guild_id !== config.guildId || !discordUserId) return discordEphemeral("Use /label in the configured Discord server with a paired Admin account.");
     try {
@@ -2501,15 +2785,19 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
   if (interaction.type === 2 && interaction.data?.name === "attendance-report") {
     if (interaction.guild_id !== config.guildId) return discordEphemeral("Use this command in the Discord server configured for this LancerLogin installation.");
     if (!discordUserId || interaction.data.options !== undefined && (!Array.isArray(interaction.data.options) || interaction.data.options.length > 0)) return discordEphemeral("This attendance-report request is malformed. Try /attendance-report again, or ask an Operator for help.");
-    return discordEphemeral(await discordAttendanceReport(db, discordUserId));
+    try { return discordEphemeral(await discordAttendanceReport(await attendanceDiscordDatabase(db), discordUserId)); }
+    catch (error) { return discordEphemeral(error instanceof HttpError ? error.message : "Attendance is unavailable. Ask an Admin to review the module."); }
   }
   if (interaction.type === 3 && customId === "lancerlogin-attendance-report") {
     if (interaction.guild_id !== config.guildId) return discordEphemeral("Use this button in the Discord server configured for this LancerLogin installation.");
     if (!discordUserId || !messageId || interaction.channel_id !== config.channelId) return discordEphemeral("This attendance-report button is invalid or expired. Ask an Operator for help.");
-    const manager = await db.prepare("SELECT discord_channel_manager_enabled AS enabled FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number }>();
-    const tracked = await db.prepare("SELECT external_id AS externalId FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'channel-manager-howto'").first<{ externalId?: string }>();
-    if (!manager?.enabled || !tracked?.externalId || tracked.externalId !== messageId) return discordEphemeral("This attendance-report button is invalid or expired. Ask an Operator for help.");
-    return discordEphemeral(await discordAttendanceReport(db, discordUserId));
+    try {
+      const attendanceDb = await attendanceDiscordDatabase(db);
+      const manager = await attendanceDb.prepare("SELECT discord_channel_manager_enabled AS enabled FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number }>();
+      const tracked = await attendanceDb.prepare("SELECT external_id AS externalId FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'channel-manager-howto'").first<{ externalId?: string }>();
+      if (!manager?.enabled || !tracked?.externalId || tracked.externalId !== messageId) return discordEphemeral("This attendance-report button is invalid or expired. Ask an Operator for help.");
+      return discordEphemeral(await discordAttendanceReport(attendanceDb, discordUserId));
+    } catch (error) { return discordEphemeral(error instanceof HttpError ? error.message : "Attendance is unavailable. Ask an Admin to review the module."); }
   }
   if (interaction.type === 2 && interaction.data?.name === "pair" && discordUserId && interaction.guild_id === config.guildId) {
     const memberId = interaction.data.options?.find((option) => option.name === "member-id")?.value?.trim();
@@ -2526,14 +2814,17 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
   }
   const meetingId = customId.startsWith("lancerlogin-attendance:") ? customId.slice("lancerlogin-attendance:".length) : "";
   if (interaction.type !== 3 || !meetingId || !discordUserId || !messageId) return discordEphemeral("This attendance contest button is invalid or expired. Ask an Operator for help.");
-  const recipient = await db.prepare("SELECT r.member_id AS memberId, r.delivered_at AS deliveredAt FROM discord_attendance_recipients r JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE r.installation_id = 'primary' AND r.meeting_id = ? AND r.message_id = ? AND r.discord_user_id = ? AND m.discord_user_id = ? AND m.active = 1").bind(meetingId, messageId, discordUserId, discordUserId).first<{ memberId: string; deliveredAt: string }>();
-  if (!recipient) return discordEphemeral("This notice does not match your current linked roster account. Use a notice sent after your Discord link was saved, or ask an Operator for help.");
-  const contestWindow = await db.prepare("SELECT discord_contest_window_hours AS discordContestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ discordContestWindowHours?: number }>();
-  if (Date.now() > Date.parse(recipient.deliveredAt) + (contestWindow?.discordContestWindowHours ?? 24) * 3_600_000) return discordEphemeral("This absence notice has expired. Ask an Operator to review your attendance.");
-  if (!(await linkedAbsentMembers(db, meetingId)).some((member) => member.id === recipient.memberId)) return discordEphemeral("Attendance no longer shows you as absent, so no contest was created.");
-  const now = new Date().toISOString(); await db.prepare("INSERT OR IGNORE INTO discord_attendance_contests (installation_id, meeting_id, member_id, message_id, status, created_at, submitted_by_discord_user_id) VALUES ('primary', ?, ?, ?, 'open', ?, ?)").bind(meetingId, recipient.memberId, messageId, now, discordUserId).run();
-  const contest = await db.prepare("SELECT status FROM discord_attendance_contests WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ?").bind(meetingId, recipient.memberId).first<{ status: string }>();
-  return contest?.status === "open" ? discordEphemeral("Your attendance contest was recorded for review. Your attendance has not been changed.") : discordEphemeral(`Your attendance contest was already reviewed with status ${contest?.status ?? "unknown"}.`);
+  try {
+    const attendanceDb = await attendanceDiscordDatabase(db);
+    const recipient = await attendanceDb.prepare("SELECT r.member_id AS memberId, r.delivered_at AS deliveredAt FROM discord_attendance_recipients r JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE r.installation_id = 'primary' AND r.meeting_id = ? AND r.message_id = ? AND r.discord_user_id = ? AND m.discord_user_id = ? AND m.active = 1").bind(meetingId, messageId, discordUserId, discordUserId).first<{ memberId: string; deliveredAt: string }>();
+    if (!recipient) return discordEphemeral("This notice does not match your current linked roster account. Use a notice sent after your Discord link was saved, or ask an Operator for help.");
+    const contestWindow = await attendanceDb.prepare("SELECT discord_contest_window_hours AS discordContestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ discordContestWindowHours?: number }>();
+    if (Date.now() > Date.parse(recipient.deliveredAt) + (contestWindow?.discordContestWindowHours ?? 24) * 3_600_000) return discordEphemeral("This absence notice has expired. Ask an Operator to review your attendance.");
+    if (!(await linkedAbsentMembers(attendanceDb, meetingId)).some((member) => member.id === recipient.memberId)) return discordEphemeral("Attendance no longer shows you as absent, so no contest was created.");
+    const now = new Date().toISOString(); await attendanceDb.prepare("INSERT OR IGNORE INTO discord_attendance_contests (installation_id, meeting_id, member_id, message_id, status, created_at, submitted_by_discord_user_id) VALUES ('primary', ?, ?, ?, 'open', ?, ?)").bind(meetingId, recipient.memberId, messageId, now, discordUserId).run();
+    const contest = await attendanceDb.prepare("SELECT status FROM discord_attendance_contests WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ?").bind(meetingId, recipient.memberId).first<{ status: string }>();
+    return contest?.status === "open" ? discordEphemeral("Your attendance contest was recorded for review. Your attendance has not been changed.") : discordEphemeral(`Your attendance contest was already reviewed with status ${contest?.status ?? "unknown"}.`);
+  } catch (error) { return discordEphemeral(error instanceof HttpError ? error.message : "Attendance is unavailable. Ask an Admin to review the module."); }
 }
 type DiscordCalendarOutcome = { meetingId: string; title: string; status: "synced" | "queued" | "skipped" | "failed"; reason?: string };
 type DiscordCalendarSyncSummary = { synced: number; queued: number; skipped: number; failed: number; outcomes: DiscordCalendarOutcome[] };
@@ -2734,21 +3025,26 @@ async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ change
     const settings = await db.prepare("SELECT discord_channel_manager_enabled AS enabled FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number }>();
     pin = Boolean(settings?.enabled);
   }
-  const kiosk = await db.prepare("SELECT id, name, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion FROM kiosks WHERE installation_id = 'primary' AND active = 1 ORDER BY created_at DESC LIMIT 1").first<{ id: string; name: string; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string }>();
-  const online = Boolean(kiosk?.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < 2 * 60_000);
-  const content = kiosk
-    ? `**${kiosk.name}** · ${online ? "online" : "offline"} · reader ${kiosk.readerOnline ? "online" : "offline"} · release ${kiosk.releaseVersion ?? "unknown"}${online ? "" : ` · last seen ${kiosk.lastSeenAt ?? "never"}`}`
+  const result = await db.prepare("SELECT id, name, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion FROM kiosks WHERE installation_id = 'primary' AND active = 1 ORDER BY lower(name), created_at").all<{ id: string; name: string; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string }>();
+  const kiosks = result.results ?? [];
+  const states = kiosks.map((kiosk) => ({ kiosk, online: Boolean(kiosk.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < 2 * 60_000) }));
+  const onlineCount = states.filter((state) => state.online).length;
+  const online = kiosks.length > 0 && onlineCount === kiosks.length;
+  const visible = states.slice(0, 10);
+  const content = kiosks.length
+    ? [`**Kiosk status** · ${onlineCount} of ${kiosks.length} online`, ...visible.map(({ kiosk, online: kioskOnline }) => `• **${kiosk.name}** · ${kioskOnline ? "online" : "offline"} · reader ${kiosk.readerOnline ? "online" : "offline"} · release ${kiosk.releaseVersion ?? "unknown"}${kioskOnline ? "" : ` · last seen ${kiosk.lastSeenAt ?? "never"}`}`), ...(kiosks.length > visible.length ? [`• ${kiosks.length - visible.length} more active kiosks are available in the dashboard.`] : [])].join("\n")
     : "No kiosk is paired.";
+  const kioskId = kiosks.length === 1 ? kiosks[0]!.id : undefined;
   if (pin) {
     const tracked = await upsertTrackedDiscordMessage(db, config, "kiosk-status", content, true);
-    return { changed: tracked.changed, messageId: tracked.messageId, online, kioskId: kiosk?.id };
+    return { changed: tracked.changed, messageId: tracked.messageId, online, kioskId };
   }
   const contentHash = await sha256(content);
   const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'kiosk-status'").first<{ externalId?: string; contentHash?: string }>();
   if (existing?.externalId && existing.contentHash === contentHash) {
     try {
       await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/${encodeURIComponent(existing.externalId)}`, { method: "GET" });
-      return { changed: false, messageId: existing.externalId, online, kioskId: kiosk?.id };
+      return { changed: false, messageId: existing.externalId, online, kioskId };
     } catch (error) { if (!discordMessageMissing(error)) throw error; existing.externalId = undefined; }
   }
   const messagesPath = `/channels/${encodeURIComponent(config.channelId)}/messages`;
@@ -2765,7 +3061,7 @@ async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ change
   if (!messageId) throw new HttpError(502, "Discord did not return a kiosk-status message identifier");
   const now = new Date().toISOString();
   await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', 'kiosk-status', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(messageId, contentHash, now).run();
-  return { changed: true, messageId, online, kioskId: kiosk?.id };
+  return { changed: true, messageId, online, kioskId };
 }
 async function syncDiscordManagedSurface(env: Env): Promise<void> {
   const db = requireDatabase(env);
@@ -2795,10 +3091,42 @@ async function privacySettings(request: Request, env: Env): Promise<Response> {
 type BackupScope = "meetings" | "roster" | "installation";
 const tableColumns = {
   installations: ["id", "created_at", "auth_mode", "telemetry_accepted_at", "telemetry_install_id", "google_enabled", "resend_enabled", "discord_enabled", "google_calendar_enabled"],
-  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on"],
+  platform_module_administration: ["installation_id", "revision", "selection_completed"],
+  platform_module_administration_epochs: ["installation_id", "revision"],
+  platform_module_epochs: ["installation_id", "module_id", "generation"],
+  platform_modules: ["installation_id", "module_id", "contract_version", "generation", "phase", "setup_version", "setup_complete", "disabled_at", "delete_after", "deletion_cursor", "cleanup_failure"],
+  platform_module_assignment_epochs: ["installation_id", "user_id", "revision"],
+  platform_module_assignment_revisions: ["installation_id", "user_id", "revision"],
+  platform_module_assignments: ["installation_id", "user_id", "module_id", "capabilities_json"],
+  platform_module_setup_progress: ["installation_id", "module_id", "step_id", "setup_version", "outcome", "completed_at", "completed_by"],
+  carpool_settings: ["installation_id", "radius_miles", "preferred_radius_miles", "revision", "updated_at"],
+  carpool_plans: ["installation_id", "id", "title", "destination", "event_reference", "event_title_snapshot", "event_starts_at_snapshot", "radius_miles", "preferred_radius_miles", "notes", "archived", "revision", "created_by", "created_at", "updated_at", "meeting_id", "trip_scope", "group_settings_json", "last_rebuild_json", "time_zone", "outbound_departure_at", "return_departure_at"],
+  carpool_people: ["installation_id", "plan_id", "id", "member_id", "display_name", "contact", "source_row", "import_identity", "import_snapshot_json", "outbound_status", "outbound_address", "outbound_lat", "outbound_lon", "outbound_seats", "return_status", "return_address", "return_lat", "return_lon", "return_seats", "return_same_as_outbound", "notes", "revision", "created_at", "updated_at", "outbound_location_source", "outbound_location_label", "return_location_source", "return_location_label"],
+  carpool_assignments: ["installation_id", "plan_id", "direction", "rider_id", "vehicle_person_id", "distance_miles", "locked", "manual", "created_at", "updated_at"],
+  carpool_unresolved: ["installation_id", "plan_id", "direction", "rider_id", "reason", "detail", "created_at"],
+  carpool_import_profiles: ["installation_id", "header_key", "mapping_json", "updated_by", "updated_at"],
+  carpool_location_cache: ["installation_id", "cache_key", "provider", "normalized_address", "original_address", "status", "latitude", "longitude", "label", "saved_at", "expires_at"],
+  hours_categories: ["installation_id", "id", "name", "mode", "impact_default", "archived", "revision", "created_at", "updated_at"],
+  hours_labels: ["installation_id", "id", "name", "archived", "revision", "created_by", "created_at", "updated_at"],
+  hours_teams: ["installation_id", "id", "number", "name", "program", "historical_descriptors", "archived", "revision", "created_at", "updated_at"],
+  hours_activities: ["installation_id", "id", "category_id", "mode", "service_date", "team_id", "title", "description", "location", "impact_relevant", "source_meeting_id", "source_snapshot", "archived", "revision", "created_at", "updated_at", "event_start_local", "event_end_local", "event_start_occurrence", "event_end_occurrence"],
+  hours_activity_labels: ["installation_id", "activity_id", "label_id", "created_by", "created_at"],
+  hours_entry_settings: ["installation_id", "reporting_days", "reopen_hours", "revision"],
+  hours_publication_settings: ["installation_id", "automatic", "revision", "created_at", "updated_at"],
+  hours_entries: ["installation_id", "id", "member_id", "activity_id", "service_date", "time_zone", "start_local", "end_local", "start_occurrence", "end_occurrence", "start_ms", "end_ms", "start_offset_seconds", "end_offset_seconds", "duration_minutes", "task_notes", "status", "channel", "attribution", "actor_user_id", "revision", "created_at", "updated_at"],
+  hours_entry_revisions: ["installation_id", "entry_id", "revision", "member_id", "activity_id", "action", "reason", "actor_user_id", "snapshot_json", "created_at"],
+  hours_submission_keys: ["installation_id", "channel", "key_hash", "fingerprint", "entry_id", "receipt_json", "created_at"],
+  hours_reopen_windows: ["installation_id", "id", "activity_id", "starts_ms", "expires_ms", "reason", "revoked", "revision", "actor_user_id", "created_at", "updated_at"],
+  hours_correction_requests: ["installation_id", "id", "channel", "attribution", "requester_member_id", "entry_id", "claimed_service_date", "message", "key_hash", "fingerprint", "status", "revision", "created_at", "resolved_at", "activity_id"],
+  hours_public_form_settings: ["installation_id", "member_validation", "revision", "updated_at"],
+  hours_correction_resolutions: ["installation_id", "request_id", "action", "note", "actor_user_id", "entry_id", "entry_revision", "created_at"],
+  hours_activity_publications: ["installation_id", "activity_id", "time_zone", "start_local", "end_local", "start_occurrence", "end_occurrence", "start_ms", "end_ms", "google_calendar", "discord", "status", "revision", "actor_user_id", "reviewed_by_user_id", "reviewed_at", "created_at", "updated_at"],
+  hours_publication_operations: ["installation_id", "activity_id", "publication_revision", "provider", "status", "attempts", "next_attempt_at", "external_id", "last_error", "lease_token", "lease_expires_at", "created_at", "updated_at", "action", "event_snapshot_json"],
+  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method"],
   user_walkthroughs: ["installation_id", "user_id", "page_id", "content_version", "status", "step_id", "updated_at"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id", "debug_mode"],
-  members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at", "attendance_required_from"],
+  user_preferences: ["installation_id", "user_id", "developer_scheduler_enabled", "revision", "updated_at"],
+  members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at", "attendance_required_from", "inactive_periods_json"],
   member_labels: ["id", "installation_id", "name", "active", "formula_enabled", "created_by", "created_at"],
   member_label_changes: ["id", "installation_id", "member_id", "label_id", "action", "effective_date", "created_by", "created_at"],
   discord_label_role_mappings: ["installation_id", "label_id", "guild_id", "role_id", "role_name", "created_by", "created_at"],
@@ -2814,7 +3142,7 @@ const tableColumns = {
   attendance_corrections: ["id", "installation_id", "member_id", "meeting_id", "disposition", "reason", "created_by", "created_at"],
   setup_progress: ["installation_id", "step", "completed_at", "completed_by"],
   pairing_codes: ["id", "installation_id", "code_hash", "expires_at", "redeemed_at", "created_by", "created_at", "purpose"],
-  kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version", "pending_events", "last_sync_at", "error_category"],
+  kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version", "pending_events", "last_sync_at", "error_category", "pairing_bound", "authentication_method"],
   simulated_kiosk_sessions: ["installation_id", "pairing_code_id", "name", "active", "online", "last_seen_at", "created_by", "created_at"],
   encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at", "verified_at"],
   google_calendar_authorizations: ["installation_id", "ciphertext", "iv", "key_version", "authorized_at", "verified_at", "updated_at"],
@@ -2834,7 +3162,9 @@ const tableColumns = {
 type BackupTable = keyof typeof tableColumns;
 // Restore parents before children so SQLite's immediate foreign-key checks remain valid.
 const installationTables: BackupTable[] = [
-  "installations", "organization_settings", "members", "users", "user_walkthroughs", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
+  "installations", "platform_module_administration", "platform_module_administration_epochs", "platform_module_epochs", "platform_modules", "organization_settings", "members", "users", "user_preferences", "platform_module_assignment_epochs", "platform_module_assignment_revisions", "platform_module_assignments", "platform_module_setup_progress", "user_walkthroughs", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
+  "hours_categories", "hours_labels", "hours_teams", "hours_entry_settings", "hours_public_form_settings", "hours_publication_settings", "hours_activities", "hours_activity_labels", "hours_entries", "hours_entry_revisions", "hours_submission_keys", "hours_reopen_windows", "hours_correction_requests", "hours_correction_resolutions", "hours_activity_publications", "hours_publication_operations",
+  "carpool_settings", "carpool_plans", "carpool_people", "carpool_assignments", "carpool_unresolved", "carpool_import_profiles", "carpool_location_cache",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
   "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
@@ -2845,6 +3175,23 @@ const rosterTables: BackupTable[] = ["members", "member_labels", "member_label_c
 const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const safeBackupValue = (value: unknown) => value === null || ["string", "number", "boolean"].includes(typeof value);
+const backupSchemaVersion = 39;
+const backupEnvelopeFormat = "lancerlogin-community-modular";
+const backupEnvelopeVersion = 1;
+
+function backupOwnership(scope: BackupScope, schemaVersion = backupSchemaVersion) {
+  const scoped = tablesForScope(scope).filter(table => !(schemaVersion < 33 && table === "hours_public_form_settings") && !(schemaVersion < 35 && table === "carpool_settings"));
+  const core = scoped.filter((table) => !bundledModuleRegistry.tableOwner(table));
+  const modules = bundledModuleRegistry.modules.map((module) => ({
+    id: module.id,
+    contractVersion: module.contractVersion,
+    backupVersion: module.backup.version,
+    tables: scoped.filter((table) => bundledModuleRegistry.tableOwner(table)?.id === module.id),
+    sharedFields: module.persistence.sharedFields.filter((field) => scoped.includes(field.table as BackupTable)),
+    transientAuthority: module.persistence.transientAuthority.filter((field) => scoped.includes(field.table as BackupTable)),
+  }));
+  return { core: { version: 1, tables: core }, modules };
+}
 
 async function backupData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const scope = new URL(request.url).searchParams.get("scope") as BackupScope;
@@ -2852,19 +3199,19 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
   }));
-  const exportedAt = new Date().toISOString(); const policySettings = scope === "roster" ? await db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ recentDays: number; policyActivatedOn: string | null }>() : null; const backup = { product: "LancerLogin", schemaVersion: 22, scope, exportedAt, tables: Object.fromEntries(entries), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
+  const exportedAt = new Date().toISOString(); const policySettings = scope === "roster" ? await db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ recentDays: number; policyActivatedOn: string | null }>() : null; const backup = { product: "LancerLogin", format: backupEnvelopeFormat, formatVersion: backupEnvelopeVersion, schemaVersion: backupSchemaVersion, scope, exportedAt, ownership: backupOwnership(scope), tables: Object.fromEntries(entries), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
   const updateRequestId = new URL(request.url).searchParams.get("updateRequestId");
   if (updateRequestId) {
     if (scope !== "installation") throw new HttpError(400, "Web updates require an entire-installation backup");
     await recordUpdateBackup(env, updateRequestId);
   }
-  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: 22 });
+  await writeAudit(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: backupSchemaVersion });
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: number; scope: BackupScope; exportedAt: string; attendanceRecentDays: number; attendancePolicyActivatedOn: string | null; tables: Record<BackupTable, Record<string, unknown>[]> };
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: number; scope: BackupScope; exportedAt: string; attendanceRecentDays: number; attendancePolicyActivatedOn: string | null; tables: Record<BackupTable, Record<string, unknown>[]>; recovery: { revokedKiosks: number; invalidatedPairingCodes: number; pausedProviderOperations: number } };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
-  organization_settings: tableColumns.organization_settings.slice(0, -11),
+  organization_settings: tableColumns.organization_settings.slice(0, -12),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
   discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -2),
 };
@@ -2872,29 +3219,178 @@ const legacyInstallationTables = installationTables.filter((table) => !["member_
 const legacyMeetingTables = meetingTables.filter((table) => !["meeting_audience_labels", "meeting_weight_categories", "meeting_templates", "discord_attendance_notifications", "discord_attendance_recipients", "discord_anomaly_reports"].includes(table));
 const legacyTablesForScope = (scope: BackupScope) => scope === "installation" ? legacyInstallationTables : scope === "meetings" ? legacyMeetingTables : rosterTables;
 
+function canonicalBackupJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalBackupJson).join(",")}]`;
+  if (isObject(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalBackupJson(value[key])}`).join(",")}}`;
+  return JSON.stringify(value) ?? "null";
+}
+
+const portableAuthorityValue = (value: unknown, minimum: number) => Number.isSafeInteger(value)
+  && Number(value) >= minimum
+  && Number(value) < Number.MAX_SAFE_INTEGER - 1;
+
+function validatePortableTableScope(tables: Record<BackupTable, Record<string, unknown>[]>, scope: BackupScope) {
+  for (const table of tablesForScope(scope)) for (const row of tables[table]) {
+    const installationId = table === "installations" ? row.id : row.installation_id;
+    if (installationId !== "primary") throw new HttpError(400, `Backup table ${table} is not scoped to this installation`);
+  }
+}
+
+function validateInstallationBackupState(tables: Record<BackupTable, Record<string, unknown>[]>) {
+  if (tables.installations.length !== 1 || tables.platform_module_administration.length !== 1 || tables.platform_module_administration_epochs.length !== 1) throw new HttpError(400, "Backup module administration state is incomplete");
+  const administration = tables.platform_module_administration[0]!; const administrationEpoch = tables.platform_module_administration_epochs[0]!;
+  if (!portableAuthorityValue(administration.revision, 0) || administration.revision !== administrationEpoch.revision || ![0, 1].includes(Number(administration.selection_completed))) throw new HttpError(400, "Backup module administration authority is invalid");
+  const definitions = new Map(bundledModuleRegistry.modules.map((module) => [module.id, module]));
+  const modules = new Map<string, Record<string, unknown>>(); const epochs = new Map<string, Record<string, unknown>>();
+  for (const row of tables.platform_module_epochs) {
+    const id = String(row.module_id); if (!definitions.has(id) || epochs.has(id) || !portableAuthorityValue(row.generation, 1)) throw new HttpError(400, "Backup module generation authority is invalid");
+    epochs.set(id, row);
+  }
+  for (const row of tables.platform_modules) {
+    const id = String(row.module_id); const definition = definitions.get(id); const phase = String(row.phase);
+    if (!definition || modules.has(id) || row.contract_version !== definition.contractVersion || row.setup_version !== definition.setup.version || row.generation !== epochs.get(id)?.generation || !["disabled", "enabled", "retained", "deleting", "deleted"].includes(phase) || ![0, 1].includes(Number(row.setup_complete)) || !Number.isSafeInteger(row.deletion_cursor) || Number(row.deletion_cursor) < 0 || Number(row.deletion_cursor) > definition.lifecycle.cleanupTargets.length || row.cleanup_failure !== null && row.cleanup_failure !== "retry-required") throw new HttpError(400, "Backup module lifecycle state is invalid");
+    const hasCountdown = phase === "retained" || phase === "deleting";
+    if (hasCountdown) {
+      const disabledAt = Date.parse(String(row.disabled_at)); const deleteAfter = Date.parse(String(row.delete_after));
+      if (!Number.isFinite(disabledAt) || deleteAfter - disabledAt !== 7 * 86_400_000) throw new HttpError(400, "Backup module retention state is invalid");
+    } else if (row.disabled_at !== null || row.delete_after !== null || phase === "deleted" && row.deletion_cursor !== 0) throw new HttpError(400, "Backup module retention state is invalid");
+    modules.set(id, row);
+  }
+  if (modules.size !== definitions.size || epochs.size !== definitions.size) throw new HttpError(400, "Backup module registrations do not match this application");
+  for (const [id, definition] of definitions) if (String(modules.get(id)?.phase) === "enabled" && definition.dependencies.some((dependency) => String(modules.get(dependency)?.phase) !== "enabled")) throw new HttpError(400, "Backup module dependencies are invalid");
+
+  const users = new Map(tables.users.map((row) => [String(row.id), row]));
+  const assignmentEpochs = new Map<string, Record<string, unknown>>(); const assignmentRevisions = new Map<string, Record<string, unknown>>();
+  for (const row of tables.platform_module_assignment_epochs) {
+    const userId = String(row.user_id); if (assignmentEpochs.has(userId) || !portableAuthorityValue(row.revision, 0)) throw new HttpError(400, "Backup assignment authority is invalid");
+    assignmentEpochs.set(userId, row);
+  }
+  for (const row of tables.platform_module_assignment_revisions) {
+    const userId = String(row.user_id); if (!users.has(userId) || assignmentRevisions.has(userId) || row.revision !== assignmentEpochs.get(userId)?.revision) throw new HttpError(400, "Backup assignment authority is invalid");
+    assignmentRevisions.set(userId, row);
+  }
+  if ([...users].some(([userId]) => !assignmentRevisions.has(userId))) throw new HttpError(400, "Backup assignment authority is incomplete");
+  const assignments = new Set<string>();
+  for (const row of tables.platform_module_assignments) {
+    const userId = String(row.user_id); const moduleId = String(row.module_id); const definition = definitions.get(moduleId); let capabilities: unknown;
+    try { capabilities = JSON.parse(String(row.capabilities_json)); } catch { throw new HttpError(400, "Backup module assignment is invalid"); }
+    const key = `${userId}:${moduleId}`;
+    if (!definition || !users.has(userId) || users.get(userId)?.role !== "operator" || String(modules.get(moduleId)?.phase) !== "enabled" || assignments.has(key) || !Array.isArray(capabilities) || capabilities.some((capability) => typeof capability !== "string" || !definition.capabilities.some((item) => item.operator && item.id === capability))) throw new HttpError(400, "Backup module assignment is invalid");
+    assignments.add(key);
+  }
+  const setup = new Set<string>();
+  for (const row of tables.platform_module_setup_progress) {
+    const moduleId = String(row.module_id); const stepId = String(row.step_id); const definition = definitions.get(moduleId); const key = `${moduleId}:${stepId}`;
+    if (!definition || setup.has(key) || row.setup_version !== definition.setup.version || !definition.setup.steps.some((step) => step.id === stepId) || !["completed", "skipped"].includes(String(row.outcome))) throw new HttpError(400, "Backup module setup progress is invalid");
+    setup.add(key);
+  }
+  for (const definition of definitions.values()) if (modules.get(definition.id)?.setup_complete === 1 && definition.setup.steps.some((step) => step.required && !setup.has(`${definition.id}:${step.id}`))) throw new HttpError(400, "Backup module setup progress is incomplete");
+}
+
 function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
-  if (!isObject(value) || value.product !== "LancerLogin" || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22].includes(Number(value.schemaVersion)) || value.scope !== scope || typeof value.exportedAt !== "string" || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
-  const schemaVersion = Number(value.schemaVersion);
+  if (!isObject(value) || value.product !== "LancerLogin" || !Number.isSafeInteger(Number(value.schemaVersion)) || Number(value.schemaVersion) < 1 || Number(value.schemaVersion) > backupSchemaVersion || value.scope !== scope || typeof value.exportedAt !== "string" || !validTimestamp(value.exportedAt) || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
+  const sourceSchemaVersion = Number(value.schemaVersion);
+  // Public Community 1.2.5 and early Modular archives both used schema 22.
+  // Recognize the complete Community table manifest, never a partial Modular
+  // archive or an archive carrying Modular ownership metadata.
+  const communityTables = tablesForScope(scope).filter(table => !table.startsWith("platform_module") && !table.startsWith("hours_") && !table.startsWith("carpool_") && table !== "user_preferences");
+  const community22 = sourceSchemaVersion === 22 && value.format === undefined && value.formatVersion === undefined && value.ownership === undefined
+    && canonicalBackupJson(Object.keys(value.tables).sort()) === canonicalBackupJson([...communityTables].sort());
+  const schemaVersion = community22 ? 21 : sourceSchemaVersion;
   const sourceTables = value.tables;
-  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 21 && table === "user_walkthroughs") && !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings") && !(schemaVersion < 20 && ["saved_report_views", "saved_report_tabs"].includes(table)));
+  if (sourceSchemaVersion >= 31 && (value.format !== backupEnvelopeFormat || value.formatVersion !== backupEnvelopeVersion || canonicalBackupJson(value.ownership) !== canonicalBackupJson(backupOwnership(scope, sourceSchemaVersion)))) throw new HttpError(400, "Backup ownership does not match this Community-based application");
+  const knownTables = new Set<unknown>(tablesForScope(scope).filter(table => !(sourceSchemaVersion >= 31 && schemaVersion < 33 && table === "hours_public_form_settings") && !(schemaVersion < 35 && table === "carpool_settings")));
+  if (Object.keys(sourceTables).some((table) => !knownTables.has(table))) throw new HttpError(400, "Backup contains tables that are not owned by this Community-based application");
+  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 35 && table === "carpool_settings") && !(schemaVersion < 33 && table === "hours_public_form_settings") && !(schemaVersion < 30 && table.startsWith("carpool_")) && !(schemaVersion < 25 && table.startsWith("hours_")) && !(schemaVersion < 26 && ["hours_reopen_windows", "hours_correction_requests", "hours_correction_resolutions"].includes(table)) && !(schemaVersion < 27 && ["hours_activity_publications", "hours_publication_operations"].includes(table)) && !(schemaVersion < 29 && ["hours_labels", "hours_activity_labels", "hours_publication_settings"].includes(table)) && !(schemaVersion < 22 && table.startsWith("platform_module")) && !(schemaVersion < 24 && table === "user_preferences") && !(schemaVersion < 23 && table === "platform_module_setup_progress") && !(schemaVersion < 21 && table === "user_walkthroughs") && !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings") && !(schemaVersion < 20 && ["saved_report_views", "saved_report_tabs"].includes(table)));
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
-    for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column]))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
+    const columns = table === "carpool_plans" && schemaVersion < 39 ? tableColumns.carpool_plans.filter(column => !["time_zone", "outbound_departure_at", "return_departure_at"].includes(column) && (schemaVersion >= 38 || !["group_settings_json", "last_rebuild_json"].includes(column)) && (schemaVersion >= 37 || column !== "trip_scope") && (schemaVersion >= 33 || column !== "meeting_id")) : table === "carpool_people" && schemaVersion < 37 ? tableColumns.carpool_people.filter(column => !column.endsWith("_location_source") && !column.endsWith("_location_label")) : schemaVersion < 36 && table === "hours_publication_operations" ? tableColumns.hours_publication_operations.slice(0, schemaVersion < 29 ? -2 : -1) : schemaVersion < 33 && table === "hours_correction_requests" ? tableColumns.hours_correction_requests.slice(0, -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : schemaVersion < 28 && table === "kiosks" ? tableColumns.kiosks.slice(0, -2) : schemaVersion < 31 && table === "kiosks" ? tableColumns.kiosks.slice(0, -1) : schemaVersion < 29 && table === "hours_activities" ? tableColumns.hours_activities.slice(0, -4) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -10) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -8) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -6) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
+    for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column])) || (sourceSchemaVersion >= 31 || community22) && Object.keys(row).some((column) => !(columns as readonly string[]).includes(column))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
 
   const tables = Object.fromEntries((Object.keys(tableColumns) as BackupTable[]).map((table) => [table, [] as Record<string, unknown>[]])) as Record<BackupTable, Record<string, unknown>[]>;
   for (const table of requiredTables) tables[table] = (sourceTables[table] as Record<string, unknown>[]).map((row) => ({ ...row }));
-  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, discord_anomaly_reports_enabled: 0, discord_anomaly_report_channel_id: null, discord_anomaly_reports_enabled_at: null, attendance_recent_days: 30, attendance_policy_activated_on: null, ...row }));
+  if (schemaVersion < 39) tables.carpool_plans = tables.carpool_plans.map(row => ({ ...row, time_zone: "UTC", outbound_departure_at: null, return_departure_at: null }));
+  if (schemaVersion < 38) tables.carpool_plans = tables.carpool_plans.map(row => ({ ...row, group_settings_json: "[]", last_rebuild_json: null }));
+  if (schemaVersion < 37) {
+    tables.carpool_plans = tables.carpool_plans.map(row => ({ ...row, trip_scope: "both" }));
+    tables.carpool_people = tables.carpool_people.map(row => ({ ...row, outbound_location_source: null, outbound_location_label: null, return_location_source: null, return_location_label: null }));
+  }
+  if (schemaVersion < 33) {
+    tables.carpool_plans = tables.carpool_plans.map(row => ({ ...row, meeting_id: null }));
+    tables.hours_correction_requests = tables.hours_correction_requests.map(row => ({ ...row, activity_id: null }));
+    if (scope === "installation") tables.hours_public_form_settings = [{ installation_id: "primary", member_validation: "off", revision: 0, updated_at: value.exportedAt }];
+  }
+  if (tables.hours_public_form_settings.length > 1 || tables.hours_public_form_settings.some(row => !["off", "validity", "name"].includes(String(row.member_validation)) || !Number.isSafeInteger(row.revision) || Number(row.revision) < 0 || Number(row.revision) >= Number.MAX_SAFE_INTEGER || (typeof row.updated_at !== "string" || !validTimestamp(row.updated_at)))) throw new HttpError(400, "Backup public form privacy settings are invalid");
+  if (tables.hours_correction_requests.some(row => row.activity_id !== null && !tables.hours_activities.some(activity => activity.id === row.activity_id && activity.installation_id === row.installation_id))) throw new HttpError(400, "Backup correction activity reference is invalid");
+  const pausedProviderOperations = tables.integration_deliveries.filter((row) => row.status === "pending").length
+    + tables.google_calendar_operations.filter((row) => row.status === "pending").length
+    + tables.discord_calendar_operations.filter((row) => ["pending", "processing"].includes(String(row.status))).length
+    + tables.discord_attendance_notifications.filter((row) => row.status === "pending").length
+    + tables.discord_anomaly_reports.filter((row) => row.status === "pending").length
+    + tables.hours_publication_operations.filter((row) => ["pending", "processing"].includes(String(row.status))).length;
+  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, discord_anomaly_reports_enabled: 0, discord_anomaly_report_channel_id: null, discord_anomaly_reports_enabled_at: null, attendance_recent_days: 30, attendance_policy_activated_on: null, ...row, ...(schemaVersion < 31 ? { kiosk_authentication_method: "fingerprint" } : {}) }));
   if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, thread_created_at: null, delivery_id: null, ...row }));
   if (tables.discord_attendance_recipients) tables.discord_attendance_recipients = tables.discord_attendance_recipients.map((row) => ({ delivery_id: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
+  if (tables.kiosks) tables.kiosks = tables.kiosks.map((row) => ({ pairing_bound: 0, ...row, ...(schemaVersion < 31 ? { authentication_method: "fingerprint" } : {}) }));
+  if (schemaVersion < 29) {
+    tables.hours_activities = tables.hours_activities.map((row) => ({ ...row, event_start_local: null, event_end_local: null, event_start_occurrence: null, event_end_occurrence: null }));
+    tables.hours_publication_operations = tables.hours_publication_operations.map((row) => ({ ...row, action: "publish" }));
+    if (scope === "installation") {
+      const createdAt = String(tables.installations.find((row) => row.id === "primary")?.created_at ?? value.exportedAt);
+      tables.hours_publication_settings = [{ installation_id: "primary", automatic: 0, revision: 0, created_at: createdAt, updated_at: createdAt }];
+    }
+  }
   if (schemaVersion < 7 && tables.installations) { const providers = new Set(tables.encrypted_integrations.map((row) => row.provider)); tables.installations = tables.installations.map((row) => ({ ...row, google_enabled: providers.has("google") ? 1 : 0, resend_enabled: providers.has("resend") ? 1 : 0, discord_enabled: providers.has("discord") ? 1 : 0 })); }
   if (schemaVersion < 12 && tables.installations) tables.installations = tables.installations.map((row) => ({ google_calendar_enabled: 0, ...row }));
-  if (tables.members) tables.members = tables.members.map((row) => ({ attendance_required_from: String(row.created_at ?? "").slice(0, 10), ...row }));
+  if (tables.members) tables.members = tables.members.map((row) => ({ attendance_required_from: String(row.created_at ?? "").slice(0, 10), ...row, ...(schemaVersion < 34 ? { inactive_periods_json: row.active === 0 ? JSON.stringify([[new Date().toISOString(), null]]) : "[]" } : {}) }));
+  try { for (const member of tables.members ?? []) validateInactivePeriods(member.inactive_periods_json, member.active); } catch { throw new HttpError(400, "Backup contains invalid member inactivity history"); }
   if (tables.users) tables.users = tables.users.map((row) => ({ debug_mode: 0, ...row }));
+  if (schemaVersion < 36 && tables.hours_publication_operations) tables.hours_publication_operations = tables.hours_publication_operations.map(row => ({ ...row, event_snapshot_json: null }));
+  try { for (const row of tables.hours_publication_operations ?? []) if (row.event_snapshot_json !== null) { const snapshot = parseOutreachPublicationEvent(JSON.parse(String(row.event_snapshot_json))); if (snapshot.activityId !== row.activity_id || snapshot.revision > Number(row.publication_revision)) throw new Error("Publication snapshot identity mismatch"); } } catch { throw new HttpError(400, "Backup publication snapshots are invalid"); }
+  if (tables.hours_publication_operations) tables.hours_publication_operations = tables.hours_publication_operations.map((row) => ["pending", "processing"].includes(String(row.status)) ? { ...row, status: "failed", next_attempt_at: null, last_error: "Restore requires explicit publication retry", lease_token: null, lease_expires_at: null } : row);
+  if (scope === "installation" && schemaVersion < 22) {
+    tables.platform_module_administration = [{ installation_id: "primary", revision: 0, selection_completed: 1 }];
+    tables.platform_module_administration_epochs = [{ installation_id: "primary", revision: 0 }];
+    tables.platform_module_epochs = [{ installation_id: "primary", module_id: "attendance", generation: 1 }];
+    tables.platform_modules = [{ installation_id: "primary", module_id: "attendance", contract_version: 1, generation: 1, phase: "enabled", setup_version: 2, setup_complete: 1, disabled_at: null, delete_after: null, deletion_cursor: 0, cleanup_failure: null }];
+    tables.platform_module_assignment_epochs = tables.users.map((row) => ({ installation_id: "primary", user_id: row.id, revision: 0 }));
+    tables.platform_module_assignment_revisions = tables.users.map((row) => ({ installation_id: "primary", user_id: row.id, revision: 0 }));
+    tables.platform_module_assignments = tables.users.filter((row) => row.role === "operator").map((row) => ({ installation_id: "primary", user_id: row.id, module_id: "attendance", capabilities_json: '["attendance.manage"]' }));
+  }
+  if (scope === "installation" && schemaVersion >= 22 && schemaVersion < 23) {
+    tables.platform_modules = tables.platform_modules.map((row) => ({ ...row, setup_version: row.module_id === "attendance" ? 2 : row.setup_version, deletion_cursor: 0, cleanup_failure: null }));
+  }
+  if (scope === "installation" && schemaVersion < 23) {
+    const attendance = tables.platform_modules.find((row) => row.module_id === "attendance");
+    if (attendance?.setup_complete === 1) {
+      const completedAt = String(tables.installations.find((row) => row.id === "primary")?.created_at ?? value.exportedAt);
+      const completedBy = tables.users.find((row) => row.role === "admin")?.id ?? null;
+      tables.platform_module_setup_progress = ["rules", "meeting", "input", "calendar", "discord"].map((stepId) => ({ installation_id: "primary", module_id: "attendance", step_id: stepId, setup_version: 2, outcome: ["calendar", "discord"].includes(stepId) ? "skipped" : "completed", completed_at: completedAt, completed_by: completedBy }));
+    }
+  }
+  if (scope === "installation" && schemaVersion < 25) {
+    const createdAt = String(tables.installations.find((row) => row.id === "primary")?.created_at ?? value.exportedAt);
+    tables.platform_module_epochs.push({ installation_id: "primary", module_id: "hour-tracking", generation: 1 });
+    tables.platform_modules.push({ installation_id: "primary", module_id: "hour-tracking", contract_version: 1, generation: 1, phase: "disabled", setup_version: 1, setup_complete: 0, disabled_at: null, delete_after: null, deletion_cursor: 0, cleanup_failure: null });
+    tables.hours_entry_settings = [{ installation_id: "primary", reporting_days: 30, reopen_hours: 24, revision: 0 }];
+    tables.hours_categories = [
+      { installation_id: "primary", id: "event", name: "Event", mode: "event", impact_default: 1, archived: 0, revision: 0, created_at: createdAt, updated_at: createdAt },
+      { installation_id: "primary", id: "team-support", name: "Team Support", mode: "team", impact_default: 1, archived: 0, revision: 0, created_at: createdAt, updated_at: createdAt },
+      { installation_id: "primary", id: "other-service", name: "Other Service", mode: "task", impact_default: 1, archived: 0, revision: 0, created_at: createdAt, updated_at: createdAt },
+    ];
+  }
+  if (scope === "installation" && schemaVersion < 29) {
+    tables.hours_labels = tables.hours_categories.map((row) => ({ installation_id: row.installation_id, id: row.id, name: row.name, archived: row.archived, revision: row.revision, created_by: null, created_at: row.created_at, updated_at: row.updated_at }));
+    tables.hours_activity_labels = tables.hours_activities.map((row) => ({ installation_id: row.installation_id, activity_id: row.id, label_id: row.category_id, created_by: null, created_at: row.created_at }));
+  }
+  if (scope === "installation" && schemaVersion < 30) {
+    tables.platform_module_epochs.push({ installation_id: "primary", module_id: "carpool", generation: 1 });
+    tables.platform_modules.push({ installation_id: "primary", module_id: "carpool", contract_version: 1, generation: 1, phase: "disabled", setup_version: 1, setup_complete: 0, disabled_at: null, delete_after: null, deletion_cursor: 0, cleanup_failure: null });
+  }
   if (tables.meetings) tables.meetings = tables.meetings.map((row) => {
     const normalized: Record<string, unknown> = { series_id: null, recurrence_frequency: null, recurrence_until: null, recurrence_sequence: null, deleted_at: null, weight_category_id: null, weight_category_name: null, attendance_weight: 1, audience_mode: "all", ...row };
     if (normalized.ends_at !== null) return normalized;
@@ -2921,8 +3417,9 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   if (tables.label_attendance_rules.some((row) => !["exclude", "count_missed"].includes(String(row.excused_handling)))) throw new HttpError(400, "Backup attendance rule has invalid excused-meeting handling");
   if (scope === "installation" && schemaVersion >= 20) {
     const restoredLabels = tables.member_labels.map((row) => ({ id: String(row.id), name: String(row.name), active: Boolean(row.active), formulaEnabled: Boolean(row.formula_enabled) }));
+    const restoredOutreachLabels = tables.hours_labels.map((row) => ({ id: String(row.id) }));
     for (const row of tables.saved_report_views) {
-      const validation = validateReportDefinition(parseStoredReportDefinition(String(row.definition_json)), restoredLabels, { allowMissingLabels: true });
+      const validation = validateReportDefinition(parseStoredReportDefinition(String(row.definition_json)), restoredLabels, { allowMissingLabels: true, outreachLabels: restoredOutreachLabels });
       if (!validation.definition || validation.errors.length) throw new HttpError(400, "Backup contains an invalid saved report definition", validation.errors);
     }
   }
@@ -2930,16 +3427,53 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
     if (row.installation_id !== "primary" || !tables.users.some((user) => user.id === row.user_id && user.installation_id === row.installation_id)
       || !validWalkthroughProgress({ pageId: row.page_id, version: row.content_version, status: row.status, stepId: row.step_id })) throw new HttpError(400, "Backup walkthrough progress is invalid");
   }
+  validatePortableTableScope(tables, scope);
+  if (scope === "installation") { validateInstallationBackupState(tables); validateCarpoolBackupTables(tables); }
+
+  tables.integration_deliveries = tables.integration_deliveries.map((row) => row.status === "pending" ? { ...row, status: "failed" } : row);
+  tables.google_calendar_operations = tables.google_calendar_operations.map((row) => row.status === "pending" ? { ...row, status: "failed", next_attempt_at: null, last_error: "Restore requires explicit Calendar review" } : row);
+  tables.discord_calendar_operations = tables.discord_calendar_operations.map((row) => ["pending", "processing"].includes(String(row.status)) ? { ...row, status: "failed", next_attempt_at: null, lease_token: null, lease_expires_at: null, last_error: "Restore requires explicit Calendar review" } : row);
+  tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => row.status === "pending" ? { ...row, status: "failed", last_error: "Restore requires explicit notification review", processed_at: value.exportedAt } : row);
+  tables.discord_anomaly_reports = tables.discord_anomaly_reports.map((row) => row.status === "pending" ? { ...row, status: "failed", last_error: "Restore requires explicit anomaly report review", processed_at: value.exportedAt } : row);
+  const invalidatedPairingCodes = tables.pairing_codes.length; const revokedKiosks = tables.kiosks.length;
+  tables.pairing_codes = tables.pairing_codes.map((row) => ({ ...row, code_hash: `restored-${crypto.randomUUID()}`, expires_at: value.exportedAt, redeemed_at: value.exportedAt }));
+  tables.kiosks = tables.kiosks.map((row) => ({ ...row, token_hash: `restored-${crypto.randomUUID()}`, active: 0 }));
+  tables.simulated_kiosk_sessions = tables.simulated_kiosk_sessions.map((row) => ({ ...row, active: 0, online: 0 }));
   const attendanceRecentDays = scope === "roster" && schemaVersion >= 15 ? Number(value.attendanceRecentDays) : 30;
   if (!Number.isSafeInteger(attendanceRecentDays) || attendanceRecentDays < 1 || attendanceRecentDays > 365) throw new HttpError(400, "Backup attendance window is invalid");
   const attendancePolicyActivatedOn = scope === "roster" && schemaVersion >= 15 ? value.attendancePolicyActivatedOn ?? null : schemaVersion < 15 && (tables.member_labels.some((row) => row.formula_enabled === 1) || tables.label_attendance_rules.length) ? new Date().toISOString().slice(0, 10) : null;
   if (attendancePolicyActivatedOn !== null && !validDate(attendancePolicyActivatedOn)) throw new HttpError(400, "Backup attendance policy activation date is invalid");
-  return { product: "LancerLogin", schemaVersion, scope, exportedAt: value.exportedAt, attendanceRecentDays, attendancePolicyActivatedOn, tables };
+  return { product: "LancerLogin", schemaVersion: sourceSchemaVersion, scope, exportedAt: value.exportedAt, attendanceRecentDays, attendancePolicyActivatedOn, tables, recovery: { revokedKiosks, invalidatedPairingCodes, pausedProviderOperations } };
 }
 
 const insertBackupRows = (db: D1Database, table: BackupTable, rows: Record<string, unknown>[]) => rows.map((row) => {
   const columns = tableColumns[table]; return db.prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`).bind(...columns.map((column) => row[column]));
 });
+
+function freshAuthorityStatements(db: D1Database, tables: Record<BackupTable, Record<string, unknown>[]>): D1Statement[] {
+  const administrationRevision = Number(tables.platform_module_administration_epochs[0]?.revision ?? 0);
+  const statements: D1Statement[] = [
+    db.prepare(`INSERT INTO platform_module_administration_epochs(installation_id,revision) VALUES('primary',?)
+      ON CONFLICT(installation_id) DO UPDATE SET revision=MAX(platform_module_administration_epochs.revision,excluded.revision-1)+1`).bind(administrationRevision + 1),
+  ];
+  for (const row of tables.platform_module_epochs) statements.push(db.prepare(`INSERT INTO platform_module_epochs(installation_id,module_id,generation) VALUES('primary',?,?)
+    ON CONFLICT(installation_id,module_id) DO UPDATE SET generation=MAX(platform_module_epochs.generation,excluded.generation-1)+1`).bind(row.module_id, Number(row.generation) + 1));
+  const assignmentEpochs = new Map(tables.platform_module_assignment_epochs.map((row) => [String(row.user_id), Number(row.revision)]));
+  for (const row of tables.users) statements.push(db.prepare(`INSERT INTO platform_module_assignment_epochs(installation_id,user_id,revision) VALUES('primary',?,?)
+    ON CONFLICT(installation_id,user_id) DO UPDATE SET revision=MAX(platform_module_assignment_epochs.revision,excluded.revision-1)+1`).bind(row.id, (assignmentEpochs.get(String(row.id)) ?? 0) + 1));
+  return statements;
+}
+
+function restoredModuleStateStatements(db: D1Database, table: BackupTable, rows: Record<string, unknown>[]): D1Statement[] {
+  if (table === "platform_module_administration") return rows.map((row) => db.prepare(`INSERT INTO platform_module_administration(installation_id,revision,selection_completed)
+    SELECT 'primary',revision,? FROM platform_module_administration_epochs WHERE installation_id='primary'`).bind(row.selection_completed));
+  if (table === "platform_modules") return rows.map((row) => db.prepare(`INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete,disabled_at,delete_after,deletion_cursor,cleanup_failure)
+    SELECT 'primary',?,?,generation,?,?,?,?,?,?,? FROM platform_module_epochs WHERE installation_id='primary' AND module_id=?`)
+    .bind(row.module_id, row.contract_version, row.phase, row.setup_version, row.setup_complete, row.disabled_at, row.delete_after, row.deletion_cursor, row.cleanup_failure, row.module_id));
+  if (table === "platform_module_assignment_revisions") return rows.map((row) => db.prepare(`INSERT INTO platform_module_assignment_revisions(installation_id,user_id,revision)
+    SELECT 'primary',?,revision FROM platform_module_assignment_epochs WHERE installation_id='primary' AND user_id=?`).bind(row.user_id, row.user_id));
+  return [];
+}
 
 async function restoreData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: BackupScope; confirmation?: string; backup?: unknown }>(request, 10_485_760); const scope = input.scope;
@@ -2951,18 +3485,24 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
     ...insertBackupRows(db, "meeting_weight_categories", tables.meeting_weight_categories), ...insertBackupRows(db, "meetings", tables.meetings), ...insertBackupRows(db, "meeting_audience_labels", tables.meeting_audience_labels), ...insertBackupRows(db, "meeting_templates", tables.meeting_templates), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_notifications", tables.discord_attendance_notifications), ...insertBackupRows(db, "discord_attendance_recipients", tables.discord_attendance_recipients), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests), ...insertBackupRows(db, "discord_anomaly_reports", tables.discord_anomaly_reports),
   ];
   else if (scope === "roster") statements = [
-    db.prepare("UPDATE members SET active = 0 WHERE installation_id = 'primary'"),
-    ...tables.members.map((row) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at, attendance_required_from) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = excluded.active, attendance_required_from = excluded.attendance_required_from").bind(row.id, row.external_id, row.first_name, row.last_name, row.email, row.discord_user_id, row.active, row.created_at, row.attendance_required_from)),
+    db.prepare(`UPDATE members SET inactive_periods_json = ${inactivePeriodsUpdateSql("0")}, active = 0 WHERE installation_id = 'primary' AND external_id NOT IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(tables.members.map(row => row.external_id))),
+    ...tables.members.map((row) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at, attendance_required_from, inactive_periods_json) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = excluded.active, attendance_required_from = excluded.attendance_required_from, inactive_periods_json = excluded.inactive_periods_json").bind(row.id, row.external_id, row.first_name, row.last_name, row.email, row.discord_user_id, row.active, row.created_at, row.attendance_required_from, row.inactive_periods_json)),
     db.prepare("DELETE FROM member_label_changes WHERE installation_id = 'primary'"), db.prepare("DELETE FROM label_attendance_rules WHERE installation_id = 'primary'"), db.prepare("DELETE FROM label_weekly_targets WHERE installation_id = 'primary'"), db.prepare("UPDATE member_labels SET active = 0 WHERE installation_id = 'primary'"),
     ...tables.member_labels.map((row) => db.prepare("INSERT INTO member_labels (id, installation_id, name, active, formula_enabled, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, active = excluded.active, formula_enabled = excluded.formula_enabled").bind(row.id, row.name, row.active, row.formula_enabled, row.created_by, row.created_at)),
     ...insertBackupRows(db, "member_label_changes", tables.member_label_changes), ...insertBackupRows(db, "label_weekly_targets", tables.label_weekly_targets), ...insertBackupRows(db, "label_attendance_rules", tables.label_attendance_rules), db.prepare("DELETE FROM discord_label_role_mappings WHERE installation_id = 'primary' AND label_id IN (SELECT id FROM member_labels WHERE installation_id = 'primary' AND active = 0)"), db.prepare("UPDATE discord_label_role_jobs SET status = 'stale', lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND status IN ('pending', 'running')").bind(new Date().toISOString(), new Date().toISOString()), db.prepare("UPDATE organization_settings SET attendance_recent_days = ?, attendance_policy_activated_on = ? WHERE installation_id = 'primary'").bind(backup.attendanceRecentDays, backup.attendancePolicyActivatedOn),
   ];
   else {
-    statements = [db.prepare("DELETE FROM installations WHERE id = 'primary'")];
-    for (const table of installationTables) { if (table === "member_labels" && backup.schemaVersion >= 14) statements.push(db.prepare("DELETE FROM member_labels WHERE installation_id = 'primary'")); statements.push(...insertBackupRows(db, table, tables[table])); }
+    statements = [...freshAuthorityStatements(db, tables), db.prepare("DELETE FROM installations WHERE id = 'primary'")];
+    const authorityTables = new Set<BackupTable>(["platform_module_administration_epochs", "platform_module_epochs", "platform_module_assignment_epochs"]);
+    const restoredStateTables = new Set<BackupTable>(["platform_module_administration", "platform_modules", "platform_module_assignment_revisions"]);
+    for (const table of installationTables) {
+      if (authorityTables.has(table)) continue;
+      if (table === "member_labels" && backup.schemaVersion >= 14) statements.push(db.prepare("DELETE FROM member_labels WHERE installation_id = 'primary'"));
+      statements.push(...(restoredStateTables.has(table) ? restoredModuleStateStatements(db, table, tables[table]) : insertBackupRows(db, table, tables[table])));
+    }
   }
-  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: backup.schemaVersion, exportedAt: backup.exportedAt }), now));
-  await db.batch(statements); return response({ restored: true, scope });
+  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: backup.schemaVersion, exportedAt: backup.exportedAt, recovery: backup.recovery }), now));
+  await db.batch(statements); return response({ restored: true, scope, recovery: backup.recovery });
 }
 
 async function resetOnboarding(request: Request, env: Env): Promise<Response> {
@@ -2980,12 +3520,59 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.attendance_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString()),
   ]);
   else if (input.scope === "roster") {
-    const references = await db.prepare("SELECT COUNT(*) AS count FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id) OR EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.member_id = m.id) OR EXISTS (SELECT 1 FROM discord_attendance_contests d WHERE d.member_id = m.id))").first<{ count: number }>();
-    if (Number(references?.count ?? 0) > 0) throw new HttpError(409, "Delete meetings and attendance first so historical records do not lose their roster references");
+    const references = await db.prepare("SELECT COUNT(*) AS count FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id) OR EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.member_id = m.id) OR EXISTS (SELECT 1 FROM discord_attendance_contests d WHERE d.member_id = m.id) OR EXISTS (SELECT 1 FROM hours_entries h WHERE h.installation_id = m.installation_id AND h.member_id = m.id) OR EXISTS (SELECT 1 FROM hours_correction_requests h WHERE h.installation_id = m.installation_id AND h.requester_member_id = m.id))").first<{ count: number }>();
+    if (Number(references?.count ?? 0) > 0) throw new HttpError(409, "Delete Attendance and Outreach participation first so historical records do not lose their roster references");
     await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id IS NOT NULL"), db.prepare("DELETE FROM members WHERE installation_id = 'primary'"), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.roster_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString())]);
   }
   else await db.prepare("DELETE FROM installations WHERE id = 'primary'").run();
   return response({ deleted: true, scope: input.scope });
+}
+
+const registeredModuleJobHandlers: Readonly<Record<string, (env: Env) => Promise<unknown>>> = Object.freeze({
+  // Google Calendar delivery retries safely on the next scheduled pass.
+  "attendance.google-calendar": processGoogleCalendarOperations,
+  "attendance.discord-calendar": processDiscordCalendarOperations,
+  "attendance.discord-channel": syncDiscordManagedSurface,
+  "attendance.discord-notices": processDiscordAttendanceNotifications,
+  "attendance.discord-anomalies": processDiscordAnomalyReports,
+  "attendance.discord-label-roles": processDiscordLabelRoleJobs,
+  "hour-tracking.publication": (env) => processOutreachPublicationOperations(requireDatabase(env), outreachPublicationProviders(env)),
+});
+
+async function moduleJobEnabled(moduleId: string, env: Env): Promise<boolean> {
+  try { await requireModuleService(requireDatabase(env), moduleId); return true; }
+  catch (error) { if (error instanceof HttpError && [409, 503].includes(error.status)) return false; throw error; }
+}
+
+async function runRegisteredModuleJob(jobId: string, env: Env): Promise<void> {
+  const owner = bundledModuleRegistry.modules.find((module) => module.jobs.some((job) => job.id === jobId));
+  const handler = registeredModuleJobHandlers[jobId];
+  if (!owner || !handler) throw new Error("Registered module job is unavailable");
+  const db = requireDatabase(env); const generation = await requireModuleService(db, owner.id);
+  await handler(moduleScopedEnvironment(env, captureModuleServiceDatabase(db, owner.id, generation)));
+}
+
+export const registeredModuleSchedulerJobs = moduleSchedulerJobs<Env>({ modules: bundledModuleRegistry.modules, enabled: moduleJobEnabled, runJob: runRegisteredModuleJob });
+export const registeredCoreSchedulerJobs: readonly SchedulerJob<Env>[] = Object.freeze([
+  Object.freeze({ id: "core.discord-commands", interval: 300_000, run: autoReconcileDiscordCommands }),
+]);
+const registeredPlatformSchedulerJobs = Object.freeze([...registeredCoreSchedulerJobs, ...registeredModuleSchedulerJobs]);
+export const PlatformScheduler = schedulerClass<Env>(registeredPlatformSchedulerJobs, async (request, env) => {
+  try { await requireRole(request, env, ["admin"]); return true; } catch { return false; }
+}, (env) => env.PLATFORM_SCHEDULER_MODE === "durable");
+
+async function platformScheduler(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]);
+  if (env.PLATFORM_SCHEDULER_MODE !== "durable" || !env.PLATFORM_SCHEDULER) throw new HttpError(503, "Durable scheduler is not configured");
+  if (request.method === "POST") {
+    const input = await parseJson<Record<string, unknown>>(request, 128);
+    if (!isObject(input) || Object.keys(input).length) throw new HttpError(400, "Scheduler controls accept no configuration fields");
+  }
+  const action = request.method === "GET" ? "status" : new URL(request.url).pathname.endsWith("/start") ? "start" : "stop";
+  const stub = env.PLATFORM_SCHEDULER.get(env.PLATFORM_SCHEDULER.idFromName("primary"));
+  const result = await stub.fetch(new Request(`https://scheduler.internal/${action}`, { method: request.method, headers: { cookie: request.headers.get("cookie") ?? "" } }));
+  if (result.ok && request.method === "POST") await writeAudit(requireDatabase(env), principal, `scheduler.${action}`, "platform_scheduler", "primary");
+  return new Response(result.body, { status: result.status, headers: result.headers });
 }
 
 const worker = { async fetch(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
@@ -2994,6 +3581,24 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   if (usage) env = { ...env, DB: usage.database };
   try {
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !["/auth/local", "/auth/logout", "/auth/google/callback"].includes(url.pathname) && await webUpdateMaintenance(env)) return withCors(response({ error: "An installation update requires temporary write suspension. Retry after recovery or completion.", code: "update_maintenance" }, 503, { "retry-after": "30" }), request, env);
+    const moduleRoute = bundledModuleRegistry.routeOwner(url.pathname);
+    if (request.method !== "OPTIONS" && moduleRoute) {
+      const db = requireDatabase(env);
+      if (moduleRoute.route.access === "workspace") {
+        const principal = await requireRole(request, env, ["admin", "operator"]);
+        const generation = await requireModuleWorkspace(db, principal.userId, moduleRoute.module.id);
+        const capability = moduleRoute.module.capabilities.find((item) => item.operator)?.id;
+        if (!capability) throw new HttpError(500, "Module workspace capability is unavailable");
+        env = moduleScopedEnvironment(env, captureModuleWorkspaceDatabase(db, moduleRoute.module.id, generation, principal.userId, capability));
+      } else if (moduleRoute.route.access === "setup") {
+        const principal = await requireRole(request, env, ["admin"]);
+        const generation = await requireModuleSetup(db, principal.userId, moduleRoute.module.id);
+        env = moduleScopedEnvironment(env, captureModuleSetupDatabase(db, moduleRoute.module.id, generation, principal.userId));
+      } else {
+        const generation = await requireModuleService(db, moduleRoute.module.id);
+        env = moduleScopedEnvironment(env, captureModuleServiceDatabase(db, moduleRoute.module.id, generation));
+      }
+    }
     if (request.method === "OPTIONS") result = new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "authorization, content-type", "access-control-allow-credentials": "true" } });
     else if (url.pathname === "/health" && request.method === "GET") result = response({ ok: true, service: "lancerlogin-api", mode: env.DB ? "ready" : "unconfigured", releaseVersion: env.RELEASE_VERSION ?? "development" });
     else if (url.pathname === "/setup/status" && request.method === "GET") result = await setupStatus(env);
@@ -3006,9 +3611,26 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/auth/session" && request.method === "GET") result = await authSession(request, env);
     else if (/^\/auth\/walkthroughs\/[^/]+$/.test(url.pathname) && ["GET", "PATCH"].includes(request.method)) result = await authWalkthrough(request, env, url.pathname.slice("/auth/walkthroughs/".length));
     else if (url.pathname === "/auth/preferences" && request.method === "PATCH") result = await authPreferences(request, env);
+    else if (url.pathname === "/admin/preferences" && ["GET", "PUT"].includes(request.method)) result = await adminPreferences(request, env);
     else if (url.pathname === "/auth/logout" && request.method === "POST") result = response({ ok: true }, 200, { "set-cookie": "lancerlogin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" });
     else if (url.pathname === "/auth/google/start" && request.method === "GET") result = await googleStart(request, env);
     else if (url.pathname === "/auth/google/callback" && request.method === "GET") result = await googleCallback(request, env);
+    else if (url.pathname === "/platform/modules" && request.method === "GET") result = await modulePlatform(request, env);
+    else if (url.pathname === "/admin/modules" && request.method === "PUT") result = await modulePlatform(request, env);
+    else if (/^\/admin\/modules\/[^/]+\/setup$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleSetup(request, env, decodeURIComponent(url.pathname.split("/")[3]));
+    else if (/^\/admin\/modules\/assignments\/[^/]+$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleAssignments(request, env, decodeURIComponent(url.pathname.split("/")[4]));
+    else if (url.pathname.startsWith("/module-setup/attendance/")) { const principal = await requireRole(request, env, ["admin"]); result = await attendanceSetupRoute(request, requireDatabase(env), principal.userId); }
+    else if (url.pathname.startsWith("/module-setup/hour-tracking/")) { const principal = await requireRole(request, env, ["admin"]); const routed = await outreachSetupRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
+    else if (url.pathname === "/module-setup/carpool/plan" && request.method === "POST") { const principal = await requireRole(request, env, ["admin"]); result = response(await createCarpoolPlan(requireDatabase(env), principal.userId, await parseJson(request)), 201); }
+    else if (url.pathname.startsWith("/public/hours/")) { const routed = await outreachPublicRoute(requireDatabase(env), request, env.ALLOWED_ORIGIN ?? url.origin, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
+    else if (url.pathname === "/admin/hours/public-form-settings") { const principal = await requireRole(request, env, ["admin"]); const routed = await publicFormSettingsRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
+    else if (url.pathname === "/admin/hours/publication-settings") { const principal = await requireRole(request, env, ["admin"]); const routed = await outreachPublicationRoute(requireDatabase(env), outreachPublicationProviders(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
+    else if (url.pathname === "/admin/hours/publications" || url.pathname === "/admin/hours/publication-providers" || /^\/admin\/hours\/activities\/[^/]+\/publication(?:\/|$)/.test(url.pathname)) { const principal = await requireRole(request, env, ["admin", "operator"]); const routed = await outreachPublicationRoute(requireDatabase(env), outreachPublicationProviders(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
+    else if (/^\/admin\/hours\/(reopen-windows|corrections)(?:\/|$)/.test(url.pathname)) { const principal = await requireRole(request, env, ["admin", "operator"]); const routed = await outreachReviewRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
+    else if (/^\/admin\/hours\/(context|member-choices|totals|entries)(?:\/|$)/.test(url.pathname)) { const principal = await requireRole(request, env, ["admin", "operator"]); if (request.method === "PATCH" && request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Participation edits require the dashboard origin"); const routed = await outreachEntryRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
+    else if (url.pathname.startsWith("/admin/hours/")) { const principal = await requireRole(request, env, ["admin", "operator"]); const routed = await outreachCatalogRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request), outreachPublicationProviders(env)); result = response(routed.body, routed.status); }
+    else if (url.pathname === "/admin/carpool/settings") { const principal = await requireRole(request, env, ["admin"]); result = response(await carpoolSettingsRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request), env.INTEGRATION_KEY, env.CARPOOL_GEOAPIFY_KEY)); }
+    else if (url.pathname.startsWith("/admin/carpool/")) { const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const meetingAccess = await createMeetingReferenceAccess(db, principal.userId); const geocoder = await readCarpoolGeocoder(db, env.INTEGRATION_KEY, env.CARPOOL_GEOAPIFY_KEY); const routed = await carpoolRoute(db, principal.userId, request, request.method === "GET" ? undefined : await parseJson(request, 2_000_000), geocoder, meetingAccess); result = response(routed.body, routed.status); }
     else if (url.pathname === "/admin/branding" && ["GET", "PATCH"].includes(request.method)) result = await branding(request, env);
     else if (url.pathname === "/meeting-weight-categories" && request.method === "GET") result = await listMeetingWeightCategories(request, env, false);
     else if (url.pathname === "/admin/meeting-weight-categories" && request.method === "GET") result = await listMeetingWeightCategories(request, env, true);
@@ -3026,12 +3648,29 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (/^\/labels\/targets\/[^/]+$/.test(url.pathname) && request.method === "DELETE") result = await labelTarget(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/labels\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateLabel(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (url.pathname === "/admin/members" && ["GET", "POST"].includes(request.method)) result = await members(request, env);
+    else if (url.pathname === "/admin/attendance/members" && request.method === "GET" || /^\/admin\/attendance\/members\/[^/]+$/.test(url.pathname) && request.method === "PATCH") { const principal = await requireRole(request, env, ["admin", "operator"]); result = await attendanceMemberSettings(request, requireDatabase(env), principal.userId, principal.role); }
     else if (url.pathname === "/admin/members/bulk/preview" && request.method === "POST") result = await bulkMemberStatus(request, env, false);
     else if (url.pathname === "/admin/members/bulk/apply" && request.method === "POST") result = await bulkMemberStatus(request, env, true);
     else if (/^\/admin\/members\/[^/]+\/history$/.test(url.pathname) && request.method === "GET") result = await memberHistory(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/members\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageMember(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/admin/pairing-codes" && ["GET", "POST"].includes(request.method)) result = await pairingCodes(request, env);
+    else if (url.pathname === "/admin/kiosks/fingerprint-review" || url.pathname.startsWith("/admin/kiosks/fingerprint-review/")) {
+      throw new HttpError(410, "Fingerprint identity review has been retired. Re-enroll fingerprints instead.");
+    }
+    else if (url.pathname === "/admin/kiosks/fingerprint-reset" || url.pathname.startsWith("/admin/kiosks/fingerprint-reset/")) {
+      const principal = await requireRole(request, env, ["admin"]);
+      result = await fingerprintResetRoute(request, { db: requireDatabase(env), actor: { kind: "admin", userId: principal.userId }, readJson: parseJson, respond: response });
+    }
+    else if (url.pathname === "/admin/kiosks/fingerprint-vault") {
+      const principal = await requireRole(request, env, ["admin"]);
+      result = await fingerprintVaultRoute(request, { db: requireDatabase(env), actor: { kind: "admin", userId: principal.userId }, secret: env.FINGERPRINT_VAULT_KEY, readJson: parseJson, respond: response });
+    }
+    else if (url.pathname === "/admin/kiosks/fingerprint-sync") {
+      const principal = await requireRole(request, env, ["admin"]);
+      result = await fingerprintRelayRoute(request, { db: requireDatabase(env), actor: { kind: "admin", userId: principal.userId }, readJson: parseJson, respond: response });
+    }
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
+    else if (url.pathname === "/admin/kiosks/authentication-method" && request.method === "PATCH") result = await kioskAuthenticationConfiguration(request, env);
     else if (/^\/admin\/kiosks\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageKiosk(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "POST") result = await queueKioskCommand(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "GET") result = await kioskCommandStatus(request, env, decodeURIComponent(url.pathname.split("/")[3]));
@@ -3084,6 +3723,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (/^\/admin\/integrations\/discord\/label-role-jobs\/[^/]+\/retry$/.test(url.pathname) && request.method === "POST") result = await discordLabelRetry(request, env, decodeURIComponent(url.pathname.split("/")[5]), context);
     else if (url.pathname === "/admin/users" && ["GET", "POST"].includes(request.method)) result = await users(request, env);
     else if (/^\/admin\/users\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateUser(request, env, decodeURIComponent(url.pathname.split("/")[3]));
+    else if (url.pathname === "/admin/scheduler" && request.method === "GET" || ["/admin/scheduler/start", "/admin/scheduler/stop"].includes(url.pathname) && request.method === "POST") result = await platformScheduler(request, env);
     else if (url.pathname === "/communications/email" && request.method === "POST") result = await sendAttendanceEmail(request, env);
     else if (url.pathname === "/discord/interactions" && request.method === "POST") result = await discordInteraction(request, env);
     else if (url.pathname === "/discord/link" && request.method === "POST") result = await linkDiscordMember(request, env);
@@ -3100,6 +3740,26 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/setup/reset" && request.method === "POST") result = await resetOnboarding(request, env);
     else if (url.pathname === "/admin/data" && request.method === "DELETE") result = await deleteData(request, env);
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
+    else if (url.pathname === "/kiosk/fingerprint-review" || url.pathname.startsWith("/kiosk/fingerprint-review/")) {
+      throw new HttpError(410, "Fingerprint identity review has been retired. Re-enroll fingerprints instead.");
+    }
+    else if (url.pathname === "/kiosk/fingerprint-reset" || url.pathname.startsWith("/kiosk/fingerprint-reset/")) {
+      if (await webUpdateMaintenance(env)) throw new HttpError(503, "Fingerprint reset is suspended during installation update recovery");
+      const kiosk = await kioskFor(request, env);
+      const credentialHash = await sha256(request.headers.get("authorization")!.slice(7));
+      result = await fingerprintResetRoute(request, { db: requireDatabase(env), actor: { kind: "kiosk", ...kiosk, credentialHash }, readJson: parseJson, respond: response });
+    }
+    else if (url.pathname === "/kiosk/fingerprint-vault" || url.pathname.startsWith("/kiosk/fingerprint-vault/")) {
+      if (await webUpdateMaintenance(env)) throw new HttpError(503, "Fingerprint cloud storage is suspended during installation update recovery");
+      const kiosk = await kioskFor(request, env);
+      const credentialHash = await sha256(request.headers.get("authorization")!.slice(7));
+      result = await fingerprintVaultRoute(request, { db: requireDatabase(env), actor: { kind: "kiosk", ...kiosk, credentialHash }, secret: env.FINGERPRINT_VAULT_KEY, readJson: parseJson, respond: response });
+    }
+    else if (url.pathname === "/kiosk/fingerprint-sync" || url.pathname.startsWith("/kiosk/fingerprint-sync/")) {
+      const kiosk = await kioskFor(request, env);
+      const credentialHash = await sha256(request.headers.get("authorization")!.slice(7));
+      result = await fingerprintRelayRoute(request, { db: requireDatabase(env), actor: { kind: "kiosk", ...kiosk, credentialHash }, readJson: parseJson, respond: response });
+    }
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env, context);
     else if (url.pathname === "/kiosk/config" && request.method === "GET") result = await kioskConfiguration(request, env);
     else if (url.pathname === "/kiosk/roster" && request.method === "GET") result = await kioskRoster(request, env);
@@ -3112,19 +3772,20 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     const detail = error instanceof HttpError ? error.details : env.APP_MODE === "unconfigured" && error instanceof Error ? [error.message] : undefined;
     result = response({ error: error instanceof HttpError || error instanceof WebUpdateError ? error.message : "Request failed", details: detail, ...(error instanceof WebUpdateError ? { code: error.code } : {}) }, status);
   }
+  if (url.pathname.startsWith("/public/hours/")) {
+    const headers = new Headers(result.headers); headers.set("cache-control", "no-store, private, max-age=0"); headers.set("pragma", "no-cache"); headers.set("expires", "0"); headers.set("x-robots-tag", "noindex, nofollow");
+    result = new Response(result.body, { status: result.status, headers });
+  }
   const measured = usage?.snapshot();
   if (measured && (measured.measuredRowsRead >= 100 || usageCategory(url.pathname) === "/reports")) console.log(JSON.stringify({ event: "d1_usage", category: usageCategory(url.pathname), status: result.status, ...measured }));
   return withCors(result, request, env);
 }, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
   if (await webUpdateMaintenance(env)) return;
+  const db = requireDatabase(env);
+  for (let pass = 0; pass < 8; pass += 1) { const cleanup = await runModuleCleanup(db); if (cleanup.status !== "progress") break; }
+  if (env.PLATFORM_SCHEDULER_MODE === "durable") return;
   if (controller.cron === "*/5 * * * *") {
-    try { await autoReconcileDiscordCommands(env); } catch { /* Command registration is retried without blocking attendance work. */ }
-    try { await processGoogleCalendarOperations(env); } catch { /* Google Calendar delivery retries safely on the next scheduled pass. */ }
-    try { await processDiscordCalendarOperations(env); } catch { /* Discord Calendar delivery retries safely on the next scheduled pass. */ }
-    try { await syncDiscordManagedSurface(env); } catch { /* Discord channel management is best-effort and retries on the next scheduled pass. */ }
-    try { await processDiscordAttendanceNotifications(env); } catch { /* Discord attendance delivery retries safely on the next scheduled pass. */ }
-    try { await processDiscordAnomalyReports(env); } catch { /* Discord anomaly reports retry safely on the next scheduled pass. */ }
-    try { await processDiscordLabelRoleJobs(env); } catch { /* Manual role sync jobs resume on the next scheduled pass. */ }
-  } else try { await syncDiscordManagedSurface(env); } catch { /* Discord status is best-effort and cannot affect kiosk operation. */ }
+    for (const job of registeredPlatformSchedulerJobs) try { if (await job.enabled?.(env) !== false) await job.run(env); } catch { /* Each registered job retries independently on the next scheduled pass. */ }
+  }
 } };
 export default worker;

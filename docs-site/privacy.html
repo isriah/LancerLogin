@@ -17,18 +17,25 @@
     <li>Organization configuration, users, roster, meetings, attendance, corrections, and audit records in your D1 database</li>
     <li>Encrypted integration credentials in D1; saved values are never displayed</li>
     <li>Sensor slot-to-member mapping, queued events, and pairing material locally on the Pi</li>
-    <li>Fingerprint templates exclusively inside the R503 sensor</li>
+    <li>Fingerprint templates inside the R503 by default; optional sharing boundaries are described below</li>
   </ul>
   <h2>Private installation data</h2>
   <ul class="privacy-list never">
     <li>Organization name</li>
     <li>Roster or personal names</li>
     <li>Attendance records</li>
-    <li>Fingerprint templates or raw scans</li>
+    <li>Biometric-related data remains sensitive even when encrypted; raw fingerprint images are never captured or uploaded</li>
     <li>Raw IP address</li>
   </ul>
   <h2>Community telemetry retirement</h2>
   <p>LancerLogin does not collect or transmit Community telemetry. Historical database fields remain inert for backup compatibility.</p>
+  <h2>Optional fingerprint sharing</h2>
+  <p>Peer sync is off by default. Installation opt-in and local PIN-authorized comparison of peer device identities allow eligible new templates to be encrypted for the destination kiosk. The relay cannot decrypt those peer messages. Disabling sync is not remote erasure.</p>
+  <p>Separate <strong>Fingerprint cloud storage</strong> is Admin-controlled and off by default. The server manages a separate 32-byte encryption key and can decrypt retained templates for authorized paired kiosks. New kiosks can receive verified enrollments while all prior kiosks are offline. This is not end-to-end private from the server. Plaintext is present briefly in memory, not intentionally stored in D1, files or logs.</p>
+  <p>Cloud uploads require immutable roster identity. Older or offline mappings without that binding require re-enrollment before sharing; unknown sensor slots are untouched and imports do not overwrite occupied slots. Legacy review approvals are retired, and their cloud copies cannot supply sharing authority. Cloud copies remain until the member is deactivated or their ID changes, storage or Attendance is disabled, or the installation is restored. Source-kiosk retirement and local mapping removal do not erase retained cloud copies or other readers.</p>
+  <p>Portable dashboard backups exclude fingerprint sharing authority and templates. Infrastructure exports and Pi-state backups are sensitive and may retain deleted information. Preserve the original vault key independently for authorized infrastructure recovery; changing it cannot decrypt existing ciphertext. Review every reader when withdrawing access. See the <a href="kiosk.html">kiosk guide</a> and maintained source privacy, security and backup guides before enabling either option.</p>
+  <h2>Re-enrollment and mappings reset</h2>
+  <p>Re-enroll older fingerprints through PIN-protected Authentication maintenance while a kiosk is online. An explicit Admin mappings reset disables sharing and requests association removal on active paired kiosks, without erasing reader templates, attendance, pairing or other authentication mappings. Offline kiosks retain old associations until reconnect and acknowledgement. Historical backups can retain retired review metadata; never restore it as active authority.</p>
   <h2>Deletion and incident contact</h2>
   <p>Data remains in the adopter-owned installation until an Admin deletes it. Exporting creates a copy and does not remove stored records. Use the Data settings page for backup and deletion controls.</p>
   <p>Send privacy and security questions to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. Community support is best-effort without an SLA.</p>

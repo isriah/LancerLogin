@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { attendanceSetupState, attendanceSnapshot } from "./module-fixtures";
 
 type Progress = { pageId: string; version: number; status: string; stepId: string | null };
 async function account(page: Page, state: { progress: Progress; fail?: boolean }, role = "admin", debugMode = false) {
@@ -22,7 +23,7 @@ test("first visit, defer, resume, and permanent dismissal follow the account", a
   await panel(page).getByRole("button", { name: "Not now" }).click();
   await expect(panel(page)).toHaveCount(0);
   await page.getByRole("link", { name: "Roster", exact: true }).click();
-  await page.getByRole("link", { name: "Dashboard", exact: true }).click();
+  await page.getByRole("link", { name: "Meetings", exact: true }).click();
   await panel(page).getByRole("button", { name: "Start walkthrough" }).click();
   await next(page); await next(page);
   await expect(panel(page)).toContainText("Step 3 of 10");
@@ -172,7 +173,7 @@ test("queued progress writes stop when the Dashboard unmounts", async ({ page })
   await expect(page.getByRole("heading", { name: "Roster", exact: true })).toBeVisible();
   const finished = page.waitForResponse((response) => response.url().endsWith("/auth/walkthroughs/dashboard") && response.request().method() === "PATCH");
   releaseSave(); await finished;
-  await page.getByRole("link", { name: "Dashboard", exact: true }).click();
+  await page.getByRole("link", { name: "Meetings", exact: true }).click();
   await expect(panel(page)).toBeVisible();
   expect(writes).toEqual(["navigation"]);
 });
@@ -196,9 +197,10 @@ test("invitation waits for a successful page load and leaves a real draft untouc
 
 test("setup and a pending Undo take precedence over the invitation", async ({ page }) => {
   await account(page, fresh());
-  await page.route("**/admin/setup/progress", (route) => route.fulfill({ json: { completedSteps: [] } }));
-  await page.goto("/dashboard"); await expect(page.getByRole("heading", { name: "Guided setup", exact: true })).toBeVisible(); await expect(panel(page)).toHaveCount(0);
-  await page.unroute("**/admin/setup/progress");
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot({ setupReady: false }) }));
+  await page.route("**/admin/modules/attendance/setup", (route) => route.fulfill({ json: attendanceSetupState() }));
+  await page.goto("/dashboard"); await expect(page.getByRole("heading", { name: "Set up Attendance", exact: true })).toBeVisible(); await expect(panel(page)).toHaveCount(0);
+  await page.unroute("**/platform/modules"); await page.unroute("**/admin/modules/attendance/setup");
   await page.clock.install();
   await page.addInitScript(() => sessionStorage.setItem("lancerlogin-pending-meeting-deletion", JSON.stringify({ meetingId: "synthetic", title: "Sample meeting", scope: "occurrence", createdAt: Date.now() })));
   await page.goto("/dashboard"); await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeVisible(); await expect(panel(page)).toHaveCount(0);

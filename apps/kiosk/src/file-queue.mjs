@@ -106,6 +106,7 @@ export function createFileQueue(path) {
         if (result?.rejected) {
           updated.rejected.push({ eventId: event.eventId, memberId: event.memberId, occurredAt: event.occurredAt,
             ...(event.meetingId ? { meetingId: event.meetingId } : {}),
+            ...(event.pairingId ? { pairingId: event.pairingId } : {}),
             httpStatus: Number.isInteger(result.status) ? result.status : null,
             reasonCode: /^[a-z][a-z0-9_]{0,39}$/.test(result.code ?? "") ? result.code : "unclassified",
             reviewStatus: "open" });

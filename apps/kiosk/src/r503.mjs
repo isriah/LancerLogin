@@ -49,6 +49,18 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
       const count = requireSuccess(await send(0x1d), "template count");
       return { connected: true, templateCount: ((count[0] ?? 0) << 8) | (count[1] ?? 0) };
     },
+    async occupiedSlots() {
+      const occupied = [];
+      for (let page = 0; page < Math.ceil(capacity / 256); page += 1) {
+        const index = requireSuccess(await send(0x1f, [page]), "slot availability check");
+        if (index.length !== 32) throw new Error("The reader could not verify occupied slots. Test the reader before enrolling.");
+        for (let offset = 0; offset < 256; offset += 1) {
+          const slot = page * 256 + offset;
+          if (slot < capacity && (index[Math.floor(offset / 8)] & (1 << (offset % 8)))) occupied.push(slot);
+        }
+      }
+      return occupied;
+    },
     async scan() {
       const image = await send(0x01); if (image.confirmation === 0x02) return { status: "no_finger" }; requireSuccess(image, "image capture");
       requireSuccess(await send(0x02, [0x01]), "image conversion");
@@ -61,8 +73,9 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
     async led({ color = 2, mode = 3, speed = 64, cycles = 0 } = {}) {
       requireSuccess(await send(0x35, [mode, speed, color, cycles]), "LED control");
     },
-    async enroll(slot, { attempts = 60, delayMs = 250, onProgress = async () => undefined } = {}) {
+    async enroll(slot, { attempts = 60, delayMs = 250, onProgress = async () => undefined, replaceExisting = false } = {}) {
       if (!Number.isInteger(slot) || slot < 0 || slot >= capacity) throw new Error(`R503 slot must be between 0 and ${capacity - 1}`);
+      if ((await reader.occupiedSlots()).includes(slot) && replaceExisting !== true) throw new Error(`Sensor slot ${slot} already contains a fingerprint. Confirm replacement or choose an empty slot.`);
       const capture = async (buffer) => {
         for (let attempt = 0; attempt < attempts; attempt += 1) {
           const image = await send(0x01);

@@ -12,14 +12,23 @@ import { createHash } from "node:crypto";
 class Database {
   sqlite = new DatabaseSync(":memory:");
   constructor() {
-    for (const name of readdirSync("apps/api/migrations").sort()) this.sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
-    this.sqlite.exec("INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-01-01','local'); INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-01-01'),('operator','primary','operator','operator','2026-01-01'); INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');");
+    const seed = () => this.sqlite.exec("INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-01-01','local'); INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-01-01'),('operator','primary','operator','operator','2026-01-01'); INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');");
+    let seeded = false;
+    for (const name of readdirSync("apps/api/migrations").sort()) {
+      if (name === "0039_module_platform.sql") { seed(); seeded = true; }
+      this.sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
+    }
+    if (!seeded) seed();
   }
   prepare(sql: string) { let values: unknown[] = []; const database = this.sqlite; return {
     bind(...params: unknown[]) { values = params; return this; },
     async first<T = unknown>() { return (database.prepare(sql).get(...values as []) ?? null) as T | null; },
     async all<T = unknown>() { return { results: database.prepare(sql).all(...values as []) as T[] }; },
-    async run() { const result = database.prepare(sql).run(...values as []); return { meta: { changes: Number(result.changes) } }; },
+    async run() {
+      const statement = database.prepare(sql);
+      if (statement.columns().length) return { results: statement.all(...values as []), meta: { changes: 0 } };
+      const result = statement.run(...values as []); return { meta: { changes: Number(result.changes) } };
+    },
   }; }
   async batch(statements: Array<{ run(): Promise<unknown> }>) { this.sqlite.exec("BEGIN"); try { const results = []; for (const statement of statements) results.push(await statement.run()); this.sqlite.exec("COMMIT"); return results; } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; } }
 }

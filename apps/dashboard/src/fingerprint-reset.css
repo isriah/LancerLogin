@@ -1,0 +1,6 @@
+.fingerprint-reset-panel { min-width: 0; }
+.fingerprint-reset-panel .kiosk-actions { margin: 0; align-items: center; }
+.fingerprint-reset-panel p,.fingerprint-reset-panel h2,.fingerprint-reset-panel h3 { margin: 0; }
+.dialog-backdrop > .fingerprint-reset-dialog[role="dialog"] { width: min(38rem,100%); max-height: calc(100dvh - 2 * var(--space-6)); overflow: auto; padding: var(--space-6); }
+.fingerprint-reset-dialog p,.fingerprint-reset-dialog h2 { margin: 0; }
+.fingerprint-reset-dialog label { display: grid; gap: var(--space-2); }

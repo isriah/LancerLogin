@@ -11,6 +11,10 @@ export const walkthroughs = {
     version: 1,
     steps: ["profile", "labels", "attendance-policy", "history", "member-actions"],
   },
+  outreach: {
+    version: 1,
+    steps: ["activities", "member-submissions", "submission-log", "corrections", "manual-entry", "reports-handoff"],
+  },
   reports: {
     version: 1,
     steps: ["tabs", "filters", "leaderboard", "trend", "report-builder", "report-actions"],

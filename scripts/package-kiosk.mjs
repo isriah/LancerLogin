@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const kioskArchitectures = ["arm64", "armv7"];
@@ -36,6 +37,58 @@ async function normalizePackageModes(directory) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) await normalizePackageModes(path);
     else await chmod(path, entry.name.endsWith(".sh") ? 0o755 : 0o644);
+  }
+}
+
+function* archiveEntries(tar) {
+  let offset = 0;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every(byte => byte === 0)) {
+      if (!tar.subarray(offset).every(byte => byte === 0)) throw new Error("Invalid kiosk archive terminator");
+      return;
+    }
+    const field = (start, length) => header.subarray(start, start + length).toString("utf8").replace(/\0.*$/s, "").trim();
+    const octal = (start, length) => {
+      const value = field(start, length);
+      if (!/^[0-7]+$/.test(value)) throw new Error("Invalid kiosk archive numeric field");
+      const result = Number.parseInt(value, 8);
+      if (!Number.isSafeInteger(result)) throw new Error("Oversized kiosk archive entry");
+      return result;
+    };
+    if (field(257, 6) !== "ustar") throw new Error("Kiosk archives require the portable ustar format");
+    const sum = header.reduce((total, byte, index) => total + (index >= 148 && index < 156 ? 32 : byte), 0);
+    if (octal(148, 8) !== sum) throw new Error("Invalid kiosk archive header checksum");
+    const name = [field(345, 155), field(0, 100)].filter(Boolean).join("/");
+    const path = name.replace(/^\.\//, "").replace(/\/$/, "") || ".";
+    if (path.startsWith("/") || path.includes("\\") || path.split("/").includes("..")) throw new Error("Unsafe kiosk archive path");
+    const type = header[156];
+    if (![0, 48, 53].includes(type)) throw new Error(`Unsupported kiosk archive entry type: ${path}`);
+    const size = octal(124, 12);
+    const next = offset + 512 + Math.ceil(size / 512) * 512;
+    if (next > tar.length || (type === 53 && size !== 0)) throw new Error("Truncated kiosk archive entry");
+    yield { header, path, mode: octal(100, 8), expectedMode: type === 53 || path.endsWith(".sh") ? 0o755 : 0o644 };
+    offset = next;
+  }
+  throw new Error("Missing kiosk archive terminator");
+}
+
+// Windows chmod cannot assign POSIX directory/execute bits. Set and verify
+// the actual tar headers instead of relying on host filesystem metadata.
+export async function writeKioskArchive(directory, path) {
+  const tar = execFileSync("tar", ["--format=ustar", "-cf", "-", "-C", directory, "."], { stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+  for (const { header, expectedMode } of archiveEntries(tar)) {
+    header.write(`${expectedMode.toString(8).padStart(7, "0")}\0`, 100, 8, "ascii");
+    header.fill(32, 148, 156);
+    const sum = header.reduce((total, byte) => total + byte, 0);
+    header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, 8, "ascii");
+  }
+  await writeFile(path, gzipSync(tar));
+}
+
+export function checkKioskArchiveModes(archive) {
+  for (const { path, mode, expectedMode } of archiveEntries(gunzipSync(archive))) {
+    if (mode !== expectedMode) throw new Error(`Unsafe kiosk artifact mode: ${path} must be ${expectedMode.toString(8)}`);
   }
 }
 
@@ -89,6 +142,7 @@ export async function verifyKioskArtifacts({ artifacts, version, requireUnprivil
   for (const arch of kioskArchitectures) {
     const name = `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`;
     await checkChecksum(artifacts, name);
+    checkKioskArchiveModes(await readFile(join(artifacts, name)));
     const extracted = await mkdtemp(join(tmpdir(), "lancerlogin-kiosk-extracted-"));
     try {
       execFileSync("tar", ["-xzf", join(artifacts, name), "-C", extracted], { stdio: "pipe" });
@@ -129,7 +183,7 @@ export async function packageKioskArtifacts({ output, version, sourceRoot = repo
     await normalizePackageModes(staging);
     for (const arch of kioskArchitectures) {
       const name = `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`;
-      execFileSync("tar", ["-czf", join(artifacts, name), "-C", staging, "."], { stdio: "pipe" });
+      await writeKioskArchive(staging, join(artifacts, name));
       await writeChecksum(artifacts, name);
     }
     const installer = (await readFile(join(kiosk, "scripts/install-lancerlogin.sh"), "utf8")).replace(/^VERSION=.*$/m, `VERSION="\${LANCERLOGIN_VERSION:-${version}}"`).replaceAll("\r\n", "\n");

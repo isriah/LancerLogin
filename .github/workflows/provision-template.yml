@@ -253,6 +253,8 @@ jobs:
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: lancerlogin-source
           command: deploy --config .provision/wrangler.json
+      - name: Prepare or retain the separate fingerprint storage key
+        run: node scripts/ensure-fingerprint-vault-key.mjs
       - name: Install or refresh the private dispatch credential without rotating installation secrets
         run: node scripts/refresh-web-update-credential.mjs
       - name: Select Worker deployment URL

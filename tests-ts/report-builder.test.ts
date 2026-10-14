@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { evaluateAttendance, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember } from "../apps/api/src/attendance-policy.ts";
-import { buildReportRows, defaultReportDefinition, resolveReportPeriod, validateReportDefinition, type ReportDefinition } from "../apps/api/src/report-builder.ts";
+import { buildReportRows, combinedMemberDataset, defaultReportDefinition, formatReportCellForColumn, reportColumnLabel, reportFieldSourceDataset, reportFilterSourceDataset, resolveReportPeriod, validateReportDefinition, type ReportDefinition } from "../apps/api/src/report-builder.ts";
 
 const labels: PolicyLabel[] = [{ id: "class", name: "Class", active: 1, formulaEnabled: 0 }, { id: "team", name: "Team", active: 1, formulaEnabled: 0 }];
 const members: PolicyMember[] = [
@@ -29,6 +29,68 @@ test("report definitions validate periods, selected columns, and missing label r
   assert.match(validateReportDefinition(missing, labels).errors.join(" "), /unknown label/);
   const restored = validateReportDefinition(missing, labels, { allowMissingLabels: true });
   assert.equal(restored.definition?.labelIds[0], "removed"); assert.match(restored.warnings.join(" "), /no longer available/);
+});
+
+test("Outreach duration units default and upgrade member reports to hours while other durations stay in minutes", () => {
+  const current = defaultReportDefinition(false, "outreach.members");
+  assert.deepEqual(current.columns.find((column) => column.key === "outreach.member.minutes"), { key: "outreach.member.minutes", unit: "hours" });
+  assert.equal(reportColumnLabel(current.columns[1]!, new Map()), "Outreach hours");
+  assert.deepEqual(formatReportCellForColumn(current.columns[1]!, { text: "70", sortValue: 70 }), { text: "1.17", sortValue: 1.17 });
+
+  const existing = structuredClone(current);
+  delete existing.columns[1]!.unit;
+  const upgraded = validateReportDefinition(existing, labels).definition!;
+  assert.deepEqual(upgraded.columns[1], { key: "outreach.member.minutes", unit: "hours" });
+  assert.deepEqual(formatReportCellForColumn(upgraded.columns[1]!, { text: "70", sortValue: 70 }), { text: "1.17", sortValue: 1.17 });
+
+  const existingActivity = defaultReportDefinition(false, "outreach.activities");
+  delete existingActivity.columns.find((column) => column.key === "outreach.activity.minutes")!.unit;
+  assert.equal(validateReportDefinition(existingActivity, labels).definition?.columns.find((column) => column.key === "outreach.activity.minutes")?.unit, "minutes");
+
+  const invalidUnit = structuredClone(current); invalidUnit.columns[1]!.unit = "seconds" as "hours";
+  assert.match(validateReportDefinition(invalidUnit, labels).errors.join(" "), /columns are invalid/i);
+  const unsupportedUnit = defaultReportDefinition(false, "core.members"); unsupportedUnit.columns[0]!.unit = "hours";
+  assert.match(validateReportDefinition(unsupportedUnit, labels).errors.join(" "), /columns are invalid/i);
+});
+
+test("Outreach report definitions normalize legacy category fields and additive label filters", () => {
+  const existing = defaultReportDefinition(false, "outreach.activities") as unknown as Record<string, unknown>;
+  delete existing.outreachLabelIds; delete existing.outreachLabelMatch;
+  existing.columns = (existing.columns as Array<{ key: string }>).map((column) => column.key === "outreach.activity.labels" ? { key: "outreach.activity.category" } : column);
+  existing.groupBy = (existing.groupBy as string[]).map((field) => field === "outreach.activity.labels" ? "outreach.activity.category" : field);
+  const normalized = validateReportDefinition(existing, labels, { outreachLabels: [{ id: "food" }] });
+  assert.deepEqual(normalized.errors, []); assert.deepEqual(normalized.definition?.outreachLabelIds, []); assert.equal(normalized.definition?.outreachLabelMatch, "any");
+  assert.equal(normalized.definition?.columns.some((column) => column.key === "outreach.activity.labels"), true);
+  assert.equal(normalized.definition?.groupBy.includes("outreach.activity.labels"), true);
+
+  const selected = { ...normalized.definition!, outreachLabelIds: ["food"], outreachLabelMatch: "all" as const };
+  assert.deepEqual(validateReportDefinition(selected, labels, { outreachLabels: [{ id: "food" }] }).errors, []);
+  assert.match(validateReportDefinition({ ...selected, outreachLabelIds: ["removed"] }, labels, { outreachLabels: [{ id: "food" }] }).errors.join(" "), /unknown Outreach label/);
+});
+
+test("combined member reports derive module measures through declared Core member relationships", () => {
+  assert.deepEqual(combinedMemberDataset.defaultColumns, ["core.member.name", "attendance.member.regular-rate", "outreach.member.minutes"]);
+  const definition = defaultReportDefinition(false, combinedMemberDataset.id);
+  const validated = validateReportDefinition(definition, labels);
+  assert.deepEqual(validated.errors, []);
+  assert.equal(reportFieldSourceDataset(combinedMemberDataset.id, "core.member.name"), "core.members");
+  assert.equal(reportFieldSourceDataset(combinedMemberDataset.id, "attendance.member.regular-rate"), "attendance.members");
+  assert.equal(reportFieldSourceDataset(combinedMemberDataset.id, "outreach.member.minutes"), "outreach.members");
+  assert.equal(reportFilterSourceDataset(combinedMemberDataset.id, "roster"), "core.members");
+  assert.equal(reportFilterSourceDataset(combinedMemberDataset.id, "meeting-type"), "attendance.members");
+  assert.equal(reportFilterSourceDataset(combinedMemberDataset.id, "membership"), "attendance.members");
+  assert.equal(reportFilterSourceDataset(combinedMemberDataset.id, "period"), undefined);
+  assert.equal(reportFilterSourceDataset(combinedMemberDataset.id, "outreach-labels"), "outreach.members");
+});
+
+test("version 1 report definitions normalize to namespaced version 2 fields without changing semantics", () => {
+  const legacy = { version: 1, period: { type: "current_month" }, roster: "all", meetingType: "required", labelIds: ["class"], labelMatch: "all", membership: "historical", columns: [{ key: "member" }, { key: "regular_attendance" }, { key: "official_policy_status", labelId: "class" }], columnFilters: [{ column: { key: "regular_attendance" }, operator: "minimum", value: "70" }], sort: { column: { key: "regular_attendance" }, direction: "desc" } };
+  const normalized = validateReportDefinition(legacy, labels).definition;
+  assert.equal(normalized?.version, 2); assert.equal(normalized?.dataset, "attendance.members"); assert.deepEqual(normalized?.groupBy, ["core.member.identity"]);
+  assert.deepEqual(normalized?.columns, [{ key: "core.member.name" }, { key: "attendance.member.regular-rate" }, { key: "attendance.policy.official-status", labelId: "class" }]);
+  assert.deepEqual(normalized?.columnFilters, [{ column: { key: "attendance.member.regular-rate" }, operator: "minimum", value: "70" }]);
+  assert.deepEqual(normalized?.sort, { column: { key: "attendance.member.regular-rate" }, direction: "desc" });
+  assert.equal(normalized?.roster, "all"); assert.equal(normalized?.meetingType, "required"); assert.equal(normalized?.membership, "historical");
 });
 
 test("report column filters validate against visible columns and filter before sorting", () => {
@@ -148,5 +210,7 @@ test("walkthrough example works with an empty label catalog and a reusable month
   assert.deepEqual(definition.period, { type: "current_month" });
   assert.equal(definition.roster, "active");
   assert.equal(definition.membership, "current");
-  assert.ok(definition.columns.some((column) => column.key === "report_policy_summary"));
+  assert.equal(definition.version, 2);
+  assert.equal(definition.dataset, "attendance.members");
+  assert.ok(definition.columns.some((column) => column.key === "attendance.policy.report-summary"));
 });

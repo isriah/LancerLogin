@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { expectDashboardTypography } from "./dashboard-typography";
 import { discovered } from "./release-discovery";
+import { attendanceSnapshot, carpoolSnapshot, outreachSnapshot } from "./module-fixtures";
 
 const settings = {
   organizationName: "Reference Arts Collective",
@@ -24,11 +25,12 @@ const routes = [
   ["/settings/access", "Dashboard access"],
   ["/settings/integrations", "Integrations"],
   ["/settings/data", "Data management"],
-  ["/settings/guided-setup", "Guided Setup"],
+  ["/settings/guided-setup", "Attendance Setup"],
   ["/settings/updates", "Updates"],
 ] as const;
 
 async function useSettingsContext(page: Page, role: "admin" | "operator" = "admin") {
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot() }));
   await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: true, installation: { authMode: "local" }, settings }) }));
   await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { id: `${role}-1`, role, debugMode: false } }) }));
   await page.route("**/admin/setup/progress", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }) }));
@@ -139,6 +141,47 @@ test("Settings keeps navigation and user controls together and persists Debug mo
   await expect(description).toBeHidden();
   await page.locator(".configuration-grid label").first().locator(".info-tip-glyph").hover();
   await expect(description).toBeVisible();
+});
+
+test("Settings links directly to single-page modules and nests Attendance", async ({ page }) => {
+  await useSettingsContext(page);
+  const snapshot = attendanceSnapshot(); snapshot.modules[1] = outreachSnapshot().modules[1]!; snapshot.modules[2] = carpoolSnapshot().modules[2]!;
+  snapshot.capabilities = snapshot.modules.flatMap(module => module.effectiveCapabilities);
+  await page.route("**/platform/modules", route => route.fulfill({ json: snapshot }));
+  await page.goto("/settings/organization");
+  const modules = page.getByRole("button", { name: "Modules", exact: true }); await modules.click();
+  const menu = page.getByRole("group", { name: "Module settings" });
+  const attendance = menu.getByRole("button", { name: "Attendance", exact: true }); await expect(attendance).toHaveAttribute("aria-expanded", "false");
+  const outreach = menu.getByRole("link", { name: "Outreach", exact: true }); const carpool = menu.getByRole("link", { name: "Carpool", exact: true });
+  await expect(outreach).toHaveAttribute("href", "/settings/outreach-setup"); await expect(carpool).toHaveAttribute("href", "/settings/carpool");
+  await attendance.focus(); await page.keyboard.press("Enter"); await expect(menu.getByRole("link", { name: "Attendance Setup" })).toBeVisible();
+  await expect(menu.getByRole("link", { name: "Kiosk Simulator" })).toHaveCount(0);
+  await attendance.click(); await expect(menu.getByRole("link", { name: "Attendance Setup" })).toBeHidden(); await expect(outreach).toBeVisible(); await expect(carpool).toBeVisible();
+  await page.keyboard.press("Escape"); await expect(modules).toBeFocused();
+});
+
+for (const width of [1280, 390]) test(`Modules disclosure dismisses without obscuring settings at ${width}`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await useSettingsContext(page);
+  await page.goto("/settings/configuration");
+  const modules = page.getByRole("button", { name: "Modules", exact: true });
+  const menu = page.getByRole("group", { name: "Module settings" });
+  await expect(modules).toHaveAttribute("aria-expanded", "false");
+  await modules.click();
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expect(modules).toBeFocused();
+  await modules.click();
+  await menu.getByRole("link", { name: "Meeting configuration", exact: true }).click();
+  await expect(menu).toBeHidden();
+  await modules.click();
+  await page.locator(".settings-toolbar").getByRole("switch", { name: "Dark mode", exact: true }).click();
+  await expect(menu).toBeHidden();
+  await modules.click();
+  await menu.getByRole("link", { name: "Attendance settings", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\/attendance$/);
+  await expect(menu).toBeHidden();
 });
 
 test("information tips use hover and keyboard focus on desktop but toggle on touch", async ({ page, browser }) => {
@@ -329,7 +372,12 @@ for (const viewport of dashboardConformanceReferences.viewports) {
         await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
         await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
         await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
+        if (["/settings/configuration", "/settings/guided-setup"].includes(path)) {
+          await expect(page.locator(".settings-module-disclosure")).toHaveAttribute("data-active", "true");
+          await page.getByRole("button", { name: "Modules", exact: true }).click();
+        }
         await expect(page.getByRole("navigation", { name: "Settings categories" }).getByRole("link", { name: heading === "Dashboard access" ? "Access" : heading === "Data management" ? "Data" : heading })).toHaveAttribute("aria-current", "page");
+        if (["/settings/configuration", "/settings/guided-setup"].includes(path)) await page.getByRole("button", { name: "Modules", exact: true }).click();
         const controls = page.locator("main button:visible, main a.primary-button:visible, main input:not([type='radio']):not([type='checkbox']):visible, main select:visible, main label:has(input[type='radio']:visible), main label:has(input[type='checkbox']:visible)");
         for (const height of await controls.evaluateAll((items) => items.map((item) => item.getBoundingClientRect().height))) expect(height).toBeGreaterThanOrEqual(44);
         await expectResponsiveFit(page);
@@ -522,7 +570,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       const reconcile = card.getByRole("button", { name: "Reconcile Discord commands" });
       await reconcile.focus(); await expect(reconcile).toBeFocused(); expect((await reconcile.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await page.keyboard.press("Enter");
-      await expect(card.getByRole("status").filter({ hasText: "Discord commands were reconciled" })).toContainText("/pair, /attendance-report, and /label are ready");
+      await expect(card.getByRole("status").filter({ hasText: "Discord commands were reconciled" })).toContainText("Core and Outreach commands are ready in the configured server");
       await expect(reconcile).toBeEnabled();
       await reconcile.click();
       const failure = card.getByRole("alert"); await expect(failure).toContainText("Discord denied command management"); await expect(failure).toBeFocused();

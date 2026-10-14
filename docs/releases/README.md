@@ -4,9 +4,12 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 > Release notes record what was true when a version shipped. For current procedures, use the linked guide rather than applying older transition steps out of context.
 
-- [v1.2.5](v1.2.5.md) - Reliable Discord absence notices for large recipient lists
+- [v2.0.0-beta.3](v2.0.0-beta.3.md) - Outreach activity management and Carpool workflow improvements
+- [v2.0.0-beta.2](v2.0.0-beta.2.md) - Preserve inactive periods in attendance reporting
+- [v2.0.0-beta.1](v2.0.0-beta.1.md) - Optional modules, multiple kiosks and Beta updates
 - [v1.2.6](v1.2.6.md) - Stable and Beta update tracks with a Community upgrade bridge
-- [v1.2.4](v1.2.4.md) - Reliable updates, current release notes, and accurate reload prompts
+- [v1.2.5](v1.2.5.md) - Reliable Discord absence notices for large rosters
+- [v1.2.4](v1.2.4.md) - Correct release notes and completed update notices
 - [v1.2.3](v1.2.3.md) - Reliable release checks with small clock differences
 - [v1.2.2](v1.2.2.md) - Page walkthroughs, member-history actions, and report fixes
 - [v1.2.1](v1.2.1.md) - More efficient attendance reporting and dashboard refreshes

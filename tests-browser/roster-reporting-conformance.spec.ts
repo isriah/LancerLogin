@@ -1,5 +1,6 @@
 import { expect,test,type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
+import { attendanceSnapshot } from "./module-fixtures";
 
 type Role="admin"|"operator";
 
@@ -22,29 +23,25 @@ const roster=[
 ];
 
 const reportColumns=[
-  { key: "member",label: "Member",group: "Roster",sortable: true,filterKind: "text" as const },
-  { key: "member_id",label: "Member ID",group: "Roster",sortable: true,filterKind: "text" as const },
-  { key: "email",label: "Email",group: "Roster",sortable: true,filterKind: "text" as const },
-  { key: "discord_id",label: "Discord ID",group: "Roster",sortable: true,filterKind: "text" as const },
-  { key: "active_status",label: "Roster status",group: "Roster",sortable: true,filterKind: "text" as const },
-  { key: "current_labels",label: "Current labels",group: "Roster",sortable: false,filterKind: "text" as const },
-  { key: "attendance_required_from",label: "Attendance starts",group: "Roster",sortable: true,filterKind: "text" as const },
-  { key: "regular_attendance",label: "Regular attendance",group: "Regular attendance",sortable: true,filterKind: "number" as const },
-  { key: "regular_weighted_present",label: "Regular weighted present",group: "Regular attendance",sortable: true,filterKind: "number" as const },
-  { key: "regular_weighted_eligible",label: "Regular weighted eligible",group: "Regular attendance",sortable: true,filterKind: "number" as const },
-  { key: "regular_period",label: "Regular reporting period",group: "Regular attendance",sortable: false,filterKind: "text" as const },
-  { key: "assigned_policies",label: "Assigned policies",group: "Policies",sortable: false,filterKind: "text" as const },
-  { key: "policy_history",label: "Policy history",group: "Policies",sortable: false,filterKind: "text" as const },
-  { key: "present_count",label: "Present count",group: "Attendance detail",sortable: true,filterKind: "number" as const },
-  { key: "present_dates",label: "Present dates",group: "Attendance detail",sortable: false,filterKind: "text" as const },
-  { key: "absent_count",label: "Absent count",group: "Attendance detail",sortable: true,filterKind: "number" as const },
-  { key: "absent_dates",label: "Absent dates",group: "Attendance detail",sortable: false,filterKind: "text" as const },
-  { key: "excused_count",label: "Excused count",group: "Attendance detail",sortable: true,filterKind: "number" as const },
-  { key: "excused_dates",label: "Excused dates",group: "Attendance detail",sortable: false,filterKind: "text" as const },
-  ...["official_policy_result","official_policy_status","official_policy_target","official_policy_type","official_policy_excused","official_policy_period","report_policy_result","report_policy_status","report_policy_target","report_policy_period"].map((key) => ({ key,label: key.replaceAll("_"," "),group: "Policies",sortable: !key.endsWith("period"),filterKind: key.endsWith("result")||key.endsWith("target") ? "number" as const : "text" as const,requiresLabel: true })),
-  { key: "report_policy_summary",label: "Report-period policies",group: "Policies",sortable: false,filterKind: "text" as const },
-];
-const defaultReportDefinition={ version: 1 as const,period: { type: "all" as const },roster: "active" as const,meetingType: "all" as const,labelIds: [] as string[],labelMatch: "any" as const,membership: "current" as const,columns: [{ key: "member" },{ key: "regular_attendance" },{ key: "assigned_policies" }],columnFilters: [] as { column: { key: string; labelId?: string }; operator: "contains"|"minimum"; value: string }[],sort: { column: { key: "member" },direction: "asc" as const } };
+  { key: "core.member.name",label: "Member",group: "Roster",sortable: true,filterKind: "text" as const },
+  { key: "core.member.id",label: "Member ID",group: "Roster",sortable: true,filterKind: "text" as const },
+  { key: "core.member.email",label: "Email",group: "Roster",sortable: true,filterKind: "text" as const },
+  { key: "core.member.discord-id",label: "Discord ID",group: "Roster",sortable: true,filterKind: "text" as const },
+  { key: "core.member.status",label: "Roster status",group: "Roster",sortable: true,filterKind: "text" as const },
+  { key: "core.member.labels",label: "Current labels",group: "Roster",sortable: false,filterKind: "text" as const },
+  { key: "attendance.member.required-from",label: "Attendance starts",group: "Roster",sortable: true,filterKind: "text" as const },
+  { key: "attendance.member.regular-rate",label: "Regular attendance",group: "Regular attendance",sortable: true,filterKind: "number" as const },
+  { key: "attendance.member.weighted-present",label: "Regular weighted present",group: "Regular attendance",sortable: true,filterKind: "number" as const },
+  { key: "attendance.member.weighted-eligible",label: "Regular weighted eligible",group: "Regular attendance",sortable: true,filterKind: "number" as const },
+  { key: "attendance.member.regular-period",label: "Regular reporting period",group: "Regular attendance",sortable: false,filterKind: "text" as const },
+  { key: "attendance.member.assigned-policies",label: "Assigned policies",group: "Policies",sortable: false,filterKind: "text" as const },
+  { key: "attendance.policy.history",label: "Policy history",group: "Policies",sortable: false,filterKind: "text" as const },
+  ...["present","absent","excused"].flatMap((status) => { const label=status[0]!.toUpperCase()+status.slice(1); return [{ key: `attendance.detail.${status}-count`,label: `${label} count`,group: "Attendance detail",sortable: true,filterKind: "number" as const },{ key: `attendance.detail.${status}-dates`,label: `${label} dates`,group: "Attendance detail",sortable: false,filterKind: "text" as const }]; }),
+  ...Object.entries({ "official-result": "Official policy result","official-status": "Official policy status","official-target": "Official policy target","official-type": "Official policy type","official-excused": "Official excuse handling","official-period": "Official policy period","report-result": "Report-period policy result","report-status": "Report-period policy status","report-target": "Report-period policy target","report-period": "Report-period policy period" }).map(([key,label]) => ({ key: `attendance.policy.${key}`,label,group: "Policies",sortable: !key.endsWith("period"),filterKind: key.endsWith("result")||key.endsWith("target") ? "number" as const : "text" as const,requiresLabel: true })),
+  { key: "attendance.policy.report-summary",label: "Report-period policies",group: "Policies",sortable: false,filterKind: "text" as const },
+].map((column) => ({ ...column,datasets: ["attendance.members"] }));
+const attendanceDataset={ id: "attendance.members",label: "Members - Attendance",description: "Member-level Attendance measures with Community roster fields.",available: true,rowIdentity: "core.member.identity",capability: "attendance.manage",fields: reportColumns.map((column) => ({ id: column.key,label: column.label,group: column.group,kind: column.filterKind==="number" ? "measure" as const : "dimension" as const,valueType: column.filterKind,sortable: column.sortable,filterOperators: [column.filterKind==="number" ? "minimum" as const : "contains" as const],requiresLabel: column.requiresLabel })),filters: ["period","roster","meeting-type","labels","membership"] as const,groupBy: ["core.member.identity"],defaultColumns: ["core.member.name","attendance.member.regular-rate","attendance.member.assigned-policies"],defaultSort: { field: "core.member.name",direction: "asc" as const },relationships: [] };
+const defaultReportDefinition={ version: 2 as const,dataset: "attendance.members",groupBy: ["core.member.identity"],period: { type: "all" as const },roster: "active" as const,meetingType: "all" as const,labelIds: [] as string[],labelMatch: "any" as const,membership: "current" as const,columns: attendanceDataset.defaultColumns.map((key) => ({ key })),columnFilters: [] as { column: { key: string; labelId?: string }; operator: "contains"|"minimum"; value: string }[],sort: { column: { key: "core.member.name" },direction: "asc" as const } };
 const reportColumnId=(column: { key: string; labelId?: string }) => `${column.key}${column.labelId ? `:${column.labelId}` : ""}`;
 const reportColumnLabel=(column: { key: string; labelId?: string }) => `${column.labelId ? "Mentor - " : ""}${reportColumns.find((item) => item.key===column.key)?.label ?? column.key}`;
 
@@ -58,10 +55,11 @@ async function useReferenceContext(page: Page,role: Role="admin",debugMode=false
   let pinnedIds=["class-report"];
   let savedReports=[
     { id: "class-report",ownerUserId: "admin-1",scope: "shared",name: "Class attendance",definition: structuredClone(defaultReportDefinition),revision: 1,createdAt: "2026-09-01T00:00:00Z",updatedAt: "2026-09-01T00:00:00Z",warnings: [],errors: [] },
-    { id: "dates-report",ownerUserId: "admin-1",scope: "personal",name: "Attendance dates",definition: { ...structuredClone(defaultReportDefinition),columns: [{ key: "member" },{ key: "absent_dates" }],sort: { column: { key: "member" },direction: "asc" as const } },revision: 1,createdAt: "2026-09-02T00:00:00Z",updatedAt: "2026-09-02T00:00:00Z",warnings: [],errors: [] },
+    { id: "dates-report",ownerUserId: "admin-1",scope: "personal",name: "Attendance dates",definition: { ...structuredClone(defaultReportDefinition),columns: [{ key: "core.member.name" },{ key: "attendance.detail.absent-dates" }],sort: { column: { key: "core.member.name" },direction: "asc" as const } },revision: 1,createdAt: "2026-09-02T00:00:00Z",updatedAt: "2026-09-02T00:00:00Z",warnings: [],errors: [] },
   ];
   await page.route("**/setup/status",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ configured: true,installation: { authMode: "local" },settings: referenceSettings }) }));
   await page.route("**/auth/session",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ user: { role,debugMode } }) }));
+  await page.route("**/platform/modules",(route) => route.fulfill({ json: attendanceSnapshot() }));
   await page.route("**/integrations/capabilities",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ integrations: { google: { enabled: true,configured: true },resend: { enabled: false,configured: false },discord: { enabled: true,configured: true } } }) }));
   await page.route("**/admin/members",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ members: roster,discordConfigured: true }) }));
   await page.route("**/admin/roster/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ imports: [{ createdAt: "2026-09-03T18:00:00Z",count: 2,mode: "merge",deactivated: 0 }] }) }));
@@ -70,7 +68,7 @@ async function useReferenceContext(page: Page,role: Role="admin",debugMode=false
     const from=new URL(route.request().url()).searchParams.get("from") ?? undefined;
     return route.fulfill({ json: referenceAttendanceReport(from) });
   });
-  await page.route("**/reports/catalog",(route) => route.fulfill({ json: { columns: reportColumns,labels: [{ id: "mentor",name: "Mentor",active: 1 }],baseline: null,timeZone: "UTC",defaultDefinition: defaultReportDefinition,role } }));
+  await page.route("**/reports/catalog",(route) => route.fulfill({ json: { datasets: [attendanceDataset],columns: reportColumns,labels: [{ id: "mentor",name: "Mentor",active: 1 }],outreachLabels: [],baseline: null,timeZone: "UTC",defaultDefinition: defaultReportDefinition,role,attendanceAvailable: true } }));
   await page.route("**/reports/views/*",async (route) => {
     const id=decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!); const report=savedReports.find((item) => item.id===id);
     if(!report) return route.fulfill({ status: 404,json: { error: "Report not found" } });
@@ -89,7 +87,7 @@ async function useReferenceContext(page: Page,role: Role="admin",debugMode=false
   await page.route("**/reports/leaderboard*",(route) => { const url=new URL(route.request().url()); const data=referenceAttendanceReport(url.searchParams.get("from") ?? undefined); return route.fulfill({ json: { ...data,pagination: { page: 1,pageSize: url.searchParams.get("pageSize")==="all"?"all":Number(url.searchParams.get("pageSize")||25),totalRows: data.members.length,totalPages: 1,rangeStart: data.members.length?1:0,rangeEnd: data.members.length },insights: { policyAlerts: [],trend: data.meetings.map((meeting) => ({ meetingId: meeting.id,title: meeting.title,startsAt: meeting.startsAt,rate: 50 })) } } }); });
   await page.route("**/reports/query",async (route) => {
     const body=route.request().postDataJSON() as { definition: typeof defaultReportDefinition; page?: number; pageSize?: number|"all" }; const columns=body.definition.columns.map((column) => ({ id: reportColumnId(column),key: column.key,label: reportColumnLabel(column),labelId: column.labelId })); const absentDates=["2026-09-01","2026-09-08","2026-09-15","2026-09-22"];
-    let rows=roster.map((member,index) => ({ member: { id: member.id,memberId: member.memberId,name: `${member.firstName} ${member.lastName}` },cells: Object.fromEntries(columns.map((column) => [column.id,column.key==="member"?{ text: `${member.firstName} ${member.lastName}`,sortValue: member.lastName }:column.key==="regular_attendance"?{ text: index?"0%":"100%",sortValue: index?0:100 }:column.key==="assigned_policies"?{ text: index?"No assigned policy":"Mentor: N/A",sortValue: null }:column.key==="absent_dates"?{ text: absentDates.join("; "),sortValue: null,dates: absentDates }:{ text: index?"0":"1",sortValue: index?0:1 }] )) }));
+    let rows=roster.map((member,index) => ({ id: member.id,label: `${member.firstName} ${member.lastName}`,href: `/roster/${member.memberId}`,cells: Object.fromEntries(columns.map((column) => [column.id,column.key==="core.member.name"?{ text: `${member.firstName} ${member.lastName}`,sortValue: member.lastName }:column.key==="attendance.member.regular-rate"?{ text: index?"0%":"100%",sortValue: index?0:100 }:column.key==="attendance.member.assigned-policies"?{ text: index?"No assigned policy":"Mentor: N/A",sortValue: null }:column.key==="attendance.detail.absent-dates"?{ text: absentDates.join("; "),sortValue: null,dates: absentDates }:{ text: index?"0":"1",sortValue: index?0:1 }] )) }));
     rows=rows.filter((row) => (body.definition.columnFilters??[]).every((filter) => { const value=row.cells[reportColumnId(filter.column)]; return filter.operator==="minimum" ? typeof value?.sortValue==="number"&&value.sortValue>=Number(filter.value) : value?.text.toLowerCase().includes(filter.value.toLowerCase()); }));
     const sortId=reportColumnId(body.definition.sort.column),direction=body.definition.sort.direction==="asc"?1:-1; rows.sort((left,right) => String(left.cells[sortId]?.sortValue??"").localeCompare(String(right.cells[sortId]?.sortValue??""))*direction);
     return route.fulfill({ json: { definition: body.definition,warnings: [],resolvedPeriod: { to: "2026-09-22" },columns,rows,pagination: { page: body.page??1,pageSize: body.pageSize??25,totalRows: rows.length,totalPages: 1,rangeStart: 1,rangeEnd: rows.length } } });
@@ -385,7 +383,9 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await page.getByRole("button",{ name: "Add column",exact: true }).click();
   const absentDatesOption=page.getByRole("checkbox",{ name: "Absent dates",exact: true });
   await expect(absentDatesOption).toBeVisible();
-  expect((await absentDatesOption.locator("..").boundingBox())!.height).toBeLessThanOrEqual(40);
+  const absentDatesTarget=(await absentDatesOption.locator("..").boundingBox())!;
+  expect(absentDatesTarget.height).toBeGreaterThanOrEqual(44);
+  expect(absentDatesTarget.height).toBeLessThanOrEqual(52);
   await expect(page.getByRole("button",{ name: /Choose labels for official policy result/i })).toBeVisible();
   await expect(page.getByRole("checkbox",{ name: /Mentor - official policy result/i })).toHaveCount(0);
   await page.getByRole("button",{ name: /Choose labels for official policy result/i }).click();
@@ -412,7 +412,7 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await expect.poll(async () => page.evaluate(() => { const trigger=document.querySelector<HTMLButtonElement>('[aria-label="Regular attendance column options"]')!.getBoundingClientRect(); const menu=document.querySelector(".report-column-popover")!.getBoundingClientRect(); return menu.top-trigger.bottom; })).toBeCloseTo(beforeScroll.offset,0);
   await page.getByRole("button",{ name: "Descending",exact: true }).click();
   await expect(page.locator(".editable-report-table tbody tr").first()).toContainText("Avery Stone");
-  await page.locator('th[data-column-id="absent_dates"]').dragTo(page.locator('th[data-column-id="regular_attendance"]'));
+  await page.locator('th[data-column-id="attendance.detail.absent-dates"]').dragTo(page.locator('th[data-column-id="attendance.member.regular-rate"]'));
   await expect.poll(async () => page.locator(".editable-report-table thead th .report-column-trigger span").allTextContents()).toEqual(["Member","Absent dates","Regular attendance","Assigned policies"]);
   const summaryDownload=page.waitForEvent("download");
   await page.getByRole("button",{ name: "Download report CSV" }).click();
@@ -736,20 +736,70 @@ test("Roster quick labels, CSV defaults, and bulk selection preview changes befo
   await page.getByRole("button",{ name: "Edit",exact: true }).first().click();
   const dialog=page.getByRole("dialog",{ name: "Edit roster member" });
   await expect(dialog.getByText("Current labels: None")).toBeVisible();
-  await dialog.getByText("Change labels").click();
+  const labelToggle=dialog.getByRole("button",{ name: "Change labels" });
+  const sharedButton=page.getByRole("button",{ name: "Bulk edit" });
+  expect((await labelToggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  const labelToggleTheme=await labelToggle.evaluate((element) => {
+    const style=getComputedStyle(element);
+    const reference=getComputedStyle(document.querySelector<HTMLElement>('[data-walkthrough="roster-bulk"]')!);
+    return { actual: [style.color,style.backgroundColor,style.borderColor,style.borderRadius],reference: [reference.color,reference.backgroundColor,reference.borderColor,reference.borderRadius] };
+  });
+  expect(labelToggleTheme.actual).toEqual(labelToggleTheme.reference);
+  await labelToggle.click();
+  const done=dialog.getByRole("button",{ name: "Done" });
+  await expect(done).toHaveClass(/ui-button/);
+  expect((await done.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await expect(sharedButton).toHaveClass(/ui-button/);
   await dialog.getByRole("checkbox",{ name: "Mentor" }).check();
   await dialog.getByRole("button",{ name: "Preview label changes" }).click();
   await expect(dialog.getByText("2026-09-23",{ exact: true })).toBeVisible();
   await dialog.getByRole("button",{ name: "Apply label changes" }).click();
   await dialog.getByRole("button",{ name: "Close member editor" }).click();
   await page.getByRole("button",{ name: "Bulk edit" }).click();
+  const bulkCard=page.locator(".bulk-roster-actions");
+  const labelCard=page.getByRole("heading",{ name: "Bulk label changes" }).locator("xpath=ancestor::section[1]");
+  const rosterTable=page.locator(".roster-table-scroll");
+  const compactGaps=await bulkCard.evaluate((element) => {
+    const children=Array.from(element.children).filter((child) => (child as HTMLElement).getClientRects().length > 0);
+    const gaps=children.slice(1).map((child,index) => child.getBoundingClientRect().top-children[index].getBoundingClientRect().bottom);
+    return { display: getComputedStyle(element).display,gaps };
+  });
+  expect(compactGaps.display).toBe("grid");
+  expect(Math.max(...compactGaps.gaps)).toBeLessThanOrEqual(20);
+  const [bulkBounds,labelBounds,tableBounds]=await Promise.all([bulkCard.boundingBox(),labelCard.boundingBox(),rosterTable.boundingBox()]);
+  expect(labelBounds!.y-(bulkBounds!.y+bulkBounds!.height)).toBeGreaterThanOrEqual(12);
+  expect(tableBounds!.y-(labelBounds!.y+labelBounds!.height)).toBeGreaterThanOrEqual(12);
+  const selectAll=page.getByRole("checkbox",{ name: "Select all shown members" });
+  const selectAllLabel=selectAll.locator("xpath=ancestor::label[1]");
+  const uncheckedTheme=await selectAll.evaluate((element) => {
+    const style=getComputedStyle(element);
+    const probe=document.createElement("span");
+    probe.style.cssText="position:absolute;background:var(--ui-surface);border:2px solid var(--ui-border)";
+    document.querySelector<HTMLElement>(".app")!.append(probe);
+    const reference=getComputedStyle(probe);
+    const result={ appearance: style.appearance,background: style.backgroundColor,border: style.borderTopColor,radius: style.borderRadius,expectedBackground: reference.backgroundColor,expectedBorder: reference.borderTopColor };
+    probe.remove();
+    return result;
+  });
+  expect(uncheckedTheme).toMatchObject({ appearance: "none",background: uncheckedTheme.expectedBackground,border: uncheckedTheme.expectedBorder });
+  expect(uncheckedTheme.radius).not.toBe("0px");
+  expect((await selectAllLabel.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   await page.getByLabel("CSV contents").fill("memberId,label\nA-101,Mentor");
   await page.getByRole("button",{ name: "Preview CSV import" }).click();
   await expect(page.getByRole("heading",{ name: "Review dated label changes" })).toBeVisible();
   expect(labelRequests).toContainEqual([{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "" }]);
   await page.getByRole("button",{ name: "Back" }).click();
   await page.locator(".roster-filters label").filter({ hasText: /^Show/ }).locator("select").selectOption("all");
-  await page.getByRole("checkbox",{ name: "Select all shown members" }).check();
+  await selectAll.check();
+  const checkedTheme=await selectAll.evaluate((element) => {
+    const probe=document.createElement("span");
+    probe.style.cssText="position:absolute;background:var(--primary)";
+    document.querySelector<HTMLElement>(".app")!.append(probe);
+    const expected=getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return { background: getComputedStyle(element).backgroundColor,expected };
+  });
+  expect(checkedTheme.background).toBe(checkedTheme.expected);
   await expect(page.getByText("2 members selected.",{ exact: false })).toBeVisible();
   await page.getByLabel("Action").selectOption("deactivate");
   await page.getByRole("button",{ name: "Preview bulk change" }).click();

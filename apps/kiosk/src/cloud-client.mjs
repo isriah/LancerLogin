@@ -19,15 +19,15 @@ export async function pairInstallation({ apiUrl, code, kioskName, fetchImpl = fe
     body: JSON.stringify({ code: String(code).trim().toUpperCase(), kioskName: String(kioskName).trim() }),
   });
   const paired = await parseResponse(response);
-  if (!paired.kioskId || !paired.kioskToken) throw new Error("The pairing response did not include kiosk credentials");
-  return { apiUrl: endpoint, kioskId: paired.kioskId, kioskToken: paired.kioskToken, kioskName: paired.name ?? kioskName, pairedAt: new Date().toISOString() };
+  if (!paired.kioskId || !paired.kioskToken || !paired.pairingId) throw new Error("The pairing response did not include kiosk credentials");
+  return { apiUrl: endpoint, kioskId: paired.kioskId, kioskToken: paired.kioskToken, pairingId: paired.pairingId, kioskName: paired.name ?? kioskName, pairedAt: new Date().toISOString() };
 }
 
-export async function sendHeartbeat(config, { readerOnline = false, releaseVersion = "development", uptimeSeconds = 0, networkType = "offline", networkSignal = null, lastWifiScanAt = null, pendingEvents = 0, lastSyncAt = null, errorCategory = null, fetchImpl = fetch } = {}) {
+export async function sendHeartbeat(config, { readerOnline = false, authenticationMethod, releaseVersion = "development", uptimeSeconds = 0, networkType = "offline", networkSignal = null, lastWifiScanAt = null, pendingEvents = 0, lastSyncAt = null, errorCategory = null, fetchImpl = fetch } = {}) {
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/heartbeat`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
-    body: JSON.stringify({ readerOnline: Boolean(readerOnline), releaseVersion, uptimeSeconds, networkType, networkSignal, lastWifiScanAt, pendingEvents, lastSyncAt, errorCategory }),
+    body: JSON.stringify({ readerOnline: Boolean(readerOnline), ...(authenticationMethod ? { authenticationMethod } : {}), releaseVersion, uptimeSeconds, networkType, networkSignal, lastWifiScanAt, pendingEvents, lastSyncAt, errorCategory }),
   });
   return parseResponse(response);
 }
@@ -60,15 +60,16 @@ export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) 
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/attendance`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
-    body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt }),
+    body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt, ...(event.pairingId ? { pairingId: event.pairingId } : {}) }),
   });
   if (response.status >= 400 && response.status < 500 && ![401, 403, 408, 425, 429].includes(response.status)) {
     const body = await response.json().catch(() => ({}));
     const error = typeof body.error === "string" ? body.error : "The scan was not accepted";
-    const code = response.status === 404 && /not linked to an active roster member/i.test(error) ? "roster_inactive"
+    const code = response.status === 404 && /(?:fingerprint|identity) is not linked to an active roster member/i.test(error) ? "roster_inactive"
       : response.status === 409 && /No meeting is accepting/i.test(error) ? "no_eligible_meeting"
       : response.status === 409 && /already complete/i.test(error) ? "attendance_complete"
       : response.status === 409 && /begins on/i.test(error) ? "participation_not_started"
+      : response.status === 409 && /different kiosk pairing/i.test(error) ? "pairing_mismatch"
       : response.status === 400 ? "invalid_scan" : `http_${response.status}`;
     return { accepted: false, rejected: true, status: response.status, code, error };
   }

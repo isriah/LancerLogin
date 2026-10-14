@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { api } from "./dashboard-api";
 import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough";
 
-export type WalkthroughStep = { id: string; title: string; description: string; targets: string; practice?: string };
+export type WalkthroughStep = { id: string; title: string; description: string; targets: string; practice?: string; navigation?: boolean };
 export type WalkthroughExperienceDefinition = {
   pageId: Exclude<WalkthroughPage, "dashboard">;
   readySelector: string;
@@ -116,10 +116,10 @@ export function PageWalkthroughExperience({ definition, debugMode, onStateChange
   const wasOpen = useRef(false);
   useEffect(() => {
     const open = walkthrough.phase !== "idle";
-    onStateChange({ open, navigation: false });
+    onStateChange({ open, navigation: open && Boolean(step?.navigation) });
     if (!open && wasOpen.current) window.requestAnimationFrame(() => document.querySelector<HTMLElement>(definition.returnFocusSelector)?.focus({ preventScroll: true }));
     wasOpen.current = open;
-  }, [walkthrough.phase, definition.returnFocusSelector, onStateChange]);
+  }, [walkthrough.phase, step?.navigation, definition.returnFocusSelector, onStateChange]);
   useEffect(() => () => onStateChange({ open: false, navigation: false }), [onStateChange]);
   return <>
     {walkthrough.error && walkthrough.phase === "idle" && <p className="ui-status walkthrough-page-status" data-tone="error" role="status">{walkthrough.error}</p>}

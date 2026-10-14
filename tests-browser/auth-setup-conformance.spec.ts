@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
+import { attendanceSetupState, attendanceSnapshot } from "./module-fixtures";
 
 const referenceSettings = {
   organizationName: "Reference Arts Collective",
@@ -34,98 +35,36 @@ async function expectResponsiveFit(page: Page) {
 
 for (const viewport of dashboardConformanceReferences.viewports) {
   for (const theme of dashboardConformanceReferences.themes) {
-    for (const purpose of ["hardware", "simulator"] as const) {
-      test(`guided setup orders hardware first and pairs ${purpose} at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
-        await page.setViewportSize(viewport);
-        await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
-        await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
-        const fulfill = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
-        const completed = ["branding", "roster"];
-        const pairingRequests: unknown[] = [];
-        const simulatorRequests: unknown[] = [];
-        let paired = false;
-        await page.route("**/setup/status", (route) => route.fulfill(fulfill({ configured: true, installation: { authMode: "local" }, settings: referenceSettings })));
-        await page.route("**/auth/session", (route) => route.fulfill(fulfill({ user: { role: "admin" } })));
-        await page.route("**/admin/branding", (route) => route.fulfill(fulfill({ settings: referenceSettings })));
-        await page.route("**/admin/setup/progress", (route) => {
-          if (route.request().method() === "PATCH") {
-            expect(route.request().postDataJSON()).toEqual({ step: "pair-kiosk", completed: true });
-            completed.push("pair-kiosk");
-          }
-          return route.fulfill(fulfill({ completedSteps: completed.map((step) => ({ step })) }));
-        });
-        await page.route("**/admin/kiosks", (route) => route.fulfill(fulfill({ kiosks: paired && purpose === "hardware" ? [{ id: "setup-pi", name: "Main kiosk", active: 1 }] : [] })));
-        await page.route("**/admin/simulator", (route) => {
-          if (route.request().method() === "POST") {
-            simulatorRequests.push(route.request().postDataJSON());
-            paired = true;
-          }
-          return route.fulfill(fulfill({ simulator: paired && purpose === "simulator" ? { name: "Main kiosk", active: 1, online: 0, readerOnline: false } : null }));
-        });
-        await page.route("**/admin/pairing-codes", (route) => {
-          pairingRequests.push(route.request().postDataJSON());
-          return route.fulfill(fulfill({ code: "SETUP-TEST", expiresAt: "2030-01-01T00:00:00Z", workerApiUrl: "https://setup.example.org/api" }));
-        });
-        await page.goto("/dashboard");
-        await expect(page.getByRole("heading", { level: 2, name: "Kiosk", exact: true })).toBeVisible();
-        await expect(page.locator("main h1")).toHaveCount(1);
-        await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
-        await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
-        await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
-        const choices = page.getByRole("group", { name: "What are you testing?" });
-        const hardware = choices.getByRole("radio", { name: /Raspberry Pi/ });
-        const simulator = choices.getByRole("radio", { name: /Browser simulator/ });
-        await expect(choices.locator("strong")).toHaveText(["Raspberry Pi", "Browser simulator"]);
-        await expect(hardware).not.toBeChecked();
-        await expect(simulator).toBeChecked();
-        await expect(page.getByRole("progressbar", { name: "Guided setup progress" })).toHaveAttribute("aria-valuenow", "40");
-        const cards = choices.locator(".choice");
-        const first = (await cards.nth(0).boundingBox())!;
-        const second = (await cards.nth(1).boundingBox())!;
-        expect(first.height).toBeGreaterThanOrEqual(44);
-        expect(second.height).toBeGreaterThanOrEqual(44);
-        expect(viewport.width === 390 ? first.y < second.y : first.x < second.x).toBe(true);
-        // Enter from the preceding step navigation to check actual Tab order.
-        await page.getByRole("button", { name: "Attendance confirmation: not complete" }).focus();
-        await page.keyboard.press("Tab");
-        await expect(hardware).toBeFocused();
-        expect(await cards.nth(0).evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
-        await page.keyboard.press("Tab");
-        await expect(simulator).toBeFocused();
-        expect(await cards.nth(1).evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
-        await expectResponsiveFit(page);
-        if (purpose === "hardware") await page.screenshot({ path: test.info().outputPath("setup-choices.png"), fullPage: true });
-        if (purpose === "hardware") {
-          await hardware.focus();
-          await page.keyboard.press("Space");
-          await expect(hardware).toBeChecked();
-          await expect(simulator).not.toBeChecked();
-          await expect(page.getByRole("button", { name: "Create simulator pairing code" })).toHaveCount(0);
-          await page.getByRole("button", { name: "Create one-time pairing key", exact: true }).click();
-          const key = await page.locator(".pairing-key code").innerText();
-          expect(JSON.parse(Buffer.from(key.slice(4), "base64url").toString("utf8"))).toEqual({ apiUrl: "https://setup.example.org/api", code: "SETUP-TEST", kioskName: "Main kiosk" });
-          await expectResponsiveFit(page);
-          paired = true; // Simulate the Pi redeeming the key outside the dashboard.
-          await page.getByRole("button", { name: "I paired the Pi — check status" }).click();
-          expect(simulatorRequests).toEqual([]);
-        } else {
-          await page.keyboard.press("Space");
-          await page.getByRole("button", { name: "Create simulator pairing code" }).click();
-          await expect(page.getByText("Simulator-only code", { exact: true })).toBeVisible();
-          await expect(page.locator(".pairing-key")).toHaveCount(0);
-          await expect(page.getByLabel("Enter simulator pairing code")).toHaveValue("SETUP-TEST");
-          await expectResponsiveFit(page);
-          await page.getByRole("button", { name: "Pair browser simulator" }).click();
-          expect(simulatorRequests).toEqual([{ action: "pair", code: "SETUP-TEST", kioskName: "Main kiosk" }]);
-        }
-        expect(pairingRequests).toEqual([{ kioskName: "Main kiosk", replaceExisting: false, purpose }]);
-        await expect(page.getByRole("button", { name: "Kiosk: complete", exact: true })).toBeVisible();
-        await expect(page.getByRole("button", { name: "Kiosk input test: not complete" })).toHaveAttribute("aria-current", "step");
-        await expect(page.getByRole("progressbar", { name: "Guided setup progress" })).toHaveAttribute("aria-valuenow", "60");
-        await expect(page.getByRole("button", { name: purpose === "hardware" ? "The local reader test passed" : "Send simulated arrival scan" })).toBeVisible();
-        await expectResponsiveFit(page);
+    test(`Attendance setup shows one validated card at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+      await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+      let state = attendanceSetupState({}, ["rules"]); let saved: unknown;
+      await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: referenceSettings } }));
+      await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot({ setupReady: false }) }));
+      await page.route("**/admin/modules/attendance/setup", async (route) => {
+        if (route.request().method() === "PUT") { saved = route.request().postDataJSON(); state = attendanceSetupState({ rules: "completed" }, ["rules"]); }
+        await route.fulfill({ json: state });
       });
-    }
+      await page.route("**/module-setup/attendance/rules", (route) => route.fulfill({ json: { values: { lateScanMinutes: 30, attendanceReportingStartsOn: null, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 10 } } }));
+      await page.route("**/module-setup/attendance/meeting", (route) => route.fulfill({ json: { meetings: [] } }));
+      await page.goto("/dashboard");
+      await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 2, name: "Attendance rules" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 2 })).toHaveCount(1);
+      await expect(page.getByText(/Roster readiness/i)).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Back" })).toBeDisabled();
+      const next = page.getByRole("button", { name: "Save and continue" });
+      await expect(next).toBeVisible();
+      await next.click();
+      await expect.poll(() => saved).toEqual({ generation: 1, stepId: "rules", outcome: "completed" });
+      await expect(page.getByRole("heading", { level: 2, name: "First meeting" })).toBeVisible();
+      const starts = await page.getByLabel("Starts").inputValue(); const ends = await page.getByLabel("Ends").inputValue();
+      expect(starts.slice(0, 10)).toBe(ends.slice(0, 10));
+      await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+      await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
+      await expectResponsiveFit(page);
+    });
   }
 }
 
@@ -243,45 +182,42 @@ test("local sign-in keeps denied and unavailable states explicit without reveali
   await expect(page.getByRole("alert")).toContainText("Sign-in service unavailable");
 });
 
-test("Admin can inspect, skip, reopen, and complete all five guided-setup steps with focus contained", async ({ page }) => {
+test("Admin can move back, skip optional integrations, and finish Attendance setup", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
   await page.addInitScript(() => localStorage.setItem("lancerlogin-theme", "dark"));
-  await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: true, installation: { authMode: "local" }, settings: referenceSettings }) }));
-  await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role: "admin" } }) }));
-  await page.route("**/admin/setup/progress", (route) => {
-    if (route.request().method() === "PATCH") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test"].map((step) => ({ step })) }) });
+  let snapshotReady = false;
+  let state = attendanceSetupState({ rules: "completed", meeting: "completed", input: "completed" }, ["rules", "meeting", "input"]);
+  const writes: unknown[] = [];
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot({ setupReady: snapshotReady }) }));
+  await page.route("**/admin/modules/attendance/setup", async (route) => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON() as { stepId: string; outcome: "completed" | "skipped" };
+      writes.push(body);
+      const outcomes = Object.fromEntries(state.steps.filter((step) => step.outcome).map((step) => [step.id, step.outcome])) as Record<string, "completed" | "skipped">;
+      outcomes[body.stepId] = body.outcome;
+      state = attendanceSetupState(outcomes, ["rules", "meeting", "input"]);
+      if (body.stepId === "discord") snapshotReady = true;
+    }
+    await route.fulfill({ json: state });
   });
-  await page.route("**/admin/branding", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ settings: referenceSettings }) }));
-  await page.route("**/admin/members", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ members: [{ memberId: "member-1", externalId: "A-101", firstName: "Avery", lastName: "Stone", active: 1 }] }) }));
-  await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1 }] }) }));
-  await page.route("**/meetings", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ meetings: [{ id: "meeting-1", title: "Build session", startsAt: new Date().toISOString() }] }) }));
-  await page.route("**/admin/simulator", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ simulator: null }) }));
   await page.goto("/dashboard");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Guided setup" })).toBeVisible();
-  await expect(page.getByRole("progressbar", { name: "Guided setup progress" })).toHaveAttribute("aria-valuenow", "80");
-  const steps = ["Organization & brand", "Roster", "Kiosk", "Kiosk input test", "Attendance confirmation"];
-  for (const name of steps) {
-    await page.getByRole("button", { name: new RegExp(`^${name}:`) }).click();
-    await expect(page.getByRole("heading", { level: 2, name, exact: true })).toBeVisible();
-  }
-  await page.getByRole("button", { name: "Organization & brand: complete" }).click();
-  await page.getByRole("button", { name: "Skip for now" }).click();
-  await expect(page.getByRole("button", { name: "Roster: complete" })).toHaveAttribute("aria-current", "step");
-  await page.getByRole("button", { name: "Attendance confirmation: not complete" }).click();
-  await page.getByRole("button", { name: "Refresh attendance" }).click();
-  await page.getByRole("button", { name: "Attendance matches — finish setup" }).click();
-
-  const dialog = page.getByRole("dialog", { name: "Setup complete" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Go to Dashboard" })).toBeFocused();
-  await expect(page.locator(".confetti")).toHaveCSS("display", "none");
-  await page.keyboard.press("Tab");
-  await expect(dialog.getByRole("button", { name: "Go to Dashboard" })).toBeFocused();
-  const bounds = await dialog.boundingBox();
-  expect(bounds!.x).toBeGreaterThanOrEqual(0);
-  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+  await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Calendar integration" })).toBeVisible();
+  await expect(page.getByText("Google Calendar is not configured and verified. You can safely set it up later.")).toBeVisible();
+  await page.getByRole("button", { name: "Set up later and continue" }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "Discord integration" })).toBeVisible();
+  await page.getByRole("button", { name: "Back" }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "Calendar integration" })).toBeVisible();
+  await page.getByRole("button", { name: "Set up later and continue" }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "Discord integration" })).toBeVisible();
+  await page.getByRole("button", { name: "Set up later and continue" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Dashboard", exact: true })).toBeVisible();
+  expect(writes).toEqual([
+    { generation: 1, stepId: "calendar", outcome: "skipped" },
+    { generation: 1, stepId: "calendar", outcome: "skipped" },
+    { generation: 1, stepId: "discord", outcome: "skipped" },
+  ]);
   await expectResponsiveFit(page);
 });

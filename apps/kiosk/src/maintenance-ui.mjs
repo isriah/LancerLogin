@@ -1,4 +1,4 @@
-export const maintenanceHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><meta name="theme-color" content="#424a53"><title>LancerLogin maintenance</title><link rel="stylesheet" href="/maintenance.css"></head><body><main id="maintenance-main" class="locked"><header id="maintenance-header" hidden><div><p id="brand-subtitle">Local tools</p><h1 id="brand-title">Fingerprint maintenance</h1></div><a href="/attendance-review">Review rejected scans</a><a href="/">Return to kiosk</a></header><p id="message" role="status">Checking local access…</p><a id="locked-return" href="/">Return to kiosk</a><section id="unlock" class="card unlock-card" hidden><h2>Unlock maintenance</h2><p>Use the same local PIN that protects network settings.</p><form id="unlock-form"><label>Local settings PIN<input id="pin" class="pin-target" inputmode="none" pattern="[0-9]{6,12}" maxlength="12" required readonly></label><div id="pin-keypad" class="pin-keypad" aria-label="PIN keypad"></div><button class="primary" type="submit">Unlock for five minutes</button></form></section><div id="workspace" class="workspace" hidden><section class="card reader-card"><div class="card-heading"><div><h2>Reader</h2><p>Templates stay inside the R503.</p></div><button id="test-reader" type="button">Test</button></div><p id="reader-status">Reader status has not been tested.</p><article id="enroll-stage" class="enroll-stage stage-ready" aria-live="polite"><strong id="stage-title">Ready to enroll</strong><span id="stage-detail">Choose a member, finger, and slot.</span></article></section><section class="card enroll-card"><h2>Enroll fingerprint</h2><form id="enroll-form"><label>Roster member<input id="member" type="hidden" required><button id="member-picker" class="picker-button" type="button">Choose a member</button></label><div class="form-row"><label>Finger<button id="finger-picker" class="picker-button" type="button">right index</button><select id="finger" required hidden><option>right index</option><option>left index</option><option>right thumb</option><option>left thumb</option><option>right middle</option><option>left middle</option><option>other</option></select></label><label>Slot<input id="slot" class="numeric-target" inputmode="none" pattern="[0-9]{1,3}" maxlength="3" required readonly></label></div><p id="slot-help"></p><label class="check"><input id="replace" type="checkbox"><span>Replace occupied slot</span></label><button class="primary" id="begin-enroll" type="submit">Begin two-scan enrollment</button></form></section><section class="card mappings-card"><div class="card-heading"><div><h2>Mappings</h2><p>Removal keeps sensor templates.</p></div><button id="refresh" type="button">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>Slot</th><th>Member</th><th>Finger</th><th></th></tr></thead><tbody id="mappings"></tbody></table></div></section></div><section id="member-sheet" class="sheet" hidden aria-labelledby="member-sheet-title"><div class="sheet-panel"><div class="card-heading member-heading"><h2 id="member-sheet-title">Choose member</h2><input id="member-search" type="search" placeholder="Search roster" aria-label="Search roster" inputmode="none" autocomplete="off" maxlength="100"><button id="toggle-search-keyboard" type="button" aria-controls="search-keyboard" aria-expanded="true">Hide keyboard</button><button id="close-member-sheet" type="button">Close</button></div><div class="member-content"><div id="member-options" class="option-list"></div><div id="search-keyboard" class="search-keyboard" aria-label="Roster search keyboard"></div></div></div></section><section id="finger-sheet" class="sheet" hidden aria-labelledby="finger-title"><div class="sheet-panel finger-panel"><div class="card-heading"><h2 id="finger-title">Choose finger</h2><button id="close-finger-sheet" type="button">Close</button></div><div id="finger-options" class="option-list"></div></div></section><section id="number-pad" class="sheet number-sheet" hidden aria-labelledby="number-pad-title"><div class="sheet-panel small"><div class="card-heading"><h2 id="number-pad-title">Enter slot</h2><button id="close-number-pad" type="button">Close</button></div><input id="number-display" class="pin-target" inputmode="none" readonly><p id="number-error" role="status"></p><div id="slot-keypad" class="pin-keypad" aria-label="Slot keypad"></div><button id="apply-number" class="primary" type="button">Use slot</button></div></section><section id="confirm-sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="confirm-title"><div class="sheet-panel confirmation-panel"><h2 id="confirm-title">Confirm action</h2><p id="confirm-detail"></p><div class="confirmation-actions"><button id="cancel-action" type="button">Cancel</button><button id="accept-action" class="primary" type="button">Confirm</button></div></div></section></main><script type="module" src="/maintenance.js"></script></body></html>`;
+export const maintenanceHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><meta name="theme-color" content="#424a53"><title>LancerLogin maintenance</title><link rel="stylesheet" href="/maintenance.css"></head><body><main id="maintenance-main" class="locked"><header id="maintenance-header" hidden><div><p id="brand-subtitle">Local tools</p><h1 id="brand-title">Authentication maintenance</h1></div><a href="/attendance-review">Review rejected scans</a><a href="/">Return to kiosk</a></header><p id="message" role="status">Checking local access…</p><a id="locked-return" href="/">Return to kiosk</a><section id="unlock" class="card unlock-card" hidden><h2>Unlock maintenance</h2><p>Use the same local PIN that protects network settings.</p><form id="unlock-form"><label>Local settings PIN<input id="pin" class="pin-target" inputmode="none" pattern="[0-9]{6,12}" maxlength="12" required readonly></label><div id="pin-keypad" class="pin-keypad" aria-label="PIN keypad"></div><button class="primary" type="submit">Unlock for five minutes</button></form></section><div id="workspace" class="workspace" hidden><section class="card reader-card" data-fingerprint><div class="card-heading"><div><h2>Fingerprint reader</h2><p>Templates stay inside the R503.</p></div><button id="test-reader" type="button">Test</button></div><p id="reader-status">Reader status has not been tested.</p><article id="enroll-stage" class="enroll-stage stage-ready" aria-live="polite"><strong id="stage-title">Ready to enroll</strong><span id="stage-detail">Choose a member, finger, and slot.</span></article></section><section class="card enroll-card" data-fingerprint><h2>Enroll fingerprint</h2><form id="enroll-form"><label>Roster member<input id="member" type="hidden" required><button id="member-picker" class="picker-button" type="button">Choose a member</button></label><div class="form-row"><label>Finger<button id="finger-picker" class="picker-button" type="button">right index</button><select id="finger" required hidden><option>right index</option><option>left index</option><option>right thumb</option><option>left thumb</option><option>right middle</option><option>left middle</option><option>other</option></select></label><label>Slot<input id="slot" class="numeric-target" inputmode="none" pattern="[0-9]{1,3}" maxlength="3" required readonly></label></div><p id="slot-help"></p><label class="check"><input id="replace" type="checkbox"><span>Replace occupied slot</span></label><button class="primary" id="begin-enroll" type="submit">Begin two-scan enrollment</button></form></section><section class="card mappings-card" data-fingerprint><div class="card-heading"><div><h2>Fingerprint mappings</h2><p>Removal keeps sensor templates.</p></div><button id="refresh" type="button">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>Slot</th><th>Member</th><th>Finger</th><th></th></tr></thead><tbody id="mappings"></tbody></table></div></section><section id="credential-enroll-card" class="card credential-card" hidden><h2 id="credential-enroll-title">Register credential</h2><p>Credential values are transformed with a kiosk-local secret and are never sent to the dashboard.</p><form id="credential-form"><label>Roster member<input id="credential-member" type="hidden" required><button id="credential-member-picker" class="picker-button" type="button">Choose a member</button></label><label>Credential label<input id="credential-label" maxlength="60" placeholder="Optional badge or code label"></label><label>Scan or enter credential<input id="credential-value" type="password" inputmode="none" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="256" required></label><button class="primary" type="submit">Register credential</button></form></section><section id="credential-mappings-card" class="card mappings-card" hidden><div class="card-heading"><div><h2>Credential mappings</h2><p>Raw credentials are never displayed.</p></div><button id="credential-refresh" type="button">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>Label</th><th>Member</th><th></th></tr></thead><tbody id="credential-mappings"></tbody></table></div></section><section id="member-id-card" class="card member-id-card" hidden><h2>Member ID entry</h2><p>Active roster member IDs are accepted directly on the kiosk. No credential enrollment is needed.</p></section></div><section id="member-sheet" class="sheet" hidden aria-labelledby="member-sheet-title"><div class="sheet-panel"><div class="card-heading member-heading"><h2 id="member-sheet-title">Choose member</h2><input id="member-search" type="search" placeholder="Search roster" aria-label="Search roster" inputmode="none" autocomplete="off" maxlength="100"><button id="toggle-search-keyboard" type="button" aria-controls="search-keyboard" aria-expanded="true">Hide keyboard</button><button id="close-member-sheet" type="button">Close</button></div><div class="member-content"><div id="member-options" class="option-list"></div><div id="search-keyboard" class="search-keyboard" aria-label="Roster search keyboard"></div></div></div></section><section id="finger-sheet" class="sheet" hidden aria-labelledby="finger-title"><div class="sheet-panel finger-panel"><div class="card-heading"><h2 id="finger-title">Choose finger</h2><button id="close-finger-sheet" type="button">Close</button></div><div id="finger-options" class="option-list"></div></div></section><section id="number-pad" class="sheet number-sheet" hidden aria-labelledby="number-pad-title"><div class="sheet-panel small"><div class="card-heading"><h2 id="number-pad-title">Enter slot</h2><button id="close-number-pad" type="button">Close</button></div><input id="number-display" class="pin-target" inputmode="none" readonly><p id="number-error" role="status"></p><div id="slot-keypad" class="pin-keypad" aria-label="Slot keypad"></div><button id="apply-number" class="primary" type="button">Use slot</button></div></section><section id="confirm-sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="confirm-title"><div class="sheet-panel confirmation-panel"><h2 id="confirm-title">Confirm action</h2><p id="confirm-detail"></p><div class="confirmation-actions"><button id="cancel-action" type="button">Cancel</button><button id="accept-action" class="primary" type="button">Confirm</button></div></div></section></main><script type="module" src="/maintenance.js"></script></body></html>`;
 
 export const maintenanceStyles = `:root{--primary:#b80100;--secondary:#f2c14e;--surface-bg:#424a53;--surface:#1a1d24;--text:#fff;--muted:#d3d8df;--line:#ffffff24;--success:#178f4f;--danger:#ff5b57;--notice:#f2c14e;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);background:var(--surface-bg);color-scheme:dark}*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--surface-bg)}[hidden]{display:none!important}button,input,select{font:inherit}main{width:100%;height:100vh;display:grid;grid-template-rows:auto auto minmax(0,1fr);gap:8px;padding:12px}main.locked{grid-template-rows:auto auto;place-content:center;padding:16px}main.locked>#message{justify-self:center;text-align:center}header,.card-heading{display:flex;align-items:start;justify-content:space-between;gap:10px}header{align-items:center}header p,header h1,.card h2,.card p{margin:0}h1{font-size:30px;line-height:1.05}h2{font-size:22px;line-height:1.1}header p,.card p,#message{color:var(--muted)}header a{min-height:42px;display:inline-grid;place-items:center;padding:0 12px;border:1px solid #ffffff33;border-radius:8px;color:#fff;text-decoration:none;font-weight:800}.card{min-height:0;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden}.workspace{min-height:0;display:grid;grid-template-columns:.95fr 1.15fr 1.25fr;gap:10px}.card form{display:grid;gap:8px}.card label{display:grid;gap:4px;font-size:16px;font-weight:800}.card input,.card select,.picker-button{min-height:40px;padding:6px 9px;border:1px solid #757b88;border-radius:7px;background:#0e1015;color:#fff;font-size:16px}.card button{min-height:40px;padding:6px 10px;border:1px solid #ffffff33;border-radius:7px;background:#292e39;color:#fff;font-size:16px;font-weight:800}.card button.primary,.card form>button.primary,.sheet button.primary{border-color:var(--primary);background:var(--primary);color:#fff}.picker-button{text-align:left;font-weight:800}.numeric-target{caret-color:transparent}.numeric-target::-webkit-inner-spin-button,.numeric-target::-webkit-outer-spin-button{appearance:none;margin:0}.form-row{display:grid;grid-template-columns:1fr 72px;gap:8px}.check{grid-template-columns:auto 1fr!important;align-items:center}.check input{width:20px;min-height:20px}#message{min-height:22px;font-size:16px}.error{color:#ffb3bd!important}.table-wrap{height:100%;min-height:0;overflow:auto}table{width:100%;border-collapse:collapse;font-size:16px}th,td{padding:6px;text-align:left;border-bottom:1px solid #ffffff1f}td button{min-height:32px!important;padding:4px 7px!important}.reader-card{display:grid;grid-template-rows:auto auto 1fr;gap:10px}.enroll-stage{align-self:stretch;display:grid;place-items:center;text-align:center;gap:8px;padding:14px;border-radius:8px;background:#2a3039;border:2px solid #3d4652}.enroll-stage strong{font-size:32px;line-height:1}.enroll-stage span{font-size:19px;color:var(--muted)}.stage-enroll_wait_first,.stage-enroll_wait_second{border-color:var(--secondary);background:color-mix(in srgb,var(--secondary) 18%,#2a3039)}.stage-enroll_scan_accepted,.stage-enroll_success{border-color:var(--success);background:color-mix(in srgb,var(--success) 24%,#2a3039)}.stage-enroll_failure{border-color:var(--danger);background:color-mix(in srgb,var(--danger) 20%,#2a3039)}.unlock-card{width:min(430px,100%);justify-self:center;align-self:center}.pin-target{font-size:26px;letter-spacing:.28em;text-align:center}.pin-keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.pin-keypad button{min-height:44px;font-size:22px}.pin-keypad .wide{grid-column:span 2}.sheet{position:fixed;z-index:20;inset:0;display:grid;place-items:end center;padding:10px;background:rgb(0 0 0 / 62%)}.sheet-panel{width:min(760px,100%);max-height:min(430px,92vh);display:grid;grid-template-rows:auto auto minmax(0,1fr);gap:10px;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 18px 60px rgb(0 0 0 / 45%)}.sheet-panel.small{width:min(330px,100%);grid-template-rows:auto auto auto auto}.sheet input{min-height:44px;padding:8px 10px;border:1px solid #757b88;border-radius:7px;background:#0e1015;color:#fff;font-size:16px}.option-list{min-height:0;overflow:auto;display:grid;gap:6px;padding-right:2px;-webkit-overflow-scrolling:touch}.option-list button{min-height:56px;padding:8px 10px;border:1px solid #ffffff24;border-radius:7px;background:#292e39;color:#fff;text-align:left;font-size:16px;font-weight:800}.option-list button.selected{border-color:var(--secondary);background:color-mix(in srgb,var(--secondary) 22%,#292e39)}@media(max-height:520px){main{padding:8px;gap:6px}main.locked{padding:8px}h1{font-size:26px}h2{font-size:20px}.card{padding:9px}.workspace{gap:8px}.enroll-stage strong{font-size:27px}.enroll-stage span{font-size:17px}.card input,.card select,.card button,.picker-button{min-height:34px}.card form{gap:5px}#message{font-size:15px}.table-wrap{max-height:294px}.sheet-panel{max-height:450px;padding:10px}.option-list button{min-height:50px}.pin-keypad button{min-height:40px}}
 main.locked{grid-template-rows:auto auto minmax(0,1fr);place-content:stretch;justify-items:center}
@@ -6,6 +6,10 @@ main.locked{grid-template-rows:auto auto minmax(0,1fr);place-content:stretch;jus
 .unlock-card{max-height:100%;overflow:auto;align-self:center}
 main:not(.locked)>#locked-return{display:none}
 .workspace{grid-template-columns:minmax(0,.95fr) minmax(0,1.15fr) minmax(0,1.25fr)}
+.workspace.auth-credentials{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr)}
+.workspace.auth-member-id{grid-template-columns:minmax(0,620px);justify-content:center}
+.credential-card{display:grid;align-content:start;gap:10px}
+.credential-card>p,.member-id-card p{font-size:16px}
 .card{min-width:0;overflow:auto}
 .card,.table-wrap,.option-list,.sheet-panel{touch-action:pan-x pan-y;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .card button,.card input,.card select,.picker-button,header a,td button{min-height:44px!important}
@@ -42,6 +46,13 @@ main:not(.locked)>#locked-return{display:none}
 .confirmation-panel{grid-template-rows:auto minmax(0,1fr) auto;width:min(500px,100%)}
 .confirmation-panel p{overflow:auto;touch-action:pan-y}
 .confirmation-actions{display:flex;gap:10px;justify-content:end}
+header{flex-wrap:wrap}header>div{flex:1 1 220px}
+header button{min-height:44px;padding:8px 12px;border:1px solid var(--danger);border-radius:8px;background:var(--surface);color:var(--text);font-weight:800}
+.sheet button.danger{background:var(--danger);border-color:var(--danger);color:#15171b}
+#confirm-ack{display:flex;gap:10px;align-items:center;min-height:44px;font-size:16px}
+#confirm-ack input{width:22px;height:22px;min-height:22px;flex:0 0 22px;accent-color:var(--primary)}
+.confirmation-panel:has(#confirm-ack:not([hidden])){grid-template-rows:auto minmax(0,1fr) auto auto}
+button:disabled{opacity:.5}
 button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid var(--secondary);outline-offset:-3px}
 @media(max-height:400px){#member-sheet .sheet-panel{gap:6px;padding:8px}
 .pin-keypad{gap:4px}
@@ -51,20 +62,67 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 .unlock-card .pin-keypad{grid-template-columns:repeat(6,minmax(0,1fr))}
 }
 
-`;
+` + fingerprintSyncStyles;
 
 export const maintenanceLayoutStyles = `.form-row{grid-template-columns:minmax(0,1fr) minmax(0,72px)}.form-row>*{min-width:0}.form-row input,.form-row select{width:100%;min-width:0}.pin-keypad button{width:100%;min-width:0}.number-sheet{padding:8px;overflow:hidden}.sheet-panel.small{width:min(310px,calc(100vw - 16px));max-width:100%;overflow:auto}`;
+
+import { fingerprintSyncApp, fingerprintSyncStyles } from "./fingerprint-sync-ui.mjs";
+export { fingerprintSyncStyles };
 
 export const maintenanceApp = `
 const byId = (id) => document.getElementById(id);
 let members = [];
 let mappings = {};
+let sensorSlots = [];
+let slotsVerified = false;
+let credentialMappings = [];
+let authenticationMethod = "fingerprint";
 let stagePolling;
 let stagePollRevision = 0;
 let selectedMember;
 let numberTarget;
-let confirmResolve;
+let confirmResolve, confirmReturnFocus;
 let sessionPolling;
+const unpairButton = document.createElement("button");
+unpairButton.id = "unpair-kiosk"; unpairButton.type = "button"; unpairButton.textContent = "Unpair kiosk";
+byId("maintenance-header").append(unpairButton);
+// Keep three touch actions on one row without shrinking their hit targets or
+// allowing a second header row to consume the short display's workspace.
+for (const [selector, label, accessibleName] of [["a[href='/attendance-review']", "Review scans", "Review rejected scans"], ["a[href='/']", "Return", "Return to kiosk"]]) {
+  const link = byId("maintenance-header").querySelector(selector);
+  link.textContent = label; link.setAttribute("aria-label", accessibleName);
+}
+const confirmAck = document.createElement("label");
+confirmAck.id = "confirm-ack"; confirmAck.hidden = true;
+const confirmAckInput = document.createElement("input"); confirmAckInput.type = "checkbox";
+const confirmAckText = document.createElement("span");
+confirmAck.append(confirmAckInput, confirmAckText);
+byId("confirm-detail").after(confirmAck);
+confirmAckInput.addEventListener("change", () => { byId("accept-action").disabled = !confirmAckInput.checked; });
+
+unpairButton.addEventListener("click", async () => {
+  unpairButton.disabled = true;
+  try {
+    const pairing = await call("/maintenance/pairing");
+    if (pairing.busy) throw new Error("Kiosk is busy. Try again after the current operation finishes.");
+    if (!pairing.paired && !pairing.recoveryPending) throw new Error("This kiosk is already unpaired.");
+    if (pairing.pendingEvents > 0) throw new Error(pairing.pendingEvents + " saved attendance scans are pending. Reconnect and sync them before unpairing.");
+    const detail = (pairing.recoveryPending ? "Finish the interrupted installation switch. " : "Disconnect " + (pairing.kioskName || "this kiosk") + (pairing.installation ? " from " + pairing.installation : "") + ". ")
+      + "Local attendance history, roster, mappings and fingerprint-sync trust will be archived, not reused. Reader fingerprints, Wi-Fi and your local PIN stay unchanged. The old dashboard entry remains until an Administrator retires it.";
+    unpairButton.disabled = false;
+    if (!await confirmAction(pairing.recoveryPending ? "Finish unpairing?" : "Unpair this kiosk?", detail, { label: "Unpair kiosk", returnFocus: unpairButton, acknowledgement: "I understand the new installation will need its own mappings and sync trust." })) return;
+    unpairButton.disabled = true;
+    await call("/maintenance/unpair", { method: "POST", body: JSON.stringify({ confirmation: "UNPAIR" }) });
+    clearInterval(sessionPolling); stopStagePolling(); lockWorkspace(); byId("unlock").hidden = true;
+    message("Unpaired. Restarting and returning to setup...");
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      try { const health = await fetch("/health", { signal: AbortSignal.timeout(1000) }).then(response => response.json()); if (health.setupReady && !health.paired) { location.href = "/"; return; } } catch { /* The service briefly disconnects during its restart. */ }
+    }
+    message("Unpaired. Wait for the service to restart, then return to the kiosk setup screen.");
+  } catch (error) { message(friendlyError(error), true); }
+  finally { unpairButton.disabled = false; }
+});
 
 async function call(path, options) {
   const response = await fetch(path, { ...options, headers: { ...(options?.body ? { "content-type": "application/json" } : {}), ...options?.headers } });
@@ -91,7 +149,7 @@ function applyBranding(value) {
   if (/^#[0-9a-f]{6}$/i.test(brand.primaryColor || "")) document.documentElement.style.setProperty("--primary", brand.primaryColor);
   if (/^#[0-9a-f]{6}$/i.test(brand.secondaryColor || "")) document.documentElement.style.setProperty("--secondary", brand.secondaryColor);
   byId("brand-subtitle").textContent = brand.subtitle || "Local tools";
-  byId("brand-title").textContent = brand.organizationName ? brand.organizationName + " fingerprints" : "Fingerprint maintenance";
+  byId("brand-title").textContent = (brand.organizationName ? brand.organizationName + " " : "") + "authentication";
 }
 
 function stage(id, title, detail) {
@@ -179,30 +237,63 @@ function lockWorkspace() {
   for (const sheet of document.querySelectorAll(".sheet")) sheet.hidden = true;
   confirmResolve?.(false);
   confirmResolve = undefined;
-  members = []; mappings = {}; selectedMember = undefined;
-  byId("member-options").replaceChildren(); byId("mappings").replaceChildren();
-  byId("member").value = ""; byId("member-search").value = ""; byId("pin").value = "";
+  confirmReturnFocus = undefined;
+  members = []; mappings = {}; credentialMappings = []; selectedMember = undefined;
+  byId("member-options").replaceChildren(); byId("mappings").replaceChildren(); byId("credential-mappings").replaceChildren();
+  byId("member").value = ""; byId("credential-member").value = ""; byId("credential-value").value = ""; byId("credential-label").value = ""; byId("member-search").value = ""; byId("pin").value = "";
   byId("maintenance-main").classList.add("locked");
   byId("unlock").hidden = false;
   message("Maintenance locked. Enter the local settings PIN.");
 }
 
-async function confirmAction(title, detail) {
+async function confirmAction(title, detail, options = {}) {
   if (confirmResolve) return false;
+  confirmReturnFocus = options.returnFocus || document.activeElement;
   byId("confirm-title").textContent = title;
   byId("confirm-detail").textContent = detail;
+  confirmAck.hidden = !options.acknowledgement; confirmAckInput.checked = false;
+  confirmAckText.textContent = options.acknowledgement || "";
+  byId("accept-action").textContent = options.label || "Confirm";
+  byId("accept-action").className = options.acknowledgement ? "danger" : "primary";
+  byId("accept-action").disabled = Boolean(options.acknowledgement);
   byId("confirm-sheet").hidden = false;
+  byId("cancel-action").focus();
   return new Promise((resolve) => { confirmResolve = resolve; });
 }
-for (const [id, accepted] of [["cancel-action", false], ["accept-action", true]]) {
-  byId(id).addEventListener("click", () => {
-    byId("confirm-sheet").hidden = true;
-    confirmResolve?.(accepted); confirmResolve = undefined;
-  });
+function finishConfirmation(accepted) {
+  if (accepted && byId("accept-action").disabled) return;
+  byId("confirm-sheet").hidden = true;
+  if (confirmReturnFocus?.isConnected && confirmReturnFocus.getClientRects().length) confirmReturnFocus.focus();
+  confirmReturnFocus = undefined;
+  confirmResolve?.(accepted); confirmResolve = undefined;
 }
+for (const [id, accepted] of [["cancel-action", false], ["accept-action", true]]) {
+  byId(id).addEventListener("click", () => finishConfirmation(accepted));
+}
+byId("confirm-sheet").addEventListener("keydown", event => {
+  if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); finishConfirmation(false); }
+  if (event.key === "Tab") {
+    const controls = [...byId("confirm-sheet").querySelectorAll("button,input")].filter(element => !element.disabled && element.getClientRects().length);
+    const first = controls[0], last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+});
 
 async function workspace() {
-  const [roster, local] = await Promise.all([call("/maintenance/members"), call("/mappings")]);
+  byId("credential-value").value = ""; byId("credential-label").value = "";
+  byId("unlock").hidden = true;
+  byId("maintenance-main").classList.remove("locked");
+  byId("maintenance-header").hidden = false;
+  clearInterval(sessionPolling);
+  sessionPolling = setInterval(async () => {
+    try { if (!(await call("/maintenance/session")).authorized) lockWorkspace(); }
+    catch { lockWorkspace(); }
+  }, 1000);
+  const displayState = await call("/display-state");
+  authenticationMethod = displayState.authenticationMethod || "fingerprint";
+  const mappedCredential = ["rfid", "nfc", "qr"].includes(authenticationMethod);
+  const [roster, local, credentialLocal] = await Promise.all([call("/maintenance/members"), authenticationMethod === "fingerprint" ? call("/mappings") : Promise.resolve({ mappings: {} }), mappedCredential ? call("/credential-mappings") : Promise.resolve({ mappings: [] })]);
   byId("unlock").hidden = true;
   byId("maintenance-main").classList.remove("locked");
   byId("maintenance-header").hidden = false;
@@ -214,14 +305,26 @@ async function workspace() {
   }, 1000);
   members = roster.members;
   mappings = local.mappings;
+  credentialMappings = credentialLocal.mappings;
+  const fingerprint = authenticationMethod === "fingerprint";
+  for (const element of document.querySelectorAll("[data-fingerprint]")) element.hidden = !fingerprint;
+  byId("credential-enroll-card").hidden = !mappedCredential;
+  byId("credential-mappings-card").hidden = !mappedCredential;
+  byId("member-id-card").hidden = authenticationMethod !== "member_id";
+  byId("workspace").className = "workspace " + (mappedCredential ? "auth-credentials" : authenticationMethod === "member_id" ? "auth-member-id" : "");
+  byId("credential-enroll-title").textContent = "Register " + authenticationMethod.toUpperCase() + (authenticationMethod === "qr" ? " code" : " badge");
   selectedMember = undefined;
   byId("member").value = "";
+  byId("credential-member").value = "";
   byId("member-picker").textContent = "Choose a member";
+  byId("credential-member-picker").textContent = "Choose a member";
   renderMemberOptions();
   renderMappings();
-  suggestSlot();
+  renderCredentialMappings();
+  if (fingerprint) await suggestSlot();
   stage("ready", "Ready to enroll", "Choose a member, finger, and slot.");
   message("Maintenance unlocked for five minutes.");
+  if (mappedCredential) byId("credential-value").focus({ preventScroll: true });
 }
 
 function memberLabel(member) {
@@ -251,17 +354,51 @@ function renderMemberOptions() {
 function chooseMember(member) {
   selectedMember = member.memberId;
   byId("member").value = member.memberId;
+  byId("credential-member").value = member.memberId;
   byId("member-picker").textContent = memberLabel(member);
+  byId("credential-member-picker").textContent = memberLabel(member);
   byId("member-sheet").hidden = true;
   renderMemberOptions();
 }
 
-function suggestSlot() {
-  const used = new Set(Object.keys(mappings).map(Number));
-  let slot = 0;
-  while (used.has(slot) && slot < 200) slot += 1;
-  byId("slot").value = String(Math.min(slot, 199));
-  byId("slot-help").textContent = slot < 200 ? "Suggested next open slot: " + slot : "All sensor slots have local mappings.";
+function renderCredentialMappings() {
+  const body = byId("credential-mappings"); body.replaceChildren();
+  const visible = credentialMappings.filter((mapping) => mapping.method === authenticationMethod);
+  for (const mapping of visible) {
+    const member = members.find((item) => item.memberId === mapping.memberId); const row = document.createElement("tr");
+    for (const text of [mapping.label, member ? member.firstName + " " + member.lastName : mapping.memberId]) { const cell = document.createElement("td"); cell.textContent = text; row.append(cell); }
+    const actions = document.createElement("td"); const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove"; remove.addEventListener("click", () => removeCredentialMapping(mapping)); actions.append(remove); row.append(actions); body.append(row);
+  }
+  if (!visible.length) { const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 3; cell.textContent = "No local credential mappings."; row.append(cell); body.append(row); }
+}
+
+async function removeCredentialMapping(mapping) {
+  if (!await confirmAction("Remove credential mapping?", "Remove " + mapping.label + " for member " + mapping.memberId + "?")) return;
+  try { await call("/credential-mappings/" + encodeURIComponent(mapping.id), { method: "DELETE" }); credentialMappings = (await call("/credential-mappings")).mappings; renderCredentialMappings(); message("Credential mapping removed."); }
+  catch (error) { message(friendlyError(error), true); }
+}
+
+async function suggestSlot() {
+  slotsVerified = false;
+  byId("begin-enroll").disabled = true;
+  byId("slot").value = "";
+  byId("slot-help").textContent = "Checking available sensor slots...";
+  try {
+    const result = await call("/sensor/slots");
+    if (byId("workspace").hidden) return;
+    if (!Array.isArray(result.occupiedSlots) || result.occupiedSlots.some((slot) => !Number.isInteger(slot) || slot < 0 || slot > 199)) throw new Error("Invalid sensor slot response");
+    sensorSlots = result.occupiedSlots;
+    const used = new Set([...Object.keys(mappings).map(Number), ...sensorSlots]);
+    let slot = 0;
+    while (used.has(slot) && slot < 200) slot += 1;
+    byId("slot").value = slot < 200 ? String(slot) : "";
+    byId("slot-help").textContent = slot < 200 ? "Suggested next open slot: " + slot : "No empty slots. Replacing a fingerprint requires confirmation.";
+    slotsVerified = true;
+    byId("begin-enroll").disabled = false;
+  } catch {
+    sensorSlots = [];
+    byId("slot-help").textContent = "Cannot verify empty slots. Test the reader before enrolling.";
+  }
 }
 
 function renderMappings() {
@@ -302,7 +439,7 @@ async function removeMapping(slot) {
     if (byId("workspace").hidden) return;
     mappings = result.mappings;
     renderMappings();
-    suggestSlot();
+    await suggestSlot();
     message("Mapping removed; sensor template retained.");
   } catch (error) {
     message(friendlyError(error), true);
@@ -356,6 +493,7 @@ byId("test-reader").addEventListener("click", async () => {
     const value = await call("/sensor/test", { method: "POST" });
     if (byId("workspace").hidden) return;
     byId("reader-status").textContent = value.readerOnline ? "Reader online · " + value.templateCount + " templates stored" : "Reader offline";
+    await suggestSlot();
     message(value.readerOnline ? "Reader test passed." : "Reader did not respond.", !value.readerOnline);
   } catch (error) {
     message(friendlyError(error), true);
@@ -365,12 +503,14 @@ byId("test-reader").addEventListener("click", async () => {
 byId("enroll-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const slot = Number(byId("slot").value);
-  if (mappings[String(slot)] && !byId("replace").checked) {
-    message("Slot " + slot + " already has a mapping. Confirm replacement or choose another slot.", true);
+  if (!slotsVerified || byId("slot").value === "") { message("Choose a verified sensor slot before enrolling.", true); return; }
+  const occupied = Boolean(mappings[String(slot)]) || sensorSlots.includes(slot);
+  if (occupied && !byId("replace").checked) {
+    message("Slot " + slot + " already contains a fingerprint or mapping. Confirm replacement or choose another slot.", true);
     return;
   }
   if (!selectedMember) { message("Choose a roster member.", true); return; }
-  if (!await confirmAction(mappings[String(slot)] ? "Replace occupied slot?" : "Begin enrollment?", "Slot " + slot + " · " + byId("member-picker").textContent + " · " + byId("finger").value + ". Present the same finger twice after confirming.")) return;
+  if (!await confirmAction(occupied ? "Replace occupied slot?" : "Begin enrollment?", "Slot " + slot + " · " + byId("member-picker").textContent + " · " + byId("finger").value + ". Present the same finger twice after confirming.")) return;
   const button = byId("begin-enroll");
   button.disabled = true;
   startStagePolling();
@@ -382,7 +522,7 @@ byId("enroll-form").addEventListener("submit", async (event) => {
     if (byId("workspace").hidden) return;
     mappings = local.mappings;
     renderMappings();
-    suggestSlot();
+    await suggestSlot();
     byId("replace").checked = false;
     stopStagePolling();
     await pollStage();
@@ -393,12 +533,34 @@ byId("enroll-form").addEventListener("submit", async (event) => {
     message(friendlyError(error), true);
   } finally {
     stopStagePolling();
-    button.disabled = false;
+    button.disabled = !slotsVerified;
   }
 });
 
+byId("credential-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!selectedMember) { message("Choose a roster member.", true); return; }
+  const credential = byId("credential-value").value;
+  if (!credential.trim()) { message("Scan or enter the credential.", true); return; }
+  const payload = { memberId: selectedMember, credential, label: byId("credential-label").value };
+  try {
+    let result;
+    try { result = await call("/credential-mappings", { method: "POST", body: JSON.stringify(payload) }); }
+    catch (error) {
+      if (!/already mapped/.test(error.message) || !await confirmAction("Replace credential mapping?", "This credential is already registered. Replace its member mapping?")) throw error;
+      result = await call("/credential-mappings", { method: "POST", body: JSON.stringify({ ...payload, replaceExisting: true }) });
+    }
+    byId("credential-value").value = ""; byId("credential-label").value = "";
+    credentialMappings = (await call("/credential-mappings")).mappings; renderCredentialMappings();
+    message(result.mapping.label + " registered without storing or displaying the raw credential.");
+  } catch (error) { message(friendlyError(error), true); }
+  finally { byId("credential-value").value = ""; }
+});
+
 byId("refresh").addEventListener("click", () => workspace().catch((error) => message(friendlyError(error), true)));
+byId("credential-refresh").addEventListener("click", () => workspace().catch((error) => message(friendlyError(error), true)));
 byId("member-picker").addEventListener("click", () => { byId("member-sheet").hidden = false; byId("member-search").focus(); renderMemberOptions(); });
+byId("credential-member-picker").addEventListener("click", () => { byId("member-sheet").hidden = false; byId("member-search").focus(); renderMemberOptions(); });
 byId("close-member-sheet").addEventListener("click", () => { byId("member-sheet").hidden = true; });
 byId("member-search").addEventListener("input", renderMemberOptions);
 byId("slot").addEventListener("click", () => openNumberPad(byId("slot")));
@@ -482,5 +644,6 @@ byId("close-finger-sheet").addEventListener("click", () => { byId("finger-sheet"
 buildSearchKeyboard();
 buildPinKeypad();
 buildSlotKeypad();
+` + fingerprintSyncApp + `
 await start();
 `;

@@ -10,10 +10,15 @@ import { databaseIdentity, measureD1, usageCategory, type D1Statement } from "..
 class Database {
   sqlite = new DatabaseSync(":memory:");
   calls: { sql: string; values: unknown[] }[] = [];
+  batchQueue: Promise<void> = Promise.resolve();
   constructor() {
     for (const file of readdirSync("apps/api/migrations").filter((name) => name.endsWith(".sql")).sort()) this.sqlite.exec(readFileSync(`apps/api/migrations/${file}`, "utf8"));
     this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES ('primary','2026-01-01','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('admin','primary','admin','admin','2026-01-01');
+      INSERT INTO platform_module_administration(installation_id,revision,selection_completed) VALUES ('primary',0,1);
+      INSERT INTO platform_module_administration_epochs(installation_id,revision) VALUES ('primary',0);
+      INSERT INTO platform_module_epochs(installation_id,module_id,generation) VALUES ('primary','attendance',1);
+      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete) VALUES ('primary','attendance',1,1,'enabled',2,1);
       INSERT INTO organization_settings(installation_id,time_zone,attendance_reporting_starts_on) VALUES ('primary','UTC','2026-02-01');
       INSERT INTO members(id,installation_id,external_id,first_name,last_name,created_at) VALUES ('m1','primary','one','First','Member','2026-01-01'),('m2','primary','two','Second','Member','2026-01-01');
       INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) VALUES ('meeting','primary','Meeting','2026-02-02T12:00:00Z','2026-02-02T13:00:00Z','admin','2026-01-01');
@@ -29,15 +34,20 @@ class Database {
       async run() {
         const before = Number(database.sqlite.prepare("SELECT total_changes() AS n").get()!.n);
         const statement = execute();
-        const results = /RETURNING/i.test(sql) ? statement.all(...values as []) : (statement.run(...values as []), undefined);
+        const results = /^\s*SELECT\b/i.test(sql) || /RETURNING/i.test(sql) ? statement.all(...values as []) : (statement.run(...values as []), undefined);
         return { results, success: true, meta: { changes: Number(database.sqlite.prepare("SELECT total_changes() AS n").get()!.n) - before } };
       },
     };
   }
   async batch(statements: D1Statement[]) {
-    this.sqlite.exec("BEGIN");
-    try { const results = []; for (const statement of statements) results.push(await statement.run()); this.sqlite.exec("COMMIT"); return results; }
-    catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
+    const execute = async () => {
+      this.sqlite.exec("BEGIN");
+      try { const results = []; for (const statement of statements) results.push(await statement.run()); this.sqlite.exec("COMMIT"); return results; }
+      catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
+    };
+    const pending = this.batchQueue.then(execute, execute);
+    this.batchQueue = pending.then(() => undefined, () => undefined);
+    return pending;
   }
 }
 const secret = "A".repeat(43);

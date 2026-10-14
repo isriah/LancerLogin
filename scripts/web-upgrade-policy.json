@@ -1,6 +1,8 @@
 {
   "format": 1,
-  "independentBridgeMigrations": ["0061_update_channels.sql"],
+  "independentBridgeMigrations": [
+    "0061_update_channels.sql"
+  ],
   "minimumInstalledVersion": "0.23.2",
   "automaticCodeRollback": false,
   "reviewedMigrations": [
@@ -200,8 +202,148 @@
       "forwardCompatible": true
     },
     {
+      "name": "0039_module_platform.sql",
+      "sha256": "7ca7cc5ec1a0ea65699364cc086da48b06a91da54888ce63123170ef1e154dda",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0040_attendance_module_lifecycle.sql",
+      "sha256": "836502ea3b8ace2657750418c78b5f47a38b3880b2235c749bf00034981eeee0",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0041_admin_developer_preferences.sql",
+      "sha256": "daad3e3f7daa84ad425ba77d24b58111a4ffd734a58c02ebb7169747974bd272",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0042_outreach_participation.sql",
+      "sha256": "76acb249628126d657a346c57beed88ad88c5e7bc33235dcde7743391876ba6e",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0043_outreach_member_participation.sql",
+      "sha256": "68c8bf2f2b05aef63e839fc530ccdc45b5f334f378638f3fcf00e0d94b6fb90a",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0044_outreach_entry_review_guards.sql",
+      "sha256": "346d1750809cd90c653a55595c436a8f9afdbb7ce76c03dd83ecf1d8ee689e02",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0045_outreach_publication.sql",
+      "sha256": "f3bbb24a3b0ef2fd6f6800221e0c5cc05bb1df1632021539473767faa260bdf9",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0046_kiosk_pairing_authority.sql",
+      "sha256": "fa13c4e5e947ffecf159f36d0bd148e0e6a6cced6f5aee3c0ec67a18fda36171",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0047_outreach_activity_labels.sql",
+      "sha256": "04b802fe9ddd70544378f0e64022113935d7e7db30eb71133cdfd8a5b7caebcb",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0048_outreach_publication_setting.sql",
+      "sha256": "a64ebb5ddd39f705c556b314c7752625006cded8fc667aa597b736b354abb9b6",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0049_carpool_module.sql",
+      "sha256": "f2d29889c04be0d7902875792965a65d085a980a4bae1d7d78d9cf9727108bdf",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0050_kiosk_auth_methods.sql",
+      "sha256": "c0d7fd63ca91e2f86b280fb30bf1e9c25d8e82701c450e92b681a373ae9256db",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0053_multi_kiosk.sql",
+      "sha256": "98484869d4c8c6fb3657ae6c47904f1d2096f429a8bdab4ec12e142978df9798",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0054_multi_kiosk_authority.sql",
+      "sha256": "18f6ede87a7a87d20e2097b400c6130e2a95951268a455bb8e9a6464388c8257",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0055_fingerprint_sync.sql",
+      "sha256": "1ffaf47e87dde961ac93774fd2a1bd2ae925a577deb28c902cd791d7d38fd056",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0056_outreach_public_workflow.sql",
+      "sha256": "7b60187b4936b1f7b0e09bbd86309dc3d489f2bc71725fbd528dc3d325b51d84",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0057_fingerprint_vault.sql",
+      "sha256": "e4f2f7e00c98a703dce665d709afe5ba7eadebe7894248e9d4dc14feb21066d1",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0058_carpool_meeting_links.sql",
+      "sha256": "b00b3f0288d267ea21019d8076dc46b0435821a6b6d0a10343152c041d9ffb0e",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0059_fingerprint_review.sql",
+      "sha256": "7d32bc5ce76b3b98fe87a53a1d4d36db4b0672f0dc1aced44ba6d159a0b6370d",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0060_retire_fingerprint_review.sql",
+      "sha256": "d4536e3d3cc7a3c247f296c322a9d45366c58ac2694d62d2192d4c345f6200a1",
+      "forwardCompatible": true
+    },
+    {
       "name": "0061_update_channels.sql",
       "sha256": "1e2e02c7891c05179423a6f78737e2e1e2d221a7d8054339b733953eed9a9192",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0062_member_inactive_periods.sql",
+      "sha256": "befed0bcf0d58605b71d1b3e16432251fe18ad37bbff72ba2b294014fa3dec06",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0063_carpool_settings.sql",
+      "sha256": "35acaa900ce2bbd85c2fda1762e396722d815211320d21def629e7c97cd4faf2",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0064_outreach_event_date_edits.sql",
+      "sha256": "08b408177a58d8bf24d5b50b408c2cb7ca7ea337bacf8fb9c25049b156ef14f1",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0065_outreach_activity_edits.sql",
+      "sha256": "af1f9d810e6af64183dd851e8772925f35509775f3c69df0b4addad8580c6c0f",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0066_outreach_publication_snapshots.sql",
+      "sha256": "f54bd022bbdc4d6ed8c41a598c18ad938e3c73b440fbccaef73c74900d51671d",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0067_carpool_people_workspace.sql",
+      "sha256": "381b92720eb631091127664aa9e338741dcf4189952c8af5f2449c891bc6bb31",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0068_carpool_groups_workspace.sql",
+      "sha256": "890acfee0645d9bfb65a729a45af5ad83b59a9c9a6c5e10fa0378933ac3f8033",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0069_carpool_share_schedule.sql",
+      "sha256": "3f37f9240df9fafe0ee7daabc762538baef2bf3964fee743da4c6ce0cb04df78",
       "forwardCompatible": true
     }
   ]

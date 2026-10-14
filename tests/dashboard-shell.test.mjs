@@ -85,6 +85,12 @@ test("guided setup keeps branding local and makes its compact progress accessibl
   assert.doesNotMatch(workspace, /Light or dark mode is a personal browser preference/);
   assert.match(workspace, /className="setup-progress" role="progressbar"/);
   assert.match(workspace, /aria-label="Guided setup progress"/);
+  assert.match(workspace, /Physical kiosk authentication/);
+  assert.match(workspace, /Save authentication method/);
+  assert.match(workspace, /The local authentication test passed/);
+  assert.match(workspace, /setInterval\(\(\) => void refresh\(\), 5_000\)/);
+  assert.match(workspace, /disabled=\{!kioskAuthenticationReady\}/);
+  assert.doesNotMatch(workspace, /The local reader test passed/);
   assert.match(styles, /\.setup-logo-file input\[type="file"\]::file-selector-button/);
   assert.match(styles, /\.wizard-panel \.logo-backdrop-options \+ \.color-grid/);
   assert.match(styles, /\.wizard-panel \.setup-branding-save \{ margin-top: \.45rem/);
@@ -177,13 +183,21 @@ test("data controls expose separate backup, restore, and deletion per category",
 
 test("dashboard consolidates meeting navigation and keeps roster accounts together", async () => {
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const modules = await readFile("apps/dashboard/src/settings-module-navigation.tsx", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
   const importer = await readFile("apps/dashboard/src/roster-import-panel.tsx", "utf8");
   const users = await readFile("apps/dashboard/src/user-settings.tsx", "utf8");
   for (const route of ["/dashboard", "/meetings", "/attendance", "/reports", "/roster", "/kiosks", "/settings/data", "/settings/updates"]) {
     assert.match(shell, new RegExp(route.replaceAll("/", "\\/")));
   }
-  assert.match(shell, /\["\/dashboard", "Dashboard"\]/);
+  assert.match(shell, /\["\/dashboard", attendanceReady \? "Meetings" : "Dashboard"\]/);
+  assert.match(shell, /<SettingsModuleNavigation currentPath=\{path\}/);
+  assert.match(modules, /<RouteLink href="\/settings\/modules"[^>]*>Manage modules<\/RouteLink>/);
+  assert.match(modules, /className="settings-module-toggle"/);
+  assert.match(modules, /<span>Modules<\/span>/);
+  assert.match(modules, /aria-expanded=\{Boolean\(expanded\[module.id\]\)\}/);
+  assert.match(shell, /CoreHomePage/);
+  assert.match(users, /ModuleAssignmentControls/);
   assert.doesNotMatch(shell, /\["\/meetings", "Meetings"\]|\["\/attendance", "Attendance"\]/);
   assert.match(shell, /LegacyMeetingsRedirect/);
   assert.match(shell, /dashboardMeetingViewKey, "table"/);
@@ -200,7 +214,9 @@ test("dashboard consolidates meeting navigation and keeps roster accounts togeth
   assert.match(users, /Roster link <span>\(optional\)<\/span>/);
   assert.match(users, /Non-rostered Admin or Operator/);
   assert.doesNotMatch(shell, /\["\/setup", "Setup"\]/);
-  assert.match(shell, /setupStepIds\.every/);
+  assert.match(shell, /ModuleSetupWorkspace/);
+  assert.match(shell, /modules\.find\(\(item\) => item\.enabled && !item\.setup\.ready\)/);
+  assert.match(shell, /outreachReady && \(path === "\/hours" \|\| path.startsWith\("\/hours\/activities\/"\)/);
 });
 
 test("dashboard access sign-in method is a compact, accessible radio toggle group", async () => {
@@ -218,11 +234,12 @@ test("dashboard access sign-in method is a compact, accessible radio toggle grou
 
 test("Settings separates operational configuration, access, and kiosk update comparisons", async () => {
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const modules = await readFile("apps/dashboard/src/settings-module-navigation.tsx", "utf8");
   const organization = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
   const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   const integrations = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
   const updates = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
-  assert.match(shell, /\["\/settings\/configuration", "Configuration"\]/);
+  assert.match(modules, /\["\/settings\/configuration", "Meeting configuration"\]/);
   assert.match(shell, /\["\/settings\/access", "Access"\]/);
   assert.match(shell, /\["\/settings\/updates", "Updates"\]/);
   assert.match(shell, /role === "admin" && path === "\/settings\/access"/);
@@ -264,6 +281,8 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(home, /length: 35/);
   assert.match(home, /lancerlogin-dashboard-meeting-view/);
   assert.match(home, /Meeting view/);
+  assert.match(home, /BrowserViewIcon view="calendar"/);
+  assert.match(home, /BrowserViewIcon view="table"/);
   assert.match(home, /className="meeting-browser-select"><span>Meeting<\/span><select className="ui-control ui-native-select"/);
   assert.match(home, /Add meeting/);
   assert.match(home, /setCalendarOffset/);
@@ -333,6 +352,9 @@ test("reports are a routed workspace with a paginated leaderboard and saved repo
   assert.match(reports, /\/reports\/query/);
   assert.match(reports, /reportQuery\(filters\)/);
   assert.match(reports, /Historical membership/);
+  assert.match(reports, /Outreach label matching/);
+  assert.match(reports, /Search Outreach labels/);
+  assert.match(reports, /definition\.outreachLabelIds/);
   assert.match(reports, /From<input type="date"/);
   assert.match(reports, /Meeting type<select/);
   assert.match(reports, /Active roster/);
@@ -377,7 +399,7 @@ test("pending contests use meeting detail, the global notifier, and the Reports 
   const reports = await readFile("apps/dashboard/src/reports-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(shell, /ContestIndicator/);
-  assert.match(shell, /ContestIndicator enabled=\{integrations\.discord\.configured\}/);
+  assert.match(shell, /ContestIndicator enabled=\{attendanceReady && integrations\.discord\.configured\}/);
   assert.match(indicator, /\/discord\/contests/);
   assert.match(indicator, /capabilities\.integrations\.discord\.configured/);
   assert.match(indicator, /aria-haspopup="dialog"/);
@@ -522,9 +544,11 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   const source = await readFile("apps/dashboard/src/kiosks-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(source, /\/admin\/pairing-codes/);
-  assert.match(source, /Replace kiosk/);
+  assert.match(source, /Add kiosk/);
   assert.match(source, /<div className="page-intro"><h1 id="kiosks-title">Kiosks<\/h1><\/div>/);
-  assert.match(source, /<div className="kiosk-card-heading"[^>]*><h2>Physical kiosk<\/h2>\{role === "admin" && <button className="primary-button"/);
+  assert.match(source, /<div className="kiosk-card-heading"[^>]*><div><h2>Physical kiosks<\/h2>/);
+  assert.match(source, /const activeKiosks = kiosks\.filter\(\(kiosk\) => kiosk\.active === 1\)/);
+  assert.match(source, /aria-label="Active physical kiosks"/);
   assert.match(source, /Retire kiosk/);
   assert.match(source, /Update kiosk/);
   assert.match(source, /Device history/);
@@ -534,7 +558,7 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(source, /Reset network PIN/);
   assert.match(source, /\/admin\/kiosks\/\$\{encodeURIComponent\(active\.id\)\}\/commands/);
   assert.match(source, /Last Wi-Fi scan/);
-  assert.match(source, /const healthy = Boolean\(active && online && active\.readerOnline/);
+  assert.match(source, /const healthy = Boolean\(kiosk && online && kiosk\.readerOnline/);
   assert.match(source, /healthy \? "healthy" : "degraded"/);
   assert.match(source, /health === "unpaired" \? "Not paired"/);
   assert.match(source, /kiosk-state-\$\{health\}/);
@@ -584,6 +608,9 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /field="applicationId" label="Application ID"/);
   assert.match(source, /During verification, LancerLogin creates or updates only the guild-scoped/);
   assert.match(source, /<code>\/attendance-report<\/code>/);
+  assert.match(source, /<code>\/outreach-submit<\/code>/);
+  assert.match(source, /Outreach commands remain unavailable until the Outreach module is enabled and ready/);
+  assert.match(source, /server's Core and Outreach commands/);
   assert.match(source, /Verify with Google/);
   assert.match(source, /Google Calendar is ready\. New meetings will be copied automatically\./);
   assert.match(source, /Authorize Google Calendar/);
@@ -603,7 +630,7 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /method: "PATCH"/);
   assert.match(shell, /\/integrations\/capabilities/);
   assert.match(shell, /HomePage[^>]+discordEnabled=\{integrations\.discord\.configured\}[^>]+debugMode=\{debugMode\}/);
-  assert.match(shell, /ReportsPage discordEnabled=\{integrations\.discord\.configured\}/);
+  assert.match(shell, /ReportsPage discordEnabled=\{attendanceReady && integrations\.discord\.configured\}/);
   assert.match(shell, /KiosksPage role=\{role\} discordConfigured=\{integrations\.discord\.configured\}/);
   assert.doesNotMatch(meetings, /Sync all to Discord/);
   assert.match(attendance, /capabilities\.integrations\.discord\.configured/);

@@ -5,8 +5,8 @@ test("Dashboard owns meeting navigation and remembers the selected browser", asy
   await page.goto("/dashboard");
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   const primary = page.getByRole("navigation", { name: "Primary dashboard navigation" });
-  await expect(primary.getByRole("link", { name: "Dashboard" })).toBeVisible();
-  await expect(primary.getByRole("link", { name: "Meetings" })).toHaveCount(0);
+  await expect(primary.getByRole("link", { name: "Meetings" })).toBeVisible();
+  await expect(primary.getByRole("link", { name: "Dashboard" })).toHaveCount(0);
   await expect(primary.getByRole("link", { name: "Attendance" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Meeting calendar" })).toBeVisible();
 

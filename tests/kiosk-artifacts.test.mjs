@@ -2,10 +2,29 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, link, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { kioskArchitectures, packageKioskArtifacts, smokeKioskDirectory, verifyKioskArtifacts } from "../scripts/package-kiosk.mjs";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { checkKioskArchiveModes, kioskArchitectures, packageKioskArtifacts, smokeKioskDirectory, verifyKioskArtifacts, writeKioskArchive } from "../scripts/package-kiosk.mjs";
+
+function archiveWithMode(archive, path, mode) {
+  const tar = gunzipSync(archive);
+  for (let offset = 0; offset + 512 <= tar.length; ) {
+    const header = tar.subarray(offset, offset + 512);
+    const name = header.subarray(0, 100).toString().replace(/\0.*$/s, "").replace(/^\.\//, "").replace(/\/$/, "") || ".";
+    if (name === path) {
+      header.write(`${mode.toString(8).padStart(7, "0")}\0`, 100, 8);
+      header.fill(32, 148, 156);
+      header.write(`${header.reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, "0")}\0 `, 148, 8);
+      return gzipSync(tar);
+    }
+    const size = Number.parseInt(header.subarray(124, 136).toString().replace(/\0.*$/s, "").trim(), 8);
+    if (!Number.isFinite(size)) break;
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  throw new Error(`Test archive entry missing: ${path}`);
+}
 
 test("Linux installer replaces an older root helper with verified packaged bytes and permissions", { skip: process.platform !== "linux" || process.getuid?.() !== 0 }, async () => {
   const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-installed-helper-"));
@@ -40,6 +59,33 @@ test("Linux installer replaces an older root helper with verified packaged bytes
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
+test("Linux in-place installer preserves protected pairing, mappings and offline queue bytes", { skip: process.platform !== "linux" || process.getuid?.() !== 0 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-retained-state-"));
+  try {
+    const artifacts = await packageKioskArtifacts({ output: join(scratch, "artifacts"), version: "9.9.9" });
+    const runtime = join(scratch, "runtime"); const state = join(scratch, "state");
+    await mkdir(runtime); await mkdir(state, { mode: 0o700 });
+    const retained = { "pairing.json": '{"kioskToken":"synthetic-retained-token"}', "mappings.json": '{"107":"SYN-001"}', "queue.json": '[{"eventId":"synthetic-before-upgrade","memberId":"SYN-001","occurredAt":"2026-10-01T10:00:00Z"}]', "network-pin.json": '{"hash":"synthetic-retained-hash"}' };
+    for (const [name, bytes] of Object.entries(retained)) await writeFile(join(state, name), bytes, { mode: 0o600 });
+    const installer = await readFile(join(artifacts, "install-lancerlogin.sh"), "utf8");
+    const normalize = installer.slice(installer.indexOf("normalize_runtime_permissions()"), installer.indexOf("check_hardware()"));
+    const start = installer.indexOf("install -d -m 0755 -o root -g root /opt/lancerlogin");
+    const end = installer.indexOf("install -m 0644 /opt/lancerlogin/systemd", start);
+    assert.ok(start > 0 && end > start);
+    // Execute real installation/extraction commands with isolated filesystem
+    // roots and root as the test state owner. No service or hardware calls.
+    const block = (normalize + installer.slice(start, end)).replaceAll("/opt/lancerlogin", runtime).replaceAll("/var/lib/lancerlogin", state).replaceAll("-o lancerlogin -g lancerlogin", "-o root -g root");
+    execFileSync("/usr/bin/bash", ["-euc", block], { env: { ...process.env, temporary: artifacts, archive: "lancerlogin-kiosk-9.9.9-linux-arm64.tar.gz" } });
+    for (const [name, bytes] of Object.entries(retained)) {
+      assert.equal(await readFile(join(state, name), "utf8"), bytes);
+      assert.equal(execFileSync("stat", ["-c", "%a", join(state, name)], { encoding: "utf8" }).trim(), "600");
+    }
+    assert.equal(execFileSync("stat", ["-c", "%a", state], { encoding: "utf8" }).trim(), "700");
+    assert.equal(execFileSync("stat", ["-c", "%a", runtime], { encoding: "utf8" }).trim(), "755");
+    assert.match(installer, /Enter a dashboard one-time pairing key only if the kiosk shows the pairing screen/);
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
 test("both shipped archives load and serve their isolated runtime; missing imports fail closed", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-artifact-test-"));
   const version = JSON.parse(await readFile("package.json", "utf8")).version;
@@ -49,6 +95,7 @@ test("both shipped archives load and serve their isolated runtime; missing impor
       const extracted = join(scratch, arch);
       await mkdir(extracted);
       execFileSync("tar", ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`), "-C", extracted]);
+      checkKioskArchiveModes(await readFile(join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`)));
       const expected = [...(await readdir("apps/kiosk/src")).filter(name => name.endsWith(".mjs")), "release-policy.mjs"].sort();
       assert.deepEqual((await readdir(join(extracted, "src"))).sort(), expected);
       assert.equal(await readFile(join(extracted, "src/release-policy.mjs"), "utf8"), await readFile("packages/shared/src/release-policy.mjs", "utf8"));
@@ -69,7 +116,7 @@ test("both shipped archives load and serve their isolated runtime; missing impor
     const name = `lancerlogin-kiosk-${version}-linux-arm64.tar.gz`;
     execFileSync("tar", ["-xzf", join(artifacts, name), "-C", broken]);
     await rm(join(broken, "src/update-command.mjs"));
-    execFileSync("tar", ["-czf", join(artifacts, name), "-C", broken, "."]);
+    await writeKioskArchive(broken, join(artifacts, name));
     const digest = createHash("sha256").update(await readFile(join(artifacts, name))).digest("hex");
     await writeFile(join(artifacts, `${name}.sha256`), `${digest}  ${name}\n`);
     await assert.rejects(verifyKioskArtifacts({ artifacts, version }), error => {
@@ -107,20 +154,15 @@ test("release publication requires shared artifact validation after exact-commit
 });
 
 
-test("valid-checksum archives with inaccessible code fail permission validation", { skip: process.platform === "win32" }, async () => {
+test("valid-checksum archives with inaccessible or writable code fail permission validation on every host", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-mode-test-"));
   const version = JSON.parse(await readFile("package.json", "utf8")).version;
   try {
     const artifacts = await packageKioskArtifacts({ output: join(scratch, "artifacts"), version });
     const name = `lancerlogin-kiosk-${version}-linux-arm64.tar.gz`;
     const good = await readFile(join(artifacts, name));
-    const extracted = join(scratch, "extracted");
-    await mkdir(extracted);
-    for (const [path, mode] of [[".", 0o700], ["src", 0o700], ["src/service.mjs", 0o600]]) {
-      await writeFile(join(artifacts, name), good);
-      execFileSync("tar", ["-xzf", join(artifacts, name), "-C", extracted]);
-      await chmod(join(extracted, path), mode);
-      execFileSync("tar", ["-czf", join(artifacts, name), "-C", extracted, "."]);
+    for (const [path, mode] of [[".", 0o700], ["src", 0o700], ["src/service.mjs", 0o600], ["src", 0o777], ["src/service.mjs", 0o666], ["scripts/lancerlogin-install-release.sh", 0o644]]) {
+      await writeFile(join(artifacts, name), archiveWithMode(good, path, mode));
       const digest = createHash("sha256").update(await readFile(join(artifacts, name))).digest("hex");
       await writeFile(join(artifacts, `${name}.sha256`), `${digest}  ${name}\n`);
       await assert.rejects(verifyKioskArtifacts({ artifacts, version }), /Unsafe kiosk artifact mode/);
@@ -140,12 +182,28 @@ test("Linux root-owned artifacts start as another account, and mode 700 actually
       assert.match(String(error.stderr), /EACCES/);
       return true;
     });
-    // Exercise the installer's exact post-extraction repair on a disposable path.
+    // Exercise the actual installer repair, including permissive Windows modes.
+    await chmod(join(extracted, "src"), 0o777);
+    await chmod(join(extracted, "src/service.mjs"), 0o666);
+    await chmod(join(extracted, "scripts/lancerlogin-install-release.sh"), 0o666);
     const installer = await readFile("apps/kiosk/scripts/install-lancerlogin.sh", "utf8");
     const repair = installer.match(/^chmod 0755 \/opt\/lancerlogin$/m)?.[0];
-    assert.ok(repair);
-    execFileSync("bash", ["-c", repair.replace("/opt/lancerlogin", '\"$1\"'), "repair-test", extracted]);
+    const normalize = installer.match(/^normalize_runtime_permissions\(\) \{[\s\S]*?^\}/m)?.[0];
+    assert.ok(repair && normalize);
+    const repairBlock = `${normalize}\n${repair}\nnormalize_runtime_permissions`.replaceAll("/opt/lancerlogin", extracted);
+    execFileSync("bash", ["-euc", repairBlock]);
+    for (const [path, mode] of [[".", "755"], ["src", "755"], ["src/service.mjs", "644"], ["scripts/lancerlogin-install-release.sh", "755"]]) {
+      assert.equal(execFileSync("stat", ["-c", "%a", join(extracted, path)], { encoding: "utf8" }).trim(), mode);
+    }
     await smokeKioskDirectory(extracted, { requireUnprivileged: true });
+    for (const [create, message] of [[symlink, /Unexpected runtime file type/], [link, /Unexpected runtime hard link/]]) {
+      const unexpected = join(extracted, "unexpected-link");
+      await create(join(extracted, "src/service.mjs"), unexpected);
+      assert.throws(() => execFileSync("bash", ["-euc", repairBlock], { stdio: "pipe" }), error => {
+        assert.match(String(error.stderr), message); return true;
+      });
+      await rm(unexpected);
+    }
   } finally {
     await rm(extracted, { recursive: true, force: true });
     await rm(scratch, { recursive: true, force: true });

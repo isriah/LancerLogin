@@ -2,6 +2,7 @@ import { RefObject, useEffect, useRef } from "react";
 
 const focusableSelector = [
   "a[href]",
+  "summary",
   "button:not([disabled])",
   "input:not([disabled])",
   "select:not([disabled])",
@@ -19,7 +20,7 @@ export function useModalFocus(dialog: RefObject<HTMLElement | null>, active: boo
     if (!active) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     const focusable = () => Array.from(dialog.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
-      .filter((element) => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+      .filter((element) => element.getClientRects().length > 0 && !element.closest("[hidden], [aria-hidden='true'], fieldset[disabled]"));
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busyRef.current) { event.preventDefault(); escapeRef.current(); return; }
       if (event.key !== "Tab") return;

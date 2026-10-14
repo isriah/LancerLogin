@@ -102,6 +102,29 @@ test("Updates keeps a confirmed kiosk release visible across responsive branded 
   }
 });
 
+test("Updates renders and queues commands for each active kiosk independently", async ({ page }) => {
+  const now = new Date().toISOString();
+  await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "0.22.0", workflowUrl: "https://github.example.test/deploy" } }));
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: "0.22.0" } }));
+  await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: "v0.23.0" }) }));
+  await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [
+    { id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: now, releaseVersion: "0.21.0" },
+    { id: "kiosk-2", name: "Workshop entrance", active: 1, lastSeenAt: now, releaseVersion: "0.20.0" },
+  ] } }));
+  const queued: string[] = [];
+  for (const kioskId of ["kiosk-1", "kiosk-2"]) await page.route(`**/admin/kiosks/${kioskId}/commands`, (route) => {
+    if (route.request().method() === "POST") queued.push(kioskId);
+    return route.fulfill({ json: route.request().method() === "GET" ? { commands: [] } : {} });
+  });
+
+  await page.goto("/settings/updates");
+  await expect(page.getByRole("heading", { name: "Physical kiosk", exact: true })).toHaveCount(2);
+  const workshop = page.locator(".release-comparisons > article").filter({ hasText: "Workshop entrance" });
+  await expect(workshop).toContainText("0.20.0");
+  await workshop.getByRole("button", { name: "Update to latest stable" }).click();
+  await expect.poll(() => queued).toEqual(["kiosk-2"]);
+});
+
 for (const scenario of [
   { installed: "0.23.0", latest: "v0.23.0", tone: "success", message: "This installation is current" },
   { installed: "0.24.0", latest: "v0.23.0", tone: "success", message: "newer than the latest confirmed published release" },

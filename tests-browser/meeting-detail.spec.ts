@@ -187,8 +187,8 @@ test("meeting contest review distinguishes partial, missing, and complete raw sc
       await expect(contest.getByText(count, { exact: true })).toBeVisible();
       await expect(contest.getByText(scan, { exact: true })).toBeVisible();
     }
-    const widths = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
-    expect(widths.scrollWidth).toBeLessThanOrEqual(widths.clientWidth);
+    const widths = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, overflow: Array.from(document.querySelectorAll(".dashboard-page *")).filter((element) => element.getBoundingClientRect().right > document.documentElement.clientWidth).map((element) => ({ tag: element.tagName, className: element.className, right: element.getBoundingClientRect().right })) }));
+    expect(widths.scrollWidth, JSON.stringify(widths.overflow)).toBeLessThanOrEqual(widths.clientWidth);
     const firstReason = review.getByLabel("Review reason").first();
     await firstReason.focus();
     await expect(firstReason).toBeFocused();

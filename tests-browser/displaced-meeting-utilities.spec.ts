@@ -68,7 +68,7 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
   for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     await page.goto("/kiosks");
-    const physical = page.locator(".kiosk-grid > .task-card").filter({ has: page.getByRole("heading", { name: "Physical kiosk" }) });
+    const physical = page.locator(".kiosk-grid > .task-card").filter({ has: page.getByRole("heading", { name: "Physical kiosks" }) });
     await expect(physical.getByRole("region", { name: "Discord kiosk status" })).toHaveCount(0);
     const syncButton = physical.getByRole("button", { name: "Sync Discord status" });
     expect((await syncButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
@@ -82,7 +82,7 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
 
   await page.goto("/kiosks");
   await page.getByRole("button", { name: "Sync Discord status" }).click();
-  await expect(page.getByRole("status")).toHaveText("Persistent Discord kiosk status updated.");
+  await expect(page.locator('.kiosk-notice[role="status"]')).toHaveText("Persistent Discord kiosk status updated.");
   expect(syncRequests).toBe(1);
   const messageLink = page.getByRole("link", { name: "View Discord status message" });
   expect((await messageLink.boundingBox())!.height).toBeGreaterThanOrEqual(44);
@@ -92,7 +92,7 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.getByRole("link", { name: "View Discord status message" })).toHaveAttribute("href", "https://discord.com/channels/123456789012345678/223456789012345678/323456789012345678");
   await page.getByRole("button", { name: "Sync Discord status" }).click();
-  await expect(page.getByRole("alert")).toHaveText("Discord denied this request because the bot cannot access the selected channel.");
+  await expect(page.locator('.kiosk-notice[role="alert"]')).toHaveText("Discord denied this request because the bot cannot access the selected channel.");
   expect(syncRequests).toBe(2);
 
   await page.route("**/integrations/capabilities", (route) => route.fulfill({

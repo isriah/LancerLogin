@@ -1,2 +1,5 @@
 # Generate a fresh value for local development. Do not commit the real key.
 SESSION_KEY=replace-with-base64url-encoded-32-random-bytes
+
+# Optional Carpool address lookup. Keep the real provider key in .dev.vars or a Worker secret.
+CARPOOL_GEOAPIFY_KEY=

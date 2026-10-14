@@ -56,8 +56,10 @@ async function swipe(page: Page, scroller: Locator, direction: "up" | "down" | "
   const { left, right, top, bottom } = visible;
   expect(right - left).toBeGreaterThan(40); expect(bottom - top).toBeGreaterThan(40);
   const x = left + (right - left) * .45;
-  const from = direction === "down" ? top + 20 : bottom - 20;
-  const to = direction === "down" ? bottom - 20 : top + 20;
+  // Use the visible pane rather than losing forty pixels of a short table to
+  // gesture margins. Both endpoints remain inset and hit-tested below.
+  const from = direction === "down" ? top + 12 : bottom - 12;
+  const to = direction === "down" ? bottom - 12 : top + 12;
   const session = await page.context().newCDPSession(page);
   const startX = origin === "blank" ? right - 12 : direction === "left" ? right - 20 : x;
   const endX = direction === "left" ? left + 20 : startX;
@@ -117,14 +119,16 @@ async function reachable(page: Page, target: Locator, scroller: Locator, directi
   throw new Error("Touch swipes could not reach target: " + JSON.stringify(await scroller.evaluate((e) => ({ top: e.scrollTop, left: e.scrollLeft, height: e.clientHeight, content: e.scrollHeight }))));
 }
 
-async function fixture(page: Page) {
+async function fixture(page: Page, options: { authenticationMethod?: "fingerprint" | "rfid" | "nfc" | "qr" | "member_id"; rejectCredential?: boolean; sensorOnlySlots?: number[]; failSlotRead?: boolean } = {}) {
+  const authenticationMethod = options.authenticationMethod ?? "fingerprint";
   let authorized = false;
   let expired = false;
   let attempts = 0;
-  const enrolled: unknown[] = [], removed: string[] = [];
+  const enrolled: unknown[] = [], removed: string[] = [], credentialAttempts: unknown[] = [];
   const displayState = await (await page.request.get(`${base}/display-state`)).json();
   const members = Array.from({ length: 80 }, (_, index) => ({ memberId: `synthetic-${index}`, firstName: `Member ${index}`, lastName: "Synthetic" }));
   let mappings: Record<string, unknown> = Object.fromEntries(members.slice(0, 60).map((member, index) => [String(index), { memberId: member.memberId, finger: "right index" }]));
+  const sensorSlots = new Set([...Object.keys(mappings).map(Number), ...(options.sensorOnlySlots ?? [])]);
   await page.route(`${base}/**`, async (route) => {
     const path = new URL(route.request().url()).pathname;
     const json = (body: unknown, status = 200) => route.fulfill({ status, json: body });
@@ -139,18 +143,25 @@ async function fixture(page: Page) {
     }
     if (path === "/network/session" && route.request().method() === "DELETE") { authorized = false; return json({ closed: true }); }
     if (path === "/maintenance/members") return authorized && !expired ? json({ members }) : json({ error: "Unlock network settings first" }, 403);
+    if (path === "/credential-mappings" && route.request().method() === "GET") return authorized && !expired ? json({ mappings: [] }) : json({ error: "Unlock network settings first" }, 403);
+    if (path === "/credential-mappings" && route.request().method() === "POST") {
+      credentialAttempts.push(route.request().postDataJSON());
+      return options.rejectCredential ? json({ error: "Credential not accepted" }, 400) : json({ mapping: { id: "local-mapping", method: authenticationMethod, memberId: "synthetic-0", label: "Local credential" } }, 201);
+    }
     if (path === "/mappings") return authorized && !expired ? json({ mappings }) : json({ error: "Unlock network settings first" }, 403);
     if (path.startsWith("/mappings/")) {
       removed.push(path); delete mappings[path.split("/").pop()!]; return json({ mappings });
     }
+    if (path === "/display-state" && authenticationMethod !== "fingerprint") return json({ ...displayState, authenticationMethod });
     if (path === "/display-state" && enrolled.length) {
       return json({ ...displayState, display: { id: "enroll_success", message: "Enrollment saved", detail: "Synthetic recovery guidance. ".repeat(30) } });
     }
     if (path === "/sensor/test") return json({ readerOnline: true, templateCount: 60 });
-    if (path === "/enroll") { const input = route.request().postDataJSON(); enrolled.push(input); mappings[String(input.slot)] = { memberId: input.memberId, finger: input.finger }; return json({ enrolled: true }); }
+    if (path === "/sensor/slots") return options.failSlotRead ? json({ error: "Cannot verify occupied sensor slots" }, 503) : json({ occupiedSlots: [...sensorSlots] });
+    if (path === "/enroll") { const input = route.request().postDataJSON(); enrolled.push(input); sensorSlots.add(input.slot); mappings[String(input.slot)] = { memberId: input.memberId, finger: input.finger }; return json({ enrolled: true }); }
     return route.continue();
   });
-  return { enrolled, removed, expire: () => { expired = true; }, attempts: () => attempts };
+  return { enrolled, removed, credentialAttempts, expire: () => { expired = true; }, resume: () => { expired = false; }, attempts: () => attempts };
 }
 
 async function pin(page: Page, value = "123456") {
@@ -161,6 +172,134 @@ async function pin(page: Page, value = "123456") {
   await reachable(page, page.locator("#unlock-form").getByRole("button", { name: "Unlock for five minutes" }), page.locator("#unlock"));
   await tap(page, page.locator("#unlock-form").getByRole("button", { name: "Unlock for five minutes" }));
 }
+
+test("fingerprint sync can be enabled and peers approved by touch at 800x480", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  const mock = await fixture(page);
+  let enabled = false, approved = false;
+  const peer = { kioskId: "other-kiosk", pairingId: "other-pair", fingerprint: "b".repeat(64), name: "Second entrance" };
+  await page.route(`${base}/fingerprint-sync`, async route => {
+    if (route.request().method() === "PATCH") enabled = route.request().postDataJSON().enabled;
+    await route.fulfill({ json: { installationEnabled: true, enabled, fingerprint: enabled ? "a".repeat(64) : null, candidates: enabled ? [peer] : [], peers: approved ? [peer] : [], diagnostics: { status: "ready" } } });
+  });
+  await page.route(`${base}/fingerprint-sync/peers`, async route => {
+    expect(route.request().postDataJSON()).toEqual({ kioskId: peer.kioskId, fingerprint: peer.fingerprint });
+    approved = true; await route.fulfill({ json: { approved: true } });
+  });
+  await page.goto(`${base}/maintenance`); await pin(page);
+  await expect(page.locator("#message")).toContainText("Maintenance unlocked");
+  await page.screenshot({ path: test.info().outputPath("sync-entry.png") });
+  await tap(page, page.getByRole("button", { name: "Fingerprint sync", exact: true }));
+  const sheet = page.locator("#fingerprint-sync-sheet"), scroll = sheet.locator(".sync-content");
+  await expect(sheet).toBeVisible(); await expect(page.locator("#toggle-sync")).toBeEnabled();
+  await tap(page, page.locator("#toggle-sync"));
+  await expect(page.locator("#confirm-detail")).toContainText("encrypted messages");
+  await tap(page, page.locator("#accept-action"));
+  await expect(page.locator("#toggle-sync")).toHaveText("Disable on this kiosk");
+  await expect(page.locator("#sync-fingerprint-value")).toContainText("aaaa aaaa");
+  const approve = sheet.getByRole("button", { name: "Compare and approve" });
+  await reachable(page, approve, scroll); await tap(page, approve);
+  await expect(page.locator("#confirm-detail")).toContainText("bbbb bbbb");
+  expect(approved).toBe(false);
+  await tap(page, page.locator("#accept-action"));
+  await expect(sheet.getByText("Approved locally", { exact: true })).toBeVisible();
+  expect(approved).toBe(true);
+  for (const height of await sheet.locator("button").evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().height))) expect(height).toBeGreaterThanOrEqual(44);
+  expect(await scroll.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: test.info().outputPath("fingerprint-sync-touch.png") });
+  mock.expire(); await expect(sheet).toBeHidden();
+  await expect(page.locator("#unlock")).toBeVisible();
+});
+
+test("fingerprint sync confirmations contain keyboard focus and cancel without enabling", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  const mock = await fixture(page); let writes = 0;
+  await page.route(`${base}/fingerprint-sync`, async route => {
+    if (route.request().method() === "PATCH") writes++;
+    await route.fulfill({ json: { installationEnabled: true, enabled: false, peers: [], candidates: [] } });
+  });
+  await page.goto(`${base}/maintenance`); await pin(page);
+  await expect(page.locator("#message")).toContainText("Maintenance unlocked");
+  const open = page.getByRole("button", { name: "Fingerprint sync", exact: true });
+  await open.focus(); await page.keyboard.press("Enter");
+  await expect(page.locator("#toggle-sync")).toBeEnabled();
+  await expect(page.locator("#close-sync")).toBeFocused();
+  await page.keyboard.press("Tab"); await expect(page.locator("#toggle-sync")).toBeFocused();
+  await page.keyboard.press("Enter"); await expect(page.locator("#cancel-action")).toBeFocused();
+  await page.keyboard.press("Shift+Tab"); await expect(page.locator("#accept-action")).toBeFocused();
+  await page.keyboard.press("Tab"); await expect(page.locator("#cancel-action")).toBeFocused();
+  await page.keyboard.press("Escape"); await expect(page.locator("#confirm-sheet")).toBeHidden();
+  await expect(page.locator("#toggle-sync")).toBeFocused(); expect(writes).toBe(0);
+  await page.keyboard.press("Shift+Tab"); await expect(page.locator("#close-sync")).toBeFocused();
+  await page.keyboard.press("Shift+Tab"); await expect(page.locator("#refresh-sync")).toBeFocused();
+  await page.keyboard.press("Tab"); await expect(page.locator("#close-sync")).toBeFocused();
+  await page.keyboard.press("Escape"); await expect(open).toBeFocused();
+  await page.keyboard.press("Enter"); await expect(page.locator("#toggle-sync")).toBeEnabled();
+  await page.keyboard.press("Tab"); await page.keyboard.press("Enter");
+  await expect(page.locator("#confirm-sheet")).toBeVisible();
+  mock.expire(); await expect(page.locator("#confirm-sheet")).toBeHidden();
+  await expect(page.locator("#fingerprint-sync-sheet")).toBeHidden(); expect(writes).toBe(0);
+});
+
+test("fingerprint relay outage leaves PIN maintenance unlocked and refresh recovers", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  await fixture(page);
+  let unavailable = true;
+  await page.route(`${base}/fingerprint-sync`, route => unavailable
+    ? route.fulfill({ status: 503, json: { error: "Fingerprint sync is unavailable. Maintenance remains unlocked." } })
+    : route.fulfill({ json: { installationEnabled: false, enabled: false, peers: [], candidates: [] } }));
+  await page.goto(`${base}/maintenance`); await pin(page);
+  await expect(page.locator("#message")).toContainText("Maintenance unlocked");
+  await tap(page, page.getByRole("button", { name: "Fingerprint sync", exact: true }));
+  await expect(page.locator("#sync-message")).toContainText("unavailable");
+  await expect(page.locator("#unlock")).toBeHidden();
+  await expect(page.locator("#toggle-sync")).toBeDisabled();
+  unavailable = false; await tap(page, page.locator("#refresh-sync"));
+  await expect(page.locator("#sync-message")).toContainText("An Admin must first enable");
+  await tap(page, page.locator("#close-sync"));
+  await expect(page.locator("#fingerprint-sync-sheet")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Fingerprint sync", exact: true })).toBeFocused();
+});
+
+test("offline fingerprint sync can still be disabled by touch", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  await fixture(page); let enabled = true;
+  await page.route(`${base}/fingerprint-sync`, async route => {
+    if (route.request().method() === "PATCH") { expect(route.request().postDataJSON()).toEqual({ enabled: false }); enabled = false; }
+    await route.fulfill({ json: { installationEnabled: false, offline: true, enabled, fingerprint: "a".repeat(64), peers: [], candidates: [], diagnostics: { status: "unavailable" } } });
+  });
+  await page.goto(`${base}/maintenance`); await pin(page);
+  await expect(page.locator("#message")).toContainText("Maintenance unlocked");
+  await tap(page, page.getByRole("button", { name: "Fingerprint sync", exact: true }));
+  await expect(page.locator("#sync-message")).toContainText("still disable local sync");
+  await expect(page.locator("#toggle-sync")).toBeEnabled();
+  await tap(page, page.locator("#toggle-sync")); await tap(page, page.locator("#accept-action"));
+  await expect(page.locator("#toggle-sync")).toHaveText("Enable on this kiosk");
+  await expect(page.locator("#toggle-sync")).toBeDisabled(); expect(enabled).toBe(false);
+  await expect(page.locator("#unlock")).toBeHidden();
+});
+
+test("suggested slot skips sensor fingerprints missing from local mappings", async ({ page }) => {
+  await page.setViewportSize({width:1280,height:800});
+  const mock=await fixture(page,{sensorOnlySlots:[60,61,62]});
+  await page.goto(`${base}/maintenance`);
+  await pin(page);
+  await expect(page.locator('#slot')).toHaveValue('63');
+  await expect(page.locator('#slot-help')).toHaveText('Suggested next open slot: 63');
+  await expect(page.locator('#begin-enroll')).toBeEnabled();
+  expect(mock.enrolled).toHaveLength(0);
+});
+
+test("unreadable sensor occupancy disables enrollment instead of suggesting slot zero", async ({ page }) => {
+  await page.setViewportSize({width:1280,height:800});
+  const mock=await fixture(page,{failSlotRead:true});
+  await page.goto(`${base}/maintenance`);
+  await pin(page);
+  await expect(page.locator('#slot')).toHaveValue('');
+  await expect(page.locator('#slot-help')).toContainText('Cannot verify empty slots');
+  await expect(page.locator('#begin-enroll')).toBeDisabled();
+  expect(mock.enrolled).toHaveLength(0);
+});
 
 for (const height of [480, 360]) {
   test(`QWERTY rows and the complete roster scroll by touch at 800x${height}`, async ({ page }) => {
@@ -299,7 +438,7 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     const enroll = page.locator(".enroll-card");
     await reachable(page, page.locator("#begin-enroll"), enroll);
     await tap(page, page.locator("#begin-enroll"));
-    await expect(page.locator("#message")).toContainText("already has a mapping");
+    await expect(page.locator("#message")).toContainText("already contains a fingerprint or mapping");
     expect(mock.enrolled).toHaveLength(0);
     await tap(page, page.locator("#replace"));
     await tap(page, page.locator("#begin-enroll"));
@@ -316,7 +455,7 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     expect(await reader.evaluate((e) => e.scrollTop)).toBeGreaterThan(20);
     await reachable(page, page.locator("#test-reader"), reader, "down");
     await tap(page, page.locator("#test-reader"));
-    const table = page.locator(".table-wrap");
+    const table = page.locator("[data-fingerprint].mappings-card .table-wrap");
     await swipe(page, table);
     expect(await table.evaluate((e) => e.scrollTop)).toBeGreaterThan(20);
     if (await table.evaluate((e) => e.scrollWidth > e.clientWidth + 10)) {
@@ -376,6 +515,35 @@ for (const surface of ["search", "confirmation"]) test(`expired maintenance hide
   await expect(page.locator("#member-search")).toHaveValue("");
   await expect(page.locator("#unlock")).toBeVisible();
   expect(mock.enrolled).toHaveLength(0);
+});
+
+test("credential maintenance clears raw input after failure and session expiry", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  const mock = await fixture(page, { authenticationMethod: "rfid", rejectCredential: true });
+  await page.goto(`${base}/maintenance`); await pin(page);
+  await expect(page.locator("#credential-enroll-card")).toBeVisible();
+  await tap(page, page.locator("#credential-member-picker"));
+  await tap(page, page.locator("#member-options button").first());
+  const credential = page.locator("#credential-value");
+  const label = page.locator("#credential-label");
+  await label.fill("Loaner badge");
+  await credential.fill(crypto.randomUUID());
+  const register = page.locator("#credential-form").getByRole("button", { name: "Register credential" });
+  await reachable(page, register, page.locator("#credential-enroll-card"));
+  await tap(page, register);
+  await expect.poll(() => mock.credentialAttempts.length).toBe(1);
+  await expect(credential).toHaveValue("");
+  await label.fill("Abandoned badge");
+  await credential.fill(crypto.randomUUID());
+  mock.expire();
+  await expect(page.locator("#workspace")).toBeHidden();
+  await expect(credential).toHaveValue("");
+  await expect(label).toHaveValue("");
+  mock.resume();
+  await pin(page);
+  await expect(page.locator("#workspace")).toBeVisible();
+  await expect(credential).toHaveValue("");
+  await expect(label).toHaveValue("");
 });
 
 

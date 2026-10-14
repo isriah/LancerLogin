@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "module": "attendance",
+  "label": "Attendance",
+  "fast": {
+    "javascript": [],
+    "typescript": [
+      "tests-ts/module-platform.test.ts",
+      "tests-ts/dashboard-module-fixture.test.ts",
+      "tests-ts/module-lifecycle.test.ts",
+      "tests-ts/attendance-lifecycle.test.ts",
+      "tests-ts/platform-scheduler.test.ts",
+      "tests-ts/report-builder.test.ts"
+    ],
+    "browser": [],
+    "typecheckWorkspaces": [],
+    "buildWorkspaces": []
+  },
+  "acceptance": {
+    "javascript": [
+      "tests/attendance-service.test.mjs",
+      "tests/integration-workflows.test.mjs",
+      "tests/pairing-service.test.mjs",
+      "tests/setup-progress.test.mjs",
+      "tests/worker.test.mjs"
+    ],
+    "typescript": [
+      "tests-ts/module-platform.test.ts",
+      "tests-ts/dashboard-module-fixture.test.ts",
+      "tests-ts/module-lifecycle.test.ts",
+      "tests-ts/attendance-lifecycle.test.ts",
+      "tests-ts/platform-scheduler.test.ts",
+      "tests-ts/report-builder.test.ts",
+      "tests-ts/integration-runtime.test.ts",
+      "tests-ts/member-label-policy.test.ts",
+      "tests-ts/roster-attendance.test.ts",
+      "tests-ts/walkthrough.test.ts",
+      "tests-ts/worker-runtime.test.ts",
+      "tests-ts/multi-kiosk.test.ts"
+    ],
+    "browser": [
+      "tests-browser/module-platform.spec.ts",
+      "tests-browser/onboarding-first-meeting.spec.ts",
+      "tests-browser/meeting-controls.spec.ts",
+      "tests-browser/meeting-detail.spec.ts",
+      "tests-browser/settings-conformance.spec.ts",
+      "tests-browser/kiosks-conformance.spec.ts",
+      "tests-browser/modular-reporting.spec.ts",
+      "tests-browser/dashboard-walkthrough.spec.ts"
+    ],
+    "typecheckWorkspaces": [
+      "@lancerlogin/shared",
+      "@lancerlogin/api",
+      "@lancerlogin/dashboard",
+      "@lancerlogin/kiosk"
+    ],
+    "buildWorkspaces": [
+      "@lancerlogin/api",
+      "@lancerlogin/dashboard",
+      "@lancerlogin/kiosk"
+    ]
+  }
+}

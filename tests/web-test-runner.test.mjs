@@ -112,7 +112,7 @@ test("development and CI avoid duplicate complete verification", () => {
   assert.equal(scripts.test, "node --test --test-concurrency=2 tests/**/*.test.mjs && node --experimental-strip-types --test --test-concurrency=2 tests-ts/**/*.test.ts");
   assert.match(scripts["verify:all"], /verify:migrations.*typecheck.*npm test.*build/);
   assert.match(scripts["verify:release"], /verify:all.*audit:release:local/);
-  assert.equal(scripts["test:release-ci"], "npm run test:web && node --test tests/kiosk-runtime.test.mjs");
+  assert.equal(scripts["test:release-ci"], "npm run test:web && node --test tests/kiosk-runtime.test.mjs tests/kiosk-reassociation.test.mjs");
   assert.equal(scripts["verify:release-ci"], "npm run verify:migrations && npm run typecheck && npm run test:release-ci && npm run build");
   assert.match(scripts["test:kiosk"], /kiosk-runtime\.test\.mjs.*kiosk-artifacts\.test\.mjs/);
 

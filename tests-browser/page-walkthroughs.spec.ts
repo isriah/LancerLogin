@@ -51,6 +51,49 @@ for (const viewport of [{ width: 1280, height: 900, theme: "light" }, { width: 3
         await expect(panel(page)).toContainText(`Step ${index + 1} of ${story.steps}`);
         await expect(panel(page).getByRole("heading")).toBeFocused();
         await expect(page.locator(".walkthrough-highlight").first()).toBeVisible();
+        if (story.pageId === "reports" && index === 0) {
+          const [tab, outline] = await Promise.all([
+            page.locator('[data-walkthrough="reports-tabs"] > button').first().boundingBox(),
+            page.locator(".walkthrough-highlight").first().boundingBox(),
+          ]);
+          expect(tab).not.toBeNull();
+          expect(outline).not.toBeNull();
+          const topGap = tab!.y - outline!.y;
+          const bottomGap = outline!.y + outline!.height - tab!.y - tab!.height;
+          // The native horizontal scrollbar can reserve up to four pixels below the controls.
+          expect(Math.abs(topGap - bottomGap)).toBeLessThanOrEqual(4);
+        }
+        if (story.pageId === "roster" && index === 5) {
+          const highlights = page.locator(".walkthrough-highlight");
+          await expect(highlights).toHaveCount(1);
+          const [target, outline] = await Promise.all([
+            page.locator('[data-walkthrough="roster-bulk"]').boundingBox(),
+            highlights.boundingBox(),
+          ]);
+          expect(target).not.toBeNull();
+          expect(outline).not.toBeNull();
+          expect(outline!.x).toBeLessThan(target!.x);
+          expect(outline!.y).toBeLessThan(target!.y);
+          expect(outline!.x + outline!.width).toBeGreaterThan(target!.x + target!.width);
+          expect(outline!.y + outline!.height).toBeGreaterThan(target!.y + target!.height);
+        }
+        if (story.pageId === "member" && index === 1) {
+          const highlights = page.locator(".walkthrough-highlight");
+          await expect(highlights).toHaveCount(1);
+          const [target, profile, outline] = await Promise.all([
+            page.locator('[data-walkthrough="member-labels"]').boundingBox(),
+            page.locator('[data-walkthrough="member-profile"]').boundingBox(),
+            highlights.boundingBox(),
+          ]);
+          expect(target).not.toBeNull();
+          expect(profile).not.toBeNull();
+          expect(outline).not.toBeNull();
+          expect(outline!.height).toBeLessThan(profile!.height);
+          expect(outline!.x).toBeLessThan(target!.x);
+          expect(outline!.y).toBeLessThan(target!.y);
+          expect(outline!.x + outline!.width).toBeGreaterThan(target!.x + target!.width);
+          expect(outline!.y + outline!.height).toBeGreaterThan(target!.y + target!.height);
+        }
         const bounds = await panel(page).boundingBox();
         expect(bounds).not.toBeNull();
         expect(bounds!.x).toBeGreaterThanOrEqual(0);
@@ -103,7 +146,7 @@ for (const view of [{ width: 1280, height: 900, theme: "light", role: "admin" },
       const input = route.request().postDataJSON();
       expect(input.name).toBe("Monthly attendance example"); expect(input.scope).toBe("personal");
       expect(input.definition.period).toEqual({ type: "current_month" });
-      expect(input.definition.columns.map((column: any) => column.key)).toEqual(["member", "member_id", "current_labels", "present_count", "absent_count", "excused_count", "report_policy_summary"]);
+      expect(input.definition.columns.map((column: any) => column.key)).toEqual(["core.member.name", "core.member.id", "core.member.labels", "attendance.detail.present-count", "attendance.detail.absent-count", "attendance.detail.excused-count", "attendance.policy.report-summary"]);
       await new Promise<void>((resolve) => { release = resolve; });
       const report = { ...input, id: "example-report", revision: 1, ownerUserId: "test-user", pinnedPosition: 0, warnings: [], errors: [] };
       reports.push(report); await route.fulfill({ status: 201, json: { report } });

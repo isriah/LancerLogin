@@ -1,0 +1,7 @@
+export function CoreHomePage({ moduleCount }: { moduleCount: number }) {
+  return <section className="page-stack core-home-page" aria-labelledby="core-home-title"><div className="page-intro"><p className="kicker">Core workspace</p><h1 id="core-home-title">Dashboard</h1><p>Manage the shared roster, reports, access, integrations, backups, updates, and optional modules from one application.</p></div><div className="content-grid"><article className="task-card"><h2>Roster</h2><p>Member identities and labels stay in Core so every enabled module can use the same source of truth.</p><a className="action-link" href="/roster">Open roster</a></article><article className="task-card"><h2>Optional modules</h2><p>{moduleCount ? `${moduleCount} module${moduleCount === 1 ? " is" : "s are"} available in this installation.` : "No optional modules are currently enabled."}</p><a className="action-link" href="/settings/modules">Manage modules</a></article></div></section>;
+}
+
+export function CoreReportsPage() {
+  return <section className="page-stack" aria-labelledby="core-reports-title"><div className="page-intro"><p className="kicker">Core reporting</p><h1 id="core-reports-title">Reports</h1><p>Enabled modules contribute report sources here. No report source is currently available to this account.</p></div><article className="task-card"><h2>No report sources enabled</h2><p>An Admin can enable a module or assign this Operator to an enabled module.</p></article></section>;
+}

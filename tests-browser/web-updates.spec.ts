@@ -196,7 +196,9 @@ for (const updateState of ["prepared", "expired", "succeeded"] as const) test(`c
 
 test("an older completed update stays in history while current release notes and status survive reload", async ({ page }, testInfo) => {
   await setup(page, pinned({ state: "succeeded", targetTag: "v0.0.0", releaseNotes: "Old completed request notes", reloadReady: true }));
-  await page.route("**/admin/releases/latest", route => route.fulfill({ json: discovered({ tag_name: `v${bundledVersion}`, html_url: `https://github.com/isriah/LancerLogin/releases/tag/v${bundledVersion}`, body: "Current release notes. <img src=x onerror=alert('unsafe')>" }) }));
+  const channel = bundledVersion.includes("-beta.") ? "beta" : "stable";
+  await page.route("**/admin/update-channel", route => route.fulfill({ json: { channel, revision: 1 } }));
+  await page.route("**/admin/releases/latest", route => route.fulfill({ json: discovered({ tag_name: `v${bundledVersion}`, prerelease: channel === "beta", html_url: `https://github.com/isriah/LancerLogin/releases/tag/v${bundledVersion}`, body: "Current release notes. <img src=x onerror=alert('unsafe')>" }, Date.now(), channel) }));
   for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
     await page.setViewportSize({ width, height: width === 1280 ? 900 : 844 });
     await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), theme);

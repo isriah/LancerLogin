@@ -4,6 +4,13 @@ set -euo pipefail
 VERSION="${LANCERLOGIN_VERSION:-0.10.1}"
 MODE="${1:---dry-run}"
 RELEASE_ROOT="https://github.com/isriah/LancerLogin/releases/download/v${VERSION}"
+SENSOR_PATH="${LANCERLOGIN_SENSOR_PATH:-/dev/serial0}"
+SENSOR_PATH_EXPLICIT=false
+[[ -z "${LANCERLOGIN_SENSOR_PATH+x}" ]] || SENSOR_PATH_EXPLICIT=true
+SENSOR_OPTION="${2:-}"
+[[ -z "$SENSOR_OPTION" || "$SENSOR_OPTION" == "--no-fingerprint-reader" || "$SENSOR_OPTION" == "--fingerprint-reader" ]] || { echo "Optional second argument must be --no-fingerprint-reader or --fingerprint-reader." >&2; exit 2; }
+if [[ "$SENSOR_OPTION" == "--no-fingerprint-reader" ]]; then SENSOR_PATH=disabled; SENSOR_PATH_EXPLICIT=true; fi
+if [[ "$SENSOR_OPTION" == "--fingerprint-reader" ]]; then SENSOR_PATH=/dev/serial0; SENSOR_PATH_EXPLICIT=true; fi
 
 architecture() {
   case "$(uname -m)" in
@@ -11,6 +18,16 @@ architecture() {
     armv7l) echo armv7 ;;
     *) echo unsupported ;;
   esac
+}
+
+normalize_runtime_permissions() {
+  # Runtime code is separate from owner-only pairing and attendance state.
+  # Refuse links before changing modes or extracting over an existing install.
+  [[ -z "$(find /opt/lancerlogin -xdev ! -type d ! -type f -print -quit)" ]] || { echo "Unexpected runtime file type. Review /opt/lancerlogin before installing." >&2; return 1; }
+  [[ -z "$(find /opt/lancerlogin -xdev -type f -links +1 -print -quit)" ]] || { echo "Unexpected runtime hard link. Review /opt/lancerlogin before installing." >&2; return 1; }
+  find /opt/lancerlogin -xdev -type d -exec chmod 0755 {} +
+  find /opt/lancerlogin -xdev -type f -exec chmod 0644 {} +
+  [[ ! -d /opt/lancerlogin/scripts ]] || find /opt/lancerlogin/scripts -xdev -type f -name '*.sh' -exec chmod 0755 {} +
 }
 
 check_hardware() {
@@ -26,7 +43,8 @@ check_hardware() {
 
 if [[ "$MODE" == "--dry-run" ]]; then
   echo "LancerLogin guided installer preview"
-  echo "1. Verify Raspberry Pi 3B+/4/5, >=1 GB RAM, network, UART, and display."
+  echo "1. Verify Raspberry Pi 3B+/4/5, >=1 GB RAM, network, display, and UART when fingerprint authentication is used."
+  echo "   For RFID, NFC, member ID, or QR-only hardware, add --no-fingerprint-reader when installing."
   echo "2. Download the fixed v${VERSION} kiosk artifact and SHA-256 checksum."
   echo "3. Install into /opt/lancerlogin with a dedicated system user."
   echo "4. Ask once for the dashboard-generated, time-limited pairing key."
@@ -36,8 +54,9 @@ if [[ "$MODE" == "--dry-run" ]]; then
   exit 0
 fi
 
-[[ "$MODE" == "--install" ]] || { echo "Use --dry-run to preview or --install to proceed." >&2; exit 2; }
+[[ "$MODE" == "--install" ]] || { echo "Use --dry-run to preview or --install to proceed. Add --no-fingerprint-reader as the second argument when no R503 is installed." >&2; exit 2; }
 [[ "${EUID}" -eq 0 ]] || { echo "Run the installer as root with sudo." >&2; exit 2; }
+[[ "$SENSOR_PATH" == disabled || "$SENSOR_PATH" =~ ^/dev/[A-Za-z0-9._/-]+$ ]] || { echo "LANCERLOGIN_SENSOR_PATH must be disabled or an absolute /dev path." >&2; exit 2; }
 check_hardware
 for command in curl sha256sum tar systemctl runuser ss nmcli cmp stat; do command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 2; }; done
 [[ -x /usr/bin/node ]] || { echo "Node.js 18 or newer must be installed at /usr/bin/node." >&2; exit 2; }
@@ -54,7 +73,7 @@ curl --fail --location --proto '=https' --tlsv1.2 "$RELEASE_ROOT/$archive.sha256
 
 id lancerlogin >/dev/null 2>&1 || useradd --system --home /var/lib/lancerlogin --shell /usr/sbin/nologin lancerlogin
 usermod --append --groups dialout lancerlogin
-[[ -e /dev/serial0 ]] || echo "Warning: /dev/serial0 is unavailable. Enable the Pi UART before starting LancerLogin."
+[[ "$SENSOR_PATH" == disabled || -e "$SENSOR_PATH" ]] || echo "Warning: $SENSOR_PATH is unavailable. Enable the Pi UART before starting fingerprint authentication."
 systemctl stop lancerlogin-kiosk.service 2>/dev/null || true
 if ss -H -ltn 'sport = :8788' | grep -q .; then
   echo "Port 8788 is already used by another service. LancerLogin did not disable or replace that service." >&2
@@ -64,10 +83,12 @@ if ss -H -ltn 'sport = :8788' | grep -q .; then
 fi
 install -d -m 0755 -o root -g root /opt/lancerlogin
 install -d -m 0700 -o lancerlogin -g lancerlogin /var/lib/lancerlogin
+normalize_runtime_permissions
 tar --extract --gzip --file "$temporary/$archive" --directory /opt/lancerlogin --no-same-owner
 # tar can replace the destination mode with the archive root mode. Code must
 # remain traversable by the service account; private state above stays 0700.
 chmod 0755 /opt/lancerlogin
+normalize_runtime_permissions
 
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-kiosk.service /etc/systemd/system/lancerlogin-kiosk.service
 install -m 0644 /opt/lancerlogin/systemd/lancerlogin-update.service /etc/systemd/system/lancerlogin-update.service
@@ -81,6 +102,10 @@ install -m 0644 /opt/lancerlogin/polkit/49-lancerlogin-update.rules /etc/polkit-
 install -d -m 0755 /etc/systemd/system/lancerlogin-kiosk.service.d
 printf '[Service]\nEnvironment=LANCERLOGIN_VERSION=%s\n' "$VERSION" > /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
 chmod 0644 /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
+if [[ "$SENSOR_PATH_EXPLICIT" == true ]]; then
+  printf '[Service]\nEnvironment=LANCERLOGIN_SENSOR_PATH=%s\n' "$SENSOR_PATH" > /etc/systemd/system/lancerlogin-kiosk.service.d/11-sensor.conf
+  chmod 0644 /etc/systemd/system/lancerlogin-kiosk.service.d/11-sensor.conf
+fi
 systemctl daemon-reload
 systemctl enable lancerlogin-kiosk.service
 systemctl restart lancerlogin-kiosk.service
@@ -97,8 +122,8 @@ if [[ "$service_ready" != true ]]; then
 fi
 host_name="$(hostname)"
 local_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-echo "LancerLogin is installed, healthy, and waiting for pairing."
-echo "On a phone or computer connected to the same network, open http://${host_name}.local:8788/ and paste the one-time pairing key from the dashboard."
+echo "LancerLogin is installed and healthy. Existing pairing, mappings, and queued scans are retained."
+echo "On the same network, open http://${host_name}.local:8788/. Enter a dashboard one-time pairing key only if the kiosk shows the pairing screen."
 [[ -z "$local_ip" ]] || echo "If the .local address does not open, use http://${local_ip}:8788/ instead."
 browser_path="$(command -v chromium || command -v chromium-browser || true)"
 if [[ -n "$browser_path" ]]; then

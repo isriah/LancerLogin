@@ -91,7 +91,7 @@ export function MemberDetailPage({ role, memberId, discordEnabled, debugMode }: 
           </div>)}
         </div></div> : <p className="empty-state">No completed meetings are available for this member yet.</p>}
       </section>
-      <EditMemberDialog member={editing ? detail.member : undefined} labelData={labelData} onClose={() => setEditing(false)} onSaved={async () => { await load("Member updated."); }} />
+      <EditMemberDialog member={editing ? detail.member : undefined} labelData={labelData} attendanceEnabled onClose={() => setEditing(false)} onSaved={async () => { await load("Member updated."); }} />
     </> : notice !== "Loading member history…" && <section className="task-card empty-page" aria-labelledby="member-unavailable-title"><h2 id="member-unavailable-title">Member unavailable</h2><p>This roster record could not be loaded. It may have been removed or the link may be out of date.</p><RouteLink href="/roster" currentPath={path} navigate={navigate}>Return to roster</RouteLink></section>}
   </section>;
 }

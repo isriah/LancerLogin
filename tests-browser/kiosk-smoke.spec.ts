@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { kioskDisplayForQueuedScan } from "../apps/kiosk/src/kiosk-presentation.mjs";
+import { attendanceSnapshot } from "./module-fixtures";
 
 const kioskBaseUrl = process.env.LANCERLOGIN_KIOSK_BASE_URL ?? "http://127.0.0.1:8792";
 
@@ -43,6 +44,65 @@ test("physical kiosk screen fits the supported 800 by 480 display", async ({ pag
   await expect(page.getByText("No scans waiting")).toBeVisible();
   const dimensions = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
   expect(dimensions).toEqual({ width: 800, height: 480 });
+});
+
+test("member ID entry is touch-friendly, case-capable, and fully visible at 800 by 480", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  const submitted: unknown[] = [];
+  await page.route(`${kioskBaseUrl}/display-state`, (route) => route.fulfill({ json: {
+    display: { id: "ready", tone: "ready", message: "Enter member ID", detail: "Use the touch keyboard below" },
+    branding: { organizationName: "Example Arts Club", subtitle: "Create together", logoData: "", primaryColor: "#8b2f72", secondaryColor: "#2f8b72", logoBackdrop: "auto" },
+    kioskName: "Main kiosk", readerOnline: true, authenticationMethod: "member_id", cloudOnline: true, networkType: "wifi", pendingEvents: 0, releaseVersion: "1.0.2", uptimeSeconds: 120,
+  } }));
+  await page.route(`${kioskBaseUrl}/identity`, async (route) => { submitted.push(route.request().postDataJSON()); await route.fulfill({ status: 202, json: { accepted: true } }); });
+  await page.goto(`${kioskBaseUrl}/`);
+  await expect(page.getByRole("heading", { name: "Enter member ID" })).toBeVisible();
+  const input = page.getByRole("textbox", { name: "Member ID", exact: true });
+  await expect(input).toHaveAttribute("inputmode", "text");
+  await expect(input).not.toHaveAttribute("readonly", "");
+  await input.fill("Case-Sensitive.id");
+  await page.getByRole("button", { name: "Submit member ID" }).click();
+  await expect.poll(() => submitted.length).toBe(1);
+  expect(submitted[0]).toEqual({ method: "member_id", memberId: "Case-Sensitive.id" });
+  await page.getByRole("button", { name: "a/A" }).click();
+  await page.getByRole("button", { name: "a", exact: true }).click();
+  await page.getByRole("button", { name: "_", exact: true }).click();
+  await expect(input).toHaveValue("a_");
+  const geometry = await page.evaluate(() => ({
+    viewport: { width: innerWidth, height: innerHeight },
+    document: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },
+    controls: Array.from(document.querySelectorAll<HTMLElement>("#identity-entry input, #identity-entry button")).filter((element) => !element.hidden).map((element) => {
+      const bounds = element.getBoundingClientRect(); return { width: bounds.width, height: bounds.height, left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom };
+    }),
+  }));
+  expect(geometry.document).toEqual({ width: 800, height: 480 });
+  expect(geometry.controls.length).toBeGreaterThan(30);
+  for (const control of geometry.controls) {
+    expect(control.height).toBeGreaterThanOrEqual(44);
+    expect(control.left).toBeGreaterThanOrEqual(0); expect(control.right).toBeLessThanOrEqual(geometry.viewport.width);
+    expect(control.top).toBeGreaterThanOrEqual(0); expect(control.bottom).toBeLessThanOrEqual(geometry.viewport.height);
+  }
+});
+
+test("keyboard-wedge authentication clears failed input and refocuses for consecutive scans", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  let displayId = "ready"; let attempts = 0;
+  await page.route(`${kioskBaseUrl}/display-state`, (route) => route.fulfill({ json: {
+    display: displayId === "ready" ? { id: "ready", tone: "ready", message: "Present RFID badge", detail: "Hold a registered badge near the reader" } : { id: "processing", tone: "processing", message: "Checking scan", detail: "Hold still" },
+    branding: { organizationName: "Example Arts Club", subtitle: "", logoData: "", primaryColor: "#8b2f72", secondaryColor: "#2f8b72", logoBackdrop: "auto" },
+    kioskName: "Main kiosk", readerOnline: true, authenticationMethod: "rfid", cloudOnline: true, networkType: "wifi", pendingEvents: 0, releaseVersion: "1.0.2", uptimeSeconds: 120,
+  } }));
+  await page.route(`${kioskBaseUrl}/identity`, async (route) => { attempts += 1; if (attempts === 1) await route.fulfill({ status: 400, json: { error: "Credential not recognized" } }); else await route.fulfill({ status: 202, json: { accepted: true } }); });
+  await page.goto(`${kioskBaseUrl}/`);
+  const input = page.getByLabel("RFID badge input");
+  await expect(input).toBeFocused();
+  await input.fill(crypto.randomUUID()); await page.getByRole("button", { name: "Read credential" }).click();
+  await expect(input).toHaveValue("");
+  displayId = "processing"; await expect(page.locator("#identity-entry")).toBeHidden();
+  displayId = "ready"; await expect(page.locator("#identity-entry")).toBeVisible(); await expect(input).toBeFocused();
+  await input.fill(crypto.randomUUID()); await page.getByRole("button", { name: "Read credential" }).click();
+  await expect.poll(() => attempts).toBe(2);
+  await expect(input).toHaveValue("");
 });
 
 test("a delayed display poll cannot restore the previous member name", async ({ page }) => {
@@ -135,6 +195,7 @@ test("physical kiosk replaces motion with persistent state cues", async ({ page 
 
 test("browser kiosk emulator keeps the shared display surface within 800 by 480", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 480 });
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot() }));
   await page.goto("/simulator");
   await expect(page.getByText("SIMULATED · BROWSER INPUT")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Place finger on reader" })).toBeVisible();

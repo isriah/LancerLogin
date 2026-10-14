@@ -6,9 +6,11 @@ const bundledVersion = JSON.parse(readFileSync(new URL("../package.json", import
 
 async function setup(page: Page) {
   let installed = "0.9.0"; let releaseCalls = 0;
+  const channel = bundledVersion.includes("-beta.") ? "beta" : "stable";
+  await page.route("**/admin/update-channel", route => route.fulfill({ json: { channel, revision: 1 } }));
   await page.route("**/admin/update-info", route => route.fulfill({ json: { releaseVersion: installed, workflowUrl: "https://github.example.test/actions/workflows/upgrade-web.yml" } }));
   await page.route("**/__lancerlogin-release", route => route.fulfill({ json: { releaseVersion: installed } }));
-  await page.route("**/admin/releases/latest", async route => { releaseCalls++; await route.fulfill({ json: discovered({ tag_name: `v${bundledVersion}` }, await page.evaluate(() => Date.now())) }); });
+  await page.route("**/admin/releases/latest", async route => { releaseCalls++; await route.fulfill({ json: discovered({ tag_name: `v${bundledVersion}`, prerelease: channel === "beta" }, await page.evaluate(() => Date.now()), channel) }); });
   return { set installed(value: string) { installed = value; }, get releaseCalls() { return releaseCalls; } };
 }
 const popup = (page: Page) => page.getByRole("status", { name: "Update available", exact: true });
@@ -28,7 +30,7 @@ test("dismissal survives background polling and reload, and Updates does not rep
   await popup(page).getByRole("button", { name: "Open Updates", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Updates", exact: true })).toBeVisible();
   await expect(popup(page)).toHaveCount(0);
-  await page.getByRole("link", { name: "Dashboard", exact: true }).click();
+  await page.getByRole("link", { name: "Meetings", exact: true }).click();
   await expect(popup(page)).toBeVisible();
   await page.getByRole("button", { name: "Dismiss update notice" }).click();
   await page.clock.runFor(31_000); await expect(popup(page)).toHaveCount(0);

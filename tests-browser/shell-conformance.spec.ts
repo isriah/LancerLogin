@@ -65,7 +65,7 @@ test("mobile navigation contains keyboard focus, closes with Escape, and returns
   const opener = page.getByRole("button", { name: "Open navigation" });
   await opener.click();
   const navigation = page.getByRole("navigation", { name: "Primary dashboard navigation" });
-  await expect(navigation.getByRole("link", { name: "Dashboard" })).toBeFocused();
+  await expect(navigation.getByRole("link", { name: "Meetings" })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(page.getByRole("button", { name: "Close navigation" })).toBeFocused();
   await page.keyboard.press("Shift+Tab");

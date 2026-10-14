@@ -14,8 +14,9 @@ export async function expectDashboardTypography(page: Page) {
       if (actual.fontFamily !== reference.fontFamily || actual.fontSize !== reference.fontSize || actual.fontWeight !== weight) failures.push(element.textContent?.trim().slice(0, 80) ?? element.tagName);
     }
     root.querySelectorAll("h1,h2,h3").forEach((element) => check(element, "--font-display", element.tagName === "H1" ? "--text-page-heading" : element.tagName === "H2" ? "--text-section-heading" : "--text-card-heading", "400"));
-    root.querySelectorAll('label:has(> input:not([type="radio"]):not([type="checkbox"])),label:has(> select),label:has(> textarea),.meeting-view-toggle legend').forEach((element) => check(element, "--font-body", "--text-small", "750"));
-    root.querySelectorAll(".meeting-browser-select > span").forEach((element) => check(element, "--font-body", "--text-small", "750"));
+    root.querySelectorAll('label:has(> input:not([type="radio"]):not([type="checkbox"])),label:has(> select),label:has(> textarea)').forEach((element) => check(element, "--font-body", "--text-body", "750"));
+    root.querySelectorAll(".meeting-view-toggle legend").forEach((element) => check(element, "--font-body", "--text-body", "750"));
+    root.querySelectorAll(".meeting-browser-select > span").forEach((element) => check(element, "--font-body", "--text-body", "750"));
     expected.remove();
     return failures;
   });

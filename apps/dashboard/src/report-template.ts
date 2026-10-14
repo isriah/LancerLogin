@@ -3,9 +3,9 @@ import type { ReportDefinition } from "./saved-reports";
 export const exampleReportName = "Monthly attendance example";
 export function exampleReportDefinition(): ReportDefinition {
   return {
-    version: 1, period: { type: "current_month" }, roster: "active", meetingType: "all",
-    labelIds: [], labelMatch: "any", membership: "current",
-    columns: ["member", "member_id", "current_labels", "present_count", "absent_count", "excused_count", "report_policy_summary"].map((key) => ({ key })),
-    sort: { column: { key: "member" }, direction: "asc" },
+    version: 2, dataset: "attendance.members", groupBy: ["core.member.identity"], period: { type: "current_month" }, roster: "active", meetingType: "all",
+    labelIds: [], labelMatch: "any", outreachLabelIds: [], outreachLabelMatch: "any", membership: "current",
+    columns: ["core.member.name", "core.member.id", "core.member.labels", "attendance.detail.present-count", "attendance.detail.absent-count", "attendance.detail.excused-count", "attendance.policy.report-summary"].map((key) => ({ key })),
+    sort: { column: { key: "core.member.name" }, direction: "asc" },
   };
 }

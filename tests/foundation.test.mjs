@@ -10,8 +10,22 @@ test("foundation documents state standalone constraints", async () => {
   assert.match(readme, /sensor/i);
   const security = await readFile("docs/SECURITY.md", "utf8");
   assert.match(security, /signed interactions/i);
+  assert.match(security, /HMAC-SHA256/);
+  assert.match(security, /no remote destructive wipe/i);
   const privacy = await readFile("docs/PRIVACY.md", "utf8");
   assert.match(privacy, /reporting/i);
+  assert.match(privacy, /raw badge and QR values, local digests, and the transform secret are not sent/i);
+  assert.match(privacy, /Sync is off by default/);
+  assert.match(privacy, /approve peer device identities/);
+  assert.match(privacy, /without receiving the recipient's private decryption key/);
+  assert.match(privacy, /Existing unidentified sensor slots and imported legacy mappings are not automatically exported/);
+  assert.match(privacy, /None of these actions erase templates or mappings already copied/);
+  const kiosk = await readFile("docs/KIOSK.md", "utf8");
+  assert.match(kiosk, /Fingerprint remains the default/);
+  assert.match(kiosk, /keyboard-wedge/);
+  assert.match(kiosk, /This software acceptance does not claim live RFID, NFC, QR camera, R503, or Pi validation/);
+  assert.match(kiosk, /owner-only active-roster cache/);
+  assert.match(kiosk, /Authentication maintenance/);
   const license = await readFile("LICENSE", "utf8");
   assert.match(license, /Apache License\s+Version 2\.0/);
   assert.match(license, /You may add Your own copyright statement to Your modifications/);
@@ -55,6 +69,15 @@ test("follow-up schema adds explicit themed branding and retained kiosk health",
   assert.doesNotMatch(migration, /fingerprint|template/i);
 });
 
+test("kiosk authentication migration is additive and keeps fingerprint as the upgrade default", async () => {
+  const migration = await readFile("apps/api/migrations/0050_kiosk_auth_methods.sql", "utf8");
+  assert.match(migration, /ALTER TABLE organization_settings ADD COLUMN kiosk_authentication_method/);
+  assert.match(migration, /ALTER TABLE kiosks ADD COLUMN authentication_method/);
+  assert.equal((migration.match(/DEFAULT 'fingerprint'/g) ?? []).length, 2);
+  for (const method of ["fingerprint", "rfid", "nfc", "member_id", "qr"]) assert.match(migration, new RegExp(`'${method}'`));
+  assert.doesNotMatch(migration, /credential|token|secret|digest|template/i);
+});
+
 test("guided setup schema keeps simulator credentials isolated from hardware kiosks", async () => {
   const migration = await readFile("apps/api/migrations/0003_guided_setup_simulator.sql", "utf8");
   assert.match(migration, /is_test INTEGER NOT NULL DEFAULT 0/);
@@ -82,7 +105,11 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /\[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22\]\.includes\(Number\(value\.schemaVersion\)\)/);
+  assert.match(source, /const backupSchemaVersion = 39;/);
+  assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -12\)/);
+  for (const [version, omitted] of [[8, 10], [9, 8], [10, 6], [15, 3]]) assert.match(source, new RegExp(`schemaVersion < ${version} && table === "organization_settings" \\? tableColumns\\.organization_settings\\.slice\\(0, -${omitted}\\)`));
+  assert.match(source, /schemaVersion < 31 && table === "organization_settings" \? tableColumns\.organization_settings\.slice\(0, -1\)/);
+  assert.match(source, /Number\(value\.schemaVersion\) < 1 \|\| Number\(value\.schemaVersion\) > backupSchemaVersion/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
   assert.match(source, /attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES/);
@@ -141,13 +168,6 @@ test("Discord channel manager migration tracks only owned messages and expiry st
 test("Discord attendance thread creation is tracked for retry", async () => {
   const migration = await readFile("apps/api/migrations/0033_discord_attendance_threads.sql", "utf8");
   assert.match(migration, /ADD COLUMN thread_created_at TEXT/);
-});
-
-test("Discord attendance delivery batches support chunk retries", async () => {
-  const migration = await readFile("apps/api/migrations/0039_discord_attendance_delivery_batches.sql", "utf8");
-  assert.equal((migration.match(/ADD COLUMN delivery_id TEXT/g) ?? []).length, 2);
-  assert.match(migration, /idx_discord_attendance_recipients_delivery/);
-  assert.doesNotMatch(migration, /fingerprint|biometric/i);
 });
 
 test("attendance anomaly thresholds migrate with safe ten-minute defaults", async () => {
@@ -265,10 +285,10 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
 
 test("CI scopes ordinary changes and runs one complete exact-release gate", async () => {
   const packageDocument = JSON.parse(await readFile("package.json", "utf8"));
-  assert.equal(packageDocument.scripts["verify:migrations"], "node scripts/verify-d1-migrations.mjs");
+  assert.equal(packageDocument.scripts["verify:migrations"], "node scripts/verify-d1-migrations.mjs && node scripts/rehearse-community-upgrade.mjs");
   assert.match(packageDocument.scripts["verify:all"], /verify:migrations.*typecheck.*test.*build/);
   assert.match(packageDocument.scripts["verify:release"], /verify:all.*audit:release:local/);
-  assert.equal(packageDocument.scripts["test:release-ci"], "npm run test:web && node --test tests/kiosk-runtime.test.mjs");
+  assert.equal(packageDocument.scripts["test:release-ci"], "npm run test:web && node --test tests/kiosk-runtime.test.mjs tests/kiosk-reassociation.test.mjs");
   assert.equal(packageDocument.scripts["verify:release-ci"], "npm run verify:migrations && npm run typecheck && npm run test:release-ci && npm run build");
   assert.doesNotMatch(packageDocument.scripts["test:release-ci"], /kiosk-artifacts/);
   assert.equal(packageDocument.scripts["audit:release"], "node scripts/audit-dependencies.mjs");

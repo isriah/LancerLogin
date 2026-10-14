@@ -6,6 +6,7 @@ import { useDashboardLoadingOverlay } from "./loading-overlay";
 import { MeetingDeleteDialog, MeetingDuplicateDialog, MeetingEditDialog, pendingMeetingDeletionKey, type Meeting, type PendingMeetingDeletion } from "./meeting-management";
 import { RouteLink, usePath } from "./router";
 import { InfoHeading } from "./info-tip";
+import { MeetingCarpoolLinks, useCarpoolMeetingLinks } from "./carpool-meeting-links";
 
 type Frequency = NonNullable<Meeting["recurrenceFrequency"]>;
 type AttendanceRow = {
@@ -34,6 +35,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const { path, navigate } = usePath();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [meeting, setMeeting] = useState<Meeting>();
+  const carpoolLinks = useCarpoolMeetingLinks(meeting);
   const [rows, setRows] = useState<AttendanceRow[]>([]);
   const [audience, setAudience] = useState("All");
   const [contests, setContests] = useState<Contest[]>([]);
@@ -174,6 +176,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
     </nav>
     {meeting ? <>
       <header className="meeting-detail-heading" data-walkthrough="meeting-management"><div><span className={`meeting-lifecycle ${lifecycle}`}>{lifecycleLabel(lifecycle!)}</span><h1 id="meeting-detail-title">{meeting.title}</h1></div><div className="meeting-detail-actions"><button type="button" onClick={() => setManagementAction("edit")}>Edit</button><button type="button" onClick={() => setManagementAction("duplicate")}>Duplicate</button><button className="danger-button" type="button" onClick={() => setManagementAction("delete")}>Delete</button><button className="primary-button" type="button" onClick={() => void manualRefresh()}>Refresh attendance</button></div></header>
+      <MeetingCarpoolLinks links={carpoolLinks.filter((link) => link.meetingId === meeting.id)} navigate={navigate} />
       <dl className="meeting-summary ui-card" aria-label="Meeting summary" data-walkthrough="meeting-summary">
         <div><dt>Date</dt><dd>{new Date(meeting.startsAt).toLocaleDateString()}</dd></div>
         <div><dt>Time</dt><dd>{new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}–{new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</dd></div>

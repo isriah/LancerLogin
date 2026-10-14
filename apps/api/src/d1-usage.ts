@@ -3,6 +3,10 @@ export interface D1Statement { bind(...values: unknown[]): D1Statement; first<T 
 export interface D1Database { prepare(query: string): D1Statement; batch(statements: D1Statement[]): Promise<D1Result[]>; }
 const originals = new WeakMap<D1Database, D1Database>();
 export const databaseIdentity = (database: D1Database): D1Database => originals.get(database) ?? database;
+export function preserveDatabaseIdentity<T extends D1Database>(wrapper: T, database: D1Database): T {
+  originals.set(wrapper, databaseIdentity(database));
+  return wrapper;
+}
 
 /** Never records SQL, parameters, URLs, identities, or returned records. */
 export function measureD1(database: D1Database) {
@@ -28,7 +32,7 @@ export function measureD1(database: D1Database) {
     prepare: (query) => wrap(database.prepare(query)),
     batch: async (batch) => (await database.batch(batch.map((statement) => statements.get(statement) ?? statement))).map(record),
   };
-  originals.set(wrapped, databaseIdentity(database));
+  preserveDatabaseIdentity(wrapped, database);
   return { database: wrapped, snapshot: () => ({ measuredRowsRead, measuredRowsWritten, measuredQueries, firstQueriesUnmeasured }) };
 }
 

@@ -131,9 +131,10 @@ test("setup and integration guides include sanitized annotated visual callouts",
   assert.match(operations, /spreadsheet formula markers as text/);
   assert.match(operations, /id="discord-commands"/);
   assert.match(operations, /No manual HTTP request or command payload is required/);
-  assert.match(operations, /creates or updates exactly the guild-scoped <code>\/pair<\/code> and <code>\/attendance-report<\/code> commands/);
+  assert.match(operations, /creates or updates exactly the guild-scoped <code>\/pair<\/code>, <code>\/attendance-report<\/code>, <code>\/label<\/code>, <code>\/outreach-submit<\/code>, and <code>\/outreach-correction<\/code> commands/);
   assert.doesNotMatch(operations, /POST \/applications|"name": "member-id"/);
   assert.match(operations, /ephemeral responses/);
+  assert.match(operations, /Exact submission retries reuse the same receipt/);
 });
 
 test("kiosk guide includes a sanitized Waveshare-sized annotated screenshot", async () => {
@@ -162,4 +163,9 @@ test("privacy page states telemetry retirement while preserving general privacy 
   const privacy = await readFile("docs-site/privacy.html", "utf8");
   assert.match(privacy, /does not collect or transmit Community telemetry/);
   assert.doesNotMatch(privacy, /Settings → Privacy|30 days|deletion-request reference/);
+  assert.match(privacy, /server manages a separate 32-byte encryption key and can decrypt/);
+  assert.match(privacy, /not end-to-end private from the server/);
+  assert.match(privacy, /require re-enrollment before sharing/);
+  assert.match(privacy, /Portable dashboard backups exclude/);
+  assert.doesNotMatch(privacy, /templates exclusively inside/);
 });

@@ -1,6 +1,6 @@
 # Web updates
 
-This guide is for Administrators preparing a dashboard installation update and maintainers responsible for its fixed private controller. A web update changes the Cloudflare dashboard installation. It is separate from a physical kiosk update, which is described in [KIOSK.md](KIOSK.md).
+This guide is for Administrators preparing a dashboard installation update and maintainers responsible for its fixed private controller. A web update changes the Cloudflare dashboard installation. It is separate from a physical kiosk update, which is described in [KIOSK.md](KIOSK.md). For the carry-over checklist and required update order, see [Upgrade Community to Modular](COMMUNITY-UPGRADE.md).
 
 ## Update the dashboard installation
 
@@ -30,7 +30,7 @@ These Worker routes are called under the dashboard's same-origin `/api` prefix. 
 | PUT `/admin/update-channel` | `{ "channel": "stable" or "beta", "revision": <current integer>, "betaConfirmed": true }` | Audited atomic change; Beta acknowledgement required. Does not install. Active updates lock the choice and prepared requests expire on a change. |
 | GET `/admin/releases/latest` | None | Complete official selected-track release metadata, last successful `checkedAt`, last provider `attemptedAt`, `fresh`, and optional failure diagnostics / `retryAt`. Admin-only discovery does not prepare or dispatch. |
 | POST `/admin/web-updates/prepare` | `{}` | Active request or new selected-track pinned request; thirty-minute expiry. Repeated prepare reuses it. |
-| GET `/admin/data/backup?scope=installation&updateRequestId=<requestId>` | None | Schema-13 entire-installation JSON attachment; records backup export against the prepared request. |
+| GET `/admin/data/backup?scope=installation&updateRequestId=<requestId>` | None | Current entire-installation JSON attachment with the Community-modular ownership envelope; records backup export against the prepared request. |
 | POST `/admin/web-updates/start` | `{ "requestId": "<prepared UUID>", "backupSaved": true }` | HTTP 202 with durable request. Requires associated export and explicit saved-file confirmation. Replay never redispatches. |
 | GET `/admin/web-updates/status` | None | Most recent durable request; provider polling admitted once per ten seconds across tabs/Workers. |
 
@@ -64,13 +64,19 @@ Actions-read preflight proves access/workflow existence, not Actions-write permi
 
 ## Executor and compatibility review
 
-Exact resources/secrets are checked before the durable executor claim. API/dashboard builds precede maintenance and migration/deployment. After maintenance and sixty-second drain, record a D1 Time Travel bookmark, previous API version, Worker deployment/version IDs and Pages production deployment ID in operational `recovery_json`. Checkpoint failure precedes migration. Apply compatible forward-only migrations, deploy API then Pages, and allow a bounded three-minute propagation window. Verify API ready/release, Pages' independent `/__lancerlogin-release`, same-origin proxy health, canonical Pages commit, retained D1 binding, retained `ALLOWED_ORIGIN`, secret names, and the registered custom dashboard domain before success. No automatic code rollback or D1 restore occurs.
+Exact resources/secrets are checked before the durable executor claim. API/dashboard builds precede maintenance and migration/deployment. After maintenance and sixty-second drain, record a D1 Time Travel bookmark, previous API version, Worker deployment/version IDs and Pages production deployment ID in operational `recovery_json`. Checkpoint failure precedes migration. Apply compatible forward-only migrations and prepare the separate `FINGERPRINT_VAULT_KEY`, then deploy API and Pages, and allow a bounded three-minute propagation window. Verify API ready/release, Pages' independent `/__lancerlogin-release`, same-origin proxy health, canonical Pages commit, retained D1 binding, retained `ALLOWED_ORIGIN`, secret names, and the registered custom dashboard domain before success. No automatic code rollback or D1 restore occurs.
 
 `scripts/web-upgrade-policy.json` is release-owned compatibility metadata: all migrations' LF-normalized SHA-256, explicit forward compatibility, minimum installed version and disabled automatic code rollback. Ordinary applied migrations must be an exact prefix. The sole explicitly independent bridge, `0061_update_channels.sql`, may precede missing Modular migrations; its reviewed hash remains mandatory. Unknown/ahead schema, changed/unreviewed hashes, unsupported installed version or downgrade fails before claim. Future migration authors/release reviewers must assess old running-code and queued-scan compatibility, update only reviewed entries, and run API/provisioning/migration/rehearsal checks. Never regenerate hashes to bypass failed compatibility. Generation/validation normalize LF identically on Windows/Linux. Any operator code rollback requires review against the resulting schema.
 
+### Fingerprint storage key retention
+
+Provisioning and reviewed web updates generate a separate random 32-byte `FINGERPRINT_VAULT_KEY` only when it is missing and cloud fingerprint storage is disabled with no stored templates. This does not enable cloud storage. Existing keys are retained, never rotated by an update, and are not copied into backups, workflow output, files, or command arguments. Upload uses protected subprocess input. Cloud storage requires explicit Administrator opt-in and uses server-managed encryption, so the Worker can decrypt stored templates.
+
+A missing key while cloud storage is enabled or templates exist is a recovery condition. Restore the original key securely before continuing. Never generate a replacement to bypass this check. Losing that key makes the stored templates unusable; retain the key securely with the installation recovery material outside source and logs. A portable installation backup does not contain cloud fingerprint templates or their key. Retained physical readers can supply a new opt-in backfill after deliberate cloud-storage reset, but a new kiosk cannot recover lost templates from the portable backup alone.
+
 ## Recovery and rehearsal
 
-`npm run rehearse:web-upgrade` is an eleven-case **synthetic-only** bridge/V1 and failure rehearsal. It proves no live dispatch, approvals, token write permission, Cloudflare resource preservation, Time Travel retention, fresh-adopter setup or Pi acceptance. Separately authorized isolated synthetic-data provider rehearsal and live acceptance remain required. Never put real attendance, credentials or pairing into fixtures/evidence.
+`npm run rehearse:web-upgrade` is an eleven-case **synthetic-only** bridge/V1 and failure rehearsal. `npm run verify:migrations` also applies the current append-only migrations to synthetic Community databases ending at `0038_page_walkthroughs.sql` (v1.2.4) `0039_discord_attendance_delivery_batches.sql` (v1.2.5), and the independent `0061_update_channels.sql` bridge (v1.2.6). It verifies retained data, settings, reports, walkthroughs, password hashes, encrypted provider grants, pairing and kiosk credentials, queued-event counts, and Discord delivery retry identifiers. These checks prove no live dispatch, approvals, token write permission, Cloudflare resource preservation, Time Travel retention, fresh-adopter setup, live provider behavior or Pi acceptance. Separately authorized isolated synthetic-data provider rehearsal and live acceptance remain required. Never put real attendance, credentials or pairing into fixtures/evidence.
 
 On recovery-required, retain write suspension and inspect the private run and operational recovery record securely. Record exact API/Pages releases, IDs, migrations and bookmark; protect a fresh sensitive D1 backup outside source/logs. An unresolved dispatch without a proved run cannot automatically unlock. Cancellation/process death may retain maintenance deliberately. Repair deployments only with live authorization and review schema compatibility before rollback. Database restore requires distinct explicit recovery authorization plus retained encryption/session/pairing context; never automate it.
 
@@ -80,9 +86,11 @@ Operational rows are excluded from dashboard category backups/restores and have 
 
 ## Current release and migration evidence
 
-This bridge release is v1.2.6. Each installation must verify its own data, session, migrations, update tracking, and maintenance state. Web-update evidence does not establish physical-kiosk operation, and physical-kiosk evidence does not establish web-update completion.
+Install the v1.2.6 Community bridge, review the private controller and update each physical kiosk while Stable is selected before opting in to Modular Beta. See [UPDATE-TRACKS.md](UPDATE-TRACKS.md). The direct path is an in-place update of the existing installation, not a portable backup restore into a replacement database. Preserve the installation's encryption and session secrets, database identity, and each kiosk's protected local state. Attendance remains enabled; optional modules start disabled. Update the web installation first, verify it, then update each kiosk in place using its retained pairing. Do not re-image or re-pair a working kiosk just to enable multi-kiosk support. Fingerprint sync remains off until explicitly configured and peers are approved.
 
-Source and mocked-provider tests do not establish live installation or physical-kiosk acceptance. Confirm those separately without bypassing update controls.
+The candidate must first become an approved, complete official release newer than the installed version before it can be offered by the production updater. A private development build is not a public update target. Each installation must verify its own data, session, migrations, update tracking, and maintenance state. Web-update evidence does not establish physical-kiosk operation, and physical-kiosk evidence does not establish web-update completion.
+
+Synthetic checks do not replace installation-specific provider and physical-kiosk acceptance or justify bypassing the fixed web-update controls.
 
 ## References and limits
 

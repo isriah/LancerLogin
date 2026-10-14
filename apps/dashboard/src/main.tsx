@@ -9,6 +9,7 @@ import type { Branding } from "./setup-workspace";
 import { AppShell } from "./app-shell";
 import { AdaptiveBrandLogo } from "./adaptive-brand-logo";
 import { brandTheme } from "./theme";
+import { PublicOutreachForm } from "./public-outreach-form";
 
 type CloudflareStep = { id: string; title: string; detail: string; action?: { label: string; href: string } };
 
@@ -51,6 +52,7 @@ function App() {
   const plannedResources = useMemo(() => validSlug ? [`${slug}-api`, `${slug}-data`, `${slug}-dashboard`] : [], [slug, validSlug]);
   const toggle = (id: string) => setCompleted((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
+  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => {
     if (!apiBaseUrl) return;
     fetch(`${apiBaseUrl}/setup/status`, { credentials: "include" })
@@ -125,6 +127,7 @@ function ProvisionedEntry({ status, onConfigured, theme, onTheme }: { status: Se
   if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
   const branding = status.configured ? status.settings : undefined;
   const style = branding ? brandTheme(branding.primaryColor, branding.secondaryColor) : undefined;
+  if (status.configured && window.location.pathname === "/submit-hours") return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to submission form</a><div className="provisioned-main"><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><PublicOutreachForm /></div></div>;
   return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to main content</a><div className="provisioned-main">{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} theme={theme} onTheme={onTheme} /> : <><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><FirstAdminSetup onConfigured={onConfigured} /></>}</div></div>;
 }
 

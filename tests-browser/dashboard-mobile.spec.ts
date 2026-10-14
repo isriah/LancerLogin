@@ -58,12 +58,23 @@ test("mobile controls retain a 44px touch target", async ({ page }) => {
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
-    }).map((element) => ({
-      label: element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName,
-      height: element.getBoundingClientRect().height,
-    })),
+    }).map((element) => {
+      const isChoice = element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type);
+      const target = isChoice ? (element.labels?.[0] ?? element) : element;
+      const mark = element.getBoundingClientRect();
+      return {
+        label: element.getAttribute("aria-label") || target.textContent?.trim() || element.tagName,
+        height: target.getBoundingClientRect().height,
+        squareMark: !isChoice || Math.abs(mark.width - mark.height) < 1,
+        associatedLabel: !isChoice || target !== element,
+      };
+    }),
   );
-  for (const control of controls) expect(control.height, control.label).toBeGreaterThanOrEqual(44);
+  for (const control of controls) {
+    expect(control.height, control.label).toBeGreaterThanOrEqual(44);
+    expect(control.squareMark, control.label).toBe(true);
+    expect(control.associatedLabel, control.label).toBe(true);
+  }
 });
 
 test("mobile navigation opens as a dismissible side drawer", async ({ page }) => {
@@ -93,6 +104,9 @@ test("Settings keeps its parent bubble and the current subpage at desktop and mo
     await expect(settings).toBeVisible();
     await expect(settings).toHaveClass(/active/);
     await expect(settings).not.toHaveAttribute("aria-current");
+    if (viewport.width < 700) await page.getByRole("button", { name: "Close navigation" }).click();
+    await expect(page.locator(".settings-module-disclosure")).toHaveAttribute("data-active", "true");
+    await page.getByRole("button", { name: "Modules", exact: true }).click();
     const currentCategory = page.getByRole("navigation", { name: "Settings categories" }).getByRole("link", { name: "Configuration" });
     await expect(currentCategory).toHaveAttribute("aria-current", "page");
     await expect(page.getByText("Changes apply to every meeting after you save them")).toHaveCount(0);

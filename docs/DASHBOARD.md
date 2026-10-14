@@ -4,13 +4,13 @@ This guide is for Administrators and Operators. An Administrator configures the 
 
 ## Page walkthroughs
 
-First-visit walkthroughs introduce Dashboard, Roster, member detail, Reports, meeting attendance, Kiosks, and the Administrator browser simulator. Settings and its subpages do not have walkthroughs. Member records share one member-detail walkthrough, meeting records share one meeting-workspace walkthrough, and all Leaderboard and saved-report routes share one Reports walkthrough.
+First-visit walkthroughs introduce Dashboard, Outreach, Roster, member detail, Reports, meeting attendance, Kiosks, and the Administrator browser simulator. Settings and its subpages do not have walkthroughs. Member records share one member-detail walkthrough, meeting records share one meeting-workspace walkthrough, and all Leaderboard and saved-report routes share one Reports walkthrough.
 
 On Dashboard, **Start walkthrough** introduces the navigation, meeting calendar, searchable table, and meeting form. You can practice changing views, searching, selecting meetings, and filling the form. The **Practice preview** cannot save or delete meetings. Your previous calendar position, view, search, and selections return when you finish or exit. The final **Add meeting** action opens a fresh, normal form where you can save a real meeting.
 
-The other page walkthroughs explain the visible controls without sending provider actions or device commands. In the Reports guide, **Add example report** optionally saves and pins a personal **Monthly attendance example** using your roster, current-month attendance counts, labels, and report-period policy results. The report remains after the tour and can be edited or deleted normally. Skipping the option creates nothing.
+The other page walkthroughs explain the visible controls without sending provider actions or device commands. The Outreach guide follows dated activities, public or Discord member submissions, Submission Log review, activity-scoped corrections, staff manual-entry exceptions, and the handoff to Reports. Create, rename, archive, or reopen Outreach labels from the **Labels** subtab, then assign active labels to activities. The activity calendar and table show scheduled events by default. Open **Visibility** to include Team support or Other service without removing them from the direct Activity selector. The activity-level **Corrections** indicator appears only while a request needs review. In the Reports guide, **Add example report** optionally saves and pins a personal **Monthly attendance example** using your roster, current-month attendance counts, labels, and report-period policy results. The report remains after the tour and can be edited or deleted normally. Skipping the option creates nothing.
 
-The Kiosks guide covers diagnostics, pairing, naming, fingerprint maintenance, restarts, PIN recovery, updates, and retirement. If no physical kiosk is paired, the tour shows a clearly labeled example with disabled management controls. It disappears when the tour closes and never creates a device record. Existing kiosks remain unchanged.
+The Kiosks guide covers diagnostics, pairing, naming, selectable authentication, local maintenance, restarts, PIN recovery, updates, and retirement. If no physical kiosk is paired, the tour shows a clearly labeled example with disabled management controls. It disappears when the tour closes and never creates a device record. Existing kiosks remain unchanged.
 
 Choose **Not now** to receive the invitation on a later visit, or **Don't show automatically again** to stop automatic invitations for that page. Progress is recorded separately for each page and follows your signed-in account across browsers and devices. Completing a walkthrough stops its automatic invitations.
 
@@ -40,6 +40,8 @@ Roster membership does not grant dashboard access. An Administrator creates, lin
 
 Use **Configuration** to set the organization-wide late scan allowance, late-arrival and early-departure limits, optional reporting baseline, and reusable meeting-weight categories. Those limits do not change a recorded attendance outcome.
 
+Attendance contest review supports individual or bulk acceptance. Filter by name, member ID or meeting, select specific entries or **Select all filtered contests**, and enter one **Shared review reason**. **Accept selected contests** marks those members present and records a separate resolution and audit entry for each contest. Changing the filter clears the selection, so hidden entries are never included. Successfully accepted items leave the review list; failures remain with their error and can be retried without resubmitting successful entries.
+
 ## Roster and reports
 
 In **Roster**, an Administrator can select **Add member** or import a CSV. The importer previews changes before writing. Required columns are `memberId`, `firstName`, and `lastName`; `email`, `discordUserId`, and `attendanceRequiredFrom` are optional. Replacing the active roster makes omitted people inactive and preserves their attendance history and dashboard accounts.
@@ -56,7 +58,21 @@ In saved reports, **Current membership** uses each member's labels today through
 
 ## Kiosks and simulator
 
-Open **Kiosks** to review the physical kiosk's pairing, reader, network, pending scans, last successful sync, installed release, and heartbeat. Administrators can choose **Add kiosk** or **Replace kiosk**, download the guided Pi installer, and create a time-limited pairing key. Paste that key into the Pi's local pairing page.
+Open **Kiosks** to review every physical kiosk's pairing, reader, network, pending scans, last successful sync, installed release, and heartbeat. Select a device to manage it. Administrators can choose **Add kiosk**, download the guided Pi installer, and create a time-limited pairing key without interrupting existing kiosks. Paste that key into the new Pi's local pairing page.
+
+Administrators can select fingerprint, RFID badge, NFC badge, member ID, or QR code authentication for the installation. Fingerprint remains selected for existing installations until an Administrator changes it. The page shows the configured method separately from the method most recently reported by each selected kiosk. A pending message means that kiosk has not yet applied or acknowledged the new selection. Use **Authentication maintenance** separately at each Pi for fingerprint enrollment or local badge and QR mappings; member ID entry needs no enrollment.
+
+### Re-enroll older fingerprints
+
+The **Fingerprint re-enrollment** card replaces legacy identity review. Staff re-enroll members through **Authentication maintenance** on an online kiosk. Older and review-derived mappings cannot be approved for sharing by looking up a member ID. New online enrollments retain immutable roster identities and can use optional automatic sharing.
+
+To start over, back up protected kiosk state, use the explicit mappings reset below, and wait for every active kiosk to acknowledge it before re-enrolling. Reader templates remain. Replace only known occupied slots deliberately, not unidentified fingerprints.
+
+### Reset fingerprint mappings
+
+**Reset all fingerprint mappings** requires typing `RESET ALL FINGERPRINT MAPPINGS`. It deletes live cloud copies, disables cloud storage and peer sync, and queues fingerprint member-to-slot association removal for every currently active paired kiosk. Reader templates are retained for deliberate replacement during re-enrollment. Roster, attendance, kiosk pairing and other authentication mappings are unchanged.
+
+Review each kiosk's **Fingerprint reset status**. An offline kiosk can continue using its old local associations until it reconnects and completes the durable reset. Pending kiosks cannot share fingerprints; a completed acknowledgement confirms mapping removal, not sensor erasure. A previous pairing is no longer authorized. Do not treat a queued reset as immediate removal from every device or from historical infrastructure backups.
 
 The roster table keeps names and emails together, with member IDs in a separate column. **Edit** shows the attendance-required date without adding it to the directory table.
 

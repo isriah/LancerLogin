@@ -6,6 +6,7 @@ import { buildProvisionConfig } from "./prepare-cloudflare-provision.mjs";
 import { buildPagesProxy } from "./prepare-pages-proxy.mjs";
 
 import { resolveDatabaseName } from "./database-identity.mjs";
+import { ensureFingerprintVaultKey, fingerprintVaultSecretName, fingerprintVaultStateSql } from "./ensure-fingerprint-vault-key.mjs";
 import { parseReleaseVersion, releaseAllowed, compareReleaseVersions } from "../packages/shared/src/release-policy.mjs";
 
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -81,17 +82,23 @@ async function jsonGet(url, headers = {}) {
   if (!response.ok) throw new Error("provider_request_failed");
   return response.json();
 }
-function command(program, args, cwd, env, { json = false } = {}) {
+function command(program, args, cwd, env, { json = false, input } = {}) {
   return new Promise((done, reject) => {
-    const child = spawn(program, args, { cwd, env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(program, args, { cwd, env, shell: false, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     let stdout = "";
-    child.stdout.on("data", (value) => { stdout += value; });
+    child.stdout.on("data", (value) => { if (input === undefined) stdout += value; });
     child.stderr.on("data", () => {}); // Never print credentials, SQL, personal data or provider bodies.
     child.on("error", () => reject(new Error("command_failed")));
-    child.on("exit", (code) => {
+    const timeout = input === undefined ? undefined : setTimeout(() => { child.kill(); reject(new Error("command_failed")); }, 60_000);
+    child.on("close", (code) => {
+      clearTimeout(timeout);
       if (code !== 0) return reject(new Error("command_failed"));
       try { done(json ? JSON.parse(stdout) : stdout.trim()); } catch { reject(new Error("command_output_invalid")); }
     });
+    if (input !== undefined) {
+      child.stdin.on("error", () => { clearTimeout(timeout); child.kill(); reject(new Error("command_failed")); });
+      child.stdin.end(`${input}\n`);
+    }
   });
 }
 
@@ -197,7 +204,14 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
       const result = await sql(`UPDATE web_update_requests SET recovery_json = ?, updated_at = ? WHERE ${owned}`, [JSON.stringify(recovery), new Date().toISOString(), context.requestId, context.runId]);
       if (result[0]?.meta?.changes !== 1) throw new Error("checkpoint_save_failed");
     },
-    async migrate() { await wrangler(["d1", "migrations", "apply", databaseName, "--remote"]); },
+    async migrate() {
+      await wrangler(["d1", "migrations", "apply", databaseName, "--remote"]);
+      await ensureFingerprintVaultKey({
+        listSecretNames: async () => (await wrangler(["secret", "list", "--format", "json"], { json: true })).map((entry) => entry.name),
+        readVaultState: async () => (await sql(fingerprintVaultStateSql))[0]?.results?.[0],
+        putSecret: (name, value) => wrangler(["secret", "put", name], { input: value }),
+      });
+    },
     async deployApi() { await wrangler(["deploy", "--message", `Web update ${context.requestId}`]); },
     async deployPages() {
       // Pages rejects custom --config paths; the generated configuration belongs to the Worker only.
@@ -226,7 +240,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
         if (customPages.releaseVersion !== context.tag.slice(1) || customProxy.ok !== true || customProxy.releaseVersion !== context.tag.slice(1)) throw new Error("custom_dashboard_health_mismatch");
       }
       const secrets = new Set((await wrangler(["secret", "list", "--format", "json"], { json: true })).map((entry) => entry.name));
-      if (!["SESSION_KEY", "INTEGRATION_KEY", "BOOTSTRAP_CODE_HASH", "WEB_UPDATE_TOKEN", "WEB_UPDATE_TOKEN_EXPIRES_AT"].every((name) => secrets.has(name))) throw new Error("postdeploy_secret_missing");
+      if (!["SESSION_KEY", "INTEGRATION_KEY", "BOOTSTRAP_CODE_HASH", "WEB_UPDATE_TOKEN", "WEB_UPDATE_TOKEN_EXPIRES_AT", fingerprintVaultSecretName].every((name) => secrets.has(name))) throw new Error("postdeploy_secret_missing");
     },
   };
 }

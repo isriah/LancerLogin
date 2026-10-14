@@ -34,7 +34,7 @@ test("live adapter keeps Worker configuration out of the actual Pages CLI invoca
     const cli = resolve("node_modules/wrangler/bin/wrangler.js");
     const invoke = args => {
       const result = spawnSync(process.execPath, [cli, ...args], { cwd: source, env: isolatedEnv, encoding: "utf8", timeout: 30_000 });
-      assert.ifError(result.error); assert.equal(result.status, 1);
+      assert.ifError(result.error); assert.equal(result.status, 1, result.stdout + result.stderr);
       return result.stdout + result.stderr;
     };
     assert.match(invoke([...pagesArgs, "--config", join(source, ".provision/wrangler.json")]), /Pages does not support custom paths for the Wrangler configuration file/);
@@ -43,6 +43,51 @@ test("live adapter keeps Worker configuration out of the actual Pages CLI invoca
     assert.match(accepted, /CLOUDFLARE_API_TOKEN/);
   } finally { await rm(source, { recursive: true, force: true }); }
 });
+
+test("live upgrade prepares a missing vault key over stdin after migrations and refuses lost-key replacement", async () => {
+  const source = await mkdtemp(join(tmpdir(), "lancerlogin-vault-upgrade-"));
+  const originalFetch = globalThis.fetch;
+  try {
+    const executable = join(source, "node_modules/wrangler/bin");
+    await mkdir(executable, { recursive: true });
+    await writeFile(join(executable, "wrangler.js"), [
+      "const fs = require('node:fs'); const args = process.argv.slice(2);",
+      "if (args[0] === 'secret' && args[1] === 'list') {",
+      "fs.appendFileSync('calls.jsonl', JSON.stringify({args})+'\\n');",
+      "process.stdout.write(JSON.stringify(fs.existsSync('key-present')?[{name:'FINGERPRINT_VAULT_KEY'}]:[]));",
+      "} else if (args[0] === 'secret' && args[1] === 'put') {",
+      "let input=''; process.stdin.on('data', chunk => input+=chunk); process.stdin.on('end', () => {",
+      "const canonical=/^[A-Za-z0-9_-]{43}\\n$/.test(input);",
+      "fs.appendFileSync('calls.jsonl', JSON.stringify({args,canonical})+'\\n');",
+      "fs.writeFileSync('key-present','metadata only'); process.stdout.write(input); });",
+      "} else fs.appendFileSync('calls.jsonl', JSON.stringify({args})+'\\n');",
+    ].join("\n"));
+    const context = validateUpgradeEnvironment(env);
+    const isolatedEnv = { ...env, CI: "true", PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+      TEMP: source, TMP: source, HOME: source, USERPROFILE: source, XDG_CONFIG_HOME: source };
+    let enabled = 0; let queries = 0;
+    globalThis.fetch = async (url, init) => {
+      assert.equal(url, `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database/${env.DATABASE_ID}/query`);
+      assert.equal(init.method, "POST");
+      assert.match(JSON.parse(init.body).sql, /kiosk_fingerprint_vault_settings/);
+      queries++;
+      return Response.json({ success: true, result: [{ success: true, results: [{ enabled, stored: enabled }] }] });
+    };
+    const io = await createLiveUpgradeIO(context, isolatedEnv, source);
+    await io.migrate();
+    const calls = (await readFile(join(source, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    assert.deepEqual(calls[0].args.slice(0, 5), ["d1", "migrations", "apply", "example-data", "--remote"]);
+    assert.deepEqual(calls[2].args.slice(0, 3), ["secret", "put", "FINGERPRINT_VAULT_KEY"]);
+    assert.equal(calls[2].canonical, true); assert.equal(queries, 1);
+    await io.migrate(); assert.equal(queries, 1, "retained key needs no template-state query");
+    await rm(join(source, "key-present"));
+    enabled = 1;
+    await assert.rejects(io.migrate(), /vault_original_key_recovery_required/);
+    const allCalls = (await readFile(join(source, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    assert.equal(allCalls.filter((call) => call.args[1] === "put").length, 1);
+  } finally { globalThis.fetch = originalFetch; await rm(source, { recursive: true, force: true }); }
+});
+
 test("fixed upgrade parameters reject public, malformed and resource substitutions", () => {
   assert.equal(validateUpgradeEnvironment(env).tag, "v1.0.0");
   for (const substitution of [{ REPOSITORY_PRIVATE: "false" }, { UPDATE_REPOSITORY: "isriah/LancerLogin" }, { RELEASE_TAG: "v1.0.0-rc1" }, { RELEASE_SHA: "main" }, { INSTALLATION_SLUG: "example;command" }, { DATABASE_ID: "unknown" }, { API_URL: "https://another-api.account.workers.dev" }, { CLOUDFLARE_API_TOKEN: "unscoped" }]) assert.throws(() => validateUpgradeEnvironment({ ...env, ...substitution }));

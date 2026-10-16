@@ -29,7 +29,8 @@ test("primary module settings and Outreach settings expose the same live privacy
   await expect(page.getByText("Public form privacy settings saved.")).toBeVisible();
   expect(state.writes).toEqual([{ memberValidation: "validity", revision: 0 }]);
   await page.getByRole("link", { name: "Outreach", exact: true }).click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveCount(0);
+  await page.goto("/settings/outreach-setup");
   await expect(mode).toHaveValue("validity");
   await mode.selectOption("name"); await page.getByRole("button", { name: "Save public form settings" }).click();
   expect(state.writes[1]).toEqual({ memberValidation: "name", revision: 1 });
@@ -38,7 +39,8 @@ test("primary module settings and Outreach settings expose the same live privacy
 
 test("Operator Outreach view does not expose or request Admin privacy settings", async ({ page }) => {
   const state = await settingsFixture(page, "operator"); await page.goto("/hours");
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveCount(0);
+  await page.goto("/settings/outreach-setup");
   await expect(page.getByRole("heading", { name: "Supported teams" })).toBeVisible();
   await expect(page.getByLabel("Public form privacy mode")).toHaveCount(0);
   expect(state.readCount()).toBe(0); expect(state.writes).toEqual([]);

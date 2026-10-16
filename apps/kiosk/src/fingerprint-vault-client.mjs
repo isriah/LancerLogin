@@ -1,9 +1,10 @@
+import { fingerprintFailureReason } from "./fingerprint-diagnostics.mjs";
 import { normalizeApiUrl } from "./cloud-client.mjs";
 
 export function createFingerprintRequester(config, prefix, { fetchImpl = fetch, maximumResponseBytes = 32768 } = {}) {
   const base = normalizeApiUrl(config.apiUrl);
   async function request(path, method = "GET", value) {
-    let response, bytes;
+    let response, bytes, stage = "network_unavailable";
     try {
       response = await fetchImpl(`${base}${prefix}${path}`, { method, redirect: "error", signal: AbortSignal.timeout(8000),
         headers: { authorization: `Bearer ${config.kioskToken}`, ...(value === undefined ? {} : { "content-type": "application/json" }) },
@@ -11,6 +12,7 @@ export function createFingerprintRequester(config, prefix, { fetchImpl = fetch, 
       if (!response.ok) {
         const error = new Error("Fingerprint cloud storage did not accept the request"); error.status = response.status; throw error;
       }
+      stage = "invalid_response";
       const reader = response.body?.getReader(); if (!reader) throw new Error("Missing response");
       let size = 0; const chunks = [];
       try {
@@ -22,6 +24,7 @@ export function createFingerprintRequester(config, prefix, { fetchImpl = fetch, 
       } finally { for (const chunk of chunks) chunk.fill(0); await reader.cancel().catch(() => undefined); reader.releaseLock(); }
     } catch (cause) {
       const error = new Error("Fingerprint cloud storage is unavailable; synchronization will retry");
+      error.reasonCode = fingerprintFailureReason(cause, stage);
       if (Number.isInteger(cause?.status)) error.status = cause.status;
       throw error;
     } finally { bytes?.fill(0); await response?.body?.cancel().catch(() => undefined); }

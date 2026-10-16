@@ -22,7 +22,7 @@ const contestKey = (contest: Contest) => `${contest.meetingId}:${contest.memberI
 const occurrenceDate = (contest: Contest) => new Date(contest.meetingStartsAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 const rawScanLabel = (status: Contest["rawScanStatus"]) => status === "partial" ? "Partial — checked in, no check-out" : status === "complete" ? "Complete — checked in and out" : "No scans";
 
-export function ContestReviewList({ contests, onResolved }: { contests: Contest[]; onResolved?: (resolution: Contest["status"], contest: Contest) => void }) {
+export function ContestReviewList({ contests, onResolved, onBulkResolved }: { contests: Contest[]; onResolved?: (resolution: Contest["status"], contest: Contest) => void; onBulkResolved?: (contests: Contest[]) => void }) {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
@@ -64,18 +64,26 @@ export function ContestReviewList({ contests, onResolved }: { contests: Contest[
     busyRef.current = true; setBusy("bulk"); setBulkNotice(""); setBulkError("");
     let accepted = 0;
     try {
-      for (const contest of items) {
-        const key = contestKey(contest);
-        setErrors((current) => ({ ...current, [key]: "" }));
+      const resolved: Contest[] = [];
+      for (let offset = 0; offset < items.length; offset += 100) {
+        const chunk = items.slice(offset, offset + 100);
+        const outcome: Record<string, string> = {};
         try {
-          await api("/discord/contests/resolve", { method: "POST", body: JSON.stringify({ meetingId: contest.meetingId, memberId: contest.memberId, resolution: "approved", reviewNote }) });
-          accepted++;
-          setSelected((current) => current.filter((selectedKey) => selectedKey !== key));
-          onResolved?.("approved", contest);
+          const response = await api<{ results: { meetingId: string; memberId: string; resolved: boolean; error?: string }[] }>("/discord/contests/accept", { method: "POST", body: JSON.stringify({ contests: chunk.map(({ meetingId, memberId }) => ({ meetingId, memberId })), reviewNote }) });
+          if (!Array.isArray(response.results) || response.results.length !== chunk.length || response.results.some((result, index) => result.meetingId !== chunk[index].meetingId || result.memberId !== chunk[index].memberId || typeof result.resolved !== "boolean")) throw new Error("The acceptance results could not be verified. Refresh contests before retrying.");
+          for (const [index, result] of response.results.entries()) {
+            const contest = chunk[index], key = contestKey(contest);
+            outcome[key] = result.resolved ? "" : `Contest acceptance failed: ${result.error || "Refresh before retrying."}`;
+            if (result.resolved) { accepted++; resolved.push(contest); }
+          }
         } catch (error) {
-          setErrors((current) => ({ ...current, [key]: `Contest acceptance failed: ${(error as Error).message || "Request failed"}` }));
+          for (const contest of chunk) outcome[contestKey(contest)] = `Contest acceptance failed: ${(error as Error).message || "Request failed"}`;
         }
+        setErrors(current => ({ ...current, ...outcome }));
       }
+      const resolvedKeys = new Set(resolved.map(contestKey));
+      setSelected(current => current.filter(key => !resolvedKeys.has(key)));
+      if (resolved.length) { if (onBulkResolved) onBulkResolved(resolved); else for (const contest of resolved) onResolved?.("approved", contest); }
       const failed = items.length - accepted;
       setBulkNotice(`${accepted} contest${accepted === 1 ? "" : "s"} accepted.${failed ? ` ${failed} could not be accepted. Review the errors beside those entries before retrying.` : ""}`);
     } finally {

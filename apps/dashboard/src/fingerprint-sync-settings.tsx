@@ -1,3 +1,4 @@
+import { InfoTip } from "./info-tip";
 import { useEffect, useState } from "react";
 import { api } from "./dashboard-api";
 import { FingerprintVaultSettings } from "./fingerprint-vault-settings";
@@ -32,14 +33,12 @@ export function FingerprintSyncSettings() {
     } catch (error) { setEnabled(undefined); setNotice((error as Error).message); setFailed(true); }
     finally { setBusy(false); }
   }
-  return <><article className="task-card ui-form fingerprint-settings-card" aria-labelledby="fingerprint-sync-title">
-    <h2 id="fingerprint-sync-title">Fingerprint sync</h2>
-    <p>Optional, off by default. Newly enrolled fingerprints can sync across networks between approved kiosks. These peer transfers are encrypted for the destination kiosk; the peer relay cannot decrypt them. Cloud storage below is a separate option with server-managed keys.</p>
-    <p>Enable and approve each peer using the physical kiosk's local settings PIN. Existing unidentified fingerprints are not automatically exported. Turning sync off does not erase fingerprints already stored on readers.</p>
+  return <><article className="ui-card ui-form fingerprint-settings-card" aria-labelledby="fingerprint-sync-title">
+    <div className="fingerprint-control-heading"><h3 id="fingerprint-sync-title">Peer sync</h3><InfoTip label="About peer sync">Encrypted transfers between locally approved kiosks. Approve peers on each physical kiosk using its settings PIN. Turning sync off leaves existing reader copies. Cloud storage is configured separately.</InfoTip></div>
     <p role="status">Installation sync: {enabled === undefined ? "Unavailable" : enabled ? "On" : "Off"}</p>
     <div className="kiosk-actions">
-      <button className="ui-button ui-button--primary" type="button" disabled={busy || enabled === undefined} onClick={() => void toggle()}>{busy ? "Please wait…" : enabled ? "Disable fingerprint sync" : "Enable fingerprint sync"}</button>
-      <button className="ui-button" type="button" disabled={busy} onClick={() => void load()}>Refresh sync settings</button>
+      <button className="ui-button ui-button--primary" type="button" disabled={busy || enabled === undefined} onClick={() => void toggle()}>{busy ? "Please wait…" : enabled ? "Disable sync" : "Enable sync"}</button>
+      <button className="ui-button" type="button" disabled={busy} aria-label="Refresh sync settings" title="Refresh sync settings" onClick={() => void load()}>↻</button>
     </div>
     {notice && <p className="ui-status" data-tone={failed ? "error" : "success"} role={failed ? "alert" : "status"}>{notice}</p>}
   </article><FingerprintVaultSettings /></>;

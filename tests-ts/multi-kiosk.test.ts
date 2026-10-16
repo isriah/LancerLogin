@@ -130,15 +130,29 @@ test("fingerprint relay paginates blocked deliveries without skipping after dele
     return (await response.json() as { deliveries: Array<{ context: { transferId: string } }> }).deliveries.map(item => item.context.transferId);
   };
   assert.deepEqual(await page(), Array.from({ length: 8 }, (_, index) => `delivery-0${index}`));
+  const poll = async (after?: string, token = destination.kioskToken) => {
+    const response = await call(`/kiosk/poll?v=1&fingerprints=1${after ? `&peerAfter=${encodeURIComponent(after)}` : ""}`, undefined, token);
+    assert.equal(response.status, 200);
+    return await response.json() as { command: unknown; fingerprints: { peer: { status: string; deliveries: Array<{ context: { transferId: string } }> } } };
+  };
+  assert.deepEqual((await poll()).fingerprints.peer.deliveries.map(item => item.context.transferId), await page());
   // The cursor remains valid even if its row or earlier rows disappear.
   database.sqlite.exec("DELETE FROM kiosk_fingerprint_deliveries WHERE transfer_id IN ('delivery-00','delivery-07')");
   assert.deepEqual(await page("delivery-07"), ["delivery-08", "delivery-09"]);
   assert.deepEqual(await page("delivery-09"), []);
   assert.deepEqual(await page("delivery-07", other.kioskToken), []);
+  assert.deepEqual((await poll("delivery-07")).fingerprints.peer.deliveries.map(item => item.context.transferId), ["delivery-08", "delivery-09"]);
+  assert.deepEqual((await poll("delivery-07", other.kioskToken)).fingerprints.peer.deliveries, []);
   assert.equal((await page()).length, 8);
   for (const query of ["after=", "after=..%2Fidentity", "after=one&after=two"]) {
     assert.equal((await call(`/kiosk/fingerprint-sync/deliveries?${query}`, undefined, destination.kioskToken)).status, 400);
   }
+  context.mock.timers.tick(600001);
+  assert.deepEqual((await poll()).fingerprints.peer.deliveries, [], "expired ciphertext is never delivered before periodic cleanup");
+  assert.ok(Number(database.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_deliveries").get()?.n) > 0, "read-only poll does not mutate retained rows");
+  const publicIdentity = senderPublic;
+  assert.equal((await call("/kiosk/fingerprint-sync/identity", { publicIdentity, fingerprint: fingerprintIdentityId(publicIdentity) }, source.kioskToken, "PUT")).status, 200);
+  assert.equal(database.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_deliveries").get()?.n, 0, "continuing bounded registration purges expired rows");
 });
 
 test("fingerprint relay requires explicit enablement and immutable paired public identities", async (context) => {
@@ -232,7 +246,7 @@ test("encrypted relay delivers only to its recipient and erases ciphertext after
   const different = sealFingerprintTemplate(syntheticTemplate, { sender, recipient: recipientPublic, context: transferContext });
   assert.equal((await enqueue(different)).status, 409);
   assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM kiosk_fingerprint_deliveries").get()?.n, 1);
-  for (const device of [first, stranger]) assert.deepEqual(await (await call("/kiosk/fingerprint-sync/deliveries", undefined, device.kioskToken)).json(), { deliveries: [] });
+  for (const device of [first, stranger]) assert.deepEqual(await (await call("/kiosk/fingerprint-sync/deliveries", undefined, device.kioskToken)).json(), { syncId, deliveries: [] });
   const received = await (await call("/kiosk/fingerprint-sync/deliveries", undefined, second.kioskToken)).json() as { deliveries: unknown[] };
   assert.equal(received.deliveries.length, 1);
   const clear = openFingerprintTemplate(received.deliveries[0], { recipient, sender: senderPublic, expected: transferContext });
@@ -246,7 +260,7 @@ test("encrypted relay delivers only to its recipient and erases ciphertext after
   assert.equal((await call(resultPath, { ...result, status: "rejected" }, second.kioskToken)).status, 409);
   assert.equal(database.sqlite.prepare("SELECT envelope_json FROM kiosk_fingerprint_deliveries").get()?.envelope_json, null);
   assert.equal((await enqueue()).status, 200);
-  assert.deepEqual(await (await call("/kiosk/fingerprint-sync/deliveries", undefined, second.kioskToken)).json(), { deliveries: [] });
+  assert.deepEqual(await (await call("/kiosk/fingerprint-sync/deliveries", undefined, second.kioskToken)).json(), { syncId, deliveries: [] });
   assert.deepEqual(await (await call(`/kiosk/fingerprint-sync/deliveries/${transferContext.transferId}`, undefined, first.kioskToken)).json(), { transferId: transferContext.transferId, status: "complete" });
   assert.equal((await call(`/kiosk/fingerprint-sync/deliveries/${transferContext.transferId}`, undefined, stranger.kioskToken)).status, 404);
   context.mock.timers.tick(600001);
@@ -326,7 +340,14 @@ test("two kiosk controllers interoperate with real Worker relay and recover a lo
   assert.equal(database.sqlite.prepare("SELECT status FROM kiosk_fingerprint_deliveries").get()?.status, "complete");
   assert.equal(database.sqlite.prepare("SELECT envelope_json FROM kiosk_fingerprint_deliveries").get()?.envelope_json, null);
   assert.equal((await source.controller.tick()).completed, 1);
-  assert.equal((await target.controller.tick()).status, "ready");
+  const receivedMapping = (await target.mappings.read())["1"];
+  assert.equal(receivedMapping.rosterId, undefined);
+  assert.equal(receivedMapping.enrollment, undefined);
+  const healthyRecipient = await target.controller.tick();
+  assert.equal(healthyRecipient.status, "ready");
+  assert.equal(healthyRecipient.missingIdentityMappings, 0);
+  assert.equal(healthyRecipient.unshareableMappings, 0);
+  assert.deepEqual((await target.mappings.read())["1"], receivedMapping);
   assert.equal(imports, 1);
   // The transferred fingerprint uses the same member identity for attendance.
   const scan = await call("/kiosk/attendance", { eventId: "transferred-finger-scan", memberId: await target.mappings.memberForSlot(1), pairingId: targetDevice.pairingId, occurredAt: new Date().toISOString() }, targetDevice.kioskToken);
@@ -437,7 +458,7 @@ test("pending fingerprint resets block both relay endpoints without exposing sta
   pending(source, "synthetic-source-reset");
   assert.deepEqual(await (await call("/kiosk/fingerprint-sync", undefined, source.kioskToken)).json(), { enabled: false, syncId: null });
   assert.equal((await call("/kiosk/fingerprint-sync/deliveries", envelope, source.kioskToken)).status, 409);
-  assert.deepEqual(await (await call("/kiosk/fingerprint-sync/deliveries", undefined, destination.kioskToken)).json(), { deliveries: [] });
+  assert.deepEqual(await (await call("/kiosk/fingerprint-sync/deliveries", undefined, destination.kioskToken)).json(), { syncId, deliveries: [] });
   assert.equal((await call("/kiosk/fingerprint-sync/deliveries/synthetic-reset-transfer/result", { status: "complete", digest: proof }, destination.kioskToken)).status, 404);
   assert.equal(database.sqlite.prepare("SELECT status FROM kiosk_fingerprint_deliveries").get()?.status, "pending");
 });

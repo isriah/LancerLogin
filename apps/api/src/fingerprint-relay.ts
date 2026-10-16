@@ -40,13 +40,14 @@ function parseEnvelope(value: unknown, now: number): Envelope {
 }
 // Every read and acknowledgement binds both current pairings and registrations,
 // not just the bearer token that authenticated the start of the request.
-const deliveryAuthority = `FROM kiosk_fingerprint_deliveries d
+export const fingerprintDeliveryAuthority = `FROM kiosk_fingerprint_deliveries d
   JOIN kiosk_fingerprint_sync s ON s.installation_id=d.installation_id AND s.sync_id=d.sync_id AND s.enabled=1
   JOIN kiosk_fingerprint_keys a ON a.kiosk_id=d.sender_id AND a.installation_id=d.installation_id AND a.pairing_id=d.sender_pairing_id AND a.key_id=d.sender_key_id
   JOIN kiosk_fingerprint_keys b ON b.kiosk_id=d.recipient_id AND b.installation_id=d.installation_id AND b.pairing_id=d.recipient_pairing_id AND b.key_id=d.recipient_key_id
   JOIN kiosks ak ON ak.id=a.kiosk_id AND ak.active=1 AND ak.pairing_code_id=a.pairing_id AND ${sourceResetGuard}
   JOIN kiosks bk ON bk.id=b.kiosk_id AND bk.active=1 AND bk.pairing_code_id=b.pairing_id AND ${recipientResetGuard}
   JOIN members m ON m.id=d.member_id AND m.installation_id=d.installation_id AND m.active=1`;
+const deliveryAuthority = fingerprintDeliveryAuthority;
 const exact = (value: unknown, keys: string[]): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key)));
 const invalid = () => new HttpError(400, "Invalid fingerprint sync public identity");
 function decode(value: unknown, length: number): Uint8Array<ArrayBuffer> {
@@ -212,7 +213,7 @@ export async function fingerprintRelayRoute(request: Request, context: Context):
       WHERE d.installation_id='primary' AND d.sync_id=? AND d.recipient_id=? AND d.recipient_pairing_id=? AND d.status='pending' AND d.expires_at>?
         AND d.transfer_id>?
       ORDER BY d.transfer_id LIMIT 8`).bind(state.syncId, actor.id, actor.pairingId, Date.now(), after).all<{ envelopeJson: string }>();
-    return respond({ deliveries: (pending.results ?? []).map(row => JSON.parse(row.envelopeJson)) });
+    return respond({ syncId: state.syncId, deliveries: (pending.results ?? []).map(row => JSON.parse(row.envelopeJson)) });
   }
   const deliveryPath = /^\/kiosk\/fingerprint-sync\/deliveries\/([A-Za-z0-9._:-]{1,128})(\/result)?$/.exec(path);
   if (deliveryPath) {

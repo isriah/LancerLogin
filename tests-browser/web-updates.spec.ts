@@ -135,7 +135,10 @@ test("manual deployment offers reload from served and running versions even when
 test("missing workflow and stalled backup cannot duplicate or start an update", async ({ page }) => {
   const state = await setup(page);
   await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: bundledVersion, workflowUrl: "" } }));
-  await page.goto("/settings/updates"); await expect(page.getByRole("button", { name: "Back up and begin update" })).toBeDisabled();
+  await page.goto("/settings/updates");
+  await expect(page.locator("#release-check-status")).toContainText("Last successful check");
+  await expect(page.getByRole("button", { name: "Check for updates", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Back up and begin update" })).toBeDisabled();
   expect(state.prepares).toBe(0);
   await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: bundledVersion, workflowUrl } }));
   await page.reload(); await page.getByRole("button", { name: "Back up and begin update" }).click();

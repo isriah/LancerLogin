@@ -15,7 +15,8 @@ test("Dashboard delegates live attendance and contest review to complete replace
   await page.locator('.calendar-day button[title^="Build session,"]').click();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Meeting actions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Meeting actions" })).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Meeting actions" })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Calendar delivery|Discord operations/ })).toHaveCount(0);
   await expect(page.getByRole("table", { name: "Meeting attendance" })).toContainText("Active · not checked out");
   await expect(page.getByRole("link", { name: "Avery Stone" })).toHaveAttribute("href", "/roster/A-101");

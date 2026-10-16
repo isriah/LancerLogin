@@ -11,7 +11,6 @@ const definitions: Record<Exclude<WalkthroughPage, "dashboard">, WalkthroughExpe
     finishTitle: "You're ready to work with the roster",
     finishDescription: "Find a member, open their history, or use the available Admin tools when roster records need attention.",
     steps: [
-      { id: "summary", title: "Read the roster at a glance", description: "The summary separates active members from the complete roster. Inactive records remain available when you need historical context.", targets: '[data-walkthrough="roster-summary"]' },
       { id: "filters", title: "Find the right people", description: "Search by name, email, member ID, or Discord ID. Show changes between active and complete history, while Label narrows the list to a current group.", targets: '[data-walkthrough="roster-filters"]' },
       { id: "member-rows", title: "Open a member profile", description: "A member's name opens their profile and complete attendance history. Each row also shows identifiers, current labels, roster status, and available integration identity.", targets: '[data-walkthrough="roster-list"]' },
       { id: "attendance", title: "Interpret attendance", description: "Regular attendance matches the default Reports calculation. Assigned label policies can use their own windows and targets, so a member may show more than one result.", targets: '.roster-attendance-rate, [data-walkthrough="roster-list"]' },
@@ -78,7 +77,7 @@ const definitions: Record<Exclude<WalkthroughPage, "dashboard">, WalkthroughExpe
     finishTitle: "You're ready to manage a meeting",
     finishDescription: "Use the summary for context, the attendance table for evidence, and correction tools only when the recorded outcome needs review.",
     steps: [
-      { id: "navigation", title: "Move between meetings", description: "Back to Dashboard returns to the meeting browser. Switch meeting opens another meeting workspace without making you search again.", targets: '[data-walkthrough="meeting-navigation"]' },
+      { id: "navigation", title: "Move between meetings", description: "Back to Dashboard returns to the meeting browser, where you can open another meeting.", targets: '[data-walkthrough="meeting-navigation"]' },
       { id: "summary", title: "Confirm the meeting context", description: "Lifecycle, date, time, attendance requirement, audience, weight, recurrence, and notes explain how this meeting contributes to attendance.", targets: '[data-walkthrough="meeting-summary"]' },
       { id: "management", title: "Understand meeting changes", description: "Edit changes this occurrence or future series items when available. Duplicate creates a new schedule from this meeting. Delete asks for scope and returns an Undo opportunity on Dashboard.", targets: '[data-walkthrough="meeting-management"]' },
       { id: "integrations", title: "Run provider actions deliberately", description: "When configured, calendar sync updates this meeting and Discord can notify linked absent members after attendance begins. These actions contact external providers.", targets: '[data-walkthrough="meeting-integrations"]' },

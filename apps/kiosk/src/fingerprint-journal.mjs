@@ -1,14 +1,16 @@
+import { fingerprintDiagnosticError, fingerprintDiagnosticOperation } from "./fingerprint-diagnostics.mjs";
 import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { acquireFingerprintStateLock } from "./fingerprint-state-lock.mjs";
 
 const id = (value) => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
 const memberId = value => typeof value === "string" && value.length > 0 && value.length <= 100 && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
 const digest = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const phases = ["reserved", "stored", "mapped", "complete"];
 const safeMode = (stat) => process.platform === "win32" || ((stat.mode & 0o077) === 0 && stat.uid === process.getuid());
-const fail = () => { throw new Error("Fingerprint delivery journal requires local review"); };
+const fail = () => { throw fingerprintDiagnosticError("local_state_review"); };
 const fields = ["transferId", "senderId", "senderPairingId", "senderKeyId", "memberId", "enrollmentId", "revision", "envelopeDigest"];
 
 // Contains delivery metadata only, never a template or private key. Call reserve
@@ -63,17 +65,17 @@ export function createFingerprintJournal(path, binding, { allowSuperseded = fals
     } finally { await file?.close(); await unlink(temporary).catch(() => undefined); }
   }
   const mutate = (operation) => exclusive(async () => {
-    await directory(); let lock;
+    await fingerprintDiagnosticOperation("local_state_review", directory); let lock;
     try {
-      lock = await open(`${path}.lock`, "wx", 0o600);
-      const state = await load();
+      lock = await fingerprintDiagnosticOperation("local_state_review", () => acquireFingerprintStateLock(`${path}.lock`));
+      const state = await fingerprintDiagnosticOperation("local_state_review", load);
       const result = operation(state);
-      await save(state);
+      await fingerprintDiagnosticOperation("local_state_review", () => save(state));
       return { ...result };
-    } finally { if (lock) { await lock.close(); await unlink(`${path}.lock`); } }
+    } finally { if (lock) await fingerprintDiagnosticOperation("local_state_review", () => lock.close()); }
   });
   return {
-    list: () => exclusive(async () => { await directory(); return (await load()).records.map((record) => ({ ...record })); }),
+    list: () => exclusive(async () => { await fingerprintDiagnosticOperation("local_state_review", directory); return (await fingerprintDiagnosticOperation("local_state_review", load)).records.map((record) => ({ ...record })); }),
     reserve: (context, envelopeDigest, { capacity, occupiedSlots, mappedSlots, existingSlot, supersedeExisting = false }) => mutate((state) => {
       if (context?.installationId !== bound.installationId || context?.recipientId !== bound.kioskId || context?.recipientPairingId !== bound.pairingId || context.senderId === bound.kioskId) return fail();
       const request = Object.fromEntries(fields.map((field) => [field, field === "envelopeDigest" ? envelopeDigest : context[field]]));

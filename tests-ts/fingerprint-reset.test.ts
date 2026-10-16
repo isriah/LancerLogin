@@ -16,7 +16,9 @@ const hash = (value: string) => createHash("sha256").update(value).digest("base6
 class Database {
   sqlite = new DatabaseSync(":memory:"); beforeRun?: (sql: string) => void;
   constructor(deferRetirement = false) {
-    for (const file of readdirSync("apps/api/migrations").filter(file => file.endsWith(".sql") && (!deferRetirement || file !== retirement)).sort()) this.sqlite.exec(readFileSync(join("apps/api/migrations", file), "utf8"));
+    // A historical fixture must stop at its original schema. Later migrations
+    // can depend on retirement's tables or extend the rows seeded below.
+    for (const file of readdirSync("apps/api/migrations").filter(file => file.endsWith(".sql") && (!deferRetirement || file < retirement)).sort()) this.sqlite.exec(readFileSync(join("apps/api/migrations", file), "utf8"));
     this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-01-01','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-01-01'),('operator','primary','operator','operator','2026-01-01');
       INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');
@@ -83,7 +85,7 @@ test("retirement revokes reviewed ciphertext and stripped grants while preservin
     db.sqlite.prepare("INSERT INTO kiosk_fingerprint_vault_templates VALUES(?,'primary',?,?,?,?,?,?,?,?,?,?)").run(binding.fingerprintId, vault, "member", binding.templateDigest, encrypted.ciphertext, encrypted.nonce, "r503-model-1536", "source", "pair-a", enrollmentId, 1); template.fill(0);
   }
   db.sqlite.exec("INSERT INTO kiosk_fingerprint_reset_batches VALUES('old-reset','primary','admin',1,1); INSERT INTO kiosk_fingerprint_reset_commands VALUES('old-command','old-reset','primary','destination','pair-b',1,NULL)");
-  db.sqlite.exec(readFileSync(join("apps/api/migrations", retirement), "utf8"));
+  for (const file of readdirSync("apps/api/migrations").filter(file => file.endsWith(".sql") && file >= retirement).sort()) db.sqlite.exec(readFileSync(join("apps/api/migrations", file), "utf8"));
   assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_templates").get()?.n, 1);
   assert.equal(db.sqlite.prepare("SELECT enrollment_id FROM kiosk_fingerprint_vault_templates").get()?.enrollment_id, "fresh-enrollment");
   assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_review_manifests").get()?.n, 0);

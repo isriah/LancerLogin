@@ -34,11 +34,11 @@ test("Outreach dashboard exposes the agreed everyday workflow", async () => {
   assert.match(workspace, /Outreach labels \(optional\)/);
   assert.match(workspace, /\/admin\/hours\/labels/);
   assert.doesNotMatch(workspace, /item === "labels" \? "Labels"|tab === "labels"/);
-  assert.match(workspace, /item === "settings" \? "Settings"/);
+  assert.doesNotMatch(workspace, /item === "settings" \? "Settings"|<OutreachSettings/);
   assert.match(moduleNavigation, /outreachReady \? \[\{ id: "outreach", label: "Outreach", links: \[\["\/settings\/outreach-setup", "Outreach settings"\]\]/);
   assert.match(shell, /<SettingsModuleNavigation[^>]*outreachReady=\{outreachReady\}/);
   assert.match(shell, /onOpenActivity=\{\(id\) => navigate\(`/);
-  assert.match(shell, /outreachReady && role === "admin" && path === "\/settings\/outreach-setup"\) page = <OutreachSetupSettings/);
+  assert.match(shell, /outreachReady && path === "\/settings\/outreach-setup"\) page = <OutreachSetupSettings isAdmin=\{role === "admin"\}/);
   assert.match(workspace, /Settings &gt; Outreach/);
   assert.match(workspace, /openCorrections\.length > 0/);
   assert.doesNotMatch(workspace, /Manage labels/);

@@ -1,4 +1,4 @@
-import { FormEvent, StrictMode, useEffect, useMemo, useState } from "react";
+import { FormEvent, StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource/bebas-neue/latin-400.css";
 import "@fontsource/roboto/latin-400.css";
@@ -9,6 +9,8 @@ import type { Branding } from "./setup-workspace";
 import { AppShell } from "./app-shell";
 import { AdaptiveBrandLogo } from "./adaptive-brand-logo";
 import { brandTheme } from "./theme";
+import { loadDashboardSession, startDashboardEntry, type DashboardSession } from "./dashboard-startup";
+import type { ModuleNavigationResult } from "./module-navigation";
 import { PublicOutreachForm } from "./public-outreach-form";
 
 type CloudflareStep = { id: string; title: string; detail: string; action?: { label: string; href: string } };
@@ -48,6 +50,7 @@ function App() {
   const [slug, setSlug] = useState("my-organization");
   const [theme, setTheme] = useState<"light" | "dark">(savedTheme);
   const [remoteStatus, setRemoteStatus] = useState<SetupStatus | "loading" | "unavailable">(apiBaseUrl ? "loading" : "unavailable");
+  const startup = useRef<ReturnType<typeof startDashboardEntry<SetupStatus>> | undefined>(undefined);
   const validSlug = /^[a-z][a-z0-9-]{2,40}$/.test(slug);
   const plannedResources = useMemo(() => validSlug ? [`${slug}-api`, `${slug}-data`, `${slug}-dashboard`] : [], [slug, validSlug]);
   const toggle = (id: string) => setCompleted((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -55,10 +58,15 @@ function App() {
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => {
     if (!apiBaseUrl) return;
-    fetch(`${apiBaseUrl}/setup/status`, { credentials: "include" })
-      .then(async (result) => result.ok ? result.json() as Promise<SetupStatus> : Promise.reject(new Error("Setup API unavailable")))
-      .then(setRemoteStatus)
-      .catch(() => setRemoteStatus("unavailable"));
+    let active = true;
+    const entry = startup.current ??= startDashboardEntry<SetupStatus>();
+    void entry.setup.then((status) => {
+      if (!active) return;
+      // Setup completion creates a new session. Discard pre-bootstrap reads.
+      if (!status.configured) startup.current = undefined;
+      setRemoteStatus(status);
+    }).catch(() => { if (active) setRemoteStatus("unavailable"); });
+    return () => { active = false; };
   }, []);
 
   function chooseTheme(next: "light" | "dark") {
@@ -67,7 +75,7 @@ function App() {
     try { localStorage.setItem(themeStorageKey, next); } catch { /* Browser storage can be unavailable in private contexts. */ }
   }
 
-  if (apiBaseUrl) return <ProvisionedEntry status={remoteStatus} onConfigured={(status) => setRemoteStatus(status)} theme={theme} onTheme={chooseTheme} />;
+  if (apiBaseUrl) return <ProvisionedEntry startup={startup.current} status={remoteStatus} onConfigured={(status) => setRemoteStatus(status)} theme={theme} onTheme={chooseTheme} />;
 
   return <div className="app" data-theme={theme}>
     <a className="skip-link" href="#main">Skip to main content</a>
@@ -122,13 +130,13 @@ function App() {
   </div>;
 }
 
-function ProvisionedEntry({ status, onConfigured, theme, onTheme }: { status: SetupStatus | "loading" | "unavailable"; onConfigured: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
+function ProvisionedEntry({ startup, status, onConfigured, theme, onTheme }: { startup?: ReturnType<typeof startDashboardEntry<SetupStatus>>; status: SetupStatus | "loading" | "unavailable"; onConfigured: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
   if (status === "loading") return <CenteredState theme={theme} title="Checking your installation…" detail="LancerLogin is securely reading setup status." />;
   if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
   const branding = status.configured ? status.settings : undefined;
   const style = branding ? brandTheme(branding.primaryColor, branding.secondaryColor) : undefined;
   if (status.configured && window.location.pathname === "/submit-hours") return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to submission form</a><div className="provisioned-main"><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><PublicOutreachForm /></div></div>;
-  return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to main content</a><div className="provisioned-main">{status.configured ? <ConfiguredInstallation status={status} onStatusChange={onConfigured} theme={theme} onTheme={onTheme} /> : <><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><FirstAdminSetup onConfigured={onConfigured} /></>}</div></div>;
+  return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to main content</a><div className="provisioned-main">{status.configured ? <ConfiguredInstallation initialSession={startup?.session} initialModules={startup?.modules} status={status} onStatusChange={onConfigured} theme={theme} onTheme={onTheme} /> : <><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><FirstAdminSetup onConfigured={onConfigured} /></>}</div></div>;
 }
 
 function EntryHeader({ branding, theme, onTheme }: { branding?: Branding; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) { return <header className="setup-header"><a className="brand-home-link" href="/dashboard" aria-label="Go to Dashboard">{branding?.logoData ? <AdaptiveBrandLogo src={branding.logoData} alt="" backdrop={branding.logoBackdrop} className="header-logo" /> : <div className="brand-mark" aria-hidden="true">L</div>}<span className="brand-heading"><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></span></a><ThemeToggle theme={theme} onTheme={onTheme} /></header>; }
@@ -172,12 +180,21 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
   </form></main>;
 }
 
-function ConfiguredInstallation({ status, onStatusChange, theme, onTheme }: { status: SetupStatus; onStatusChange: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
-  const [session, setSession] = useState<{ id: string; role: "admin" | "operator"; debugMode: boolean }>();
+function ConfiguredInstallation({ initialSession, initialModules, status, onStatusChange, theme, onTheme }: { initialSession?: Promise<DashboardSession | undefined>; initialModules?: Promise<ModuleNavigationResult>; status: SetupStatus; onStatusChange: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
+  const [session, setSession] = useState<DashboardSession>();
+  const [moduleRequest, setModuleRequest] = useState(() => initialModules);
   const [checking, setChecking] = useState(true);
-  useEffect(() => { fetch(`${apiBaseUrl}/auth/session`, { credentials: "include" }).then(async (result) => { if (result.ok) setSession((await result.json() as { user: { id: string; role: "admin" | "operator"; debugMode: boolean } }).user); }).finally(() => setChecking(false)); }, []);
+  useEffect(() => {
+    let active = true;
+    void (initialSession ?? loadDashboardSession()).then((user) => {
+      if (!active) return;
+      setSession(user); setChecking(false);
+      if (!user) setModuleRequest(undefined);
+    });
+    return () => { active = false; };
+  }, []);
   if (checking) return <section className="centered-state auth-check" aria-live="polite" aria-busy="true"><p className="kicker">Secure sign-in</p><h1>Checking your session…</h1><p>Confirming whether this browser already has an active dashboard session.</p></section>;
-  if (session) return <AppShell themeControl={<ThemeToggle theme={theme} onTheme={onTheme} />} role={session.role} debugMode={session.debugMode} onDebugModeChanged={async (debugMode) => { const response = await fetch(`${apiBaseUrl}/auth/preferences`, { method: "PATCH", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ debugMode }) }); if (!response.ok) throw new Error("Could not save Debug mode."); setSession((current) => current ? { ...current, debugMode } : current); }} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => setSession(undefined)); }} />;
+  if (session) return <AppShell initialModules={moduleRequest} themeControl={<ThemeToggle theme={theme} onTheme={onTheme} />} role={session.role} debugMode={session.debugMode} onDebugModeChanged={async (debugMode) => { const response = await fetch(`${apiBaseUrl}/auth/preferences`, { method: "PATCH", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ debugMode }) }); if (!response.ok) throw new Error("Could not save Debug mode."); setSession((current) => current ? { ...current, debugMode } : current); }} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => { setModuleRequest(undefined); setSession(undefined); }); }} />;
   return <><EntryHeader branding={status.settings} theme={theme} onTheme={onTheme} /><LocalLogin status={status} onSignedIn={setSession} /></>;
 }
 

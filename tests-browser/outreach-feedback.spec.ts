@@ -67,6 +67,20 @@ async function chooseClock(page: Page, label: string, hour: number, minute: numb
   await dialog.getByRole("button", { name: `${hour} o'clock`, exact: true }).click(); await dialog.getByRole("button", { name: `${minute} minutes`, exact: true }).click(); await dialog.getByRole("group", { name: "Choose AM or PM" }).getByRole("button", { name: period, exact: true }).click();
 }
 
+test("deleting the last counted participation hides the zero-hour person and retains the entry history", async ({ page }) => {
+  const state = await fixture(page); state.entries.splice(1);
+  await page.goto(`/hours/activities/${event.id}`);
+  await page.getByRole("button", { name: "Details for Avery Synthetic" }).click();
+  await page.locator('[data-entry-id="entry-a"]').getByRole("button", { name: /^Delete participation/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete participation" });
+  await expect(dialog.getByLabel("Type DELETE PARTICIPATION")).toHaveCount(0);
+  await dialog.getByLabel("Staff reason").fill("Duplicate synthetic submission");
+  await dialog.getByRole("button", { name: "Delete participation", exact: true }).click();
+  await expect(page.getByText("0.00 hours total", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Details for Avery Synthetic" })).toHaveCount(0);
+  expect(state.entries).toHaveLength(1); expect(state.entries[0].status).toBe("void");
+});
+
 for (const theme of ["light", "dark"]) for (const width of [1280, 390]) test(`compact activity controls retain entry history and themes at ${width} in ${theme}`, async ({ page }) => {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 }); await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), theme); const state = await fixture(page);
   await page.goto(`/hours/activities/${event.id}`); await expect(page.getByText("2.50 hours total", { exact: true })).toBeVisible();
@@ -92,7 +106,7 @@ for (const theme of ["light", "dark"]) for (const width of [1280, 390]) test(`co
   for (let index = 0; index < columnsBefore.length; index++) { expect(columnsAfter[index]!.x).toBeCloseTo(columnsBefore[index]!.x, 1); expect(columnsAfter[index]!.width).toBeCloseTo(columnsBefore[index]!.width, 1); }
   const row = page.locator('article[data-entry-id="entry-a"]'); await themed(page, row.getByRole("button", { name: /^Edit participation/ })); await themed(page, row.getByRole("button", { name: /^Delete participation/ }), "danger");
   await row.getByRole("button", { name: /^Edit participation/ }).click(); const edit = page.getByRole("dialog", { name: "Edit participation" }); await expect(edit.getByRole("combobox", { name: "Member", exact: true })).toBeFocused(); await edit.getByRole("button", { name: /^Start time:/ }).click(); await expect(page.getByRole("dialog", { name: "Start time", exact: true }).locator(".outreach-clock-readout button").first()).toBeFocused(); await page.keyboard.press("Escape"); await expect(edit).toBeVisible(); await expect(page.getByRole("dialog", { name: "Start time", exact: true })).toHaveCount(0); await edit.getByLabel("Task notes").fill("Updated notes"); await chooseClock(page, "End time", 10, 30, "AM"); await edit.getByLabel("Staff reason").fill("Verified by event lead"); await themed(page, edit.getByRole("button", { name: "Save participation" }), "primary"); await edit.getByRole("button", { name: "Save participation" }).click(); await expect(page.getByText("3.00 hours total", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Details for Avery Synthetic" }).click(); await page.locator('article[data-entry-id="entry-a"]').getByRole("button", { name: /^Delete participation/ }).click(); const deletion = page.getByRole("dialog", { name: "Delete participation" }); await expect(deletion.getByRole("button", { name: "Delete participation", exact: true })).toBeDisabled(); await deletion.getByLabel("Type DELETE PARTICIPATION").fill("DELETE PARTICIPATION"); await deletion.getByLabel("Staff reason").fill("Duplicate record"); await themed(page, deletion.getByRole("button", { name: "Delete participation", exact: true }), "danger"); await deletion.getByRole("button", { name: "Delete participation", exact: true }).click(); await expect(page.getByText("1.50 hours total", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Details for Avery Synthetic" }).click(); await page.locator('article[data-entry-id="entry-a"]').getByRole("button", { name: /^Delete participation/ }).click(); const deletion = page.getByRole("dialog", { name: "Delete participation" }); await expect(deletion.getByRole("button", { name: "Delete participation", exact: true })).toBeDisabled(); await expect(deletion.getByLabel("Type DELETE PARTICIPATION")).toHaveCount(0); await deletion.getByLabel("Staff reason").fill("Duplicate record"); await themed(page, deletion.getByRole("button", { name: "Delete participation", exact: true }), "danger"); await deletion.getByRole("button", { name: "Delete participation", exact: true }).click(); await expect(page.getByText("1.50 hours total", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Details for Avery Synthetic" }).click(); await expect(page.getByText("Deleted - excluded from totals", { exact: true })).toBeVisible(); await expect(page.locator('article[data-entry-id="entry-a"]').getByRole("button", { name: /^Edit participation/ })).toBeDisabled();
   await page.getByRole("button", { name: "Add member participation" }).click(); await expect(page.getByRole("combobox", { name: "Member", exact: true }).locator("option")).toHaveText(["Avery Synthetic (SYN-A)", "Blake Synthetic (SYN-B)", "Zoe Synthetic (SYN-Z)"]); await page.getByRole("button", { name: "Cancel", exact: true }).click();
   if (width === 390) expect(await table.evaluate(element => element.scrollWidth <= element.parentElement!.clientWidth)).toBe(true);

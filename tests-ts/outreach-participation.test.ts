@@ -4,16 +4,15 @@ import { groupOutreachParticipation, loadOutreachPages, type OutreachParticipati
 
 const entry = (id: string, minutes: number, status: "counted" | "void" = "counted"): OutreachParticipationEntry => ({ id, memberId: "member-1", activityId: "activity-1", revision: 2, status, memberName: "Avery Synthetic", externalId: "SYN-001", serviceDate: "2026-10-09", startLocal: "09:00", endLocal: "10:00", durationMinutes: minutes, taskNotes: "Synthetic service", attribution: "self_asserted" });
 
-test("activity member totals include current counted revisions but retain void submissions for review", () => {
+test("activity totals hide zero-hour people while retaining deleted submissions beside counted entries", () => {
   const entries = [entry("entry-3", 90), entry("entry-1", 15), entry("entry-2", 60, "void"), { ...entry("entry-4", 60, "void"), memberId: "member-2", memberName: "Blake Synthetic", externalId: "SYN-002" }];
   const groups = groupOutreachParticipation(entries);
-  assert.equal(groups.length, 2);
+  assert.equal(groups.length, 1);
   assert.equal(groups[0].minutes, 105);
   assert.equal(groups[0].counted, 2);
   assert.deepEqual(groups[0].entries.map((value) => value.id), ["entry-1", "entry-2", "entry-3"]);
-  assert.equal(groups[1].minutes, 0);
-  assert.equal(groups[1].counted, 0);
-  assert.equal(groups[1].entries.length, 1);
+  assert.equal(groupOutreachParticipation([entry("only-deleted", 60, "void")]).length, 0);
+  assert.equal(entries.length, 4);
   assert.equal(entries[0].id, "entry-3");
 });
 

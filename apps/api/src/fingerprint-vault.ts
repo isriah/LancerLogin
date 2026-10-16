@@ -98,7 +98,7 @@ export async function fingerprintVaultRoute(request: Request, context: Context):
     const afters = url.searchParams.getAll("after"), after = afters[0] ?? "";
     if (afters.length > 1 || afters.length && !hexId(after) || queryFields.some(key => key !== "after")) throw new HttpError(400, "Invalid fingerprint vault cursor");
     const rows = await db.prepare(`SELECT t.fingerprint_id AS fingerprintId,m.external_id AS memberId,m.id AS rosterId FROM kiosk_fingerprint_vault_templates t
-      JOIN members m ON m.id=t.member_id AND m.installation_id=t.installation_id AND m.active=1
+      CROSS JOIN members m ON m.id=t.member_id AND m.installation_id=t.installation_id AND m.active=1
       WHERE t.installation_id='primary' AND t.vault_id=? AND t.fingerprint_id>? AND ${shareableTemplate} AND ${currentAuthority} ORDER BY t.fingerprint_id LIMIT 8`)
       .bind(settings.vaultId, after, ...currentBindings).all<{ fingerprintId: string; memberId: string; rosterId: string }>();
     return respond({ vaultId: settings.vaultId, fingerprints: rows.results ?? [] });

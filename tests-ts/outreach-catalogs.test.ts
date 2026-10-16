@@ -504,6 +504,13 @@ test("Event publication defaults off, supports explicit and automatic queues, an
     assert.equal((historical.body as { publicationQueue: { reason: string } }).publicationQueue.reason, "not_eligible");
     const pastScheduled = await outreachCatalogRoute(database, "admin", request("/admin/hours/activities", "POST"), { mode: "event", serviceDate: "2026-09-20", teamId: null, title: "Historical scheduled backfill", description: "", location: "", impactRelevant: true, eventStartLocal: "09:00", eventEndLocal: "10:00", archived: false }, providers, now);
     assert.equal((pastScheduled.body as { publicationQueue: { reason: string } }).publicationQueue.reason, "not_eligible");
+    for (const past of [historical, pastScheduled]) {
+      const id = String((past.body as { id: string }).id);
+      const result = await outreachPublicationRoute(database, providers, "admin", request(`/admin/hours/activities/${id}/publication`, "POST"), { activityRevision: 0, publicationRevision: null, provider: "google_calendar" }, now);
+      assert.equal(result.status, 202);
+      await assert.rejects(outreachPublicationRoute(database, providers, "admin", request(`/admin/hours/activities/${id}/publication`, "POST"), { activityRevision: 0, publicationRevision: 0, provider: "discord" }, now), /future/);
+    }
+    assert.deepEqual(await processOutreachPublicationOperations(database, providers, now + 190_000), { delivered: 2, failed: 0, pending: 0 });
     const task = await outreachCatalogRoute(database, "admin", request("/admin/hours/activities", "POST"), { mode: "task", serviceDate: "2026-10-01", teamId: null, title: "Never published", description: "", location: "", impactRelevant: true, archived: false }, providers, now);
     assert.equal("publicationQueue" in (task.body as Record<string, unknown>), false);
 

@@ -67,7 +67,19 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
   const audience = (meeting: PolicyMeeting) => meeting.audienceMode === "all" ? "All" : meeting.audienceLabelIds.map((id) => labelNames.get(id) ?? "Retired label").join(", ");
   return input.members.map((member) => {
     const changes = changesByMember.get(member.id) ?? [];
-    const historicalLabelsAt = (date: string): Set<string> => { const active = new Set<string>(); for (const change of changes) { if (change.effectiveDate > date) break; if (change.action === "add") active.add(change.labelId); else active.delete(change.labelId); } return active; };
+    // Reuse only within this evaluation; a later request can have new history or time.
+    const labelsByDate = new Map<string, Set<string>>();
+    const historicalLabelsAt = (date: string): Set<string> => {
+      const cached = labelsByDate.get(date); if (cached) return cached;
+      const active = new Set<string>();
+      for (const change of changes) { if (change.effectiveDate > date) break; if (change.action === "add") active.add(change.labelId); else active.delete(change.labelId); }
+      labelsByDate.set(date, active); return active;
+    };
+    const inactiveByMeeting = new Map<PolicyMeeting, boolean>();
+    const isInactive = (meeting: PolicyMeeting): boolean => {
+      if (!inactiveByMeeting.has(meeting)) inactiveByMeeting.set(meeting, inactiveAt(member.inactivePeriodsJson, meeting.startsAt));
+      return inactiveByMeeting.get(meeting)!;
+    };
     const currentLabels = historicalLabelsAt(today);
     // Saved reports can apply today's membership across their period without rewriting label history.
     const labelsAt = (date: string) => input.membership === "current" ? currentLabels : historicalLabelsAt(date);
@@ -79,7 +91,7 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
     const rows: PolicyRow[] = [];
     const weekBuckets = new Map<string, { rule: AttendanceRule; labelId: string; weekStartsOn: string; segmentStartsOn: string; segmentEndsOn: string; target: number; legacy: boolean; opportunities: number; attended: number; excused: number; pending: boolean }>();
     for (const meeting of meetings) {
-      if (inactiveAt(member.inactivePeriodsJson, meeting.startsAt)) continue;
+      if (isInactive(meeting)) continue;
       const date = meetingDates.get(meeting.id)!;
       const activeLabels = labelsAt(date);
       if (historicalLabelIds.length && (input.historicalLabelMatch === "all" ? !historicalLabelIds.every((id) => activeLabels.has(id)) : !historicalLabelIds.some((id) => activeLabels.has(id)))) continue;
@@ -152,15 +164,23 @@ export function evaluateAttendance(input: { members: PolicyMember[]; labels: Pol
     const regularPresent = regularRows.reduce((sum, row) => sum + (row.attended ? row.regularWeight : 0), 0);
     const regularRequired = regularRows.reduce((sum, row) => sum + row.regularWeight, 0);
     const regularAttendance: RegularAttendance = { rate: rate(regularPresent, regularRequired), attended: regularPresent, required: regularRequired, from: input.from ?? (participationStart || null), to: input.to ?? today };
-    const percentageRows = (labelId: string, rule: AttendanceRule, from?: string) => meetings.flatMap((meeting) => {
-      const date = localDate(meeting.startsAt, input.timeZone);
-      const activeLabels = labelsAt(date);
-      const historicalMatch = !historicalLabelIds.length || (input.historicalLabelMatch === "all" ? historicalLabelIds.every((id) => activeLabels.has(id)) : historicalLabelIds.some((id) => activeLabels.has(id)));
-      if (inactiveAt(member.inactivePeriodsJson, meeting.startsAt) || !historicalMatch || from && date < from || !activeLabels.has(labelId) || ruleOn(rules, labelId, date)?.id !== rule.id || participationStart && date < participationStart || Date.parse(meeting.attendanceClosesAt) > now || !meeting.required || meeting.audienceMode === "labels" && !meeting.audienceLabelIds.some((id) => activeLabels.has(id))) return [];
-      const observation = observations.get(meeting.id + ":" + member.id);
-      const disposition = observation?.disposition === "active" ? "absent" : observation?.disposition ?? "absent";
-      return [{ disposition, attended: disposition === "present", weight: Number(meeting.attendanceWeight ?? 1) }];
-    });
+    const percentageRowsByRule = new Map<AttendanceRule, { date: string; disposition: Observation["disposition"]; attended: boolean; weight: number }[]>();
+    const percentageRows = (labelId: string, rule: AttendanceRule, from?: string) => {
+      let selected = percentageRowsByRule.get(rule);
+      if (!selected) {
+        selected = meetings.flatMap((meeting) => {
+          const date = meetingDates.get(meeting.id)!;
+          const activeLabels = labelsAt(date);
+          const historicalMatch = !historicalLabelIds.length || (input.historicalLabelMatch === "all" ? historicalLabelIds.every((id) => activeLabels.has(id)) : historicalLabelIds.some((id) => activeLabels.has(id)));
+          if (isInactive(meeting) || !historicalMatch || !activeLabels.has(labelId) || ruleOn(rules, labelId, date)?.id !== rule.id || participationStart && date < participationStart || Date.parse(meeting.attendanceClosesAt) > now || !meeting.required || meeting.audienceMode === "labels" && !meeting.audienceLabelIds.some((id) => activeLabels.has(id))) return [];
+          const observation = observations.get(meeting.id + ":" + member.id);
+          const disposition = observation?.disposition === "active" ? "absent" : observation?.disposition ?? "absent";
+          return [{ date, disposition, attended: disposition === "present", weight: Number(meeting.attendanceWeight ?? 1) }];
+        });
+        percentageRowsByRule.set(rule, selected);
+      }
+      return from ? selected.filter((row) => row.date >= from) : selected;
+    };
     const currentCompliances: PolicyCompliance[] = currentPolicyLabelIds.map((activeLabelId) => {
       const activeRule = ruleOn(rules, activeLabelId, today);
       const labelName = labelNames.get(activeLabelId) ?? "Retired label";

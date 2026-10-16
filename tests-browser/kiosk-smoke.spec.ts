@@ -40,8 +40,8 @@ test("physical kiosk screen fits the supported 800 by 480 display", async ({ pag
   await page.goto(`${kioskBaseUrl}/`);
   await expect(page.getByRole("heading", { name: "Place finger on reader" })).toBeVisible();
   await expect(page.getByText("Example Arts Club")).toBeVisible();
-  await expect(page.getByText("LancerLogin 1.0.2")).toBeVisible();
-  await expect(page.getByText("No scans waiting")).toBeVisible();
+  await expect(page.getByText("v1.0.2")).toBeVisible();
+  await expect(page.getByText("0 queued")).toBeVisible();
   const dimensions = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
   expect(dimensions).toEqual({ width: 800, height: 480 });
 });
@@ -240,4 +240,159 @@ test("local rejected-scan review shows safe reasons and review does not change a
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(800);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+});
+
+
+test("dashboard name stays readable beside separated footer sections and a compact development version", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  let name = "Workshop entrance", online = true;
+  await page.route(`${kioskBaseUrl}/display-state`, async route => {
+    const response = await route.fetch(); const state = await response.json();
+    await route.fulfill({ response, json: { ...state, kioskName: name, readerOnline: online, releaseVersion: "2.0.0-dev.kiosk-improvements.ef2e129" } });
+  });
+  await page.goto(`${kioskBaseUrl}/`);
+  await expect(page.locator("#kiosk-name")).toHaveText(name);
+  expect(await page.locator("#kiosk-name").evaluate(e => e.scrollWidth <= e.clientWidth)).toBe(true);
+  name = "Renamed workshop entrance with a deliberately long dashboard name"; online = false;
+  await expect(page.locator("#kiosk-name")).toHaveText(name);
+  await expect(page.locator("#kiosk-name")).toHaveAttribute("title", name);
+  await expect(page.locator("#reader-status")).toHaveText("Reader offline");
+  await expect(page.locator("#kiosk-version")).toHaveText("v2.0.0-dev");
+  await expect(page.locator("#kiosk-version")).toHaveAttribute("title", "Software version 2.0.0-dev.kiosk-improvements.ef2e129");
+  const boxes = await Promise.all(["kiosk-name", "kiosk-version", "reader-status", "queue-status", "uptime"].map(id => page.locator(`#${id}`).boundingBox()));
+  for (const box of boxes) {
+    expect(box!.y).toBeCloseTo(boxes[0]!.y, 0);
+    expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(800);
+  }
+  expect(await page.locator("#kiosk-name").evaluate(e => getComputedStyle(e).textOverflow)).toBe("ellipsis");
+  expect(boxes[0]!.width).toBeGreaterThanOrEqual(128);
+  for (const id of ["kiosk-version", "reader-status", "queue-status", "uptime"]) {
+    expect(await page.locator(`#${id}`).evaluate(e => getComputedStyle(e).borderInlineStartWidth)).toBe("1px");
+  }
+  await page.screenshot({ path: test.info().outputPath("single-line-footer.png") });
+});
+
+for (const target of ["network-status", "brand"]) test(`${target} long hold accepts modest drift and cancels a larger slide`, async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  await page.goto(`${kioskBaseUrl}/`);
+  await expect(page.locator("#display-message")).toHaveText("Place finger on reader");
+  const hold = async (drift: number) => {
+    const box = await page.locator(`#${target}`).boundingBox();
+    const x = box!.x + box!.width - 4, y = box!.y + box!.height / 2;
+    const session = await page.context().newCDPSession(page);
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 1 }] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + drift, y, id: 1 }] });
+    await page.waitForTimeout(3100);
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await session.detach();
+  };
+  await hold(32);
+  expect(new URL(page.url()).pathname).toBe("/");
+  await expect(page.locator("#network-panel")).toBeHidden();
+  await hold(12);
+  if (target === "brand") await expect(page).toHaveURL(`${kioskBaseUrl}/maintenance`);
+  else { await expect(page.locator("#network-panel")).toBeVisible(); await page.getByRole("button", { name: "Close network settings" }).click(); await expect(page.locator("#network-panel")).toBeHidden(); }
+});
+
+for (const input of ["mouse", "touch"] as const) test(`maintenance hold survives a wobble beginning on the logo with ${input} input`, async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  await page.route(`${kioskBaseUrl}/display-state`, async route => {
+    const response = await route.fetch(); const state = await response.json();
+    const logo = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="white"/></svg>').toString("base64");
+    await route.fulfill({ response, json: { ...state, branding: { ...state.branding, logoData: `data:image/svg+xml;base64,${logo}` } } });
+  });
+  await page.goto(`${kioskBaseUrl}/`);
+  await expect(page.locator("#brand-logo")).toBeVisible();
+  const box = await page.locator("#brand-logo").boundingBox();
+  const x = box!.x + box!.width / 2, y = box!.y + box!.height / 2;
+  if (input === "mouse") {
+    await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 12, y, { steps: 4 });
+    await page.waitForTimeout(3100); await page.mouse.up();
+  } else {
+    const session = await page.context().newCDPSession(page);
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 1 }] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + 12, y, id: 1 }] });
+    await page.waitForTimeout(3100);
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }); await session.detach();
+  }
+  await expect(page).toHaveURL(`${kioskBaseUrl}/maintenance`);
+});
+
+test("cloud or wifi loss does not open network settings and interrupt attendance", async ({ page }) => {
+  await page.route(`${kioskBaseUrl}/network/session`, route => route.fulfill({ json: { configured: true, authorized: false, network: { online: false } } }));
+  await page.route(`${kioskBaseUrl}/display-state`, async route => {
+    const response = await route.fetch(); await route.fulfill({ response, json: { ...await response.json(), cloudOnline: false } });
+  });
+  await page.goto(`${kioskBaseUrl}/`);
+  await expect(page.locator("#display-message")).toHaveText("Place finger on reader");
+  await expect(page.locator("#network-status")).toHaveClass(/offline/);
+  await expect(page.locator("#network-panel")).toBeHidden();
+});
+
+
+test("LAN pairing remains usable without a local operator presence request", async ({ page }) => {
+  let presenceRequests = 0, pairingRequests = 0;
+  await page.route("http://kiosk.invalid/**", async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/health") return route.fulfill({ json: { paired: false } });
+    if (url.pathname === "/operator-presence") { presenceRequests++; return route.fulfill({ status: 403, json: { error: "Local display only" } }); }
+    if (url.pathname === "/pair") { pairingRequests++; return route.fulfill({ status: 201, json: { kioskName: "Synthetic paired kiosk" } }); }
+    const response = await route.fetch({ url: kioskBaseUrl + url.pathname });
+    return route.fulfill({ response });
+  });
+  await page.goto("http://kiosk.invalid/");
+  await expect(page.locator("#pairing-panel")).toBeVisible();
+  await page.locator("#pairing-key").fill("synthetic-pairing-input");
+  await page.locator("#pair-form button").click();
+  await expect(page.locator("#pair-result")).toContainText("Paired Synthetic paired kiosk");
+  expect(pairingRequests).toBe(1); expect(presenceRequests).toBe(0);
+});
+
+
+for (const authenticationMethod of ["rfid", "qr", "member_id"]) test(`${authenticationMethod} buffered identity clears when network settings suspend attendance`, async ({ page }) => {
+  let displayId = "ready", submitted = 0;
+  await page.route(`${kioskBaseUrl}/display-state`, async route => {
+    const response = await route.fetch(); const state = await response.json();
+    await route.fulfill({ response, json: { ...state, authenticationMethod, display: { id: displayId, message: "Enter identity", detail: "Synthetic input" } } });
+  });
+  await page.route(`${kioskBaseUrl}/identity`, route => { submitted++; return route.fulfill({ json: { accepted: true } }); });
+  await page.goto(`${kioskBaseUrl}/`);
+  const input = page.locator("#identity-value");
+  await expect(input).toBeVisible(); await input.fill("synthetic-partial-input");
+  await page.locator("#network-status").focus(); await page.keyboard.press("Enter");
+  await expect(page.locator("#network-panel")).toBeVisible();
+  await expect(input).toBeHidden(); await expect(input).toHaveValue("");
+  await page.getByRole("button", { name: "Close network settings" }).click();
+  await expect(input).toBeVisible(); await expect(input).toHaveValue("");
+  await input.fill("another-partial-input");
+  displayId = "processing";
+  await expect(input).toBeHidden(); await expect(input).toHaveValue("");
+  displayId = "ready";
+  await expect(input).toBeVisible(); await expect(input).toHaveValue("");
+  expect(submitted).toBe(0);
+});
+
+test("failed network close keeps attendance retry usable after network lease renewal", async ({ page }) => {
+  const presenceRequests: { action: string; mode: string }[] = [];
+  let rejectClose = true;
+  await page.route(`${kioskBaseUrl}/operator-presence`, route => {
+    const input = route.request().postDataJSON(); presenceRequests.push(input);
+    if (input.action === "transition" && input.mode === "attendance" && rejectClose) {
+      rejectClose = false;
+      return route.fulfill({ status: 409, json: { error: "Page session changed. Retry attendance." } });
+    }
+    return route.fulfill({ json: { pageId: input.pageId, generation: input.generation ?? 1, mode: input.mode, captureSuspended: input.mode !== "attendance", reason: input.mode === "attendance" ? null : "operator_active", expiresInMs: 15000 } });
+  });
+  await page.goto(`${kioskBaseUrl}/`);
+  await page.locator("#network-status").focus(); await page.keyboard.press("Enter");
+  await expect(page.locator("#network-panel")).toBeVisible();
+  await page.getByRole("button", { name: "Close network settings" }).click();
+  await expect(page.locator("#network-panel")).toBeHidden();
+  await expect(page.locator("#retry-attendance")).toBeVisible();
+  await expect.poll(() => presenceRequests.some(value => value.action === "renew" && value.mode === "network"), { timeout: 7000 }).toBe(true);
+  await expect(page.locator("#retry-attendance")).toBeVisible();
+  await page.locator("#retry-attendance").click();
+  await expect(page.locator("#display-message")).toHaveText("Place finger on reader");
+  await expect(page.locator("#retry-attendance")).toBeHidden();
+  expect(presenceRequests.at(-1)).toMatchObject({ action: "enter", mode: "attendance" });
 });

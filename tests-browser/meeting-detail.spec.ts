@@ -15,7 +15,8 @@ test("canonical meeting routes, legacy redirects, switching, and browser history
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
 
-  await page.getByLabel("Switch meeting").selectOption("next-week");
+  await expect(page.getByLabel("Switch meeting")).toHaveCount(0);
+  await page.goto("/meetings/next-week");
   await expect(page).toHaveURL(/\/meetings\/next-week$/);
   await expect(page.getByRole("heading", { name: "Studio night" })).toBeVisible();
   await page.goBack();
@@ -149,7 +150,7 @@ test("meeting-local calendar and Discord actions retain their scoped outcomes", 
   await page.route(/\/discord\/contests(?:\?.*)?$/, async (route) => { contestLoads += 1; await route.continue(); });
 
   await page.goto("/meetings/active-meeting");
-  await expect(page.getByRole("heading", { name: "Meeting actions" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Meeting actions" })).toBeVisible();
   await page.getByRole("button", { name: "Sync configured calendars" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Google Calendar: 1 updated · Discord: 0 updated, 1 queued" })).toBeVisible();
   await page.getByRole("button", { name: "Send Discord absence notice" }).click();
@@ -202,7 +203,7 @@ test("meeting contest review distinguishes partial, missing, and complete raw sc
 test("unverified Discord exposes no meeting actions or global contest notifier", async ({ page }) => {
   await page.route("**/integrations/capabilities", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: false } } }) }));
   await page.goto("/meetings/active-meeting");
-  await expect(page.getByRole("heading", { name: "Meeting actions" })).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Meeting actions" })).toHaveCount(0);
   await expect(page.locator(".meeting-contests")).toHaveCount(0);
   await expect(page.locator(".contest-indicator")).toHaveCount(0);
 });
@@ -214,7 +215,7 @@ test("meeting operations preserve the custom brand in light and dark desktop lay
   await expect(app).toHaveAttribute("data-theme", "dark");
   const tokens = await app.evaluate((element) => { const style = getComputedStyle(element); return { primary: style.getPropertyValue("--primary").trim(), secondary: style.getPropertyValue("--secondary").trim() }; });
   expect(tokens).toEqual({ primary: "#8b2f72", secondary: "#e9b949" });
-  const operations = await page.locator(".meeting-actions-card").boundingBox();
+  const operations = await page.locator(".meeting-detail-heading .meeting-actions-buttons").boundingBox();
   const contests = await page.locator(".meeting-contests").boundingBox();
   expect(operations && contests && operations.width <= 1280 && contests.width <= 1280).toBe(true);
   await setDashboardTheme(page, "light");
@@ -235,11 +236,9 @@ test("attendance refreshes manually and every 30 seconds only while its window i
   await expect.poll(() => activeRequests).toBe(1);
   await page.clock.fastForward(30_000);
   await expect.poll(() => activeRequests).toBe(2);
-  await page.getByRole("button", { name: "Refresh attendance" }).click();
-  await expect.poll(() => activeRequests).toBe(3);
-  await expect(page.getByRole("status").filter({ hasText: "Attendance refreshed." })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh attendance" })).toHaveCount(0);
 
-  await page.getByLabel("Switch meeting").selectOption("past-regular");
+  await page.goto("/meetings/past-regular");
   await expect.poll(() => pastRequests).toBe(1);
   await page.clock.fastForward(60_000);
   expect(pastRequests).toBe(1);

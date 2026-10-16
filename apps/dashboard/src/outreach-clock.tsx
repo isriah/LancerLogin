@@ -14,9 +14,10 @@ export function OutreachClock({ label, date, time, zone, occurrence, onTime, onO
   try { candidates = resolveCivilTime({ date, time, timeZone: zone }); valid = true; } catch { /* Incomplete input stays editable. */ }
   const problem = valid && candidates.length === 0 ? "This local time does not exist because the clock changes. Choose another time." : valid && candidates.length > 1 && !occurrence ? "This time occurs twice. Choose the intended occurrence." : "";
   const choose = (next: number) => { if (phase === "hour") { setHour(next); setPhase("minute"); } else if (phase === "minute") { setMinute(next); setPhase("period"); } };
-  const finish = (next: "AM" | "PM") => { setPeriod(next); onTime(value(hour, minute, next)); onOccurrence(undefined); setOpen(false); window.requestAnimationFrame(() => trigger.current?.focus()); };
+  const finish = (next: "AM" | "PM") => { setPeriod(next); onTime(value(hour, minute, next)); onOccurrence(undefined); setOpen(false); };
   const adjust = (delta: number) => { if (phase === "hour") setHour((current) => (current - 1 + delta + 12) % 12 + 1); else if (phase === "minute") setMinute((current) => (current + delta * 5 + 60) % 60); };
-  const close = () => { setOpen(false); window.requestAnimationFrame(() => trigger.current?.focus()); };
+  // Modal cleanup restores focus once. A later frame must not steal a new target.
+  const close = () => { setOpen(false); };
   useModalFocus(dialog, open, disabled, close);
   useEffect(() => {
     if (!open) return;

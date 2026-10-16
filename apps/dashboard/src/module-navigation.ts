@@ -3,7 +3,14 @@ import type { ModulePlatformSnapshot, ModuleSnapshotItem } from "../../../packag
 import { api } from "./dashboard-api";
 import { readModuleSnapshot } from "./module-client";
 
-export function useModuleNavigation() {
+export type ModuleNavigationResult = { receivedAt: number } & ({ snapshot: ModulePlatformSnapshot; error?: false } | { snapshot?: undefined; error: true });
+
+export async function loadModuleNavigation(): Promise<ModuleNavigationResult> {
+  try { return { snapshot: readModuleSnapshot(await api<unknown>("/platform/modules")), receivedAt: Date.now() }; }
+  catch { return { error: true, receivedAt: Date.now() }; }
+}
+
+export function useModuleNavigation(initialRequest?: Promise<ModuleNavigationResult>) {
   const [snapshot, setSnapshot] = useState<ModulePlatformSnapshot>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -14,8 +21,9 @@ export function useModuleNavigation() {
       const request = ++sequence;
       if (initial) setLoading(true);
       try {
-        const next = readModuleSnapshot(await api<unknown>("/platform/modules"));
-        if (active && request === sequence) { setSnapshot(next); setError(false); }
+        let next = await (initial && version === 0 && initialRequest ? initialRequest : loadModuleNavigation());
+        if (initial && initialRequest && Date.now() - next.receivedAt >= 5_000) next = await loadModuleNavigation();
+        if (active && request === sequence) { setSnapshot(next.snapshot); setError(Boolean(next.error)); }
       } catch {
         if (active && request === sequence) { setSnapshot(undefined); setError(true); }
       } finally { if (active && request === sequence) setLoading(false); }

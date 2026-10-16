@@ -5,6 +5,7 @@ import { maintenanceApp, maintenanceHtml, maintenanceStyles, maintenanceLayoutSt
 import { recoveryApp } from "../../apps/kiosk/src/recovery-ui.mjs";
 import { attendanceReviewApp, attendanceReviewHtml, attendanceReviewStyles } from "../../apps/kiosk/src/attendance-review.mjs";
 import { kioskScrollbarStyles, maintenanceScrollbarStyles } from "../../apps/kiosk/src/scrollbar-styles.mjs";
+import { operatorPresenceApp } from "../../apps/kiosk/src/operator-presence-ui.mjs";
 
 const port = Number(process.env.LANCERLOGIN_KIOSK_PREVIEW_PORT ?? 8792);
 const baseState = {
@@ -27,8 +28,17 @@ function previewState(request) {
   return { ...baseState, display: previewDisplays[preview] || previewDisplays.ready, cloudOnline, pendingEvents: cloudOnline ? 0 : 1 };
 }
 
-createServer((request, response) => {
+createServer(async (request, response) => {
   const path = new URL(request.url ?? "/", `http://127.0.0.1:${port}`).pathname;
+  if (path === "/operator-presence.js") { response.setHeader("content-type", "text/javascript; charset=utf-8"); response.end(operatorPresenceApp); return; }
+  if (path === "/operator-presence" && request.method === "POST") {
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    // Screens use an isolated preview acknowledgement. Multi-page behavior is
+    // covered with the real coordinator in service and browser integration tests.
+    try { let value = ""; for await (const chunk of request) value += chunk; const input = JSON.parse(value); response.end(JSON.stringify({ pageId: input.pageId, generation: input.generation ?? 1, mode: input.mode, captureSuspended: input.mode !== "attendance", reason: input.mode === "attendance" ? null : "operator_active", expiresInMs: 15_000 })); }
+    catch { response.statusCode = 409; response.end(JSON.stringify({ error: "Kiosk page session unavailable. Retry attendance." })); }
+    return;
+  }
   if (path === "/styles.css") { response.setHeader("content-type", "text/css; charset=utf-8"); response.end(kioskStyles + kioskStatusStyles + kioskIdentityStyles + kioskScrollbarStyles); return; }
   if (path === "/attendance-review.css") { response.setHeader("content-type", "text/css; charset=utf-8"); response.end(attendanceReviewStyles + maintenanceScrollbarStyles); return; }
   const assets = { "/": ["text/html; charset=utf-8", kioskHtml], "/styles.css": ["text/css; charset=utf-8", kioskStyles + kioskStatusStyles + kioskScrollbarStyles], "/app.js": ["text/javascript; charset=utf-8", kioskApp], "/network.css": ["text/css; charset=utf-8", networkStyles], "/network.js": ["text/javascript; charset=utf-8", networkApp], "/maintenance": ["text/html; charset=utf-8", maintenanceHtml], "/maintenance.css": ["text/css; charset=utf-8", maintenanceStyles + maintenanceLayoutStyles + maintenanceScrollbarStyles], "/maintenance.js": ["text/javascript; charset=utf-8", maintenanceApp], "/recovery.js": ["text/javascript; charset=utf-8", recoveryApp], "/attendance-review": ["text/html; charset=utf-8", attendanceReviewHtml], "/attendance-review.css": ["text/css; charset=utf-8", attendanceReviewStyles], "/attendance-review.js": ["text/javascript; charset=utf-8", attendanceReviewApp] };

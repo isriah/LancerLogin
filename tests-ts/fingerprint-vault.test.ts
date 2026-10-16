@@ -82,6 +82,125 @@ async function fixture(context: TestContext) {
   return { db, env, call, enable, upload };
 }
 
+test("conditional kiosk rosters retain current membership and pairing or module revocation", async context => {
+  const f = await fixture(context);
+  let rosterReads = 0;
+  f.db.beforeRun = sql => { if (sql.includes("SELECT id AS rosterId, external_id AS memberId")) rosterReads++; };
+  const read = (etag?: string) => worker.fetch(new Request("https://api.example.test/kiosk/roster", { headers: { authorization: "Bearer source-token", ...(etag ? { "if-none-match": etag } : {}) } }), f.env);
+  const initial = await read(); assert.equal(initial.status, 200);
+  const etag = initial.headers.get("etag")!; assert.match(etag, /^"kiosk-roster-v1-\d+"$/);
+  for (let i = 0; i < 25; i++) { const same = await read(etag); assert.equal(same.status, 304); assert.equal(await same.text(), ""); }
+  for (let i = 0; i < 5; i++) { const olderClient = await read(); assert.equal(olderClient.status, 200); assert.equal(((await olderClient.json()) as { members: unknown[] }).members.length, 2); }
+  assert.equal(rosterReads, 1);
+  f.db.sqlite.exec("UPDATE members SET active=0 WHERE id='member'");
+  const changed = await read(etag); assert.equal(changed.status, 200); assert.notEqual(changed.headers.get("etag"), etag);
+  assert.equal(((await changed.json()) as { members: { rosterId: string }[] }).members.some(m => m.rosterId === "member"), false);
+  const latest = changed.headers.get("etag")!;
+  f.db.sqlite.exec("UPDATE kiosks SET token_hash='replacement' WHERE id='source'");
+  assert.equal((await read(latest)).status, 401);
+  f.db.sqlite.prepare("UPDATE kiosks SET token_hash=? WHERE id='source'").run(tokenHash("source-token"));
+  f.db.sqlite.exec("UPDATE platform_modules SET phase='disabled' WHERE module_id='attendance'");
+  assert.equal((await read(latest)).status, 409);
+});
+
+test("combined poll preserves command, configuration and roster contracts while revalidating unchanged metadata", async context => {
+  const f = await fixture(context); const vaultId = await f.enable();
+  await f.db.prepare("INSERT INTO kiosk_commands(id,installation_id,kiosk_id,command_type,created_by,created_at) VALUES('reload','primary','source','reload_display','admin',?)").bind(new Date().toISOString()).run();
+  const poll = await f.call("/kiosk/poll?v=1&fingerprints=1&config=1", undefined, "source-token");
+  assert.equal(poll.status, 200, poll.status === 200 ? "" : await poll.text());
+  assert.equal(poll.headers.get("cache-control"), "no-store");
+  const data = await poll.json() as any;
+  assert.equal(data.protocol, 1);
+  assert.deepEqual(data.command, (await (await f.call("/kiosk/commands", undefined, "source-token")).json() as any).command);
+  assert.deepEqual(data.configuration, await (await f.call("/kiosk/config", undefined, "source-token")).json());
+  assert.deepEqual(data.fingerprints.roster.members, (await (await f.call("/kiosk/roster", undefined, "source-token")).json() as any).members);
+  assert.equal(data.fingerprints.vault.vaultId, vaultId);
+  assert.equal(data.fingerprints.vault.catalogRevision, 0);
+  assert.deepEqual(data.fingerprints.reset, { status: "ok", commands: [] });
+  const unchanged = await (await f.call(`/kiosk/poll?v=1&fingerprints=1&rosterRevision=${data.fingerprints.roster.revision}`, undefined, "source-token")).json() as any;
+  assert.deepEqual(unchanged.fingerprints.roster, { status: "ok", revision: data.fingerprints.roster.revision, notModified: true });
+  assert.equal(unchanged.configuration, undefined);
+  f.db.sqlite.exec("UPDATE members SET first_name='Changed' WHERE id='member'");
+  const changed = await (await f.call(`/kiosk/poll?v=1&fingerprints=1&rosterRevision=${data.fingerprints.roster.revision}`, undefined, "source-token")).json() as any;
+  assert.equal(changed.fingerprints.roster.notModified, false);
+  assert.equal(changed.fingerprints.roster.members.find((member: any) => member.rosterId === "member").firstName, "Changed");
+  const commandOnly = await (await f.call("/kiosk/poll?v=1", undefined, "source-token")).json() as any;
+  assert.deepEqual(Object.keys(commandOnly).sort(), ["command", "protocol"]);
+  for (const query of ["v=2", "v=1&v=1", "v=1&config=0", "v=1&fingerprints=1&rosterRevision=-1", "v=1&peerAfter=anything", "v=1&unknown=1"]) {
+    assert.equal((await f.call(`/kiosk/poll?${query}`, undefined, "source-token")).status, 400);
+  }
+  assert.equal((await f.call("/kiosk/poll?v=1", undefined, "invalid-token")).status, 401);
+});
+
+test("poll keeps commands available during vault failure, pending reset and maintenance without exposing sharing metadata", async context => {
+  const f = await fixture(context); await f.enable();
+  f.env.FINGERPRINT_VAULT_KEY = undefined;
+  let data = await (await f.call("/kiosk/poll?v=1&fingerprints=1", undefined, "source-token")).json() as any;
+  assert.equal(data.protocol, 1); assert.equal(data.fingerprints.vault.status, "unavailable");
+  assert.equal(data.fingerprints.reset.status, "ok"); assert.equal(data.fingerprints.roster.status, "ok");
+  f.env.FINGERPRINT_VAULT_KEY = vaultSecret;
+  f.db.sqlite.exec("INSERT INTO kiosk_fingerprint_reset_batches(id,installation_id,actor_user_id,created_at) VALUES('reset','primary','admin',1); INSERT INTO kiosk_fingerprint_reset_commands(id,batch_id,installation_id,kiosk_id,pairing_id,created_at) VALUES('reset-one','reset','primary','source','pair-a',1)");
+  data = await (await f.call("/kiosk/poll?v=1&fingerprints=1", undefined, "source-token")).json() as any;
+  assert.equal(data.fingerprints.reset.commands[0].id, "reset-one");
+  assert.equal(data.fingerprints.peer.status, "reset_pending"); assert.deepEqual(data.fingerprints.peer.deliveries, []);
+  assert.equal(data.fingerprints.peer.syncId, null); assert.equal(data.fingerprints.vault.vaultId, null);
+  assert.equal(data.fingerprints.vault.status, "reset_pending");
+  f.env.UPDATE_REPOSITORY = "example/installation";
+  f.db.sqlite.exec(`INSERT INTO web_update_requests(id,installation_id,release_tag,release_sha,release_notes,previous_version,state,stage,maintenance,created_at,expires_at,updated_at) VALUES('update','primary','v2.0.0-beta.3','${"a".repeat(40)}','Synthetic','2.0.0-beta.2','succeeded','done',1,'2026-01-01','2026-01-02','2026-01-01')`);
+  const maintenance = await f.call("/kiosk/poll?v=1&fingerprints=1&config=1", undefined, "source-token");
+  assert.equal(maintenance.status, 200); data = await maintenance.json();
+  assert.equal(data.configuration.kiosk.id, "source"); assert.equal(data.command, null);
+  assert.deepEqual(data.fingerprints.reset, { status: "unavailable", commands: [] });
+  assert.equal(data.fingerprints.vault.status, "unavailable"); assert.equal(data.fingerprints.vault.vaultId, null);
+  assert.equal(data.fingerprints.peer.status, "unavailable"); assert.deepEqual(data.fingerprints.peer.deliveries, []);
+  assert.equal((await f.call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "synthetic" }, "source-token")).status, 503);
+});
+
+test("poll retains the existing ten-thousand-member roster limit and refuses a truncated authority snapshot", async context => {
+  const f = await fixture(context);
+  f.db.sqlite.exec("WITH RECURSIVE n(x) AS(VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<9998) INSERT INTO members(id,installation_id,external_id,first_name,last_name,created_at) SELECT 'bulk-'||x,'primary','bulk-'||x,'Synthetic','Member','2026-01-01' FROM n");
+  let data = await (await f.call("/kiosk/poll?v=1&fingerprints=1", undefined, "source-token")).json() as any;
+  assert.equal(data.fingerprints.roster.status, "ok"); assert.equal(data.fingerprints.roster.members.length, 10000);
+  f.db.sqlite.exec("INSERT INTO members(id,installation_id,external_id,first_name,last_name,created_at) VALUES('overflow','primary','overflow','Synthetic','Member','2026-01-01')");
+  data = await (await f.call("/kiosk/poll?v=1&fingerprints=1", undefined, "source-token")).json() as any;
+  assert.equal(data.command, null); assert.deepEqual(data.fingerprints.roster, { status: "unavailable" });
+});
+
+test("poll denies revoked credentials, pairing or module epochs and validates authority inside its transaction", async context => {
+  const f = await fixture(context);
+  f.db.sqlite.exec("UPDATE kiosks SET pairing_bound=0 WHERE id='source'");
+  let data = await (await f.call("/kiosk/poll?v=1&fingerprints=1&config=1", undefined, "source-token")).json() as any;
+  assert.equal(data.configuration.kiosk.id, "source"); assert.equal(data.fingerprints.reset.status, "unavailable"); assert.equal(data.fingerprints.roster.status, "unavailable");
+  f.db.sqlite.exec("UPDATE kiosks SET pairing_bound=1,active=0 WHERE id='source'");
+  assert.equal((await f.call("/kiosk/poll?v=1", undefined, "source-token")).status, 401);
+  f.db.sqlite.exec("UPDATE kiosks SET active=1 WHERE id='source'");
+  let injected = false;
+  f.db.beforeRun = sql => {
+    if (!injected && sql.includes("WITH current_kiosk AS MATERIALIZED")) { injected = true; f.db.sqlite.exec("DELETE FROM platform_module_administration_epochs"); }
+  };
+  assert.equal((await f.call("/kiosk/poll?v=1&fingerprints=1", undefined, "source-token")).status, 403);
+  assert.equal(injected, true);
+  f.db.beforeRun = undefined;
+  f.db.sqlite.exec("DELETE FROM platform_module_epochs WHERE module_id='attendance'");
+  assert.equal((await f.call("/kiosk/poll?v=1", undefined, "source-token")).status, 409);
+});
+
+test("durable fingerprint catalog revision covers uploads, grants, member revocation and configuration changes", async context => {
+  const f = await fixture(context); const vaultId = await f.enable();
+  const revision = () => Number(f.db.sqlite.prepare("SELECT catalog_revision AS revision FROM kiosk_fingerprint_vault_settings").get()?.revision);
+  const advances = async (change: () => unknown) => { const before = revision(); await change(); assert.ok(revision() > before); };
+  await advances(async () => assert.equal((await f.upload(vaultId)).status, 200));
+  await advances(() => f.db.sqlite.exec("INSERT INTO kiosk_fingerprint_retired_review_grants(installation_id,grant_id) VALUES('primary','synthetic-existing-enrollment')"));
+  assert.deepEqual((await (await f.call("/kiosk/fingerprint-vault/templates", undefined, "destination-token")).json() as any).fingerprints, []);
+  await advances(() => f.db.sqlite.exec("UPDATE kiosk_fingerprint_retired_review_grants SET grant_id='other-grant'"));
+  await advances(() => f.db.sqlite.exec("DELETE FROM kiosk_fingerprint_retired_review_grants"));
+  await advances(() => f.db.sqlite.exec("UPDATE members SET external_id='SYN-RENAMED' WHERE id='member'"));
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS total FROM kiosk_fingerprint_vault_templates").get()?.total, 0);
+  await advances(() => f.db.sqlite.exec("UPDATE kiosk_fingerprint_vault_settings SET enabled=0"));
+  const poll = await (await f.call("/kiosk/poll?v=1&fingerprints=1", undefined, "source-token")).json() as any;
+  assert.deepEqual(poll.fingerprints.vault, { status: "ok", enabled: false, vaultId: null, catalogRevision: null });
+});
+
 test("fingerprint vault crypto binds installation, member, generation, content and key without plaintext persistence", async () => {
   const template = new Uint8Array(1536).fill(17), binding = { vaultId: "v".repeat(64), keyId: await fingerprintVaultKeyId(vaultSecret), fingerprintId: "f".repeat(64), memberId: "member", templateDigest: "unused", sourceKioskId: "source", sourcePairingId: "pair-a", enrollmentId: "synthetic-enrollment", createdAt: 123 };
   const { fingerprintVaultDigest } = await import("../apps/api/src/fingerprint-vault-crypto.ts");

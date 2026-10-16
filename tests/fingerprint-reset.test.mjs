@@ -11,6 +11,7 @@ import { freshFingerprintSource } from "../apps/kiosk/src/fingerprint-source.mjs
 import { enrollFingerprint } from "../apps/kiosk/src/fingerprint-enrollment.mjs";
 import { createFingerprintSync } from "../apps/kiosk/src/fingerprint-sync.mjs";
 import { createFingerprintIdentityStore } from "../apps/kiosk/src/fingerprint-identity-store.mjs";
+import { acquireFingerprintStateLock } from "../apps/kiosk/src/fingerprint-state-lock.mjs";
 
 async function fixture(context) {
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-synthetic-reset-"));
@@ -59,14 +60,15 @@ test("mappings-only reset preserves reader bytes and unrelated files; lost ack n
 test("an interrupted mapping-clear completion blocks enrollment until exact durable reset recovery", async context => {
   const current = await fixture(context); current.models.set(1, new Uint8Array(1536).fill(42)); await current.mappings.replace({ 1: { memberId: "SYN-001", finger: "index" } });
   const path = join(current.directory, "synthetic-kiosk-synthetic-pair", "reset.json");
-  const original = current.mappings.replace; let interrupt = true;
+  const original = current.mappings.replace; let interrupt = true, completionLock;
+  context.after(() => completionLock?.close());
   context.mock.method(current.mappings, "replace", async value => {
     const result = await original(value);
-    if (interrupt) { interrupt = false; await writeFile(`${path}.lock`, "synthetic-completion-write-interruption", { mode: 0o600 }); }
+    if (interrupt) { interrupt = false; completionLock = await acquireFingerprintStateLock(`${path}.lock`); }
     return result;
   });
   current.reset(); const controller = current.factory(); assert.equal((await controller.tick()).blocked, true); assert.deepEqual(await current.mappings.read(), {});
-  await rm(`${path}.lock`); assert.equal(await controller.enrollmentAllowed(), false);
+  await completionLock.close(); completionLock = undefined; assert.equal(await controller.enrollmentAllowed(), false);
   let writes = 0;
   await assert.rejects(enrollFingerprint({ sensor: { enroll: async () => { writes++; } }, mappings: current.mappings, withSensor: current.withSensor,
     slot: 2, memberId: "SYN-002", finger: "index", isEnrollmentAllowed: controller.enrollmentAllowed }), /reset recovery/);

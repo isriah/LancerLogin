@@ -152,6 +152,20 @@ test("every registered page accepts independent walkthrough progress", async () 
   } finally { db.sqlite.close(); }
 });
 
+test("legacy roster summary progress remains readable and survives backup restore", async () => {
+  const db = new Database();
+  try {
+    const legacy = { version: 1, status: "in_progress", stepId: "summary" };
+    assert.equal((await call(db, "/auth/walkthroughs/roster", "admin", legacy)).status, 200);
+    const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
+    const restored = await call(db, "/admin/data/restore", "admin", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup });
+    assert.equal(restored.status, 200, await restored.clone().text());
+    const saved = await (await call(db, "/auth/walkthroughs/roster")).json() as any;
+    assert.deepEqual(saved.progress, { pageId: "roster", ...legacy });
+    assert.equal(walkthroughs.roster.steps[0], "filters");
+  } finally { db.sqlite.close(); }
+});
+
 test("entire-installation backups round-trip progress, older backups reset it, and category restores preserve it", async () => {
   const db = new Database();
   try {

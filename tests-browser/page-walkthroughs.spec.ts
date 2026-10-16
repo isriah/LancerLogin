@@ -5,7 +5,7 @@ type Progress = { pageId: PageId; version: number; status: string; stepId: strin
 type Story = { pageId: PageId; path: string; welcome: string; finish: string; steps: number; root: string };
 
 const stories: Story[] = [
-  { pageId: "roster", path: "/roster", welcome: "Get to know your roster", finish: "You're ready to work with the roster", steps: 6, root: '[data-walkthrough-page="roster"]' },
+  { pageId: "roster", path: "/roster", welcome: "Get to know your roster", finish: "You're ready to work with the roster", steps: 5, root: '[data-walkthrough-page="roster"]' },
   { pageId: "member", path: "/roster/A-101", welcome: "Understand this member", finish: "You're ready to review a member", steps: 5, root: '[data-walkthrough-page="member"]' },
   { pageId: "reports", path: "/reports", welcome: "Turn attendance into answers", finish: "You're ready to explore reports", steps: 6, root: '[data-walkthrough-page="reports"]' },
   { pageId: "meeting", path: "/meetings/active-meeting", welcome: "Manage this meeting's attendance", finish: "You're ready to manage a meeting", steps: 7, root: '[data-walkthrough-page="meeting"]' },
@@ -63,7 +63,7 @@ for (const viewport of [{ width: 1280, height: 900, theme: "light" }, { width: 3
           // The native horizontal scrollbar can reserve up to four pixels below the controls.
           expect(Math.abs(topGap - bottomGap)).toBeLessThanOrEqual(4);
         }
-        if (story.pageId === "roster" && index === 5) {
+        if (story.pageId === "roster" && index === 4) {
           const highlights = page.locator(".walkthrough-highlight");
           await expect(highlights).toHaveCount(1);
           const [target, outline] = await Promise.all([
@@ -218,3 +218,14 @@ for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, 
     await page.reload(); await expect(page.getByText("Example kiosk", { exact: true })).toHaveCount(0);
   });
 }
+
+test("legacy roster summary resumes at filters and finishes without an empty panel", async ({ page }) => {
+  const state = { progress: { pageId: "roster", version: 1, status: "in_progress", stepId: "summary" } as Progress };
+  await walkthroughAccount(page, "roster", state);
+  await page.goto("/roster");
+  await panel(page).getByRole("button", { name: "Resume walkthrough" }).click();
+  await expect(panel(page)).toContainText("Step 1 of 5");
+  for (let index = 0; index < 5; index++) await panel(page).getByRole("button", { name: "Next", exact: true }).click();
+  await expect(panel(page)).toContainText("You're ready to work with the roster");
+  await expect.poll(() => state.progress.status).toBe("completed");
+});

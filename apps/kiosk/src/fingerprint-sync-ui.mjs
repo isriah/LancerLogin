@@ -1,7 +1,9 @@
+import { fingerprintDiagnosticMessages } from "./fingerprint-diagnostics.mjs";
+
 export const fingerprintSyncStyles = `
 .sync-reader-heading{flex-wrap:wrap}.sync-sheet{z-index:19}.sync-panel{grid-template-rows:auto minmax(0,1fr);width:min(720px,100%);max-height:92vh}
 .sync-content{min-height:0;overflow:auto;display:grid;gap:12px;touch-action:pan-y}.sync-content p{margin:0}.sync-content code{display:block;overflow-wrap:anywhere;white-space:normal;font-size:16px;line-height:1.5;color:var(--text)}
-.sync-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.sync-peers{display:grid;gap:10px}.sync-peer{display:grid;gap:8px;border:1px solid var(--line);border-radius:8px;padding:10px}.sync-panel button{min-height:44px}.sync-fingerprint{padding:8px;background:var(--surface-bg);border-radius:8px}
+.sync-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.sync-peers,#sync-diagnostics{display:grid;gap:10px}.sync-peer{display:grid;gap:8px;border:1px solid var(--line);border-radius:8px;padding:10px}#fingerprint-sync-sheet button{min-height:48px!important}.sync-fingerprint{padding:8px;background:var(--surface-bg);border-radius:8px}
 `;
 
 // Appended to the maintenance module so requests share its PIN session and lock
@@ -14,9 +16,30 @@ export const fingerprintSyncApp = `
   heading.querySelector("p").textContent = "Local fingerprints and optional encrypted sync.";
   const sheet = document.createElement("section"); sheet.id = "fingerprint-sync-sheet"; sheet.className = "sheet sync-sheet";
   sheet.hidden = true; sheet.setAttribute("role", "dialog"); sheet.setAttribute("aria-modal", "true"); sheet.setAttribute("aria-labelledby", "sync-title");
-  sheet.innerHTML = '<div class="sheet-panel card sync-panel"><div class="card-heading"><h2 id="sync-title">Fingerprint sync</h2><button type="button" id="close-sync">Close</button></div><div class="sync-content"><p id="sync-message" role="status"></p><div class="sync-actions"><button type="button" id="toggle-sync" class="primary" disabled>Enable on this kiosk</button><button type="button" id="refresh-sync">Refresh</button></div><p>Approve only kiosks you control. Compare the device fingerprint shown here with the one on the other kiosk before approving.</p><div id="sync-local-fingerprint" class="sync-fingerprint" hidden><strong>This kiosk device fingerprint</strong><code id="sync-fingerprint-value"></code></div><p>New enrollments sync across networks after both kiosks approve each other. Existing unidentified fingerprints are not exported. Disabling sync or revoking trust does not erase fingerprints already stored on readers.</p><div id="sync-peers" class="sync-peers"></div></div></div>';
+  sheet.innerHTML = '<div class="sheet-panel card sync-panel"><div class="card-heading"><h2 id="sync-title">Fingerprint sync</h2><button type="button" id="close-sync">Close</button></div><div class="sync-content"><p id="sync-message" role="status"></p><div class="sync-actions"><button type="button" id="toggle-sync" class="primary" disabled>Enable on this kiosk</button><button type="button" id="refresh-sync">Refresh</button></div><p>Approve only kiosks you control. Compare the device fingerprint shown here with the one on the other kiosk before approving.</p><div id="sync-local-fingerprint" class="sync-fingerprint" hidden><strong>This kiosk device fingerprint</strong><code id="sync-fingerprint-value"></code></div><p>New enrollments sync across networks after both kiosks approve each other. Existing unidentified fingerprints are not exported. Disabling sync or revoking trust does not erase fingerprints already stored on readers.</p><div id="sync-peers" class="sync-peers"></div><section id="sync-diagnostics" aria-label="Fingerprint sync health"></section></div></div>';
   byId("maintenance-main").append(sheet);
   let state, busy = false;
+  const diagnosticMessages = ${JSON.stringify(fingerprintDiagnosticMessages)};
+  function renderDiagnostics(value) {
+    const target = byId("sync-diagnostics"); target.replaceChildren();
+    for (const [component, label] of [["reset", "Reset recovery"], ["peer", "Peer sharing"], ["vault", "Cloud storage"]]) {
+      const entry = value?.[component];
+      const row = document.createElement("div"); row.className = "sync-peer";
+      const title = document.createElement("strong"); title.textContent = label;
+      const message = document.createElement("p"); message.textContent = Object.hasOwn(diagnosticMessages, entry?.reasonCode) ? diagnosticMessages[entry.reasonCode] : diagnosticMessages.unavailable;
+      row.append(title, message);
+      if (Number.isSafeInteger(entry?.missingIdentityMappings) && entry.missingIdentityMappings > 0) {
+        const count = document.createElement("p"); count.textContent = component === "vault" ? Math.min(entry.missingIdentityMappings, 1000000) + " mapping(s) are not eligible for cloud upload." : Math.min(entry.missingIdentityMappings, 1000000) + " enrollment(s) need fresh enrollment with a verified roster identity."; row.append(count);
+      }
+      if (Number.isSafeInteger(entry?.unshareableMappings) && entry.unshareableMappings > (entry.missingIdentityMappings || 0)) {
+        const count = document.createElement("p"); count.textContent = Math.min(entry.unshareableMappings, 1000000) + " mapping(s) cannot currently be shared. Review membership and mappings."; row.append(count);
+      }
+      if (typeof entry?.lastSuccessAt === "string" && Number.isFinite(Date.parse(entry.lastSuccessAt))) {
+        const checked = document.createElement("p"); checked.textContent = "Last successful check: " + new Date(entry.lastSuccessAt).toLocaleString() + ". This does not confirm every fingerprint was delivered."; row.append(checked);
+      }
+      target.append(row);
+    }
+  }
   const fingerprint = value => String(value || "").match(/.{1,4}/g)?.join(" ") || "Unavailable";
   function notice(text, failed = false) { byId("sync-message").textContent = text; byId("sync-message").className = failed ? "error" : ""; }
   function controls() {
@@ -30,7 +53,7 @@ export const fingerprintSyncApp = `
     byId("sync-fingerprint-value").textContent = fingerprint(state.fingerprint);
     const target = byId("sync-peers"); target.replaceChildren();
     if (!state.installationEnabled) notice(state.offline ? "The relay is unavailable. Transfers are paused; you can still disable local sync or revoke peer trust." : "An Admin must first enable Fingerprint sync on the dashboard's Kiosks page.");
-    else notice(!state.enabled ? "Sync is off on this kiosk." : state.diagnostics?.status === "needs_attention" || state.diagnostics?.status === "unavailable" ? "Sync needs attention. Check both readers, network access, active membership, and peer approval, then refresh." : "Sync is enabled. Approved peers can exchange new enrollments.");
+    else notice(!state.enabled ? "Sync is off on this kiosk." : state.diagnostics?.status === "needs_attention" || state.diagnostics?.status === "unavailable" ? "Sync needs attention. Check both readers, network access, active membership, and peer approval, then refresh." : "Peer sharing is enabled. See the separate health checks below for current sync status.");
     const candidates = state.candidates || [];
     const peers = [...candidates, ...(state.peers || []).filter(peer => !candidates.some(candidate => candidate.kioskId === peer.kioskId))];
     for (const peer of peers) {
@@ -51,8 +74,14 @@ export const fingerprintSyncApp = `
   }
   async function refresh() {
     busy = true; controls(); notice("Loading sync settings…");
-    try { state = await call("/fingerprint-sync"); if (!byId("workspace").hidden) render(); }
-    catch (error) { state = undefined; notice(friendlyError(error), true); }
+    try {
+      const [settings, diagnostics] = await Promise.allSettled([call("/fingerprint-sync"), call("/fingerprint-diagnostics")]);
+      if (byId("workspace").hidden) return;
+      renderDiagnostics(diagnostics.status === "fulfilled" ? diagnostics.value : undefined);
+      if (settings.status === "fulfilled") { state = settings.value; render(); }
+      else { state = undefined; byId("sync-local-fingerprint").hidden = true; byId("sync-peers").replaceChildren(); notice(friendlyError(settings.reason), true); }
+    }
+    catch { state = undefined; notice("Fingerprint sync status could not be loaded. Refresh to retry.", true); }
     finally { busy = false; controls(); if (!sheet.hidden && !sheet.contains(document.activeElement)) byId("close-sync").focus(); }
   }
   async function change(operation) {

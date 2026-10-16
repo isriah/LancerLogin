@@ -1,3 +1,4 @@
+import { fingerprintDiagnostic, fingerprintDiagnosticOperation, fingerprintFailureReason } from "./fingerprint-diagnostics.mjs";
 import { join } from "node:path";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createFingerprintJournal } from "./fingerprint-journal.mjs";
@@ -16,35 +17,47 @@ const signature = (slot, mapping) => digest(JSON.stringify([slot, mapping.member
 export function createFingerprintVault({ directory, config, client, sensor, templates, mappings, withSensor, fetchRoster, capacity = 200, now = Date.now }) {
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(config?.kioskId ?? "") || !/^[A-Za-z0-9._:-]{1,128}$/.test(config?.pairingId ?? "")) throw new Error("Fingerprint cloud storage requires a bound kiosk pairing");
   let running, vaultId, journal, importer, cursor, captureCursor = 0, resetPaused = false;
-  let members = new Map(), rosterUntil = 0, captured = new Set(), knownIds = new Set();
-  let diagnostics = { status: "disabled", uploaded: 0, received: 0, errors: 0, legacyMappings: 0 };
+  let members = new Map(), rosterUntil = 0, captured = new Set();
+  let diagnostics = { status: "starting", reasonCode: "starting", uploaded: 0, received: 0, errors: 0, legacyMappings: 0, lastAttemptAt: null, lastSuccessAt: null };
+  const snapshot = () => fingerprintDiagnostic("vault", resetPaused ? { ...diagnostics, status: "reset", reasonCode: "reset_recovery" } : diagnostics, now());
   const active = (value, identity) => !resetPaused && now() < rosterUntil && members.has(value) && (!identity || members.get(value) === identity);
   const importContext = (fingerprintId, member, identity) => ({ installationId: vaultId, senderId: "cloud-vault", senderPairingId: vaultId, senderKeyId: vaultId, rosterId: identity,
     recipientId: config.kioskId, recipientPairingId: config.pairingId, memberId: member, enrollmentId: fingerprintId,
     transferId: digest(JSON.stringify(["LancerLogin vault import v1", vaultId, config.kioskId, config.pairingId, fingerprintId])), revision: 1 });
-  async function run() {
+  async function run(metadata) {
+    let stage = "network_unavailable";
+    diagnostics.lastAttemptAt = new Date(now()).toISOString();
     try {
-      const remote = await client.configuration();
-      if (resetPaused) return { ...diagnostics, status: "reset" };
+      const remote = await (metadata?.configuration ?? (() => client.configuration()))();
+      if (resetPaused) return snapshot();
+      stage = "invalid_response";
       if (typeof remote?.enabled !== "boolean" || remote.enabled && (!id(remote.vaultId) || remote.format !== "r503-model-1536")) throw new Error("Invalid fingerprint cloud configuration");
-      if (!remote.enabled) { rosterUntil = 0; captured.clear(); knownIds.clear(); diagnostics = { status: "disabled", uploaded: 0, received: 0, errors: 0, legacyMappings: 0 }; return diagnostics; }
+      if (!remote.enabled) { rosterUntil = 0; captured.clear(); diagnostics = { ...diagnostics, status: "disabled", reasonCode: "installation_disabled", uploaded: 0, received: 0, errors: 0, legacyMappings: 0, missingIdentityMappings: 0, unshareableMappings: 0 }; return snapshot(); }
       if (remote.vaultId !== vaultId) {
-        vaultId = remote.vaultId; captured.clear(); knownIds.clear(); cursor = undefined;
+        vaultId = remote.vaultId; captured.clear(); cursor = undefined;
         journal = createFingerprintJournal(join(directory, `${config.kioskId}-${config.pairingId}`, vaultId, "received.json"), { installationId: vaultId, kioskId: config.kioskId, pairingId: config.pairingId }, { allowSuperseded: true });
         importer = createFingerprintImporter({ journal, sensor, templates, mappings, withSensor, isMemberActive: active, capacity, reuseExisting: true });
       }
-      const roster = await fetchRoster();
+      stage = "roster_unavailable";
+      const roster = await (metadata?.roster ?? fetchRoster)();
       if (!Array.isArray(roster?.members) || roster.members.length > 10000 || roster.members.some(member => !memberId(member?.memberId) || !rosterId(member?.rosterId))) throw new Error("Fresh active roster is unavailable");
-      members = new Map(roster.members.map(member => [member.memberId, member.rosterId])); rosterUntil = now() + 60000;
+      members = new Map(roster.members.map(member => [member.memberId, member.rosterId])); rosterUntil = Math.min(now() + 60000, roster.freshUntil ?? Infinity);
+      if (!(rosterUntil > now())) throw new Error("Fresh active roster is unavailable");
+      stage = "local_state_review";
       const entries = Object.entries(await mappings.read());
       if (entries.length > capacity || entries.some(([slot, mapping]) => !/^\d{1,4}$/.test(slot) || Number(slot) >= capacity || !memberId(mapping.memberId))) throw new Error("Fingerprint mappings require local review");
       const currentSignatures = new Set(entries.map(([slot, mapping]) => signature(slot, mapping)));
       captured = new Set([...captured].filter(value => currentSignatures.has(value)));
+      const missingIdentityMappings = entries.filter(([, mapping]) => !mapping.rosterId).length;
+      // Recipient peer copies have no source roster binding. This controller
+      // cannot distinguish those from legacy mappings, so missing identities
+      // describe upload eligibility without declaring a transfer failure.
+      const reviewMappings = entries.filter(([, mapping]) => !members.has(mapping.memberId) || (mapping.rosterId && members.get(mapping.memberId) !== mapping.rosterId) || mapping.review !== undefined).length;
       const legacyMappings = entries.filter(([, mapping]) => !mapping.rosterId || !active(mapping.memberId, mapping.rosterId) || mapping.review !== undefined).length;
       const candidates = entries.filter(([slot, mapping]) => freshFingerprintSource(mapping, now()) && active(mapping.memberId, mapping.rosterId) && !captured.has(signature(slot, mapping)));
       const batch = candidates.length ? Array.from({ length: Math.min(2, candidates.length) }, (_, offset) => candidates[(captureCursor + offset) % candidates.length]) : [];
       captureCursor = candidates.length ? (captureCursor + batch.length) % candidates.length : 0;
-      let uploaded = 0, received = 0, errors = 0;
+      let uploaded = 0, received = 0, errors = 0, failureReason;
       for (const [slot, mapping] of batch) {
         try {
           await withSensor(async () => {
@@ -68,15 +81,17 @@ export function createFingerprintVault({ directory, config, client, sensor, temp
                 finally { existing.fill(0); }
               }
               for (const [from, to] of [["reserved", "stored"], ["stored", "mapped"], ["mapped", "complete"]]) if (record.phase === from) record = await journal.advance(record.transferId, from, to);
-              captured.add(signature(slot, current)); knownIds.add(result.fingerprintId); uploaded++;
+              captured.add(signature(slot, current)); uploaded++;
             } finally { template.fill(0); }
           });
-        } catch { errors++; }
+        } catch (error) { errors++; const reason = fingerprintFailureReason(error, "transfer_retry"); if (!failureReason || reason === "local_state_review") failureReason = reason; }
       }
-      const pending = await client.list(cursor);
+      stage = "network_unavailable";
+      const pending = await (metadata?.list ? metadata.list(cursor, after => client.list(after)) : client.list(cursor));
+      stage = "invalid_response";
       if (pending?.vaultId !== vaultId || !Array.isArray(pending.fingerprints) || pending.fingerprints.length > 8) throw new Error("Invalid fingerprint cloud manifest");
       let previous = cursor ?? "";
-      const records = await journal.list();
+      const records = await fingerprintDiagnosticOperation("local_state_review", () => journal.list());
       for (const fingerprint of pending.fingerprints) {
         if (!id(fingerprint?.fingerprintId) || fingerprint.fingerprintId <= previous || !memberId(fingerprint.memberId) || !rosterId(fingerprint.rosterId)) throw new Error("Invalid fingerprint cloud cursor");
         previous = fingerprint.fingerprintId;
@@ -87,10 +102,9 @@ export function createFingerprintVault({ directory, config, client, sensor, temp
           // An explicitly replaced local source copy is historical metadata, not
           // permission to download the old model into another free reader slot.
           if (record?.phase === "superseded") continue;
-          if (knownIds.has(fingerprint.fingerprintId)) continue;
           if (record?.phase === "complete") {
             const mapping = (await mappings.read())[String(record.slot)];
-            if (mapping?.memberId !== fingerprint.memberId || mapping.rosterId !== fingerprint.rosterId) throw new Error("Completed fingerprint mapping requires review");
+            if (mapping?.memberId !== fingerprint.memberId || mapping.rosterId !== fingerprint.rosterId || !(await withSensor(() => sensor.occupiedSlots())).includes(record.slot)) throw new Error("Completed fingerprint mapping requires review");
             continue;
           }
           const result = await client.template(fingerprint.fingerprintId);
@@ -102,16 +116,17 @@ export function createFingerprintVault({ directory, config, client, sensor, temp
             const context = importContext(fingerprint.fingerprintId, fingerprint.memberId, fingerprint.rosterId);
             await importer.receive(context, template, digest(template)); received++;
           } finally { template.fill(0); }
-        } catch { errors++; }
+        } catch (error) { errors++; const reason = fingerprintFailureReason(error, "transfer_retry"); if (!failureReason || reason === "local_state_review") failureReason = reason; }
       }
       cursor = pending.fingerprints.length === 8 ? previous : undefined;
-      diagnostics = { status: errors || legacyMappings ? "needs_attention" : "ready", uploaded, received, errors, legacyMappings };
-    } catch { rosterUntil = 0; diagnostics = { ...diagnostics, status: "unavailable", errors: diagnostics.errors + 1 }; }
-    return { ...diagnostics };
+      diagnostics = { ...diagnostics, status: errors || reviewMappings ? "needs_attention" : "ready", reasonCode: errors ? failureReason ?? "transfer_retry" : reviewMappings ? "mapping_review" : "ready", uploaded, received, errors, legacyMappings, missingIdentityMappings, unshareableMappings: legacyMappings, lastSuccessAt: errors ? diagnostics.lastSuccessAt : new Date(now()).toISOString() };
+    } catch (error) { rosterUntil = 0; diagnostics = { ...diagnostics, status: "unavailable", reasonCode: fingerprintFailureReason(error, stage), errors: diagnostics.errors + 1 }; }
+    return snapshot();
   }
   return {
-    tick() { if (resetPaused) return Promise.resolve({ ...diagnostics, status: "reset" }); if (!running) running = run().finally(() => { running = undefined; }); return running; },
-    async stopForReset() { resetPaused = true; rosterUntil = 0; await running; diagnostics.status = "reset"; },
-    diagnostics: () => ({ ...diagnostics }),
+    invalidateAuthority() { rosterUntil = 0; },
+    tick(metadata) { if (resetPaused) return Promise.resolve(snapshot()); if (!running) running = run(metadata).finally(() => { running = undefined; }); return running; },
+    async stopForReset() { resetPaused = true; rosterUntil = 0; await running; diagnostics.status = "reset"; diagnostics.reasonCode = "reset_recovery"; },
+    diagnostics: snapshot,
   };
 }

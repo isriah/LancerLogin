@@ -99,6 +99,43 @@ test("keyboard clock selection also moves End time after Start time", async ({ p
   await expect(page.getByRole("button", { name: "End time: 12:00 PM" })).toBeVisible();
 });
 
+for (const dismissal of ["finish", "cancel"] as const) test(`clock ${dismissal} returns focus once without stealing a later keyboard target`, async ({ page }) => {
+  await routePublicForm(page);
+  await page.goto("/submit-hours");
+  await page.getByLabel("Dated activity").selectOption(activity.id);
+  await chooseClock(page, "Start time", 9, 0, "AM");
+  const end = page.getByRole("button", { name: /^End time:/ });
+  await end.click();
+  const dialog = page.getByRole("dialog", { name: "End time", exact: true });
+  if (dismissal === "finish") {
+    await dialog.getByRole("button", { name: "10 o'clock" }).click();
+    await dialog.getByRole("button", { name: "0 minutes", exact: true }).click();
+  }
+  await expect(dialog.locator(".outreach-clock-readout")).toBeVisible();
+  // Hold deferred focus callbacks so a new keyboard target can be selected
+  // between modal cleanup and the next animation frame, without a timing race.
+  await page.evaluate(() => {
+    const original = window.requestAnimationFrame.bind(window);
+    const callbacks: FrameRequestCallback[] = [];
+    window.requestAnimationFrame = (callback) => { callbacks.push(callback); return callbacks.length; };
+    (window as typeof window & { releaseClockFrames?: () => void }).releaseClockFrames = () => {
+      window.requestAnimationFrame = original;
+      for (const callback of callbacks) callback(performance.now());
+    };
+  });
+  if (dismissal === "finish") await dialog.getByRole("group", { name: "Choose AM or PM" }).getByRole("button", { name: "AM", exact: true }).click();
+  else await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(end).toBeFocused();
+  const start = page.getByRole("button", { name: /^Start time:/ });
+  await start.focus();
+  await page.evaluate(() => (window as typeof window & { releaseClockFrames: () => void }).releaseClockFrames());
+  await expect(start).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "Start time", exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "End time", exact: true })).toHaveCount(0);
+});
+
 test("an End time before Start time shows a specific client error without submitting", async ({ page }) => {
   const submissions = await routePublicForm(page);
   await page.goto("/submit-hours");

@@ -35,6 +35,13 @@ async function tap(page: Page, target: Locator, expectClick = true) {
   if (expectClick) await expect.poll(() => touchClicks.get(page), { timeout: 3000, message: "Real touch tap must click its intended target" }).toBe(clicks + 1);
 }
 
+async function chooseSearchKeys(page: Page, key: string) {
+  if (key === " ") return;
+  const keyboard = page.locator("#search-keyboard");
+  if (await keyboard.getByRole("button", { name: key, exact: true }).count()) return;
+  await tap(page, keyboard.getByRole("button", { name: /^(123|ABC)$/ }));
+}
+
 async function swipe(page: Page, scroller: Locator, direction: "up" | "down" | "left" = "up", origin?: "row" | "blank") {
   const visible = await scroller.evaluate((element) => {
     const r = element.getBoundingClientRect();
@@ -119,11 +126,11 @@ async function reachable(page: Page, target: Locator, scroller: Locator, directi
   throw new Error("Touch swipes could not reach target: " + JSON.stringify(await scroller.evaluate((e) => ({ top: e.scrollTop, left: e.scrollLeft, height: e.clientHeight, content: e.scrollHeight }))));
 }
 
-async function fixture(page: Page, options: { authenticationMethod?: "fingerprint" | "rfid" | "nfc" | "qr" | "member_id"; rejectCredential?: boolean; sensorOnlySlots?: number[]; failSlotRead?: boolean } = {}) {
+async function fixture(page: Page, options: { authenticationMethod?: "fingerprint" | "rfid" | "nfc" | "qr" | "member_id"; rejectCredential?: boolean; sensorOnlySlots?: number[]; failSlotRead?: boolean; failRoster?: boolean; rejectEnrollment?: boolean; failRefresh?: boolean } = {}) {
   const authenticationMethod = options.authenticationMethod ?? "fingerprint";
   let authorized = false;
   let expired = false;
-  let attempts = 0;
+  let attempts = 0, readerTests = 0;
   const enrolled: unknown[] = [], removed: string[] = [], credentialAttempts: unknown[] = [];
   const displayState = await (await page.request.get(`${base}/display-state`)).json();
   const members = Array.from({ length: 80 }, (_, index) => ({ memberId: `synthetic-${index}`, firstName: `Member ${index}`, lastName: "Synthetic" }));
@@ -142,12 +149,14 @@ async function fixture(page: Page, options: { authenticationMethod?: "fingerprin
       authorized = true; return json({ authorized: true });
     }
     if (path === "/network/session" && route.request().method() === "DELETE") { authorized = false; return json({ closed: true }); }
+    if (path === "/maintenance/members" && options.failRoster) return json({ error: "Roster unavailable. Retry when connected." }, 503);
     if (path === "/maintenance/members") return authorized && !expired ? json({ members }) : json({ error: "Unlock network settings first" }, 403);
     if (path === "/credential-mappings" && route.request().method() === "GET") return authorized && !expired ? json({ mappings: [] }) : json({ error: "Unlock network settings first" }, 403);
     if (path === "/credential-mappings" && route.request().method() === "POST") {
       credentialAttempts.push(route.request().postDataJSON());
       return options.rejectCredential ? json({ error: "Credential not accepted" }, 400) : json({ mapping: { id: "local-mapping", method: authenticationMethod, memberId: "synthetic-0", label: "Local credential" } }, 201);
     }
+    if (path === "/mappings" && options.failRefresh && enrolled.length) return json({ error: "Mappings refresh unavailable" }, 503);
     if (path === "/mappings") return authorized && !expired ? json({ mappings }) : json({ error: "Unlock network settings first" }, 403);
     if (path.startsWith("/mappings/")) {
       removed.push(path); delete mappings[path.split("/").pop()!]; return json({ mappings });
@@ -156,12 +165,13 @@ async function fixture(page: Page, options: { authenticationMethod?: "fingerprin
     if (path === "/display-state" && enrolled.length) {
       return json({ ...displayState, display: { id: "enroll_success", message: "Enrollment saved", detail: "Synthetic recovery guidance. ".repeat(30) } });
     }
-    if (path === "/sensor/test") return json({ readerOnline: true, templateCount: 60 });
+    if (path === "/sensor/test") { readerTests++; return json({ readerOnline: true, templateCount: 60 }); }
     if (path === "/sensor/slots") return options.failSlotRead ? json({ error: "Cannot verify occupied sensor slots" }, 503) : json({ occupiedSlots: [...sensorSlots] });
+    if (path === "/enroll" && options.rejectEnrollment) return json({ error: "Roster verification unavailable. Retry enrollment." }, 503);
     if (path === "/enroll") { const input = route.request().postDataJSON(); enrolled.push(input); sensorSlots.add(input.slot); mappings[String(input.slot)] = { memberId: input.memberId, finger: input.finger }; return json({ enrolled: true }); }
     return route.continue();
   });
-  return { enrolled, removed, credentialAttempts, expire: () => { expired = true; }, resume: () => { expired = false; }, attempts: () => attempts };
+  return { enrolled, removed, credentialAttempts, readerTests: () => readerTests, expire: () => { expired = true; }, resume: () => { expired = false; }, attempts: () => attempts };
 }
 
 async function pin(page: Page, value = "123456") {
@@ -204,7 +214,7 @@ test("fingerprint sync can be enabled and peers approved by touch at 800x480", a
   await tap(page, page.locator("#accept-action"));
   await expect(sheet.getByText("Approved locally", { exact: true })).toBeVisible();
   expect(approved).toBe(true);
-  for (const height of await sheet.locator("button").evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().height))) expect(height).toBeGreaterThanOrEqual(44);
+  for (const height of await sheet.locator("button").evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().height))) expect(height).toBeGreaterThanOrEqual(48);
   expect(await scroll.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: test.info().outputPath("fingerprint-sync-touch.png") });
   mock.expire(); await expect(sheet).toBeHidden();
@@ -301,6 +311,40 @@ test("unreadable sensor occupancy disables enrollment instead of suggesting slot
   expect(mock.enrolled).toHaveLength(0);
 });
 
+for (const origin of ["row", "blank"] as const) test(`roster swipes from ${origin} also scroll when the display reports mouse input`, async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  await fixture(page); await page.goto(`${base}/maintenance`); await pin(page);
+  await tap(page, page.locator("#member-picker"));
+  await tap(page, page.locator("#toggle-search-keyboard"));
+  const list = page.locator("#member-options");
+  const drag = async (down = false) => {
+    const points = await list.evaluate((e, { origin, down }) => {
+      const r = e.getBoundingClientRect();
+      const rows = [...e.querySelectorAll("button")].map(b => b.getBoundingClientRect()).filter(b => b.top >= r.top && b.bottom <= r.bottom);
+      const row = down ? rows[0] : rows[rows.length - 1];
+      const x = origin === "blank" ? r.left + e.clientLeft + e.clientWidth - 10 : r.left + 100;
+      const y = origin === "row" ? row.top + row.height / 2 : down ? r.top + 20 : r.bottom - 20;
+      const hit = document.elementFromPoint(x, y);
+      if (origin === "row" ? !hit?.closest("button") : hit !== e) throw new Error("Drag must start in the intended list area");
+      return { x, y, end: down ? r.bottom - 20 : r.top + 20 };
+    }, { origin, down });
+    await page.mouse.move(points.x, points.y); await page.mouse.down();
+    await page.mouse.move(points.x, points.end, { steps: 12 }); await page.mouse.up();
+  };
+  await drag();
+  const position = await list.evaluate(e => e.scrollTop);
+  expect(position).toBeGreaterThan(40);
+  await expect(page.locator("#member-sheet")).toBeVisible();
+  await expect(page.locator("#member")).toHaveValue("");
+  await drag(true);
+  expect(await list.evaluate(e => e.scrollTop)).toBeLessThan(position);
+  for (let attempt = 0; attempt < 3 && await list.evaluate(e => e.scrollTop) > 0; attempt++) await drag(true);
+  expect(await list.evaluate(e => e.scrollTop)).toBe(0);
+  await expect(page.locator("#member")).toHaveValue("");
+  await page.locator("#member-options").getByRole("button", { name: /Member 0 ·/ }).click();
+  await expect(page.locator("#member")).toHaveValue("synthetic-0");
+});
+
 for (const height of [480, 360]) {
   test(`QWERTY rows and the complete roster scroll by touch at 800x${height}`, async ({ page }) => {
     await page.setViewportSize({ width: 800, height });
@@ -312,8 +356,8 @@ for (const height of [480, 360]) {
     for (const letters of ["qwertyuiop", "asdfghjkl", "zxcvbnm"]) {
       const boxes = await Promise.all([...letters].map((key) => keyboard.getByRole("button", { name: key, exact: true }).boundingBox()));
       for (let index = 0; index < boxes.length; index++) {
-        expect(boxes[index]!.width).toBeGreaterThanOrEqual(44);
-        expect(boxes[index]!.height).toBeGreaterThanOrEqual(44);
+        expect(boxes[index]!.width).toBeGreaterThanOrEqual(48);
+        expect(boxes[index]!.height).toBeGreaterThanOrEqual(48);
         expect(boxes[index]!.y).toBe(boxes[0]!.y);
         if (index) expect(boxes[index]!.x).toBeGreaterThan(boxes[index - 1]!.x);
       }
@@ -379,6 +423,7 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     }))).toBe(true);
     await page.screenshot({ path: test.info().outputPath(`roster-keyboard-${viewport.height}.png`) });
     for (const key of "abcdefghijklmnopqrstuvwxyz0123456789-'.") {
+      await chooseSearchKeys(page, key);
       const target = keyboard.getByRole("button", { name: key, exact: true });
       expect(await target.evaluate((e) => {
         const r = e.getBoundingClientRect();
@@ -390,7 +435,7 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     await tap(page, keyboard.getByRole("button", { name: "Space", exact: true }));
     await tap(page, keyboard.getByRole("button", { name: "Backspace" }));
     await tap(page, keyboard.getByRole("button", { name: "Clear", exact: true }));
-    for (const key of "member 79") await tap(page, keyboard.getByRole("button", { name: key === " " ? "Space" : key, exact: true }));
+    for (const key of "member 79") { await chooseSearchKeys(page, key); await tap(page, keyboard.getByRole("button", { name: key === " " ? "Space" : key, exact: true })); }
     await expect(page.locator("#member-search")).toHaveValue("member 79");
     await tap(page, keyboard.getByRole("button", { name: "Backspace" }));
     await expect(page.locator("#member-search")).toHaveValue("member 7");
@@ -398,23 +443,18 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     await tap(page, page.locator("#member-search"));
     await expect(page.locator("#member-search")).toHaveValue("member 79");
     await page.locator("#member-search").evaluate((element) => (element as HTMLInputElement).setSelectionRange(0, 6));
+    await chooseSearchKeys(page, "m");
     await tap(page, keyboard.getByRole("button", { name: "m", exact: true }));
     await expect(page.locator("#member-search")).toHaveValue("m 79");
     await tap(page, keyboard.getByRole("button", { name: "Clear", exact: true }));
-    for (const key of "member 79") await tap(page, keyboard.getByRole("button", { name: key === " " ? "Space" : key, exact: true }));
+    for (const key of "member 79") { await chooseSearchKeys(page, key); await tap(page, keyboard.getByRole("button", { name: key === " " ? "Space" : key, exact: true })); }
     await tap(page, page.locator("#close-member-sheet"));
     await tap(page, page.locator("#member-picker"));
     await expect(page.locator("#member-search")).toHaveValue("member 79");
     await tap(page, options.getByRole("button", { name: /Member 79/ }));
     await expect(page.locator("#member")).toHaveValue("synthetic-79");
-    await tap(page, page.locator("#finger-picker"));
-    await tap(page, page.locator("#close-finger-sheet"));
-    await expect(page.locator("#finger")).toHaveValue("right index");
-    await tap(page, page.locator("#finger-picker"));
-    const fingers = page.locator("#finger-options");
-    await reachable(page, fingers.getByRole("button", { name: "other", exact: true }), fingers);
-    await tap(page, fingers.getByRole("button", { name: "other", exact: true }));
-    await expect(page.locator("#finger")).toHaveValue("other");
+    await expect(page.locator("#finger-picker")).toHaveCount(0);
+    await reachable(page, page.locator("#slot"), page.locator(".enroll-card"));
     await tap(page, page.locator("#slot"), false);
     await expect(page.locator("#number-display")).toHaveValue("60");
     const pad = page.locator("#slot-keypad");
@@ -447,7 +487,7 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     expect(mock.enrolled).toHaveLength(0);
     await tap(page, page.locator("#begin-enroll"));
     await tap(page, page.locator("#accept-action"));
-    await expect.poll(() => mock.enrolled).toEqual([{ memberId: "synthetic-79", finger: "other", slot: 5, replaceExisting: true }]);
+    await expect.poll(() => mock.enrolled).toEqual([{ memberId: "synthetic-79", slot: 5, replaceExisting: true }]);
     await expect(page.locator("#message")).toContainText("Enrollment saved");
     const reader = page.locator(".reader-card");
     await expect(page.locator("#stage-detail")).toContainText("Synthetic recovery guidance");
@@ -504,6 +544,7 @@ for (const surface of ["search", "confirmation"]) test(`expired maintenance hide
   if (surface === "confirmation") {
     await tap(page, page.locator("#search-keyboard").getByRole("button", { name: "Clear", exact: true }));
     await tap(page, page.locator("#member-options button").first());
+    await reachable(page, page.locator("#begin-enroll"), page.locator(".enroll-card"));
     await tap(page, page.locator("#begin-enroll"));
     await expect(page.locator("#confirm-sheet")).toBeVisible();
   }
@@ -555,4 +596,118 @@ test("unconfigured maintenance offers touch return without exposing tools", asyn
   await expect(page.locator("#workspace")).toBeHidden();
   await tap(page, page.locator("#locked-return"));
   await expect(page).toHaveURL(`${base}/`);
+});
+
+
+test("reader tests automatically after unlock despite roster outage", async ({ page }) => {
+  const mock = await fixture(page, { failRoster: true });
+  await page.goto(`${base}/maintenance`);
+  expect(mock.readerTests()).toBe(0);
+  await pin(page);
+  await expect(page.locator("#reader-status")).toContainText("Reader online");
+  expect(mock.readerTests()).toBe(1);
+  await expect(page.locator("#message")).toContainText("Roster unavailable");
+  await page.locator("#test-reader").click();
+  await expect.poll(mock.readerTests).toBe(2);
+});
+
+for (const failRefresh of [false, true]) test(`successful enrollment clears selection before refresh failure ${failRefresh}`, async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  const mock = await fixture(page, { failRefresh });
+  await page.goto(`${base}/maintenance`); await pin(page);
+  await page.locator("#member-picker").click();
+  await page.locator("#member-search").fill("member 79");
+  await page.locator("#member-options button").click();
+  await page.locator("#begin-enroll").click();
+  const box = await page.locator(".confirmation-panel").boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(700);
+  expect(Math.abs(box!.x + box!.width / 2 - 400)).toBeLessThan(2);
+  expect(Math.abs(box!.y + box!.height / 2 - 240)).toBeLessThan(2);
+  expect((await page.locator("#accept-action").boundingBox())!.height).toBeGreaterThanOrEqual(56);
+  await page.screenshot({ path: test.info().outputPath("enrollment-confirmation.png") });
+  await page.locator("#accept-action").click();
+  await expect.poll(() => mock.enrolled.length).toBe(1);
+  await expect(page.locator("#member")).toHaveValue("");
+  await expect(page.locator("#member-search")).toHaveValue("");
+  await expect(page.locator("#member-picker")).toHaveText("Choose a member");
+  await expect(page.locator("#replace")).not.toBeChecked();
+  expect(mock.enrolled[0]).not.toHaveProperty("finger");
+  await expect(page.locator("#finger-picker")).toHaveCount(0);
+  await expect(page.locator(".mappings-card th").filter({ hasText: /^Finger$/ })).toHaveCount(0);
+  if (failRefresh) await expect(page.locator("#begin-enroll")).toBeDisabled();
+});
+
+test("failed enrollment retains selected member and search for retry", async ({ page }) => {
+  await fixture(page, { rejectEnrollment: true });
+  await page.goto(`${base}/maintenance`); await pin(page);
+  await page.locator("#member-picker").click();
+  await page.locator("#member-search").fill("member 79");
+  await page.locator("#member-options button").click();
+  await page.locator("#begin-enroll").click(); await page.locator("#accept-action").click();
+  await expect(page.locator("#message")).toContainText("Retry enrollment");
+  await expect(page.locator("#member")).toHaveValue("synthetic-79");
+  await expect(page.locator("#member-search")).toHaveValue("member 79");
+});
+
+
+test("exit to desktop is confirmed and reports a safe launcher failure", async ({ page }) => {
+  await fixture(page); let attempts = 0;
+  await page.route(`${base}/maintenance/desktop/exit`, route => { attempts++; return route.fulfill({ status: 503, json: { error: "Desktop launcher is unavailable. Reopen the kiosk from the desktop shortcut." } }); });
+  await page.goto(`${base}/maintenance`);
+  await expect(page.locator("#exit-desktop")).toBeHidden();
+  await pin(page);
+  await page.locator("#exit-desktop").click(); await page.locator("#cancel-action").click();
+  expect(attempts).toBe(0);
+  await page.locator("#exit-desktop").click(); await page.locator("#accept-action").click();
+  await expect(page.locator("#message")).toContainText("Desktop launcher is unavailable");
+  expect(attempts).toBe(1);
+  await expect(page.locator("#exit-desktop")).toBeEnabled();
+});
+
+
+test("late reader response cannot restore an expired maintenance workspace", async ({ page }) => {
+  const mock = await fixture(page);
+  let release: (() => void) | undefined;
+  const delayed = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`${base}/sensor/test`, async route => { await delayed; await route.fulfill({ json: { readerOnline: true, templateCount: 60 } }); });
+  await page.goto(`${base}/maintenance`); await pin(page);
+  await expect(page.locator("#reader-status")).toHaveText("Testing reader...");
+  mock.expire();
+  await expect(page.locator("#workspace")).toBeHidden();
+  release!();
+  await expect(page.locator("#unlock")).toBeVisible();
+  await expect(page.locator("#reader-status")).not.toContainText("Reader online");
+});
+
+test("non-fingerprint maintenance does not test the fingerprint reader", async ({ page }) => {
+  const mock = await fixture(page, { authenticationMethod: "member_id" });
+  await page.goto(`${base}/maintenance`); await pin(page);
+  await expect(page.locator("#member-id-card")).toBeVisible();
+  expect(mock.readerTests()).toBe(0);
+});
+
+
+for (const height of [480, 360]) test(`mobile roster keyboard keeps digits visible and layer toggle fixed at 800x${height}`, async ({ page }) => {
+  await page.setViewportSize({ width: 800, height });
+  await fixture(page); await page.goto(`${base}/maintenance`); await pin(page);
+  await page.locator("#member-picker").click();
+  const keyboard = page.locator("#search-keyboard"), search = page.locator("#member-search");
+  for (const digit of "1234567890") await expect(keyboard.getByRole("button", { name: digit, exact: true })).toBeVisible();
+  const toggle = await keyboard.getByRole("button", { name: "123", exact: true }).boundingBox();
+  expect(await keyboard.locator("button").evaluateAll(buttons => buttons.every(button => {
+    const r = button.getBoundingClientRect();
+    return r.width >= 48 && r.height >= 48 && r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth;
+  }))).toBe(true);
+  await page.screenshot({ path: test.info().outputPath(`keyboard-number-row-${height}.png`) });
+  await keyboard.getByRole("button", { name: "Shift", exact: true }).click();
+  await expect(keyboard.getByRole("button", { name: "Shift", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await keyboard.getByRole("button", { name: "A", exact: true }).click();
+  await keyboard.getByRole("button", { name: "123", exact: true }).click();
+  expect(await keyboard.getByRole("button", { name: "ABC", exact: true }).boundingBox()).toEqual(toggle);
+  for (const digit of "1234567890") await expect(keyboard.getByRole("button", { name: digit, exact: true })).toBeVisible();
+  await keyboard.getByRole("button", { name: "7", exact: true }).click();
+  await keyboard.getByRole("button", { name: "ABC", exact: true }).click();
+  await search.evaluate(e => (e as HTMLInputElement).setSelectionRange(0, 1));
+  await keyboard.getByRole("button", { name: "B", exact: true }).click();
+  await expect(search).toHaveValue("B7");
 });

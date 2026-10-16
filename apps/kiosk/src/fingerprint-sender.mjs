@@ -50,7 +50,7 @@ export function createFingerprintSender({ identities, outbox, mappings, template
               } finally { template.fill(0); }
             });
           });
-        } catch { summary.errors++; }
+        } catch (error) { if (error?.reasonCode === "local_state_review") throw error; summary.errors++; }
     }
     const pending = await outbox.pending();
     const batch = pending.length ? Array.from({ length: Math.min(8, pending.length) }, (_, offset) => pending[(cursor + offset) % pending.length]) : [];
@@ -75,7 +75,7 @@ export function createFingerprintSender({ identities, outbox, mappings, template
             if (result.status === "complete") summary.completed++;
           }
         });
-      } catch { summary.errors++; }
+      } catch (error) { if (error?.reasonCode === "local_state_review") throw error; summary.errors++; }
     }
     return summary;
   }

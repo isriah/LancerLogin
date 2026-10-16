@@ -1,3 +1,4 @@
+import { fingerprintFailureReason } from "./fingerprint-diagnostics.mjs";
 import { normalizeApiUrl } from "./cloud-client.mjs";
 
 export function createFingerprintCloudClient(config, { fetchImpl = fetch } = {}) {
@@ -7,7 +8,7 @@ export function createFingerprintCloudClient(config, { fetchImpl = fetch } = {})
     return value;
   };
   async function request(path, method = "GET", value) {
-    let response;
+    let response, stage = "network_unavailable";
     try {
       response = await fetchImpl(`${base}/kiosk/fingerprint-sync${path}`, { method, redirect: "error", signal: AbortSignal.timeout(8000),
         headers: { authorization: `Bearer ${config.kioskToken}`, ...(value === undefined ? {} : { "content-type": "application/json" }) },
@@ -17,6 +18,7 @@ export function createFingerprintCloudClient(config, { fetchImpl = fetch } = {})
         const error = new Error("Fingerprint relay request was not accepted");
         error.status = response.status; throw error;
       }
+      stage = "invalid_response";
       const reader = response.body?.getReader();
       if (!reader) throw new Error("Missing response");
       let size = 0; const chunks = [];
@@ -32,6 +34,7 @@ export function createFingerprintCloudClient(config, { fetchImpl = fetch } = {})
     } catch (cause) {
       // Do not surface response bodies, URLs, credentials or template payloads.
       const error = new Error("Fingerprint relay is unavailable; saved deliveries will retry");
+      error.reasonCode = fingerprintFailureReason(cause, stage);
       if (Number.isInteger(cause?.status)) error.status = cause.status;
       throw error;
     }

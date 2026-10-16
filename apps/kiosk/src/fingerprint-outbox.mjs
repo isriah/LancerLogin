@@ -1,10 +1,12 @@
+import { fingerprintDiagnosticError, fingerprintDiagnosticOperation } from "./fingerprint-diagnostics.mjs";
 import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { acquireFingerprintStateLock } from "./fingerprint-state-lock.mjs";
 import { fingerprintEnvelopeDigest, fingerprintIdentityId } from "./fingerprint-envelope.mjs";
 
-const fail = () => { throw new Error("Fingerprint outbox requires local review"); };
+const fail = () => { throw fingerprintDiagnosticError("local_state_review"); };
 const id = value => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
 const safeMode = stat => process.platform === "win32" || ((stat.mode & 0o077) === 0 && stat.uid === process.getuid());
 const terminal = ["complete", "needs_review", "rejected", "expired", "revoked"];
@@ -65,13 +67,13 @@ export function createFingerprintOutbox(path, binding, { publicIdentity, now = D
     } finally { await file?.close(); await unlink(temporary).catch(() => undefined); }
   }
   const mutate = operation => exclusive(async () => {
-    await directory(); let lock;
+    await fingerprintDiagnosticOperation("local_state_review", directory); let lock;
     try {
-      lock = await open(`${path}.lock`, "wx", 0o600);
-      const state = await load();
+      lock = await fingerprintDiagnosticOperation("local_state_review", () => acquireFingerprintStateLock(`${path}.lock`));
+      const state = await fingerprintDiagnosticOperation("local_state_review", load);
       for (const record of state.records) if (record.status === "pending" && record.expiresAt <= now()) { record.status = "expired"; record.envelope = null; }
-      const result = operation(state); await save(state); return structuredClone(result);
-    } finally { if (lock) { await lock.close(); await unlink(`${path}.lock`); } }
+      const result = operation(state); await fingerprintDiagnosticOperation("local_state_review", () => save(state)); return structuredClone(result);
+    } finally { if (lock) await fingerprintDiagnosticOperation("local_state_review", () => lock.close()); }
   });
   return {
     enqueue(envelope) {

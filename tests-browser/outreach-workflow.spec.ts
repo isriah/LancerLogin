@@ -298,7 +298,7 @@ test("Admin creates an activity, records time with the accessible clock, and rev
   await expect(page.getByLabel("Activity type")).toHaveCount(0);
   for (const theme of ["light", "dark"] as const) {
     await page.locator(".app").evaluate((element, value) => element.setAttribute("data-theme", value), theme);
-    for (const control of [page.getByRole("button", { name: "Submission Log" }), page.getByRole("button", { name: "Settings", exact: true })]) {
+    for (const control of [page.getByRole("button", { name: "Submission Log" })]) {
       const appearance = await control.evaluate((element) => {
         const style = getComputedStyle(element); const expected = getComputedStyle(document.querySelector(".primary-navigation a:not(.active)")!);
         return { actual: [style.backgroundColor, style.borderTopWidth, style.color, style.borderRadius], expected: [expected.backgroundColor, expected.borderTopWidth, expected.color, expected.borderRadius], height: element.getBoundingClientRect().height };
@@ -329,7 +329,8 @@ test("Admin creates an activity, records time with the accessible clock, and rev
   const mobileWidth = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
   expect(mobileWidth.scrollWidth).toBeLessThanOrEqual(mobileWidth.clientWidth);
   await expect(page.getByRole("button", { name: /Corrections/ })).toHaveCount(0);
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveCount(0);
+  await page.goto("/settings/outreach-setup");
   await page.getByRole("button", { name: /^Supported teams(?: \(|$)/ }).click();
   await expect(page.getByRole("heading", { name: "Supported teams", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Outreach labels", exact: true })).toHaveCount(0);

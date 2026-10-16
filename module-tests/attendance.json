@@ -3,7 +3,9 @@
   "module": "attendance",
   "label": "Attendance",
   "fast": {
-    "javascript": [],
+    "javascript": [
+      "tests/kiosk-poll.test.mjs"
+    ],
     "typescript": [
       "tests-ts/module-platform.test.ts",
       "tests-ts/dashboard-module-fixture.test.ts",
@@ -22,7 +24,9 @@
       "tests/integration-workflows.test.mjs",
       "tests/pairing-service.test.mjs",
       "tests/setup-progress.test.mjs",
-      "tests/worker.test.mjs"
+      "tests/worker.test.mjs",
+      "tests/kiosk-poll.test.mjs",
+      "tests/kiosk-poll-service.test.mjs"
     ],
     "typescript": [
       "tests-ts/module-platform.test.ts",

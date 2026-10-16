@@ -2,17 +2,22 @@ import { kioskDisplayForQueuedScan } from "./kiosk-presentation.mjs";
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-export function createIdentityScanner({ captureIdentity, setFeedback = async () => undefined, queue, loadPairing, flushAttendance, onDisplay, onInput = () => undefined, onCloud, now = () => Date.now(), delay = wait, eventId = () => crypto.randomUUID(), debounceMs = 8_000, flushWaitMs = 1_000 }) {
+export function createIdentityScanner({ captureIdentity, captureAllowed = () => true, setFeedback = async () => undefined, queue, loadPairing, flushAttendance, onDisplay, onInput = () => undefined, onCloud, now = () => Date.now(), delay = wait, eventId = () => crypto.randomUUID(), debounceMs = 8_000, flushWaitMs = 1_000 }) {
   let stopped = false; let paused = false; let lastIdentity; let lastIdentityAt = 0; let lastUnknownAt = 0;
   async function show(id, overrides) { await onDisplay(id, overrides); try { await setFeedback(id); } catch { /* Screen feedback remains available if optional hardware feedback fails. */ } }
-  let currentTick;
+  let currentTick, currentCommit, captureGeneration = 0;
+  const suspensions = new Set();
+  const allowed = () => !suspensions.size && captureAllowed();
   async function performTick() {
-    if (paused) { await delay(100); return; }
+    if (paused || !allowed()) { await delay(100); return; }
+    const epoch = captureGeneration;
+    const valid = () => epoch === captureGeneration && allowed();
     const config = await loadPairing();
     if (!config) { await onDisplay("unpaired"); await delay(500); return; }
     let observation;
     try { observation = await captureIdentity(); onInput(true); }
     catch { onInput(false); await show("reader_offline"); await delay(1_000); return; }
+    if (!valid()) return;
     if (!observation || observation.status === "idle") { await delay(100); return; }
     const timestamp = now();
     if (observation.status === "unknown") {
@@ -26,13 +31,18 @@ export function createIdentityScanner({ captureIdentity, setFeedback = async () 
     if (observation.status !== "identified" || !observation.memberId) { await delay(100); return; }
     const identityKey = observation.identityKey || observation.memberId;
     if (lastIdentity === identityKey && timestamp - lastIdentityAt < debounceMs) { await delay(250); return; }
-    lastIdentity = identityKey; lastIdentityAt = timestamp;
     await show("processing", observation.processingDetail ? { detail: observation.processingDetail } : undefined);
     const event = { eventId: eventId(), memberId: observation.memberId, occurredAt: new Date(timestamp).toISOString(), ...(config.pairingId ? { pairingId: config.pairingId } : {}) };
     let queuedDisplay;
     try {
       queuedDisplay = kioskDisplayForQueuedScan(observation.memberId, await queue.pending());
-      if (!await queue.enqueue(event)) throw new Error("Scan was not queued");
+      if (!valid()) return;
+      lastIdentity = identityKey; lastIdentityAt = timestamp;
+      // Synchronous ownership before invoking enqueue closes the entry/write
+      // race. Strict suspension waits only for this durable commit boundary.
+      currentCommit = Promise.resolve().then(() => queue.enqueue(event));
+      try { if (!await currentCommit) throw new Error("Scan was not queued"); }
+      finally { currentCommit = undefined; }
     } catch {
       await show("rejected", { detail: "This scan could not be saved. Ask an operator for help." });
       await delay(250); return;
@@ -60,7 +70,9 @@ export function createIdentityScanner({ captureIdentity, setFeedback = async () 
     return currentTick;
   }
   async function loop() { while (!stopped) await tick(); }
-  return { start: loop, pause() { paused = true; }, async pauseAndDrain() { paused = true; await currentTick; }, resume() { paused = false; }, stop() { stopped = true; }, tick };
+  return { start: loop, pause() { paused = true; }, async pauseAndDrain() { paused = true; await currentTick; }, resume() { paused = false; },
+    suspend(reason) { if (!suspensions.has(reason)) { suspensions.add(reason); captureGeneration++; } return currentCommit ? currentCommit.catch(() => undefined) : Promise.resolve(); },
+    release(reason) { if (suspensions.delete(reason)) captureGeneration++; }, stop() { stopped = true; }, tick };
 }
 
 // Preserve the original fingerprint contract while routing it through the shared

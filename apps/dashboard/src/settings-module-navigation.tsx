@@ -16,6 +16,7 @@ export function SettingsModuleNavigation({ currentPath, navigate, attendanceRead
       ["/settings/attendance", "Attendance settings"],
       ["/settings/configuration", "Meeting configuration"],
       ["/settings/guided-setup", "Attendance Setup"],
+      ["/settings/fingerprint-recovery", "Fingerprint recovery"],
     ] as [string, string][] }] : []),
     ...(outreachReady ? [{ id: "outreach", label: "Outreach", links: [["/settings/outreach-setup", "Outreach settings"]] as [string, string][] }] : []),
     ...(carpoolReady ? [{ id: "carpool", label: "Carpool", links: [["/settings/carpool", "Carpool settings"]] as [string, string][] }] : []),

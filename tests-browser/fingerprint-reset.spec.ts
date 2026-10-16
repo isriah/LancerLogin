@@ -17,7 +17,7 @@ for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
   test(`Re-enrollment and reset are themed at ${width} in ${theme}`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
-    await context(page); await page.goto("/kiosks");
+    await context(page); await page.goto("/settings/fingerprint-recovery");
     const panel = panelFor(page), reset = panel.getByRole("button", { name: "Reset all fingerprint mappings", exact: true });
     await expect(panel).toContainText("re-enroll older fingerprints");
     await expect(reset).toBeEnabled(); await reset.scrollIntoViewIfNeeded();
@@ -46,7 +46,7 @@ test("No legacy review controls, slot metadata or review requests remain", async
   await context(page); let retiredCalls = 0, writes = 0;
   await page.route("**/admin/kiosks/fingerprint-review**", route => { retiredCalls++; return route.fulfill({ status: 410, json: { error: "Re-enrollment required" } }); });
   await page.route(endpoint, route => { if (route.request().method() !== "GET") writes++; return route.fulfill({ json: { resetCommands: [] } }); });
-  await page.goto("/kiosks"); const panel = panelFor(page); await expect(panel).toBeVisible();
+  await page.goto("/settings/fingerprint-recovery"); const panel = panelFor(page); await expect(panel).toBeVisible();
   await expect(page.getByRole("article", { name: "Fingerprint identity review", exact: true })).toHaveCount(0);
   for (const name of ["Look up member", "Confirm association", "Request mapping review", "Leave unverified"]) await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
   await expect(panel.getByRole("textbox")).toHaveCount(0); await expect(panel.getByRole("table")).toHaveCount(0);
@@ -63,7 +63,7 @@ test("Uncertain reset retries the same identity across cancel and reports offlin
     }
     return route.fulfill({ json: { resetCommands: queued ? [{ id: "pending", kioskName: "Offline kiosk", acknowledgedAt: null, currentPairing: 1 }, { id: "completed", kioskName: "Online kiosk", acknowledgedAt: 0, currentPairing: 1 }, { id: "old", kioskName: "Replaced kiosk", acknowledgedAt: null, currentPairing: 0 }] : [] } });
   });
-  await page.goto("/kiosks"); const panel = panelFor(page);
+  await page.goto("/settings/fingerprint-recovery"); const panel = panelFor(page);
   for (let attempt = 0; attempt < 2; attempt++) {
     await panel.getByRole("button", { name: "Reset all fingerprint mappings", exact: true }).click(); const dialog = dialogFor(page);
     await dialog.getByLabel(`Type ${confirmation}`).fill(confirmation);
@@ -80,7 +80,7 @@ test("Uncertain reset retries the same identity across cancel and reports offlin
 test("Reset requires exact typed confirmation and no automatic write", async ({ page }) => {
   await context(page); let writes = 0;
   await page.route(endpoint, route => { if (route.request().method() === "POST") writes++; return route.fulfill({ json: { resetCommands: [] } }); });
-  await page.goto("/kiosks"); await panelFor(page).getByRole("button", { name: "Reset all fingerprint mappings", exact: true }).click();
+  await page.goto("/settings/fingerprint-recovery"); await panelFor(page).getByRole("button", { name: "Reset all fingerprint mappings", exact: true }).click();
   const dialog = dialogFor(page), field = dialog.getByLabel(`Type ${confirmation}`), submit = dialog.getByRole("button", { name: "Reset fingerprint mappings", exact: true });
   for (const value of ["", "reset all fingerprint mappings", `${confirmation} `, "RESET ALL FINGERPRINTS"]) { await field.fill(value); await expect(submit).toBeDisabled(); }
   await field.fill(confirmation); await expect(submit).toBeEnabled(); expect(writes).toBe(0);
@@ -93,7 +93,7 @@ test("Unavailable status disables reset and confirmed dispatch survives status r
     if (route.request().method() === "POST") { writes++; available = false; return route.fulfill({ json: { queued: true } }); }
     return available ? route.fulfill({ json: { resetCommands: [] } }) : route.fulfill({ status: 503, json: { error: "Reset status unavailable" } });
   });
-  await page.goto("/kiosks"); const panel = panelFor(page), reset = panel.getByRole("button", { name: "Reset all fingerprint mappings", exact: true });
+  await page.goto("/settings/fingerprint-recovery"); const panel = panelFor(page), reset = panel.getByRole("button", { name: "Reset all fingerprint mappings", exact: true });
   await expect(panel.getByRole("alert")).toHaveText("Reset status unavailable"); await expect(reset).toBeDisabled();
   available = true; await panel.getByRole("button", { name: "Refresh status", exact: true }).click(); await expect(reset).toBeEnabled();
   await reset.click(); const dialog = dialogFor(page); await dialog.getByLabel(`Type ${confirmation}`).fill(confirmation);
@@ -108,7 +108,7 @@ test("Unconfirmed reset remains uncertain and keeps its request identity", async
     if (route.request().method() === "POST") { ids.push(route.request().postDataJSON().resetId); return route.fulfill({ json: { queued: false } }); }
     return route.fulfill({ json: { resetCommands: [] } });
   });
-  await page.goto("/kiosks"); await panelFor(page).getByRole("button", { name: "Reset all fingerprint mappings", exact: true }).click(); const dialog = dialogFor(page);
+  await page.goto("/settings/fingerprint-recovery"); await panelFor(page).getByRole("button", { name: "Reset all fingerprint mappings", exact: true }).click(); const dialog = dialogFor(page);
   await dialog.getByLabel(`Type ${confirmation}`).fill(confirmation);
   for (let attempt = 0; attempt < 2; attempt++) { await dialog.getByRole("button", { name: "Reset fingerprint mappings", exact: true }).click(); await expect(dialog.getByRole("alert")).toContainText("The reset was not confirmed"); }
   expect(ids).toHaveLength(2); expect(ids[0]).toBe(ids[1]);
@@ -120,7 +120,7 @@ test("Malformed reset status cannot show completed acknowledgements or enable re
   const invalid = [null, { ...valid, acknowledgedAt: undefined }, { ...valid, acknowledgedAt: "complete" }, { ...valid, acknowledgedAt: -1 }, { ...valid, acknowledgedAt: 0.5 }, { ...valid, currentPairing: 2 }, { ...valid, id: "" }];
   let commands: unknown[] = [];
   await page.route(endpoint, route => route.fulfill({ json: { resetCommands: commands } }));
-  await page.goto("/kiosks"); const panel = panelFor(page), reset = panel.getByRole("button", { name: "Reset all fingerprint mappings", exact: true });
+  await page.goto("/settings/fingerprint-recovery"); const panel = panelFor(page), reset = panel.getByRole("button", { name: "Reset all fingerprint mappings", exact: true });
   await expect(reset).toBeEnabled();
   for (const command of invalid) {
     commands = [command]; await panel.getByRole("button", { name: "Refresh status", exact: true }).click();
@@ -133,6 +133,6 @@ test("Malformed reset status cannot show completed acknowledgements or enable re
 
 test("Operator has no re-enrollment reset controls or Admin reads", async ({ page }) => {
   let reads = 0; await context(page, "operator"); await page.route(endpoint, route => { reads++; return route.fulfill({ status: 403, json: { error: "Admin required" } }); });
-  await page.goto("/kiosks"); await expect(page.getByRole("heading", { name: "Kiosks", exact: true })).toBeVisible();
+  await page.goto("/settings/fingerprint-recovery"); await expect(page.getByRole("heading", { name: "Page unavailable", exact: true })).toBeVisible();
   await expect(panelFor(page)).toHaveCount(0); expect(reads).toBe(0);
 });

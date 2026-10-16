@@ -109,6 +109,41 @@ async function expectResponsiveFit(page: Page) {
   expect(geometry.clipped).toEqual([]);
 }
 
+test("roster filters share one desktop row and the Show pill has its filter icon", async ({ page }) => {
+  await useReferenceContext(page);
+  for (const width of [1280, 960, 390]) {
+    await page.setViewportSize({ width, height: 900 }); await page.goto("/roster");
+    await expect(page.locator(".roster-summary-card")).toHaveCount(0);
+    await expect(page.locator(".roster-filter-icon")).toBeVisible();
+    const fields = await Promise.all(["Search roster", "Show", "Label"].map(name => (name === "Search roster" ? page.getByRole("searchbox", { name, exact: true }) : page.getByRole("combobox", { name, exact: true })).boundingBox()));
+    if (width >= 960) { expect(fields[0]!.y).toBe(fields[1]!.y); expect(fields[0]!.y).toBe(fields[2]!.y); }
+    await expectResponsiveFit(page);
+    await page.screenshot({ path: test.info().outputPath(`roster-filters-${width}.png`), fullPage: false });
+  }
+});
+
+test("all attendance trend dates split together on narrow charts and return to one line when space permits", async ({ page }) => {
+  await useReferenceContext(page);
+  const data = referenceAttendanceReport();
+  const trend = Array.from({ length: 10 }, (_, index) => ({ meetingId: `trend-${index}`, title: `Synthetic meeting ${index}`, startsAt: `2026-09-${String(index + 10).padStart(2, "0")}T15:00:00Z`, rate: 50 + index }));
+  await page.route("**/reports/leaderboard*", route => route.fulfill({ json: { ...data, pagination: { page: 1, pageSize: 25, totalRows: data.members.length, totalPages: 1, rangeStart: 1, rangeEnd: data.members.length }, insights: { policyAlerts: [], trend } } }));
+  await page.setViewportSize({ width: 1440, height: 900 }); await page.goto("/reports");
+  const chart = page.locator(".trend-chart"); await expect(chart.locator(".trend-day")).toHaveCount(10);
+  await expect(chart).not.toHaveAttribute("data-split-dates", "true");
+  for (const width of [800, 390]) {
+    await page.setViewportSize({ width, height: 900 }); await expect(chart).toHaveAttribute("data-split-dates", "true");
+    const positions = await chart.locator(".trend-date").evaluateAll(labels => labels.map(label => {
+      const month = label.querySelector(".trend-month")!.getBoundingClientRect(), day = label.querySelector(".trend-day")!.getBoundingClientRect();
+      return { month: month.y, day: day.y, visible: label.querySelector(".trend-day")!.clientWidth >= label.querySelector(".trend-day")!.scrollWidth };
+    }));
+    expect(positions.every(value => value.day > value.month && Math.abs(value.day - positions[0].day) < 1 && value.visible)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await chart.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: test.info().outputPath(`trend-dates-${width}.png`), fullPage: false });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 }); await expect(chart).not.toHaveAttribute("data-split-dates", "true");
+});
+
 async function expectLabelButtonTheme(page: Page,name: string,kind: "secondary"|"primary"|"danger") {
   const button=page.locator(".member-labels-panel").getByRole("button",{ name,exact: true });
   await expect(button).toBeVisible();
@@ -390,6 +425,11 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await expect(page.getByRole("checkbox",{ name: /Mentor - official policy result/i })).toHaveCount(0);
   await page.getByRole("button",{ name: /Choose labels for official policy result/i }).click();
   const addColumnDialog=page.getByRole("dialog",{ name: "Add report column" });
+  await expect(addColumnDialog).toBeVisible();
+  const compactOption = addColumnDialog.locator(".report-column-option").first();
+  await expect(compactOption).toHaveCSS("margin-top", "0px");
+  expect((await compactOption.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  expect((await compactOption.boundingBox())!.height).toBeLessThanOrEqual(48);
   await expect(addColumnDialog.getByLabel("Search labels")).toBeVisible();
   const mentorPolicyColumn=addColumnDialog.getByRole("checkbox",{ name: "Mentor",exact: true });
   await mentorPolicyColumn.check();

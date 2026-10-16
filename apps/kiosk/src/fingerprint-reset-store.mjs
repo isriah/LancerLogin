@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { acquireFingerprintStateLock } from "./fingerprint-state-lock.mjs";
 
 const identifier = value => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
 const privateMode = stat => process.platform === "win32" || (stat.mode & 0o077) === 0 && stat.uid === process.getuid();
@@ -43,7 +44,7 @@ export function createFingerprintResetStore(path, binding, { legacyPath } = {}) 
     let legacyLock;
     try {
       try { await lstat(legacyPath); } catch (error) { if (error?.code === "ENOENT") return { state: empty() }; throw error; }
-      legacyLock = await open(`${legacyPath}.lock`, "wx", 0o600);
+      legacyLock = await acquireFingerprintStateLock(`${legacyPath}.lock`);
       const old = await readProtected(legacyPath, 262144);
       if (old?.version !== 1 || old.binding?.kioskId !== bound.kioskId || old.binding?.pairingId !== bound.pairingId || !recoveryValid(old)) return fail();
       // Historical completion IDs mixed review and reset commands. Only the
@@ -52,7 +53,7 @@ export function createFingerprintResetStore(path, binding, { legacyPath } = {}) 
       return { state: { ...empty(), lastResetCommand: old.lastResetCommand, pendingResetCommand: old.pendingResetCommand,
         completedCommands: old.lastResetCommand ? [old.lastResetCommand] : [] }, legacyLock };
     } catch {
-      if (legacyLock) { await legacyLock.close(); await unlink(`${legacyPath}.lock`); }
+      await legacyLock?.close();
       return fail();
     }
   }
@@ -70,11 +71,11 @@ export function createFingerprintResetStore(path, binding, { legacyPath } = {}) 
       const parent = await lstat(dirname(path)); if (!parent.isDirectory() || parent.isSymbolicLink() || !privateMode(parent)) return fail();
       let lock, migration;
       try {
-        lock = await open(`${path}.lock`, "wx", 0o600); migration = await load();
+        lock = await acquireFingerprintStateLock(`${path}.lock`); migration = await load();
         const result = await callback(migration.state); await save(migration.state); return result;
       } finally {
-        if (migration?.legacyLock) { await migration.legacyLock.close(); await unlink(`${legacyPath}.lock`); }
-        if (lock) { await lock.close(); await unlink(`${path}.lock`); }
+        try { await migration?.legacyLock?.close(); }
+        finally { await lock?.close(); }
       }
     });
   }

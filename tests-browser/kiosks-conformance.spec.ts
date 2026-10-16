@@ -63,7 +63,7 @@ async function useKioskContext(page: Page, { role = "admin", state = "healthy", 
 test("Fingerprint sharing cards use one themed spacing interval", async ({ page }) => {
   await useKioskContext(page);
   await page.goto("/kiosks");
-  for (const title of ["Fingerprint sync", "Fingerprint cloud storage"]) {
+  for (const title of ["Peer sync", "Cloud storage"]) {
     const card = page.getByRole("article", { name: title, exact: true });
     await expect(card).toBeVisible();
     const rhythm = await card.evaluate(element => {
@@ -94,10 +94,13 @@ for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
       await route.fulfill({ json: { enabled, keyStatus: "ready", storedFingerprints: enabled ? 2 : 0, serverManagedKeys: true } });
     });
     await page.goto("/kiosks");
-    const panel = page.getByRole("article", { name: "Fingerprint cloud storage", exact: true });
+    const panel = page.getByRole("article", { name: "Cloud storage", exact: true });
     const toggle = panel.getByRole("button", { name: "Enable cloud storage", exact: true });
     await expect(toggle).toBeEnabled(); await toggle.scrollIntoViewIfNeeded();
-    await expect(panel).toContainText("server manages the key");
+    await page.screenshot({ path: test.info().outputPath(`kiosk-sharing-${width}-${theme}.png`), fullPage: false });
+    await panel.getByRole("button", { name: "About cloud storage" }).focus();
+    await expect(page.getByRole("tooltip")).toContainText("server manages the key");
+    await page.keyboard.press("Escape");
     const style = await toggle.evaluate(element => {
       const css = getComputedStyle(element), probe = document.createElement("span");
       probe.style.background = "var(--primary)"; element.append(probe); const primary = getComputedStyle(probe).backgroundColor; probe.remove();
@@ -125,8 +128,8 @@ for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
       await route.fulfill({ json: { enabled } });
     });
     await page.goto("/kiosks");
-    const panel = page.getByRole("article", { name: "Fingerprint sync", exact: true });
-    const toggle = panel.getByRole("button", { name: "Enable fingerprint sync", exact: true });
+    const panel = page.getByRole("article", { name: "Peer sync", exact: true });
+    const toggle = panel.getByRole("button", { name: "Enable sync", exact: true });
     await expect(toggle).toBeEnabled(); await toggle.scrollIntoViewIfNeeded();
     await expect(panel).toContainText("Installation sync: Off");
     const style = await toggle.evaluate(element => {
@@ -145,7 +148,7 @@ for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
     await expect(panel.getByRole("button", { name: "Please wait…" })).toBeDisabled();
     await expect(panel.getByRole("button", { name: "Refresh sync settings" })).toBeDisabled();
     await expect.poll(() => Boolean(finishPatch)).toBe(true); finishPatch!();
-    await expect(panel.getByRole("button", { name: "Disable fingerprint sync" })).toBeEnabled();
+    await expect(panel.getByRole("button", { name: "Disable sync" })).toBeEnabled();
     await expect(panel).toContainText("Installation sync: On"); expect(writes).toBe(1);
     await expectResponsiveFit(page);
   });
@@ -159,7 +162,7 @@ test("Missing or changed vault keys fail closed but allow cloud deletion and ref
     if (route.request().method() === "PATCH") enabled = route.request().postDataJSON().enabled;
     await route.fulfill({ json: { enabled, keyStatus, storedFingerprints: enabled ? 1 : 0, serverManagedKeys: true } });
   });
-  await page.goto("/kiosks"); const panel = page.getByRole("article", { name: "Fingerprint cloud storage", exact: true });
+  await page.goto("/kiosks"); const panel = page.getByRole("article", { name: "Cloud storage", exact: true });
   await expect(panel.getByRole("button", { name: "Enable cloud storage", exact: true })).toBeDisabled();
   await expect(panel.getByRole("alert")).toContainText("is missing");
   enabled = true; keyStatus = "changed"; await panel.getByRole("button", { name: "Refresh cloud storage" }).click();
@@ -177,11 +180,11 @@ test("Fingerprint sync settings fail closed and recover through refresh", async 
   let fail = true;
   await page.route("**/admin/kiosks/fingerprint-sync", route => fail ? route.fulfill({ status: 503, json: { error: "Sync settings temporarily unavailable" } }) : route.fulfill({ json: { enabled: false } }));
   await page.goto("/kiosks");
-  const panel = page.getByRole("article", { name: "Fingerprint sync", exact: true });
+  const panel = page.getByRole("article", { name: "Peer sync", exact: true });
   await expect(panel.getByRole("alert")).toContainText("temporarily unavailable");
-  await expect(panel.getByRole("button", { name: "Enable fingerprint sync", exact: true })).toBeDisabled();
+  await expect(panel.getByRole("button", { name: "Enable sync", exact: true })).toBeDisabled();
   fail = false; await panel.getByRole("button", { name: "Refresh sync settings" }).click();
-  await expect(panel.getByRole("button", { name: "Enable fingerprint sync", exact: true })).toBeEnabled();
+  await expect(panel.getByRole("button", { name: "Enable sync", exact: true })).toBeEnabled();
   await expect(panel.getByRole("alert")).toHaveCount(0);
 });
 

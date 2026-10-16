@@ -73,6 +73,12 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
     async led({ color = 2, mode = 3, speed = 64, cycles = 0 } = {}) {
       requireSuccess(await send(0x35, [mode, speed, color, cycles]), "LED control");
     },
+    async fingerPresent() {
+      const image = await send(0x01);
+      if (image.confirmation === 0x02) return false;
+      requireSuccess(image, "finger removal check");
+      return true;
+    },
     async enroll(slot, { attempts = 60, delayMs = 250, onProgress = async () => undefined, replaceExisting = false } = {}) {
       if (!Number.isInteger(slot) || slot < 0 || slot >= capacity) throw new Error(`R503 slot must be between 0 and ${capacity - 1}`);
       if ((await reader.occupiedSlots()).includes(slot) && replaceExisting !== true) throw new Error(`Sensor slot ${slot} already contains a fingerprint. Confirm replacement or choose an empty slot.`);

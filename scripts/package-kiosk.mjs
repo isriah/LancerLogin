@@ -119,6 +119,10 @@ export async function smokeKioskDirectory(directory, { requireUnprivileged = fal
       }
       const { server } = await import(${JSON.stringify(pathToFileURL(join(directory, "src/service.mjs")).href)});
       const { resolveKioskRelease } = await import(${JSON.stringify(pathToFileURL(join(directory, "src/resolve-kiosk-release.mjs")).href)});
+      const { createDesktopControl } = await import(${JSON.stringify(pathToFileURL(join(directory, "src/desktop-control.mjs")).href)});
+      const { kioskBrowserArguments } = await import(${JSON.stringify(pathToFileURL(join(directory, "src/desktop-launcher.mjs")).href)});
+      assert.equal(createDesktopControl().status().available, false);
+      assert.ok(kioskBrowserArguments(${JSON.stringify(join(state, "browser-profile"))})[0].startsWith("--user-data-dir="));
       await assert.rejects(resolveKioskRelease({ request: { targetTag: "v2.0.0-beta.1", channel: "stable" }, installedVersion: "1.2.6", fetcher: () => { throw new Error("No provider access for invalid targets"); } }), /invalid_update_request/);
       await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
       try {
@@ -147,7 +151,7 @@ export async function verifyKioskArtifacts({ artifacts, version, requireUnprivil
     try {
       execFileSync("tar", ["-xzf", join(artifacts, name), "-C", extracted], { stdio: "pipe" });
       await checkPackageModes(extracted);
-      for (const path of ["src/release-policy.mjs", "src/resolve-kiosk-release.mjs", "scripts/lancerlogin-install-release.sh", "systemd/lancerlogin-kiosk.service", "systemd/lancerlogin-update.service", "polkit/49-lancerlogin-network.rules", "polkit/49-lancerlogin-recovery.rules", "polkit/49-lancerlogin-update.rules"]) await readFile(join(extracted, path));
+      for (const path of ["src/release-policy.mjs", "src/resolve-kiosk-release.mjs", "src/desktop-control.mjs", "src/desktop-launcher.mjs", "scripts/lancerlogin-open-kiosk.sh", "scripts/lancerlogin-install-release.sh", "systemd/lancerlogin-kiosk.service", "systemd/lancerlogin-update.service", "polkit/49-lancerlogin-network.rules", "polkit/49-lancerlogin-recovery.rules", "polkit/49-lancerlogin-update.rules"]) await readFile(join(extracted, path));
       await smokeKioskDirectory(extracted, { requireUnprivileged });
     } finally {
       await rm(extracted, { recursive: true, force: true });
@@ -177,6 +181,7 @@ export async function packageKioskArtifacts({ output, version, sourceRoot = repo
     }
     await copyFile(join(sourceRoot, "packages/shared/src/release-policy.mjs"), join(staging, "src/release-policy.mjs"));
     await copyFile(join(kiosk, "scripts/lancerlogin-install-release.sh"), join(staging, "scripts/lancerlogin-install-release.sh"));
+    await writeFile(join(staging, "scripts/lancerlogin-open-kiosk.sh"), (await readFile(join(kiosk, "scripts/lancerlogin-open-kiosk.sh"), "utf8")).replaceAll("\r\n", "\n"));
     for (const [directory, suffix] of [["systemd", ".service"], ["polkit", ".rules"]]) {
       for (const name of await readdir(join(kiosk, directory))) if (name.endsWith(suffix)) await copyFile(join(kiosk, directory, name), join(staging, directory, name));
     }

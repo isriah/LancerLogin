@@ -158,6 +158,32 @@ test("current label history separates percentage periods from weekly periods", (
   assert.equal(result.rate, null);
 });
 
+test("percentage reuse keeps recent and historical windows distinct and rechecks time and changed source", () => {
+  const member = { ...members[0], inactivePeriodsJson: "[]" };
+  const input = {
+    members: [member], labels, changes: [{ memberId: "a", labelId: "student", action: "add" as const, effectiveDate: "2026-09-01" }],
+    rules: [percentage()], meetings: [meeting("old", "2026-09-01", []), meeting("recent", "2026-09-30", []), meeting("closing", "2026-10-01", [])],
+    observations: [observed("recent", "a", "present")], timeZone: "UTC", now: "2026-10-01T20:29:59.999Z",
+  };
+  const before = evaluateAttendance(input)[0];
+  assert.equal(before.currentCompliance.rate, 100);
+  assert.equal(before.historySummaries[0].rate, 50);
+  input.now = "2026-10-01T20:30:00.000Z";
+  const closed = evaluateAttendance(input)[0];
+  assert.equal(closed.currentCompliance.rate, 50);
+  assert.equal(closed.historySummaries[0].rate, 33);
+  input.observations.push(observed("closing", "a", "present"));
+  const corrected = evaluateAttendance(input)[0];
+  assert.equal(corrected.currentCompliance.rate, 100);
+  assert.equal(corrected.historySummaries[0].rate, 67);
+  member.inactivePeriodsJson = '[["2026-09-30T00:00:00.000Z","2026-10-01T20:30:00.000Z"]]';
+  const inactive = evaluateAttendance(input)[0];
+  assert.equal(inactive.currentCompliance.rate, null);
+  assert.equal(inactive.historySummaries[0].rate, 0);
+  input.changes[0].effectiveDate = "2026-10-02";
+  assert.deepEqual(evaluateAttendance(input)[0].currentLabelIds, []);
+});
+
 test("additive migration backfills prior weekly targets and stops future Mentor seeding", () => {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON; CREATE TABLE installations(id TEXT PRIMARY KEY, created_at TEXT NOT NULL); CREATE TABLE users(id TEXT PRIMARY KEY); CREATE TABLE members(id TEXT PRIMARY KEY, installation_id TEXT); CREATE TABLE meetings(id TEXT PRIMARY KEY, installation_id TEXT); CREATE TABLE organization_settings(installation_id TEXT PRIMARY KEY);");

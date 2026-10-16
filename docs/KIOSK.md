@@ -95,7 +95,7 @@ The first accepted scan welcomes the member and records arrival. The second says
 
 Member ID entry and stored credential mappings are checked against the owner-only active-roster cache. A deactivated or unknown member fails closed locally, even when an older badge mapping remains. After the kiosk has completed one roster sync, that cache supports offline identity resolution. Attendance delivery remains in the same durable offline queue for every method.
 
-Organization name, subtitle, logo, logo contrast treatment, and colors are cached locally. A transparent logo uses the configured adaptive backdrop. If cloud delivery fails, the atomic local queue retains events in order and retries. Server rejections move out of the pending list so later valid scans can proceed, but remain in an owner-only local review record with a safe reason code. When the reader is online, the footer shows the running LancerLogin release (or a development fallback); a reader failure replaces it with the offline warning. Queue count and uptime remain beside it.
+Organization name, subtitle, logo, logo contrast treatment, and colors are cached locally. A transparent logo uses the configured adaptive backdrop. If cloud delivery fails, the atomic local queue retains events in order and retries. Server rejections move out of the pending list so later valid scans can proceed, but remain in an owner-only local review record with a safe reason code. The footer keeps the dashboard-configured kiosk name, running release, reader status, queue count and uptime on one line. A dashboard rename is retained for an offline restart. Very long names are shortened visually while their full accessible text remains available.
 
 Offline queued scans keep **Welcome** or **Goodbye** as the headline, with exactly **Saved for sync | Welcome** or **Saved for sync | Goodbye** beneath it. This is a display estimate, not confirmation: the Worker still resolves attendance from the original timestamp, and queued events contain no inferred direction. Each member's currently pending sequence starts with Welcome and alternates; all fingers mapped to that member share the sequence. Other members, unknown fingers and debounced scans do not advance it. A failed local save shows a rejection instead of claiming the scan was saved.
 
@@ -105,9 +105,24 @@ No extra direction history, member labels or biometric data are persisted. After
 
 After unlocking the local settings PIN in maintenance, choose **Review rejected scans**. The local page shows the original scan time, roster member ID, event ID, and a safe rejection reason. Check the meeting, roster, and attendance in the dashboard before using its audited correction workflow. **Mark reviewed** only records that the local item was examined; it never creates or changes attendance. An owner-only outcomes file retains the rejected item after review. The pending queue remains in its release 1.0.6 array format. Local `/health` reports saved, pending, accepted, duplicate, and rejected counts since outcome recording began. These are kiosk-observed outcomes: an acknowledgement lost during power interruption can appear as a duplicate on retry even when the Worker had accepted the first attempt. An upgraded queue marks earlier history as incomplete, and running older kiosk code again can leave a gap in these counts. The counts do not include scans that were never saved locally.
 
+## Fingerprint storage locks on Linux
+
+Fingerprint reset, identity, upload and import state uses owner-only persistent
+lock directories with Linux kernel locks. The kernel releases ownership when a process
+exits, including a forced stop. The `.lock` directories remain on disk normally;
+their presence alone does not mean synchronization is blocked. Do not remove them
+while the service is running. The kiosk requires `/usr/bin/flock` from util-linux.
+
+Regular lock files left by older versions still require local recovery.
+Stop the service, verify no writer remains and validate the protected state before
+archiving an abandoned legacy lock. Never reset mappings or discard a pending reset
+to bypass a lock error. When downgrading to a version using exclusive-create locks,
+stop all writers and archive the lock directories before starting the older code.
+State validation, pairing checks and unfinished reset recovery remain mandatory.
+
 ## Touch Wi-Fi settings
 
-Press and hold the network dot for three seconds. If the Pi is offline, the network page opens automatically. On first use, create a 6–12 digit local settings PIN; later visits require that PIN and five failed attempts lock entry for 30 seconds. An authorized session lasts five minutes.
+Press and hold the network dot for three seconds. Small finger movement during the hold is allowed; releasing early or moving too far cancels it. On first use, create a 6–12 digit local settings PIN; later visits require that PIN and five failed attempts lock entry for 30 seconds. An authorized session lasts five minutes.
 
 The page shows NetworkManager connection state and visible Wi-Fi networks, including signal and lock indicators. Select a network and use the on-screen keyboard. The password is passed to NetworkManager for connection and is never saved or displayed by LancerLogin. Ethernet continues to work without configuration.
 
@@ -115,7 +130,9 @@ Captive-portal automation is unsupported. Complete a portal outside LancerLogin 
 
 ## Authentication maintenance
 
-Press and hold the organization logo or name for three seconds, then enter the same local settings PIN. There is no visible maintenance shortcut on the attendance screen. Before unlock, the maintenance page shows PIN entry and a return-to-kiosk link. Maintenance is deliberately available only on the physical kiosk.
+Press and hold the organization logo or name for three seconds, then enter the same local settings PIN. There is no visible maintenance shortcut on the attendance screen. Small finger movement during the hold is allowed. Before unlock, the maintenance page shows PIN entry and a return-to-kiosk link. Maintenance is deliberately available only on the physical kiosk.
+
+Attendance capture pauses while maintenance or its network, fingerprint-sync and review tools are open, including while the PIN is locked or expires. Earlier queued scans continue syncing. Use Return to kiosk to resume attendance. If a local page session is lost, reopen or retry the attendance screen; a cloud outage alone does not stop offline capture. In fingerprint mode, lift any finger from the reader before placing it for the next attendance scan.
 
 For RFID, NFC, or QR, choose an active roster member, optionally add a local label, then present or enter the credential. LancerLogin transforms the value with HMAC-SHA256 and an owner-only kiosk secret. Only the keyed digest, member mapping, method, and label remain after submission. The raw value is cleared after both success and failure, and is also cleared when maintenance locks or reloads. The digest and secret are co-located on the kiosk, so this boundary prevents routine disclosure and cloud propagation but does not protect against an attacker who already has owner-level access to the Pi.
 
@@ -123,15 +140,35 @@ The credential list never displays raw values. Mapping removal is local and conf
 
 ### Fingerprint enrollment
 
-The page can test the reader, load active roster labels through the paired Worker, suggest the next open slot, and guide enrollment. Choose a member from the touch-friendly roster picker, choose a fixed finger label, and enter a slot from 0–199 with the on-screen number pad. Search the roster with the in-app QWERTY keyboard (including digits, hyphen, apostrophe and period). Use **Hide keyboard** to give the complete roster the full list width; **Show keyboard** or tapping search brings the keyboard back. Swipe from user rows or blank space inside the list to reach every member; a swipe never selects a member, while a tap does. Finger choices also use an in-page touch picker. Swipe inside cards, mapping tables and picker sheets to reach overflowing content at 800×480, 1024×600 and short 800×360 landscape sizes; no OS keyboard or scrollbar dragging is required. Slot edits are applied only with **Use slot**, and closing the keypad retains the previous slot.
+Opening authorized fingerprint maintenance automatically tests the reader and displays the result. Use Test to retry a failed check. Hardware testing does not require a successful roster refresh.
 
-Confirm or cancel the enrollment summary before reader listening begins; occupied-slot replacement still requires the explicit replacement checkbox and confirmation. Mapping removal has an in-page confirmation and retains the sensor template. Return to kiosk closes the local PIN session; expiration hides the workspace, open pickers and search keyboard, then requires unlock again. Cancellation at the summary starts no sensor operation; after confirmation the existing two-scan sensor operation runs to success or reader failure.
+Choose a member with the nearly full-screen search view. Its mobile-style keyboard supports letters, digits, spaces and punctuation, with Shift, Backspace and a numbers/symbols toggle. Hide the keyboard to give the roster more space. Swipe the list to reach every member; tapping selects a member while swiping does not. Enter a slot from 0-199 with the number pad. Controls remain reachable on the supported landscape displays.
 
-The member presents the same finger twice; the R503 creates and stores the template internally. Slot suggestions check the reader's occupied slots as well as local mappings, so a fresh SD card cannot make existing fingerprints appear available for replacement. Enrollment checks occupancy again before capturing a finger and refuses to proceed if that check fails. Replacing an occupied slot requires explicit confirmation even when its local mapping is missing. Reader errors are shown as plain recovery guidance rather than protocol codes.
+Enrollment requires a successful current online roster check with a verified member identity. If the connection fails, times out or cannot verify the selected member, retry after restoring connectivity. The failed check does not write a new reader template or remove the previous replacement mapping. Existing offline attendance continues normally.
 
-The owner-only local mapping records the sensor slot, roster member ID, and finger label. New local enrollments also record an enrollment identifier and time for optional sync. New online enrollments retain the immutable roster identity for optional cloud storage. Offline or legacy mappings without this identity require re-enrollment before sharing. Review-derived mappings are not fresh enrollments. Removing a mapping does not delete the sensor template. With both sharing options off, templates stay inside the R503. With approved peer sync or cloud storage enabled, eligible templates are read briefly into memory; raw templates are not intentionally written to files or logs.
+Review the large centered enrollment summary, then confirm or cancel before reader listening begins. Replacing an occupied slot still requires explicit confirmation. Cancellation starts no sensor operation. After successful enrollment, the member search and selection clear automatically. A failed enrollment keeps the selection for retry. Finger labels are no longer requested or shown in the mapping list; historical mapping labels remain compatible.
+
+Mapping removal retains the sensor template. Return to kiosk closes the local PIN session. Expiration hides the workspace and open pickers, and requires unlock again; it does not resume attendance behind maintenance.
+
+The member presents the same finger twice; the R503 creates and stores the template internally. Lift the finger when prompted after the first capture, then place the same finger again. After enrollment is saved, lift the finger again before returning to attendance. A finger left on the reader must not become an attendance scan. If the reader disconnects after storage, enrollment may already be saved; resolve the reader/removal warning rather than immediately replacing the occupied slot. Slot suggestions check the reader's occupied slots as well as local mappings, so a fresh SD card cannot make existing fingerprints appear available for replacement. Enrollment checks occupancy again before capturing a finger and refuses to proceed if that check fails. Replacing an occupied slot requires explicit confirmation even when its local mapping is missing. Reader errors are shown as plain recovery guidance rather than protocol codes.
+
+The owner-only local mapping records the sensor slot and roster member ID, retaining legacy fields for compatibility. New verified enrollments record an enrollment identifier, time and immutable roster identity for optional sharing. Historical local-only or legacy mappings without this identity require fresh online enrollment before sharing. Review-derived mappings are not fresh enrollments. Removing a mapping does not delete the sensor template. With both sharing options off, templates stay inside the R503. With approved peer sync or cloud storage enabled, eligible templates are read briefly into memory; raw templates are not intentionally written to files or logs.
 
 Badge and QR raw values, keyed digests, and the kiosk secret are never included in Worker requests, D1, logs, fixtures, or portable dashboard backups. Portable restore, Attendance disablement, and kiosk retirement revoke server-side records but cannot remotely erase local mappings or R503 templates. Before repurposing or decommissioning a Pi, open **Authentication maintenance** on that device and remove its local mappings. LancerLogin intentionally provides no remote destructive wipe.
+
+### Return to the desktop
+
+In unlocked maintenance, choose **Exit to desktop** to close the dedicated kiosk browser. The local kiosk service and delivery of queued scans continue running. Attendance capture remains paused until the kiosk attendance screen is reopened. Use the **LancerLogin Kiosk** desktop shortcut to relaunch it.
+
+Exit is available only when the installed dedicated launcher is connected. An ordinary browser window or older launcher may report that desktop exit is unavailable. LancerLogin does not close unrelated browser windows or use a general process-kill command.
+
+### Diagnose fingerprint synchronization
+
+The authenticated fingerprint-sync tools show separate reset, peer-sharing and cloud-storage status, with the latest attempt, historical success and actionable reasons where available. Attendance cloud connectivity alone does not establish that fingerprint sharing is ready.
+
+Disabled sharing, an unavailable reader or roster, rejected cloud authentication, pending reset recovery and protected-state problems need different remedies. Follow the displayed guidance. An earlier successful poll is historical evidence, not confirmation that a later transfer succeeded. A count of enrollments without verified roster identity means those members need fresh online enrollment; it is not permission to infer identities or delete mappings.
+
+Do not delete state locks, rewrite journals, overwrite unknown slots or wipe the reader to clear a diagnostic warning. Differing mapping counts between devices do not prove duplicate fingerprint templates.
 
 ### Provision new kiosks from encrypted cloud copies
 

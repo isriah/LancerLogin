@@ -102,7 +102,7 @@ async function queuePublication(db: D1Database, providers: OutreachPublicationPr
   if (previous.some(row => row.status === "processing")) throw new HttpError(409, "Publication delivery is in progress; try again after it finishes");
   const externalIds = await latestExternalIds(db, activityId);
   if (options.remove && (!existing || !options.provider || !externalIds.has(options.provider))) throw new HttpError(409, "This destination has no published event to remove");
-  const timing = options.remove ? { startLocal: existing!.start_local, endLocal: existing!.end_local, startOccurrence: existing!.start_occurrence, endOccurrence: existing!.end_occurrence, startMs: existing!.start_ms, endMs: existing!.end_ms, allDay: false } : publicationTiming(activity, String(activity.time_zone), now);
+  const timing = options.remove ? { startLocal: existing!.start_local, endLocal: existing!.end_local, startOccurrence: existing!.start_occurrence, endOccurrence: existing!.end_occurrence, startMs: existing!.start_ms, endMs: existing!.end_ms, allDay: false } : publicationTiming(activity, String(activity.time_zone), now, options.automatic || selected.includes("discord"));
   const revision = existing ? Number(existing.revision) + 1 : 0; const nowText = new Date(now).toISOString(); const auditId = crypto.randomUUID();
   const event: OutreachPublicationEvent = { activityId, revision, title: String(activity.title), description: String(activity.description ?? ""), location: String(activity.location ?? ""),
     startsAt: new Date(Number(timing.startMs)).toISOString(), endsAt: new Date(Number(timing.endMs)).toISOString(), timeZone: String(activity.time_zone), allDay: timing.allDay, serviceDate: String(activity.service_date) };

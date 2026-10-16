@@ -19,6 +19,7 @@ import { createR503Transaction } from "../apps/kiosk/src/r503-transaction.mjs";
 import { createR503TemplateTransfer, r503TemplateBytes } from "../apps/kiosk/src/r503-template-transfer.mjs";
 import { generateFingerprintIdentity, fingerprintPublicIdentity, fingerprintIdentityId, sealFingerprintTemplate, openFingerprintTemplate, fingerprintEnvelopeDigest } from "../apps/kiosk/src/fingerprint-envelope.mjs";
 import { createFingerprintIdentityStore } from "../apps/kiosk/src/fingerprint-identity-store.mjs";
+import { acquireFingerprintStateLock } from "../apps/kiosk/src/fingerprint-state-lock.mjs";
 import { createFingerprintJournal } from "../apps/kiosk/src/fingerprint-journal.mjs";
 import { createFingerprintReceiver } from "../apps/kiosk/src/fingerprint-receiver.mjs";
 import { createFingerprintOutbox } from "../apps/kiosk/src/fingerprint-outbox.mjs";
@@ -346,8 +347,9 @@ test("fingerprint outbox rejects tampering, pairing substitution, corrupt storag
     await assert.rejects(create().enqueue({ ...data.envelope, signature: Buffer.alloc(64).toString("base64") }), /authenticated/);
     await create().enqueue(data.envelope);
     await assert.rejects(create({ ...binding, pairingId: "new-pairing" }).pending(), /local review/);
+    if (process.platform === "linux") await rm(`${path}.lock`, { recursive: true });
     await writeFile(`${path}.lock`, "", { mode: 0o600 });
-    await assert.rejects(create().pending(), /EEXIST/);
+    await assert.rejects(create().pending(), error => error.reasonCode === "local_state_review");
     await rm(`${path}.lock`);
     const stored = JSON.parse(await readFile(path, "utf8"));
     stored.records[0].envelope.context.memberId = "substituted";
@@ -375,14 +377,14 @@ test("fingerprint enrollment reads mappings under the sensor lock and preserves 
   const mappings = createMappingStore(join(directory, "mappings.json"));
   let locked = false, enrolled = false;
   try {
-    await enrollFingerprint({ mappings, slot: 3, memberId: "new-member", finger: "right index",
+    await enrollFingerprint({ mappings, slot: 3, memberId: "new-member", rosterId: "stable-new", finger: "right index",
       withSensor: async operation => { await mappings.assignIfUnmapped(2, "synced-member"); locked = true; try { return await operation(); } finally { locked = false; } },
       sensor: { enroll: async () => { assert.equal(locked, true); enrolled = true; } } });
     assert.equal(enrolled, true);
     assert.equal(await mappings.memberForSlot(2), "synced-member");
     assert.equal(await mappings.memberForSlot(3), "new-member");
-    await assert.rejects(enrollFingerprint({ mappings, slot: 3, memberId: "other", finger: "left index", withSensor: operation => operation(), sensor: { enroll: () => assert.fail("occupied mapping must stop enrollment") } }), /already mapped/);
-    await assert.rejects(enrollFingerprint({ mappings, slot: 3, memberId: "other", finger: "left index", replaceExisting: true, withSensor: operation => operation(),
+    await assert.rejects(enrollFingerprint({ mappings, slot: 3, memberId: "other", rosterId: "stable-other", finger: "left index", withSensor: operation => operation(), sensor: { enroll: () => assert.fail("occupied mapping must stop enrollment") } }), /already mapped/);
+    await assert.rejects(enrollFingerprint({ mappings, slot: 3, memberId: "other", rosterId: "stable-other", finger: "left index", replaceExisting: true, withSensor: operation => operation(),
       sensor: { enroll: async () => { assert.equal(await mappings.memberForSlot(3), undefined); throw new Error("Synthetic reader interruption"); } } }), /interruption/);
     assert.equal(await mappings.memberForSlot(3), undefined);
     assert.equal(await mappings.memberForSlot(2), "synced-member");
@@ -738,10 +740,13 @@ test("fingerprint identity store preserves state when another writer holds its l
     const path = join(root, "identity.json");
     const store = createFingerprintIdentityStore(path, { installationId: "synthetic-installation", kioskId: "kiosk-a", pairingId: "pairing-a" });
     const original = await store.setEnabled(true);
-    await writeFile(`${path}.lock`, "", { flag: "wx", mode: 0o600 });
-    await assert.rejects(store.setEnabled(false), /local review/);
-    assert.deepEqual(await store.status(), original);
-    assert.equal(await readFile(`${path}.lock`, "utf8"), "");
+    const lock = await acquireFingerprintStateLock(`${path}.lock`);
+    try {
+      const lockInode = (await stat(`${path}.lock`)).ino;
+      await assert.rejects(store.setEnabled(false), /local review/);
+      assert.deepEqual(await store.status(), original);
+      assert.equal((await stat(`${path}.lock`)).ino, lockInode);
+    } finally { await lock.close(); }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -1097,6 +1102,12 @@ test("network policy grants only narrow NetworkManager actions to the kiosk acco
 
 test("loopback display state exposes only a safe release version and local Wi-Fi remains PIN-protected", async () => {
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-network-service-"));
+  const isolatedPaths = { CONFIG: "pairing.json", MAPPINGS: "slot-mappings.json", BRANDING: "branding.json", AUTHENTICATION: "authentication.json", CREDENTIAL_MAPPINGS: "credential-mappings.json", ROSTER_CACHE: "roster-cache.json", FINGERPRINT_SYNC: "fingerprint-sync", FINGERPRINT_VAULT: "fingerprint-vault", FINGERPRINT_RESET: "fingerprint-reset", FINGERPRINT_REVIEW: "fingerprint-review" };
+  const previousPaths = {};
+  for (const [key, name] of Object.entries(isolatedPaths)) {
+    previousPaths[key] = process.env[`LANCERLOGIN_${key}`];
+    process.env[`LANCERLOGIN_${key}`] = join(directory, name);
+  }
   const previousPinPath = process.env.LANCERLOGIN_NETWORK_PIN;
   const previousQueuePath = process.env.LANCERLOGIN_QUEUE;
   const previousNodeEnv = process.env.NODE_ENV;
@@ -1165,6 +1176,9 @@ test("loopback display state exposes only a safe release version and local Wi-Fi
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousNodeEnv;
     if (previousReleaseVersion === undefined) delete process.env.LANCERLOGIN_VERSION; else process.env.LANCERLOGIN_VERSION = previousReleaseVersion;
     if (previousSensorPath === undefined) delete process.env.LANCERLOGIN_SENSOR_PATH; else process.env.LANCERLOGIN_SENSOR_PATH = previousSensorPath;
+    for (const [key, value] of Object.entries(previousPaths)) {
+      if (value === undefined) delete process.env[`LANCERLOGIN_${key}`]; else process.env[`LANCERLOGIN_${key}`] = value;
+    }
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -1247,6 +1261,7 @@ test("local attendance acknowledges durable offline saves without waiting for cl
         const {server}=await import(process.argv[1]);
         await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
         const base='http://127.0.0.1:'+server.address().port;
+        await fetch(base+'/operator-presence',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'enter',pageId:'synthetic-offline-page',mode:'attendance'})});
         const event={eventId:'offline-fixed-id',memberId:'synthetic-member',occurredAt:'2026-09-19T12:00:00.000Z'};
         const submit=()=>fetch(base+'/attendance',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(event),signal:AbortSignal.timeout(2000)});
         try {
@@ -1852,7 +1867,8 @@ test("R503 enrollment errors are plain language for touch users", async () => {
 test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskHtml, /<main id="kiosk"/);
   assert.match(kioskHtml, /aria-live="polite"/);
-  assert.match(kioskHtml, /Place finger on reader/);
+  assert.match(kioskHtml, /Starting attendance/);
+  assert.equal(presentationStates.ready.message, "Place finger on reader");
   assert.doesNotMatch(kioskHtml, /maintenance-status|>FP</);
   assert.match(kioskHtml, /One-time pairing key/);
   assert.doesNotMatch(kioskHtml, /Roster member ID|Meeting ID|Enroll fingerprint/);
@@ -1878,7 +1894,7 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(kioskStyles, /kiosk-shell-processing\{box-shadow:[^}]*processing-sweep-color/);
   assert.match(kioskStyles, /network-status\.offline\{opacity:1;transform:none\}/);
   assert.match(kioskHtml, /\/recovery\.js/);
-  assert.match(networkApp, /setTimeout\(openNetwork,3000\)/);
+  assert.match(networkApp, /installHoldGesture\(trigger,openNetwork\)/);
   assert.match(networkApp, /touch-keyboard/);
   assert.match(networkApp, /network-create-keypad/);
   assert.match(networkApp, /appendPinDigit/);

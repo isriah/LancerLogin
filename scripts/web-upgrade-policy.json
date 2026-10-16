@@ -345,6 +345,16 @@
       "name": "0069_carpool_share_schedule.sql",
       "sha256": "3f37f9240df9fafe0ee7daabc762538baef2bf3964fee743da4c6ce0cb04df78",
       "forwardCompatible": true
+    },
+    {
+      "name": "0070_kiosk_sync_read_efficiency.sql",
+      "sha256": "5dc94fb3ee5c67ee55a79257fab86da04c4d90793dbc96e5564357180ad43327",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0071_fingerprint_catalog_revision.sql",
+      "sha256": "1349ecb9904a3eb65d0e50a7b5ecf7d2743af39d3a42c0e0182d864efc9d0c28",
+      "forwardCompatible": true
     }
   ]
 }

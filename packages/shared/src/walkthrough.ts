@@ -5,7 +5,7 @@ export const walkthroughs = {
   },
   roster: {
     version: 1,
-    steps: ["summary", "filters", "member-rows", "attendance", "member-actions", "bulk-tools"],
+    steps: ["filters", "member-rows", "attendance", "member-actions", "bulk-tools"],
   },
   member: {
     version: 1,
@@ -44,7 +44,8 @@ export function validWalkthroughProgress(value: unknown): value is WalkthroughPr
   const definition = walkthroughs[progress.pageId];
   return Number.isInteger(progress.version) && progress.version > 0 && progress.version <= definition.version
     && ["not_started", "in_progress", "completed", "dismissed"].includes(progress.status)
-    && (progress.stepId === null ? progress.status !== "in_progress" : (definition.steps as readonly string[]).includes(progress.stepId));
+    // Retain saved progress from the removed roster summary step. Resuming starts at filters.
+    && (progress.stepId === null ? progress.status !== "in_progress" : (definition.steps as readonly string[]).includes(progress.stepId) || progress.pageId === "roster" && progress.stepId === "summary");
 }
 
 export const initialWalkthroughProgress = (pageId: WalkthroughPage): WalkthroughProgress => ({ pageId, version: walkthroughs[pageId].version, status: "not_started", stepId: null });

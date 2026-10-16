@@ -11,9 +11,11 @@ export const kioskStates = Object.freeze({
   offline: { message: "Saved for sync", detail: "This scan is stored on the kiosk and will sync automatically", tone: "offline", durationMs: 2600 },
   reader_offline: { message: "Reader offline", detail: "The fingerprint reader is not responding", tone: "error" },
   enroll_wait_first: { message: "Place finger", detail: "Enrollment scan 1 of 2", tone: "processing" },
-  enroll_scan_accepted: { message: "Scan captured", detail: "Remove finger", tone: "success" },
+  enroll_scan_accepted: { message: "Lift your finger", detail: "First scan captured. Lift before the second scan.", tone: "success" },
   enroll_wait_second: { message: "Place same finger", detail: "Enrollment scan 2 of 2", tone: "processing" },
   enroll_success: { message: "Enrollment saved", detail: "Fingerprint slot mapped", tone: "success", durationMs: 2600 },
+  finger_removal: { message: "Lift your finger", detail: "Lift, then place your finger again to record attendance", tone: "notice" },
+  operator_paused: { message: "Attendance paused", detail: "Return from operator settings to resume attendance", tone: "notice" },
   enroll_failure: { message: "Enrollment failed", detail: "Try again", tone: "error", durationMs: 2800 },
   unpaired: { message: "Setup required", detail: "Pair this kiosk from the LancerLogin dashboard", tone: "notice" },
 });

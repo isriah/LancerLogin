@@ -59,6 +59,7 @@ fi
 [[ "$SENSOR_PATH" == disabled || "$SENSOR_PATH" =~ ^/dev/[A-Za-z0-9._/-]+$ ]] || { echo "LANCERLOGIN_SENSOR_PATH must be disabled or an absolute /dev path." >&2; exit 2; }
 check_hardware
 for command in curl sha256sum tar systemctl runuser ss nmcli cmp stat; do command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 2; }; done
+[[ -x /usr/bin/flock ]] || { echo "The util-linux flock command is required at /usr/bin/flock." >&2; exit 2; }
 [[ -x /usr/bin/node ]] || { echo "Node.js 18 or newer must be installed at /usr/bin/node." >&2; exit 2; }
 node_major="$(/usr/bin/node -p 'process.versions.node.split(".")[0]')"
 [[ "$node_major" -ge 18 ]] || { echo "Node.js 18 or newer is required." >&2; exit 2; }
@@ -128,12 +129,8 @@ echo "On the same network, open http://${host_name}.local:8788/. Enter a dashboa
 browser_path="$(command -v chromium || command -v chromium-browser || true)"
 if [[ -n "$browser_path" ]]; then
   install -d -m 0755 /usr/local/bin
-  cat > /usr/local/bin/lancerlogin-open-kiosk <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec "$browser_path" --kiosk --noerrdialogs --disable-infobars --start-fullscreen http://127.0.0.1:8788/
-EOF
-  chmod 0755 /usr/local/bin/lancerlogin-open-kiosk
+  install -m 0755 /opt/lancerlogin/scripts/lancerlogin-open-kiosk.sh /usr/local/bin/lancerlogin-open-kiosk
+  cmp --silent /opt/lancerlogin/scripts/lancerlogin-open-kiosk.sh /usr/local/bin/lancerlogin-open-kiosk || { echo "Installed kiosk launcher verification failed." >&2; exit 1; }
 
   install -d -m 0755 /etc/xdg/autostart
   printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=LancerLogin Kiosk' 'Exec=/usr/local/bin/lancerlogin-open-kiosk' 'X-GNOME-Autostart-enabled=true' > /etc/xdg/autostart/lancerlogin-kiosk.desktop

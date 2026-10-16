@@ -115,7 +115,7 @@ const setupCode = "private setup code 1234";
 const setupCodeHash = createHash("sha256").update(setupCode).digest("base64url");
 const request = (path: string, body?: unknown, options: { method?: string; cookie?: string } = {}) => new Request(`https://api.example.test${path}`, {
   method: options.method ?? (body ? "POST" : "GET"),
-  headers: { ...(body ? { "content-type": "application/json" } : {}), ...(options.cookie ? { cookie: options.cookie } : {}), ...(/^\/admin\/kiosks\/[^/]+\/commands$/.test(path) && body ? { origin: "https://dashboard.example.test" } : {}) },
+  headers: { ...(body ? { "content-type": "application/json" } : {}), ...(options.cookie ? { cookie: options.cookie } : {}), ...((/^\/admin\/kiosks\/[^/]+\/commands$/.test(path) || path === "/discord/contests/accept") && body ? { origin: "https://dashboard.example.test" } : {}) },
   body: body ? JSON.stringify(path === "/setup/bootstrap" && typeof body === "object" ? { setupCode, ...body } : body) : undefined,
 });
 const sessionSecret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -2723,6 +2723,24 @@ test("unverified Discord exposes no contest list or resolution operation", async
   const resolved = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved", reviewNote: "Verified in person." }, { cookie }), env);
   assert.equal(resolved.status, 409);
   assert.equal(database.batches.length, 0);
+});
+
+test("bulk contest acceptance retains authenticated staff, origin and verified Discord boundaries", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("google_enabled AS googleEnabled", { googleEnabled: 0, resendEnabled: 0, discordEnabled: 1 });
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ciphertext: "unused", iv: "unused", updatedAt: "2026-08-30T00:00:00Z", verifiedAt: null, enabled: 1 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const input = { contests: [{ meetingId: "meeting-1", memberId: "member-1" }], reviewNote: "Verified synthetic attendance" };
+  assert.equal((await worker.fetch(request("/discord/contests/accept", input), env)).status, 401);
+  const cookie = await sessionCookie("operator");
+  assert.equal((await worker.fetch(request("/discord/contests/accept", input, { cookie }), env)).status, 409);
+  assert.equal(database.batches.length, 0);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ciphertext: "unused", iv: "unused", updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  assert.equal((await worker.fetch(new Request("https://worker.example.test/discord/contests/accept", { method: "POST", headers: { cookie, origin: "https://untrusted.example.test", "content-type": "application/json" }, body: JSON.stringify(input) }), env)).status, 403);
+  assert.equal(database.batches.length, 0);
+  const accepted = await worker.fetch(request("/discord/contests/accept", input, { cookie }), env);
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  assert.ok(database.batches.some(batch => batch.some(statement => statement.sql.includes("INSERT INTO attendance_corrections"))));
 });
 
 test("a signed Discord button creates a contest only for the delivered linked member", async () => {

@@ -56,6 +56,20 @@ test("Linux installer replaces an older root helper with verified packaged bytes
     const verification = block.slice(block.indexOf("cmp --silent"));
     await writeFile(installed, "corrupted");
     assert.throws(() => execFileSync("/usr/bin/bash", ["-euc", verification], { stdio: "pipe" }));
+
+    const launcher = join(scratch, "usr/local/bin/lancerlogin-open-kiosk");
+    await mkdir(join(scratch, "usr/local/bin"));
+    await writeFile(launcher, "#!/bin/bash\n# old shared-profile launcher\n", { mode: 0o700 });
+    const launcherStart = installer.indexOf("  install -m 0755 /opt/lancerlogin/scripts/lancerlogin-open-kiosk.sh");
+    const launcherEnd = installer.indexOf("  install -d -m 0755 /etc/xdg/autostart", launcherStart);
+    assert.ok(launcherStart > 0 && launcherEnd > launcherStart);
+    const launcherBlock = installer.slice(launcherStart, launcherEnd).replaceAll("/opt/lancerlogin", extracted).replaceAll("/usr/local/bin/lancerlogin-open-kiosk", launcher);
+    execFileSync("/usr/bin/bash", ["-euc", launcherBlock]);
+    assert.equal(await readFile(launcher, "utf8"), await readFile(join(extracted, "scripts/lancerlogin-open-kiosk.sh"), "utf8"));
+    assert.equal(execFileSync("stat", ["-c", "%U:%G:%a", launcher], { encoding: "utf8" }).trim(), "root:root:755");
+    assert.throws(() => execFileSync("/usr/bin/bash", [launcher, "unexpected"], { stdio: "pipe" }), error => {
+      assert.equal(error.status, 2); assert.match(String(error.stderr), /accepts no arguments/); return true;
+    });
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 

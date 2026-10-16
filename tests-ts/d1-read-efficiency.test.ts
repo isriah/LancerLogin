@@ -78,6 +78,32 @@ test("scoped member reports equal the full report and reuse data until a databas
   } finally { database.sqlite.close(); }
 });
 
+test("reports apply the current configured baseline in one request while explicit dates take precedence", async () => {
+  const database = new Database();
+  try {
+    database.sqlite.exec("INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) VALUES ('older','primary','Older meeting','2026-01-02T12:00:00Z','2026-01-02T13:00:00Z','admin','2026-01-01')");
+    const fetch = await client(database);
+    const read = async (filter: string) => {
+      const result = await fetch(`/reports/attendance?roster=all${filter}`); assert.equal(result.status, 200);
+      return result.json() as Promise<{ meetings: { id: string }[]; baseline: string | null }>;
+    };
+    const baseline = await read("&useBaseline=true");
+    assert.deepEqual(baseline, await read("&from=2026-02-01"));
+    assert.deepEqual(baseline.meetings.map(meeting => meeting.id), ["meeting"]);
+    const full = await read("");
+    assert.equal(full.meetings.length, 2);
+    assert.deepEqual(await read("&useBaseline=true&from=2026-01-01"), await read("&from=2026-01-01"));
+    assert.deepEqual(await read("&useBaseline=false"), full);
+    database.sqlite.exec("UPDATE organization_settings SET attendance_reporting_starts_on='2026-03-01'");
+    assert.deepEqual((await read("&useBaseline=true")).meetings, []);
+    database.sqlite.exec("UPDATE organization_settings SET attendance_reporting_starts_on=NULL");
+    assert.equal((await read("&useBaseline=true")).meetings.length, 2);
+    assert.equal((await fetch("/reports/attendance?useBaseline=invalid")).status, 400);
+    database.sqlite.exec("UPDATE users SET active=0 WHERE id='admin'");
+    assert.equal((await fetch("/reports/attendance?useBaseline=true")).status, 401);
+  } finally { database.sqlite.close(); }
+});
+
 test("cache generations cover report inputs but ignore kiosk heartbeat writes", () => {
   const database = new Database();
   try {

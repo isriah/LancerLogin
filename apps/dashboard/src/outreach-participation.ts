@@ -13,7 +13,7 @@ export function groupOutreachParticipation<T extends OutreachParticipationEntry>
     if (entry.status === "counted") { member.minutes += entry.durationMinutes; member.counted += 1; }
     members.set(entry.memberId, member);
   }
-  return [...members.values()].map((member) => ({ ...member, entries: [...member.entries].sort((left, right) => left.serviceDate.localeCompare(right.serviceDate) || left.startLocal.localeCompare(right.startLocal) || left.id.localeCompare(right.id)) })).sort((left, right) => left.name.localeCompare(right.name) || left.externalId.localeCompare(right.externalId));
+  return [...members.values()].filter(member => member.minutes > 0).map((member) => ({ ...member, entries: [...member.entries].sort((left, right) => left.serviceDate.localeCompare(right.serviceDate) || left.startLocal.localeCompare(right.startLocal) || left.id.localeCompare(right.id)) })).sort((left, right) => left.name.localeCompare(right.name) || left.externalId.localeCompare(right.externalId));
 }
 
 export const outreachEntrySource = (attribution: string) => attribution === "linked_discord" ? "Linked Discord submission" : attribution === "self_asserted" ? "Public form submission" : attribution === "staff_recorded" ? "Staff-added entry" : "Member submission";

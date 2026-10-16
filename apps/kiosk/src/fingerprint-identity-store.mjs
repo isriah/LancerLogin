@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
+import { acquireFingerprintStateLock } from "./fingerprint-state-lock.mjs";
 import { fingerprintIdentityId, fingerprintPublicIdentity, generateFingerprintIdentity } from "./fingerprint-envelope.mjs";
 
 const validId = (value) => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
@@ -105,12 +106,12 @@ export function createFingerprintIdentityStore(path, binding) {
     const lockPath = `${path}.lock`;
     let lock;
     try {
-      lock = await open(lockPath, "wx", 0o600);
+      lock = await acquireFingerprintStateLock(lockPath);
       const state = await operation(await load());
       if (state) await persist(state);
       return publicStatus(state);
     } catch { return failure(); }
-    finally { if (lock) { await lock.close(); await unlink(lockPath); } }
+    finally { await lock?.close(); }
   });
   return {
     status: () => exclusive(async () => { await directory(); return publicStatus(await load()); }),

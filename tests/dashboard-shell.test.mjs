@@ -113,8 +113,8 @@ test("meeting detail keeps meeting-specific attendance, Discord, and contest ope
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(source, /Back to Dashboard/);
-  assert.match(source, /Switch meeting/);
-  assert.match(source, /Refresh attendance/);
+  assert.doesNotMatch(source, /Switch meeting/);
+  assert.doesNotMatch(source, /Refresh attendance/);
   assert.doesNotMatch(source, /Attendance closes/);
   assert.match(source, /Date\.parse\(meeting\.attendanceClosesAt\)/);
   assert.match(source, /const formatScanTime = .*toLocaleString/);
@@ -207,7 +207,7 @@ test("dashboard consolidates meeting navigation and keeps roster accounts togeth
   assert.match(importer, /Preview roster/);
   assert.match(importer, /Replace the active roster/);
   assert.match(roster, /Add roster member/);
-  assert.match(roster, /roster-summary-card/);
+  assert.doesNotMatch(roster, /roster-summary-card/);
   assert.match(roster, /Import CSV instead/);
   assert.match(roster, /RosterImportPanel members=\{members\}/);
   assert.doesNotMatch(roster, /importOpen/);
@@ -334,9 +334,7 @@ test("attendance actions preserve their layout and mute unavailable choices", as
   assert.match(attendance, /memberNotices\[row\.memberId\]/);
   assert.match(attendance, /window\.setTimeout/);
   assert.doesNotMatch(attendance, /Kiosk meeting ID|Copy ID|meeting data is current/i);
-  assert.match(attendance, /Refresh attendance/);
-  assert.match(attendance, /navigate\(`\/meetings\/\$\{encodeURIComponent\(event\.target\.value\)\}`\)/);
-  assert.match(attendance, /toLocaleDateString\(\).*item\.title/);
+  assert.doesNotMatch(attendance, /Refresh attendance/);
   assert.doesNotMatch(attendance, /row\.disposition === "absent" && <button/);
   assert.match(styles, /grid-template-columns: minmax\(10rem,1fr\) 7rem 30rem/);
   assert.match(styles, /\.correction-actions button:disabled/);
@@ -359,7 +357,7 @@ test("reports are a routed workspace with a paginated leaderboard and saved repo
   assert.match(reports, /Meeting type<select/);
   assert.match(reports, /Active roster/);
   assert.match(reports, /Team regular attendance trend/);
-  assert.match(reports, /role="img" aria-label=\{`Team regular attendance trend/);
+  assert.match(await readFile("apps/dashboard/src/attendance-trend-chart.tsx", "utf8"), /role="img" aria-label=\{`Team regular attendance trend/);
   assert.match(reports, /Review contest/);
   assert.match(reports, /Approve and mark present/);
   assert.match(reports, /\/discord\/contests\/resolve/);

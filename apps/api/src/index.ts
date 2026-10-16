@@ -12,10 +12,12 @@ import { buildReportRows, combinedMemberDataset, defaultReportDefinition, filter
 import { createModuleReportDispatcher, outreachReportHandlers, projectCoreMembers, type ReportProjectionContext } from "./module-reporting.ts";
 
 import { databaseIdentity, measureD1, usageCategory, type D1Database, type D1Statement } from "./d1-usage.ts";
+import { acceptContestBatch } from "./contest-review.ts";
 import { ReportDataCache } from "./report-data-cache.ts";
 import { HttpError } from "./http-error.ts";
 import { fingerprintRelayRoute } from "./fingerprint-relay.ts";
 import { fingerprintVaultRoute } from "./fingerprint-vault.ts";
+import { kioskPoll } from "./kiosk-poll.ts";
 import { fingerprintResetRoute } from "./fingerprint-reset.ts";
 import { bundledModuleRegistry } from "../../../packages/shared/src/module-platform.ts";
 import { configureModulePlatform, readModuleAssignments, readModulePlatformSnapshot, readModuleSetup, requireModuleService, requireModuleSetup, requireModuleWorkspace, setModuleAssignments, updateModuleSetup } from "./module-platform.ts";
@@ -709,10 +711,10 @@ async function redeemPairingCode(request: Request, env: Env): Promise<Response> 
   if ((results[1]?.meta?.changes ?? 1) < 1) throw new HttpError(409, "Pairing code was already used or that kiosk name is already active");
   return response({ kioskId, kioskToken, pairingId: pairing.id, name: kioskName }, 201);
 }
-async function kioskFor(request: Request, env: Env): Promise<{ id: string; name: string; pairingId: string; pairingBound: boolean }> {
+async function kioskFor(request: Request, env: Env, includeRosterRevision = false): Promise<{ id: string; name: string; pairingId: string; pairingBound: boolean; rosterRevision?: number }> {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
-  const kiosk = await requireDatabase(env).prepare("SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1").bind(await sha256(authorization.slice(7))).first<{ id: string; name: string; pairingId: string; pairingBound: number }>();
+  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound${includeRosterRevision ? ", (SELECT revision FROM report_data_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<{ id: string; name: string; pairingId: string; pairingBound: number; rosterRevision?: number }>();
   if (!kiosk) throw new HttpError(401, "Kiosk credential is invalid");
   return { ...kiosk, pairingBound: Boolean(kiosk.pairingBound) };
 }
@@ -751,9 +753,22 @@ async function kioskConfiguration(request: Request, env: Env): Promise<Response>
   const kiosk = await kioskFor(request, env); const settings = await requireDatabase(env).prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop, kiosk_authentication_method AS authenticationMethod FROM organization_settings WHERE installation_id = 'primary'").first();
   return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings });
 }
+type KioskRosterMember = { rosterId: string; memberId: string; firstName: string; lastName: string };
+const kioskRosterCache = new ReportDataCache<KioskRosterMember[]>();
 async function kioskRoster(request: Request, env: Env): Promise<Response> {
-  await kioskFor(request, env); const result = await requireDatabase(env).prepare("SELECT id AS rosterId, external_id AS memberId, first_name AS firstName, last_name AS lastName FROM members WHERE installation_id = 'primary' AND active = 1 ORDER BY last_name, first_name").all();
-  return response({ members: result.results ?? [] });
+  const kiosk = await kioskFor(request, env, true);
+  const db = requireDatabase(env);
+  const etag = typeof kiosk.rosterRevision === "number" && Number.isSafeInteger(kiosk.rosterRevision) && kiosk.rosterRevision >= 0 ? `"kiosk-roster-v1-${kiosk.rosterRevision}"` : undefined;
+  if (etag && request.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers: { etag, "cache-control": "no-store" } });
+  let initial = true;
+  const members = await kioskRosterCache.read(databaseIdentity(db), "active-roster", async () => {
+    if (initial) { initial = false; return kiosk.rosterRevision; }
+    const current = await db.prepare("SELECT revision FROM report_data_revision WHERE installation_id = 'primary'").first<{ revision: number }>();
+    return current && Number.isSafeInteger(current.revision) ? current.revision : undefined;
+  }, async () => (await db.prepare("SELECT id AS rosterId, external_id AS memberId, first_name AS firstName, last_name AS lastName FROM members WHERE installation_id = 'primary' AND active = 1 ORDER BY last_name, first_name").all<KioskRosterMember>()).results ?? []);
+  const reply = response({ members });
+  if (etag) reply.headers.set("etag", etag);
+  return reply;
 }
 async function manageKiosk(request: Request, env: Env, kioskId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -1199,7 +1214,9 @@ function reportFilters(url: URL): ReportFilters {
   if ((from && !validDate(from)) || (to && !validDate(to)) || (from && to && from > to)) throw new HttpError(400, "Report dates must be valid and in order");
   const meetingType = url.searchParams.get("meetingType") ?? "all"; const roster = url.searchParams.get("roster") ?? "active"; const membership = url.searchParams.get("membership") ?? "current";
   if (!["all", "required", "optional"].includes(meetingType) || !["active", "all"].includes(roster) || !["current", "historical"].includes(membership)) throw new HttpError(400, "Invalid report filter");
-  return { from, to, meetingType: meetingType as ReportFilters["meetingType"], roster: roster as ReportFilters["roster"], labelId: url.searchParams.get("labelId") || undefined, membership: membership as ReportFilters["membership"], memberId: url.searchParams.get("memberId") || undefined };
+  const useBaseline = url.searchParams.get("useBaseline");
+  if (useBaseline !== null && useBaseline !== "true" && useBaseline !== "false") throw new HttpError(400, "Invalid report baseline option");
+  return { from, to, meetingType: meetingType as ReportFilters["meetingType"], roster: roster as ReportFilters["roster"], labelId: url.searchParams.get("labelId") || undefined, membership: membership as ReportFilters["membership"], memberId: url.searchParams.get("memberId") || undefined, useBaseline: useBaseline === "true" };
 }
 async function policyReport(db: D1Database, filters: ReportFilters): Promise<{ meetings: PolicyMeeting[]; members: PolicyMemberResult[]; labels: PolicyLabel[]; baseline: string | null; timeZone: string }> {
   const data = await policyData(db, filters.memberId ? { memberId: filters.memberId } : {});
@@ -3729,6 +3746,12 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/discord/link" && request.method === "POST") result = await linkDiscordMember(request, env);
     else if (url.pathname === "/discord/missing" && request.method === "POST") result = await discordMissing(request, env);
     else if (url.pathname === "/discord/contests" && request.method === "GET") result = await discordContests(request, env);
+    else if (url.pathname === "/discord/contests/accept" && request.method === "POST") {
+      const principal = await requireRole(request, env, ["admin", "operator"]);
+      if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Contest acceptance requires the dashboard origin");
+      await requireIntegrationConfigured(env, "discord");
+      result = response(await acceptContestBatch(requireDatabase(env), principal.userId, await parseJson(request)));
+    }
     else if (url.pathname === "/discord/contests/resolve" && request.method === "POST") result = await resolveDiscordContest(request, env);
     else if (url.pathname === "/discord/calendar" && request.method === "POST") result = await discordCalendar(request, env);
     else if (url.pathname === "/calendars/sync" && request.method === "POST") result = await syncMeetingCalendars(request, env);
@@ -3759,6 +3782,11 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
       const kiosk = await kioskFor(request, env);
       const credentialHash = await sha256(request.headers.get("authorization")!.slice(7));
       result = await fingerprintRelayRoute(request, { db: requireDatabase(env), actor: { kind: "kiosk", ...kiosk, credentialHash }, readJson: parseJson, respond: response });
+    }
+    else if (url.pathname === "/kiosk/poll" && request.method === "GET") {
+      const authorization = request.headers.get("authorization");
+      if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
+      result = await kioskPoll(request, { db: requireDatabase(env), credentialHash: await sha256(authorization.slice(7)), secret: env.FINGERPRINT_VAULT_KEY, maintenanceEnabled: Boolean(env.UPDATE_REPOSITORY), respond: response });
     }
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env, context);
     else if (url.pathname === "/kiosk/config" && request.method === "GET") result = await kioskConfiguration(request, env);

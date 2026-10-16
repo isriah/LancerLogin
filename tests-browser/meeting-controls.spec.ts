@@ -76,8 +76,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
         const colors = await page.locator(".app").evaluate((element) => ({ primary: getComputedStyle(element).getPropertyValue("--primary").trim(), secondary: getComputedStyle(element).getPropertyValue("--secondary").trim() }));
         expect(colors).toEqual({ primary: brand.primaryColor, secondary: brand.secondaryColor });
         await expect(page.locator("main h1")).toHaveCount(1);
-        const switchMeeting = page.getByLabel("Switch meeting");
-        await expectControl(switchMeeting, true);
+        await expect(page.getByLabel("Switch meeting")).toHaveCount(0);
         await page.screenshot({ path: test.info().outputPath("meeting-navigation.png") });
         const edit = page.getByRole("button", { name: "Edit", exact: true });
         await edit.click();
@@ -121,9 +120,10 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
         await dialog.getByRole("button", { name: "Save meeting" }).click();
         await expect(dialog).toHaveCount(0);
         expect(submitted[3]).toMatchObject({ audienceMode: "labels", audienceLabelIds: ["mentor"] });
-        await switchMeeting.focus();
-        await page.keyboard.press("End");
+        await page.getByRole("button", { name: "Back to Dashboard" }).focus();
         await page.keyboard.press("Enter");
+        await expect(page).toHaveURL(/\/dashboard$/);
+        await page.goto("/meetings/next-week");
         await expect(page).toHaveURL(/\/meetings\/next-week$/);
         await expect(page.getByRole("heading", { name: "Studio night", exact: true })).toBeVisible();
         const dimensions = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));

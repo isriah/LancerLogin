@@ -45,8 +45,8 @@ async function chooseSearchKeys(page: Page, key: string) {
 async function swipe(page: Page, scroller: Locator, direction: "up" | "down" | "left" = "up", origin?: "row" | "blank") {
   const visible = await scroller.evaluate((element) => {
     const r = element.getBoundingClientRect();
-    let left = Math.max(1, r.left), right = Math.min(innerWidth - 1, r.right);
-    let top = Math.max(1, r.top), bottom = Math.min(innerHeight - 1, r.bottom);
+    let left = Math.max(1, r.left + element.clientLeft), right = Math.min(innerWidth - 1, r.left + element.clientLeft + element.clientWidth);
+    let top = Math.max(1, r.top + element.clientTop), bottom = Math.min(innerHeight - 1, r.top + element.clientTop + element.clientHeight);
     for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
       const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
       if (/auto|scroll|hidden|clip/.test(style.overflowX)) {
@@ -63,10 +63,11 @@ async function swipe(page: Page, scroller: Locator, direction: "up" | "down" | "
   const { left, right, top, bottom } = visible;
   expect(right - left).toBeGreaterThan(40); expect(bottom - top).toBeGreaterThan(40);
   const x = left + (right - left) * .45;
-  // Use the visible pane rather than losing forty pixels of a short table to
-  // gesture margins. Both endpoints remain inset and hit-tested below.
-  const from = direction === "down" ? top + 12 : bottom - 12;
-  const to = direction === "down" ? bottom - 12 : top + 12;
+  // Keep the gesture inside visible content, outside borders and scrollbars,
+  // without losing most of a short pane to gesture margins.
+  const inset = bottom - top < 100 ? 4 : 12;
+  const from = direction === "down" ? top + inset : bottom - inset;
+  const to = direction === "down" ? bottom - inset : top + inset;
   const session = await page.context().newCDPSession(page);
   const startX = origin === "blank" ? right - 12 : direction === "left" ? right - 20 : x;
   const endX = direction === "left" ? left + 20 : startX;
@@ -496,8 +497,12 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     await reachable(page, page.locator("#test-reader"), reader, "down");
     await tap(page, page.locator("#test-reader"));
     const table = page.locator("[data-fingerprint].mappings-card .table-wrap");
+    // Swipe the heading to expose the nested table before scrolling its rows.
+    await reachable(page, table, page.locator("[data-fingerprint].mappings-card .card-heading"));
+    const initialTableTop = await table.evaluate(element => element.scrollTop);
+    expect(await table.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeGreaterThan(20);
     await swipe(page, table);
-    expect(await table.evaluate((e) => e.scrollTop)).toBeGreaterThan(20);
+    expect(await table.evaluate(element => element.scrollTop) - initialTableTop).toBeGreaterThan(20);
     if (await table.evaluate((e) => e.scrollWidth > e.clientWidth + 10)) {
       await swipe(page, table, "left");
       expect(await table.evaluate((e) => e.scrollLeft)).toBeGreaterThan(0);
@@ -509,6 +514,7 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     expect(mock.removed).toHaveLength(0);
     await tap(page, remove); await tap(page, page.locator("#accept-action"));
     await expect.poll(() => mock.removed.length).toBe(1);
+    await reachable(page, page.locator("#refresh"), page.locator("[data-fingerprint].mappings-card .card-heading"), "down");
     await tap(page, page.locator("#refresh"));
     await expect(page.locator("#member")).toHaveValue("");
     expect(await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }))).toEqual(viewport);

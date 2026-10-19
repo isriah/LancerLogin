@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 
 test("canonical meeting routes, legacy redirects, switching, and browser history stay synchronized", async ({ page }) => {
   await page.goto("/dashboard");
-  await page.locator('.calendar-day button[title^="Build session,"]').click();
+  await page.getByRole("button", { name: "Open meeting Build session", exact: true }).click();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
   await page.goBack();
@@ -54,6 +54,7 @@ test("meeting detail presents lifecycle and operational context", async ({ page 
   for (const [id, label] of [["upcoming", "Upcoming"], ["progress", "In progress"], ["late", "Late scan window"], ["past", "Past"]] as const) {
     await page.goto(`/meetings/${id}`);
     await expect(page.locator(".meeting-lifecycle")).toHaveText(label);
+    await page.locator(".meeting-more-actions > summary").click();
     await expect(page.getByRole("button", { name: "Sync configured calendars" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "Send Discord absence notice" })).toBeEnabled({ enabled: id !== "upcoming" });
   }
@@ -74,7 +75,7 @@ test("detail dialogs manage occurrence and future-series scope, return focus, an
     if (request.method() === "GET") return route.continue();
     submitted.push({ url: new URL(request.url()).pathname, method: request.method(), body: request.postDataJSON() });
     if (request.method() === "POST" && new URL(request.url()).pathname === "/meetings") return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ meetings: [{ id: "duplicate-1" }] }) });
-    return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ deleted: 2, restored: 2, deletion: { meetingIds: ["active-meeting", "next-week"], deletedAt: "2026-10-18T12:00:00.000Z" } }) });
   });
 
   await page.goto("/meetings/active-meeting");
@@ -99,13 +100,13 @@ test("detail dialogs manage occurrence and future-series scope, return focus, an
   await expect(dialog).toHaveCount(0);
   await expect(duplicateButton).toBeFocused();
 
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.locator(".meeting-more-actions > summary").click(); await page.getByRole("button", { name: "Delete meeting", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "Delete meeting" });
   await expect(dialog.getByRole("button", { name: "Delete this and future meetings" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Delete", exact: true })).toBeFocused();
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Delete meeting", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Delete meeting", exact: true }).click();
   await page.getByRole("dialog", { name: "Delete meeting" }).getByRole("button", { name: "Delete this and future meetings" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.getByRole("status").filter({ hasText: "This and future series occurrences were deleted." })).toBeVisible();
@@ -116,7 +117,7 @@ test("detail dialogs manage occurrence and future-series scope, return focus, an
     expect.objectContaining({ url: "/meeting-series/weekly-build", method: "PATCH", body: expect.objectContaining({ meetingId: "active-meeting", title: "Build session shifted", weightCategoryId: "extended" }) }),
     expect.objectContaining({ url: "/meetings", method: "POST", body: expect.objectContaining({ title: "Build session copy", recurrence: expect.objectContaining({ frequency: "weekly" }) }) }),
     { url: "/meetings/active-meeting", method: "DELETE", body: { scope: "future" } },
-    { url: "/meetings/active-meeting/restore", method: "POST", body: { scope: "future" } },
+    { url: "/meetings/active-meeting/restore", method: "POST", body: { scope: "future", deletion: { meetingIds: ["active-meeting", "next-week"], deletedAt: "2026-10-18T12:00:00.000Z" } } },
   ]);
 });
 
@@ -150,6 +151,7 @@ test("meeting-local calendar and Discord actions retain their scoped outcomes", 
   await page.route(/\/discord\/contests(?:\?.*)?$/, async (route) => { contestLoads += 1; await route.continue(); });
 
   await page.goto("/meetings/active-meeting");
+  await page.locator(".meeting-more-actions > summary").click();
   await expect(page.getByRole("group", { name: "Meeting actions" })).toBeVisible();
   await page.getByRole("button", { name: "Sync configured calendars" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Google Calendar: 1 updated · Discord: 0 updated, 1 queued" })).toBeVisible();
@@ -215,6 +217,7 @@ test("meeting operations preserve the custom brand in light and dark desktop lay
   await expect(app).toHaveAttribute("data-theme", "dark");
   const tokens = await app.evaluate((element) => { const style = getComputedStyle(element); return { primary: style.getPropertyValue("--primary").trim(), secondary: style.getPropertyValue("--secondary").trim() }; });
   expect(tokens).toEqual({ primary: "#8b2f72", secondary: "#e9b949" });
+  await page.locator(".meeting-more-actions > summary").click();
   const operations = await page.locator(".meeting-detail-heading .meeting-actions-buttons").boundingBox();
   const contests = await page.locator(".meeting-contests").boundingBox();
   expect(operations && contests && operations.width <= 1280 && contests.width <= 1280).toBe(true);
@@ -252,6 +255,7 @@ test("meeting attendance preserves member-local corrections and Admin-only clear
 
   await page.goto("/meetings/active-meeting");
   const avery = page.locator(".attendance-row").filter({ hasText: "Avery Stone" });
+  await avery.getByRole("button", { name: "Adjust attendance for Avery Stone" }).click();
   page.once("dialog", (dialog) => dialog.accept(""));
   await avery.getByRole("button", { name: "Present" }).click();
   await expect(avery.getByRole("status")).toHaveText("Marked present.");
@@ -276,6 +280,7 @@ test("meeting attendance preserves member-local corrections and Admin-only clear
 
   await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role: "operator" } }) }));
   await page.goto("/meetings/active-meeting");
+  await page.getByRole("button", { name: "Adjust attendance for Avery Stone" }).click();
   await expect(page.getByRole("button", { name: "Clear" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Present" }).first()).toBeVisible();
 });
@@ -312,6 +317,7 @@ test("meeting attendance shows authoritative scan times for complete, partial, m
         await expect(row.getByText("Check-out", { exact: true })).toBeVisible();
       }
 
+      await partial.getByRole("button", { name: "Adjust attendance for Avery Stone" }).click();
       await partial.getByRole("button", { name: "Present" }).focus();
       await expect(partial.getByRole("button", { name: "Present" })).toBeFocused();
       await page.keyboard.press("Tab");

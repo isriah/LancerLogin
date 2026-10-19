@@ -146,16 +146,14 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
   await page.route("**/auth/walkthroughs/*", (route) => { const pageId = new URL(route.request().url()).pathname.split("/").at(-1); return route.fulfill({ json: { progress: { pageId, version: 1, status: "completed", stepId: null } } }); });
   await page.route(/\/meetings(?:\?.*)?$/, (route) => route.fulfill({ json: { meetings: [{ id: "meeting-1", title: "Community planning", startsAt: "2026-09-28T13:00:00.000Z", endsAt: "2026-09-28T14:00:00.000Z", attendanceClosesAt: "2026-09-28T15:00:00.000Z", required: 1, notes: "", audienceMode: "all", audienceLabelIds: [] }] } }));
   await routeWorkspaceReads(page, { activities: [{ id: "activity-1", mode: "event", labelIds: [], labels: [], serviceDate: "2026-09-28", teamId: null, title: "Community planning", description: "", location: "", impactRelevant: true, archived: false, revision: 0, eventStartLocal: "09:00", eventEndLocal: "10:00", eventStartOccurrence: null, eventEndOccurrence: null }], entries: [], countedMinutes: 0 });
-  const capture = () => page.evaluate(() => Object.fromEntries(Object.entries({ intro: ".operational-page-intro", controls: ".meeting-browser-controls", browser: ".dashboard-meeting-calendar", browserHeading: ".dashboard-meeting-calendar .calendar-heading" }).map(([key, selector]) => { const bounds = document.querySelector(selector)!.getBoundingClientRect(); return [key, { top: bounds.top, left: bounds.left, width: bounds.width, height: bounds.height }]; })));
+  const capture = () => page.evaluate(() => Object.fromEntries(Object.entries({ intro: ".operational-page-intro", browser: ".dashboard-meeting-calendar", browserHeading: ".dashboard-meeting-calendar .calendar-heading" }).map(([key, selector]) => { const bounds = document.querySelector(selector)!.getBoundingClientRect(); return [key, { top: bounds.top, left: bounds.left, width: bounds.width, height: bounds.height }]; })));
   const captureBox = (selector: string) => page.locator(selector).evaluate((element) => { const bounds = element.getBoundingClientRect(); return { top: bounds.top, left: bounds.left, width: bounds.width, height: bounds.height }; });
 
   await page.goto("/dashboard");
   await expect(page.getByRole("heading", { name: "Meeting calendar" })).toBeVisible();
   await expect(page.locator(".meeting-view-icon")).toHaveCount(2);
   await expectInlineViewIcons(page);
-  const meetingControlHeights = await page.locator(".meeting-browser-controls").evaluate((controls) => [...controls.querySelectorAll(":scope > .meeting-view-toggle > div,:scope > .meeting-browser-select select,:scope > button")].map((element) => element.getBoundingClientRect().height));
-  expect(Math.max(...meetingControlHeights) - Math.min(...meetingControlHeights)).toBeLessThanOrEqual(1);
-  expect(Math.min(...meetingControlHeights)).toBeGreaterThanOrEqual(44);
+  for (const control of await page.locator(".compact-view-toggle label,.calendar-heading > button").all()) expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   const meetings = await capture();
   await page.getByRole("radio", { name: "Table" }).check();
   await expect(page.getByRole("heading", { name: "Existing meetings" })).toBeVisible();
@@ -164,19 +162,15 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
   await expect(page.getByRole("heading", { name: "Activity calendar" })).toBeVisible();
   await expect(page.locator(".meeting-view-icon")).toHaveCount(2);
   await expectInlineViewIcons(page);
-  const activityControlHeights = await page.locator(".meeting-browser-controls").evaluate((controls) => [...controls.querySelectorAll(":scope > .meeting-view-toggle > div,.meeting-browser-select select,.outreach-activity-visibility > summary,:scope > button")].map((element) => element.getBoundingClientRect().height));
-  expect(Math.max(...activityControlHeights) - Math.min(...activityControlHeights)).toBeLessThanOrEqual(1);
-  expect(Math.min(...activityControlHeights)).toBeGreaterThanOrEqual(44);
-  const navigationStyles = await page.evaluate(() => { const primary = getComputedStyle(document.querySelector('.primary-navigation a[aria-current="page"]')!); const secondary = getComputedStyle(document.querySelector('.outreach-tabs button[aria-pressed="true"]')!); return { primary: { background: primary.backgroundColor, borderWidth: primary.borderTopWidth, color: primary.color, radius: primary.borderRadius }, secondary: { background: secondary.backgroundColor, borderWidth: secondary.borderTopWidth, color: secondary.color, radius: secondary.borderRadius } }; });
-  expect(navigationStyles.secondary).toEqual(navigationStyles.primary);
+  for (const control of await page.locator(".compact-view-toggle label,.calendar-heading > button,.outreach-activity-visibility > summary").all()) expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   const activities = await capture();
   await page.getByRole("radio", { name: "Table" }).check();
   await expect(page.getByRole("heading", { name: "Activity table" })).toBeVisible();
   const activityTable = await captureBox(".meeting-directory");
-  for (const key of ["intro", "controls", "browser", "browserHeading"] as const) {
-    for (const dimension of ["top", "left", "width", "height"] as const) expect(Math.abs(meetings[key][dimension] - activities[key][dimension]), `${key} ${dimension}`).toBeLessThanOrEqual(1);
+  for (const key of ["intro", "browserHeading"] as const) {
+    for (const dimension of ["left", "width", "height"] as const) expect(Math.abs(meetings[key][dimension] - activities[key][dimension]), `${key} ${dimension}`).toBeLessThanOrEqual(1);
   }
-  for (const dimension of ["top", "left", "width"] as const) expect(Math.abs(meetingTable[dimension] - activityTable[dimension]), `table ${dimension}`).toBeLessThanOrEqual(1);
+  for (const dimension of ["left", "width"] as const) expect(Math.abs(meetingTable[dimension] - activityTable[dimension]), `table ${dimension}`).toBeLessThanOrEqual(1);
 });
 
 test("Outreach activity views default to scheduled events and persist visibility choices", async ({ page }) => {
@@ -190,10 +184,10 @@ test("Outreach activity views default to scheduled events and persist visibility
   await routeWorkspaceReads(page, { activities, entries: [], countedMinutes: 0 });
 
   await page.goto("/hours");
-  await expect(page.getByRole("button", { name: "Open Scheduled service fair" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open Robotics Team 901 support" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Open Individual donation sorting" })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "Activity", exact: true }).locator("option")).toHaveCount(4);
+  await expect(page.getByRole("button", { name: "Open activity Scheduled service fair" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open activity Robotics Team 901 support" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open activity Individual donation sorting" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Activity", exact: true })).toHaveCount(0);
 
   const visibility = page.locator(".outreach-activity-visibility");
   const visibilitySummary = visibility.locator("summary");
@@ -214,9 +208,9 @@ test("Outreach activity views default to scheduled events and persist visibility
   await visibility.getByRole("checkbox", { name: "Other service" }).check();
   await visibility.getByRole("checkbox", { name: "Scheduled events" }).uncheck();
   await visibilitySummary.click();
-  await expect(page.getByRole("button", { name: "Open Scheduled service fair" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Open Robotics Team 901 support" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open Individual donation sorting" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open activity Scheduled service fair" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open activity Robotics Team 901 support" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open activity Individual donation sorting" })).toBeVisible();
 
   await page.getByRole("radio", { name: "Table" }).check();
   const table = page.getByRole("table");
@@ -273,7 +267,7 @@ test("Admin completes the focused Outreach setup flow", async ({ page }) => {
   const finishSetup = page.getByRole("button", { name: "Finish Outreach setup" });
   await expectPrimaryControl(page, finishSetup);
   await finishSetup.click();
-  await expect(page.getByRole("heading", { level: 1, name: "Outreach Participation" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Outreach" })).toBeVisible();
 });
 
 test("Admin creates an activity, records time with the accessible clock, and reviews the Submission Log", async ({ page }) => {
@@ -284,7 +278,7 @@ test("Admin creates an activity, records time with the accessible clock, and rev
   await routeWorkspaceReads(page, state);
 
   await page.goto("/hours");
-  await expect(page.getByRole("heading", { level: 1, name: "Outreach Participation" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Outreach" })).toBeVisible();
   await expect(page.getByText("Reuse Attendance details", { exact: false })).toHaveCount(0);
   expect(attendanceSourceRequests).toEqual([]);
   expect(totalsRequests).toEqual([]);
@@ -295,17 +289,12 @@ test("Admin creates an activity, records time with the accessible clock, and rev
   await page.reload();
   await expect(page.getByRole("radio", { name: "Table" })).toBeChecked();
   await page.getByRole("radio", { name: "Calendar" }).check();
-  await expect(page.getByLabel("Activity type")).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Activity type", exact: true })).toHaveCount(0);
   for (const theme of ["light", "dark"] as const) {
     await page.locator(".app").evaluate((element, value) => element.setAttribute("data-theme", value), theme);
-    for (const control of [page.getByRole("button", { name: "Submission Log" })]) {
-      const appearance = await control.evaluate((element) => {
-        const style = getComputedStyle(element); const expected = getComputedStyle(document.querySelector(".primary-navigation a:not(.active)")!);
-        return { actual: [style.backgroundColor, style.borderTopWidth, style.color, style.borderRadius], expected: [expected.backgroundColor, expected.borderTopWidth, expected.color, expected.borderRadius], height: element.getBoundingClientRect().height };
-      });
-      expect(appearance.actual).toEqual(appearance.expected);
-      expect(appearance.height).toBeGreaterThanOrEqual(44);
-    }
+    const logDisclosure = page.locator(".outreach-submission-disclosure > summary");
+    expect((await logDisclosure.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await page.getByRole("radio", { name: "Table", exact: true }).check();
     for (const control of [page.getByRole("combobox", { name: "Activity", exact: true })]) {
       const appearance = await control.evaluate((element) => {
         const style = getComputedStyle(element);
@@ -325,13 +314,16 @@ test("Admin creates an activity, records time with the accessible clock, and rev
       expect(appearance.height).toBeGreaterThanOrEqual(44);
     }
   }
+  await page.getByRole("radio", { name: "Calendar", exact: true }).check();
   await page.setViewportSize({ width: 390, height: 844 });
   const mobileWidth = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
   expect(mobileWidth.scrollWidth).toBeLessThanOrEqual(mobileWidth.clientWidth);
   await expect(page.getByRole("button", { name: /Corrections/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveCount(0);
   await page.goto("/settings/outreach-setup");
-  await page.getByRole("button", { name: /^Supported teams(?: \(|$)/ }).click();
+  const settingsSections = page.getByRole("combobox", { name: "Outreach section", exact: true });
+  await settingsSections.selectOption("/settings/outreach-setup?section=teams");
+  await expect(settingsSections).toHaveValue("/settings/outreach-setup?section=teams");
   await expect(page.getByRole("heading", { name: "Supported teams", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Outreach labels", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Team name")).toHaveCount(0);
@@ -350,8 +342,8 @@ test("Admin creates an activity, records time with the accessible clock, and rev
   await teamDialog.getByRole("button", { name: "Add team", exact: true }).click();
   await expect(page.getByText("Team added.")).toBeVisible();
   await expect(teamDialog).toHaveCount(0);
-  await expect(page.getByRole("rowheader", { name: "Community Team 2", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /^Labels(?: \(|$)/ }).click();
+  await expect(page.locator(".outreach-team-record").getByText("Community Team 2", { exact: true })).toBeVisible();
+  await settingsSections.selectOption("/settings/outreach-setup?section=labels");
   const addLabel = page.getByRole("button", { name: "Add label", exact: true });
   await expectPrimaryControl(page, addLabel);
   await addLabel.click();
@@ -368,8 +360,8 @@ test("Admin creates an activity, records time with the accessible clock, and rev
 
   await page.goto("/settings/outreach-setup");
   await expect(page.getByRole("heading", { level: 1, name: "Outreach", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /^Supported teams(?: \(|$)/ }).click(); await expect(page.getByRole("rowheader", { name: "Community Team 2", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /^Labels(?: \(|$)/ }).click();
+  await settingsSections.selectOption("/settings/outreach-setup?section=teams"); await expect(page.locator(".outreach-team-record").getByText("Community Team 2", { exact: true })).toBeVisible();
+  await settingsSections.selectOption("/settings/outreach-setup?section=labels");
   await page.getByRole("button", { name: "Edit Community-facing", exact: true }).click(); const editLabel = page.getByRole("dialog", { name: "Edit Outreach label" });
   const labelName = editLabel.getByLabel("Label name"); await expect(labelName).toHaveValue("Community-facing"); await expectFocusedControl(page, labelName); await editLabel.getByRole("button", { name: "Close label dialog" }).focus(); await expectSurfaceControl(page, labelName); await labelName.fill("Community event");
   await editLabel.getByRole("button", { name: "Save label" }).click(); await expect(page.getByText("Label updated.")).toBeVisible();
@@ -380,11 +372,12 @@ test("Admin creates an activity, records time with the accessible clock, and rev
   const createDialog = page.getByRole("dialog", { name: "Create Outreach activity" });
   await expect(createDialog).toBeVisible();
   await createDialog.getByRole("button", { name: "Close create activity" }).focus();
+  await page.mouse.move(0, 0);
   for (const control of [createDialog.getByLabel("Activity type"), createDialog.getByLabel("Description")]) await expectSurfaceControl(page, control);
   await expect(page.getByLabel("Service date")).toHaveValue("2026-09-28");
-  await page.getByLabel("Activity type").selectOption("team");
+  await page.getByRole("combobox", { name: "Activity type", exact: true }).selectOption("team");
   await expect(page.getByLabel("Supported team")).toBeVisible();
-  await page.getByLabel("Activity type").selectOption("event");
+  await page.getByRole("combobox", { name: "Activity type", exact: true }).selectOption("event");
   await expect(page.getByLabel("Supported team")).toHaveCount(0);
   await expect(createDialog.getByLabel("Community event")).not.toBeChecked();
   await createDialog.getByLabel("Community event").check();
@@ -406,8 +399,8 @@ test("Admin creates an activity, records time with the accessible clock, and rev
   await page.getByRole("button", { name: "Create activity" }).click();
   await expect(page.getByRole("dialog", { name: "Create Outreach activity" }).getByLabel("Community event")).not.toBeChecked();
   await page.getByRole("dialog", { name: "Create Outreach activity" }).getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByRole("button", { name: "Open Community open house" })).toBeVisible();
-  await page.getByRole("button", { name: "Open Community open house" }).click();
+  await expect(page.getByRole("button", { name: "Open activity Community open house" })).toBeVisible();
+  await page.getByRole("button", { name: "Open activity Community open house" }).click();
   await expect(page.getByRole("heading", { name: "Community open house" })).toBeVisible();
   await expect(page.getByLabel("Activity summary").getByText("Community event", { exact: true })).toBeVisible();
   await expect(page.getByText("Closes Oct 28, 2026, 12:00 AM")).toBeVisible();
@@ -422,12 +415,12 @@ test("Admin creates an activity, records time with the accessible clock, and rev
   await saveManualParticipation.click();
   await expect(page.getByText("Manual Outreach participation counted and attributed to Staff.")).toBeVisible();
   await page.goBack();
-  await page.getByRole("button", { name: "Submission Log" }).click();
+  await page.locator(".outreach-submission-disclosure > summary").click();
   await expect(page.getByRole("heading", { name: "Submission Log" })).toBeVisible();
   await expect(page.getByText(/Avery Member - Community open house/)).toBeVisible();
   await expect(page.getByText(/Counted - Staff-added entry - Staff reason: Transferred a signed paper record/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Totals" })).toHaveCount(0);
-  await expect(page.getByText("Open Reports for participation totals.")).toHaveCount(1);
+  await expect(page.getByText("Open Reports for participation totals.")).toHaveCount(0);
   expect(totalsRequests).toEqual([]);
 });
 
@@ -466,7 +459,8 @@ test("Staff handles activity-scoped reporting, corrections, and Event publicatio
 
   const oldActivityDetail = page.locator('article[aria-labelledby="outreach-activity-activity-old"]');
   await page.goBack();
-  await page.getByRole("button", { name: "Open Future service fair" }).click();
+  await page.getByRole("button", { name: "September 30, 2026, 1 activity", exact: true }).click();
+  await page.getByRole("button", { name: "Open activity Future service fair" }).click();
   const futureActivityDetail = page.locator('article[aria-labelledby="outreach-activity-activity-future"]');
   await expect(page.getByText("Report closed", { exact: true })).toBeVisible(); await expect(page.getByRole("button", { name: "Add member participation" })).toHaveCount(0);
   await expect(futureActivityDetail.getByText("All day", { exact: true })).toBeVisible();
@@ -496,7 +490,7 @@ test("Member records participation publicly and can retry the exact uncertain su
   });
 
   await page.goto("/submit-hours");
-  await expect(page.getByRole("heading", { level: 1, name: "Record Outreach Participation" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Record Outreach" })).toBeVisible();
   const mobileWidth = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
   expect(mobileWidth.scrollWidth).toBeLessThanOrEqual(mobileWidth.clientWidth);
   const memberId = page.getByLabel("Roster member ID");
@@ -532,10 +526,10 @@ test("Member records participation publicly and can retry the exact uncertain su
   const cancelAppearance = await controlAppearance(cancelClock);
   expect(cancelAppearance.background).toBe(darkSurface); expect(cancelAppearance.borderColor).toBe(darkBorder); expect(cancelAppearance.height).toBeGreaterThanOrEqual(44);
   await cancelClock.click();
-  const themeToggle = page.getByRole("switch", { name: "Dark mode" });
-  await expect(themeToggle).toHaveAttribute("aria-checked", "true");
-  await themeToggle.click();
+  const themeToggle = page.getByRole("switch", { name: "Light mode" });
   await expect(themeToggle).toHaveAttribute("aria-checked", "false");
+  await themeToggle.click();
+  await expect(themeToggle).toHaveAttribute("aria-checked", "true");
   await page.setViewportSize({ width: 1280, height: 900 });
   const lightSurface = await resolvedThemeColor(page, "--ui-surface-subtle");
   expect(lightSurface).not.toBe(darkSurface);

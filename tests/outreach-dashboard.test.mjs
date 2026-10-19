@@ -22,8 +22,8 @@ test("Outreach dashboard exposes the agreed everyday workflow", async () => {
   assert.match(workspace, /Activity view/);
   assert.match(workspace, /Activity calendar/);
   assert.match(workspace, /Activity table/);
-  assert.match(workspace, /BrowserViewIcon view="calendar"/);
-  assert.match(workspace, /BrowserViewIcon view="table"/);
+  assert.match(workspace, /CalendarViewToggle/);
+  assert.match(workspace, /MonthCalendar/);
   assert.match(workspace, /outreachActivityViewKey/);
   assert.match(workspace, /outreachActivityVisibilityKey/);
   assert.match(workspace, /if \(raw === null\) return \["event"\]/);
@@ -35,7 +35,7 @@ test("Outreach dashboard exposes the agreed everyday workflow", async () => {
   assert.match(workspace, /\/admin\/hours\/labels/);
   assert.doesNotMatch(workspace, /item === "labels" \? "Labels"|tab === "labels"/);
   assert.doesNotMatch(workspace, /item === "settings" \? "Settings"|<OutreachSettings/);
-  assert.match(moduleNavigation, /outreachReady \? \[\{ id: "outreach", label: "Outreach", links: \[\["\/settings\/outreach-setup", "Outreach settings"\]\]/);
+  assert.match(moduleNavigation, /outreachReady \? \[\{ id: "outreach", label: "Outreach", href: "\/settings\/outreach-setup"/);
   assert.match(shell, /<SettingsModuleNavigation[^>]*outreachReady=\{outreachReady\}/);
   assert.match(shell, /onOpenActivity=\{\(id\) => navigate\(`/);
   assert.match(shell, /outreachReady && path === "\/settings\/outreach-setup"\) page = <OutreachSetupSettings isAdmin=\{role === "admin"\}/);
@@ -52,7 +52,7 @@ test("Outreach dashboard exposes the agreed everyday workflow", async () => {
   assert.match(workspace, /Submission Log/);
   assert.doesNotMatch(workspace, /TotalsPanel|Outreach totals|Supported-team totals|\/admin\/hours\/totals/);
   assert.match(workspace, /Retry exact submission/);
-  assert.match(workspace, /className="ui-control-group outreach-tabs"/);
+  assert.match(workspace, /outreach-submission-disclosure/);
   assert.match(workspace, /className="ui-button"/);
   assert.match(workspace, /className="ui-card ui-form outreach-stack"/);
   assert.doesNotMatch(workspace, /Historical descriptors|historicalDescriptors/);

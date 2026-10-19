@@ -128,7 +128,7 @@ test("reset capacity limits fail closed without clearing configuration or partia
 
 test("reset is atomic, idempotent, pairing-specific and available while sharing is off", async context => {
   const { db, call, reset, enable, command } = await fixture(context); await enable();
-  await call("/admin/kiosks/fingerprint-sync", { enabled: true }, undefined, "PATCH"); const oldSync = db.sqlite.prepare("SELECT sync_id FROM kiosk_fingerprint_sync").get()?.sync_id;
+  db.sqlite.prepare("INSERT INTO kiosk_fingerprint_sync(installation_id,sync_id,enabled) VALUES('primary',?,1)").run("a".repeat(64)); const oldSync = db.sqlite.prepare("SELECT sync_id FROM kiosk_fingerprint_sync").get()?.sync_id;
   assert.equal((await reset()).status, 200);
   assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_settings").get()?.n, 0); assert.equal(db.sqlite.prepare("SELECT enabled FROM kiosk_fingerprint_sync").get()?.enabled, 0); assert.notEqual(db.sqlite.prepare("SELECT sync_id FROM kiosk_fingerprint_sync").get()?.sync_id, oldSync);
   assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM members").get()?.n, 2); assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosks WHERE active=1").get()?.n, 2);
@@ -144,11 +144,11 @@ test("reset is atomic, idempotent, pairing-specific and available while sharing 
 });
 
 test("pending reset blocks cloud and peer sharing until the same current pairing acknowledges", async context => {
-  const { call, reset, enable, command } = await fixture(context); await reset(); const pending = await command(); await enable(); await call("/admin/kiosks/fingerprint-sync", { enabled: true }, undefined, "PATCH");
+  const { db, call, reset, enable, command } = await fixture(context); await reset(); const pending = await command(); await enable(); db.sqlite.prepare("INSERT INTO kiosk_fingerprint_sync(installation_id,sync_id,enabled) VALUES('primary',?,1)").run("a".repeat(64));
   assert.deepEqual(await (await call("/kiosk/fingerprint-vault", undefined, "source-token")).json(), { enabled: false, vaultId: null });
   const peer = await (await call("/kiosk/fingerprint-sync", undefined, "source-token")).json() as { enabled: boolean }; assert.equal(peer.enabled, false);
   assert.equal((await call("/kiosk/fingerprint-vault/templates", undefined, "source-token")).status, 409);
-  assert.equal((await call("/kiosk/fingerprint-sync/keys", { unexpected: true }, "source-token", "PUT")).status, 409);
+  assert.equal((await call("/kiosk/fingerprint-sync/keys", { unexpected: true }, "source-token", "PUT")).status, 410);
   assert.equal((await call(`/kiosk/fingerprint-reset/commands/${pending.id}/acknowledge`, { completed: true }, "source-token")).status, 200);
   assert.equal((await call("/kiosk/fingerprint-vault/templates", undefined, "source-token")).status, 200);
 });
@@ -179,7 +179,7 @@ test("current Admin revocation is rechecked at mutation and does not queue or cl
 });
 
 test("reset rollback preserves cloud and peer state when the audited transaction fails", async context => {
-  const { db, call, reset, enable } = await fixture(context), vault = await enable(); await call("/admin/kiosks/fingerprint-sync", { enabled: true }, undefined, "PATCH");
+  const { db, call, reset, enable } = await fixture(context), vault = await enable(); db.sqlite.prepare("INSERT INTO kiosk_fingerprint_sync(installation_id,sync_id,enabled) VALUES('primary',?,1)").run("a".repeat(64));
   db.beforeRun = sql => { if (sql.includes("kiosk.fingerprint_mappings_reset_requested")) { db.beforeRun = undefined; throw new Error("Synthetic rollback"); } };
   assert.equal((await reset()).status, 500);
   assert.equal(db.sqlite.prepare("SELECT vault_id FROM kiosk_fingerprint_vault_settings").get()?.vault_id, vault); assert.equal(db.sqlite.prepare("SELECT enabled FROM kiosk_fingerprint_sync").get()?.enabled, 1); assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_reset_commands").get()?.n, 0);

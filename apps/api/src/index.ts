@@ -1,11 +1,12 @@
 import { inactiveAt, inactivePeriodsUpdateSql, validateInactivePeriods } from "./member-participation.ts";
+import { meetingDeletion, restoreMeetingDeletion } from "./meeting-deletion.ts";
 import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough.ts";
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
 import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance } from "./web-updates.ts";
 import { discoveryForChannel, releaseRequestHeaders, resolveOfficialRelease } from "./release-discovery.ts";
 import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
-import { compareReleaseVersions } from "../../../packages/shared/src/release-policy.mjs";
+import { kioskReleaseTransition } from "../../../packages/shared/src/release-policy.mjs";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
 import { buildReportRows, combinedMemberDataset, defaultReportDefinition, filterAndSortReportRows, reportColumnCatalog, reportColumnId, reportColumnLabel, reportDatasetCatalog, reportDatasetDefinition, reportFieldSourceDataset, reportFilterSourceDataset, reportLabelsMatch, resolveReportPeriod, validateReportDefinition, type NormalizedReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
@@ -15,7 +16,6 @@ import { databaseIdentity, measureD1, usageCategory, type D1Database, type D1Sta
 import { acceptContestBatch } from "./contest-review.ts";
 import { ReportDataCache } from "./report-data-cache.ts";
 import { HttpError } from "./http-error.ts";
-import { fingerprintRelayRoute } from "./fingerprint-relay.ts";
 import { fingerprintVaultRoute } from "./fingerprint-vault.ts";
 import { kioskPoll } from "./kiosk-poll.ts";
 import { fingerprintResetRoute } from "./fingerprint-reset.ts";
@@ -711,10 +711,10 @@ async function redeemPairingCode(request: Request, env: Env): Promise<Response> 
   if ((results[1]?.meta?.changes ?? 1) < 1) throw new HttpError(409, "Pairing code was already used or that kiosk name is already active");
   return response({ kioskId, kioskToken, pairingId: pairing.id, name: kioskName }, 201);
 }
-async function kioskFor(request: Request, env: Env, includeRosterRevision = false): Promise<{ id: string; name: string; pairingId: string; pairingBound: boolean; rosterRevision?: number }> {
+async function kioskFor(request: Request, env: Env, includeRosterRevision = false): Promise<{ id: string; name: string; pairingId: string; pairingBound: boolean; configuredAuthenticationMethod: KioskAuthenticationMethod; rosterRevision?: number }> {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
-  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound${includeRosterRevision ? ", (SELECT revision FROM report_data_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<{ id: string; name: string; pairingId: string; pairingBound: number; rosterRevision?: number }>();
+  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound, configured_authentication_method AS configuredAuthenticationMethod${includeRosterRevision ? ", (SELECT revision FROM report_data_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<{ id: string; name: string; pairingId: string; pairingBound: number; configuredAuthenticationMethod: KioskAuthenticationMethod; rosterRevision?: number }>();
   if (!kiosk) throw new HttpError(401, "Kiosk credential is invalid");
   return { ...kiosk, pairingBound: Boolean(kiosk.pairingBound) };
 }
@@ -743,15 +743,12 @@ async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContex
 async function kioskStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]);
   const db = requireDatabase(env);
-  const [result, settings] = await Promise.all([
-    db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all(),
-    db.prepare("SELECT kiosk_authentication_method AS authenticationMethod FROM organization_settings WHERE installation_id = 'primary'").first<{ authenticationMethod: KioskAuthenticationMethod }>(),
-  ]);
-  return response({ kiosks: result.results ?? [], authenticationMethod: settings?.authenticationMethod ?? "fingerprint" });
+  const result = await db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, configured_authentication_method AS configuredAuthenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
+  return response({ kiosks: result.results ?? [] });
 }
 async function kioskConfiguration(request: Request, env: Env): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const settings = await requireDatabase(env).prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop, kiosk_authentication_method AS authenticationMethod FROM organization_settings WHERE installation_id = 'primary'").first();
-  return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings });
+  const kiosk = await kioskFor(request, env); const settings = await requireDatabase(env).prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop FROM organization_settings WHERE installation_id = 'primary'").first();
+  return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings: settings ? { ...settings, authenticationMethod: kiosk.configuredAuthenticationMethod } : null });
 }
 type KioskRosterMember = { rosterId: string; memberId: string; firstName: string; lastName: string };
 const kioskRosterCache = new ReportDataCache<KioskRosterMember[]>();
@@ -791,20 +788,23 @@ async function manageKiosk(request: Request, env: Env, kioskId: string): Promise
   await writeAudit(db, principal, "kiosk.retired", "kiosk", kioskId, { name: kiosk.name });
   return response({ retired: true, kioskId });
 }
-async function kioskAuthenticationConfiguration(request: Request, env: Env): Promise<Response> {
+async function kioskAuthenticationConfiguration(request: Request, env: Env, kioskId?: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (!kioskId) throw new HttpError(400, "Select a kiosk and save its authentication method individually");
   const input = await parseJson<{ authenticationMethod?: KioskAuthenticationMethod }>(request);
   if (!input.authenticationMethod || !kioskAuthenticationMethods.has(input.authenticationMethod)) throw new HttpError(400, "Choose fingerprint, RFID badge, NFC badge, member ID entry, or QR code");
-  const previous = await db.prepare("SELECT kiosk_authentication_method AS authenticationMethod FROM organization_settings WHERE installation_id = 'primary'").first<{ authenticationMethod: KioskAuthenticationMethod }>();
-  await db.prepare("UPDATE organization_settings SET kiosk_authentication_method = ? WHERE installation_id = 'primary'").bind(input.authenticationMethod).run();
-  await writeAudit(db, principal, "kiosk.authentication_method_updated", "organization_settings", "primary", { previousMethod: previous?.authenticationMethod ?? "fingerprint", authenticationMethod: input.authenticationMethod });
-  return response({ authenticationMethod: input.authenticationMethod });
+  const kiosk = await db.prepare("SELECT id, configured_authentication_method AS authenticationMethod FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; authenticationMethod: KioskAuthenticationMethod }>();
+  if (!kiosk) throw new HttpError(404, "Active kiosk not found");
+  const result = await db.prepare("UPDATE kiosks SET configured_authentication_method = ? WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.authenticationMethod, kioskId).run();
+  if (result.meta?.changes === 0) throw new HttpError(409, "Kiosk was retired before its method could be saved");
+  await writeAudit(db, principal, "kiosk.authentication_method_updated", "kiosk", kioskId, { previousMethod: kiosk.authenticationMethod, authenticationMethod: input.authenticationMethod });
+  return response({ kioskId, authenticationMethod: input.authenticationMethod });
 }
 async function queueKioskCommand(request: Request, env: Env, kioskId: string): Promise<Response> {
   if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Kiosk commands require the dashboard origin");
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ command?: KioskCommandType }>(request);
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ command?: KioskCommandType; replaceDevelopmentBuild?: boolean }>(request);
   const supported: KioskCommandType[] = ["reload_display", "restart_service", "reboot", "reset_network_pin", "install_latest"];
-  if (!isObject(input) || Object.keys(input).some((key) => key !== "command") || !input.command || !supported.includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command without additional arguments");
+  if (!isObject(input) || Object.keys(input).some((key) => key !== "command" && key !== "replaceDevelopmentBuild") || input.replaceDevelopmentBuild !== undefined && (input.command !== "install_latest" || input.replaceDevelopmentBuild !== true) || !input.command || !supported.includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command without additional arguments");
   const kiosk = await db.prepare("SELECT id, name, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string; releaseVersion?: string; updatePolicyVersion?: number }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
   let requestedReleaseVersion: string | null = null;
@@ -812,7 +812,9 @@ async function queueKioskCommand(request: Request, env: Env, kioskId: string): P
   const target = input.command === "install_latest" ? await latestCompatibleKioskRelease(env, setting.channel) : undefined;
   if (target) {
     if (target.prerelease && kiosk.updatePolicyVersion !== 2) throw new HttpError(409, "Install the stable update-channel bridge on this kiosk before updating it to Beta.");
-    if (compareReleaseVersions(target.tag, kiosk.releaseVersion ?? "") !== 1) throw new HttpError(409, "This kiosk has no newer release on the selected track. Downgrades are not supported.");
+    const transition = kioskReleaseTransition(target.tag, kiosk.releaseVersion ?? "");
+    if (transition === "replace-development" && input.replaceDevelopmentBuild !== true) throw new HttpError(409, "Confirm replacing this development build with the verified official release.");
+    if (!["upgrade", "replace-development"].includes(transition)) throw new HttpError(409, "This kiosk has no eligible release on the selected track. Unknown versions and downgrades are not supported.");
     requestedReleaseVersion = target.tag;
   }
   const id = crypto.randomUUID(); const now = new Date().toISOString();
@@ -996,18 +998,18 @@ async function deleteMeetings(request: Request, env: Env, meetingId: string): Pr
   if (!meeting) throw new HttpError(404, "Meeting not found");
   const now = new Date().toISOString();
   if (input.scope === "future" && meeting.seriesId) {
-    const affected = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL").bind(meeting.seriesId, meeting.startsAt).all<{ id: string }>();
     const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL RETURNING id").bind(now, meeting.seriesId, meeting.startsAt).all<{ id: string }>();
     const count = updated.results?.length ?? 0; if (count < 1) throw new HttpError(404, "No future series occurrences were found");
     await writeAudit(db, principal, "meeting.series_deleted", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, deleted: count });
-    const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", (affected.results ?? []).map((item) => item.id));
-    return response({ deleted: count, scope: "future", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
+    const meetingIds = (updated.results ?? []).map((item) => item.id);
+    const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", meetingIds);
+    return response({ deleted: count, scope: "future", deletion: { meetingIds, deletedAt: now }, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
   }
   const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, meeting.id).run();
   if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
   await writeAudit(db, principal, "meeting.deleted", "meeting", meeting.id);
   const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", [meeting.id]);
-  return response({ deleted: 1, scope: "occurrence", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
+  return response({ deleted: 1, scope: "occurrence", deletion: { meetingIds: [meeting.id], deletedAt: now }, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function bulkDeleteMeetings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingIds?: string[]; confirmation?: string }>(request);
@@ -1015,29 +1017,19 @@ async function bulkDeleteMeetings(request: Request, env: Env): Promise<Response>
   if (!ids.length || ids.length > 100) throw new HttpError(400, "Select between 1 and 100 meetings");
   if (input.confirmation !== "DELETE SELECTED MEETINGS") throw new HttpError(400, "Type DELETE SELECTED MEETINGS exactly to continue");
   const now = new Date().toISOString(); const statements = ids.map((id) => db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, id)); const results = await db.batch(statements); const deletedIds = ids.filter((_id, index) => (results[index]?.meta?.changes ?? 0) > 0); const deleted = deletedIds.length;
-  await writeAudit(db, principal, "meetings.bulk_deleted", "meeting", null, { selected: ids.length, deleted }); const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", deletedIds); return response({ deleted, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
+  await writeAudit(db, principal, "meetings.bulk_deleted", "meeting", null, { selected: ids.length, deleted }); const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", deletedIds); return response({ deleted, deletion: deleted ? { meetingIds: deletedIds, deletedAt: now } : undefined, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function rosterHistory(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]); const result = await requireDatabase(env).prepare("SELECT created_at AS createdAt, metadata_json AS metadata FROM audit_log WHERE installation_id = 'primary' AND action = 'roster.imported' ORDER BY created_at DESC LIMIT 20").all<{ createdAt: string; metadata: string }>();
   return response({ imports: (result.results ?? []).map((item) => { let metadata: { count?: number; mode?: string; deactivated?: number } = {}; try { metadata = JSON.parse(item.metadata); } catch { /* Historical audit metadata is optional. */ } return { createdAt: item.createdAt, count: metadata.count ?? 0, mode: metadata.mode ?? "merge", deactivated: metadata.deactivated ?? 0 }; }) });
 }
 async function restoreMeetings(request: Request, env: Env, meetingId: string): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "occurrence" | "future" }>(request);
-  const meeting = await db.prepare("SELECT id, series_id AS seriesId, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NOT NULL").bind(meetingId).first<{ id: string; seriesId?: string | null; startsAt: string }>();
-  if (!meeting) throw new HttpError(404, "Deleted meeting not found");
-  if (input.scope === "future" && meeting.seriesId) {
-    const affected = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NOT NULL").bind(meeting.seriesId, meeting.startsAt).all<{ id: string }>();
-    const updated = await db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NOT NULL RETURNING id").bind(meeting.seriesId, meeting.startsAt).all<{ id: string }>();
-    const count = updated.results?.length ?? 0; if (count < 1) throw new HttpError(404, "No deleted future series occurrences were found");
-    await writeAudit(db, principal, "meeting.series_restored", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, restored: count });
-    const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "restore", (affected.results ?? []).map((item) => item.id));
-    return response({ restored: count, scope: "future", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
-  }
-  const updated = await db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NOT NULL").bind(meeting.id).run();
-  if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Deleted meeting not found");
-  await writeAudit(db, principal, "meeting.restored", "meeting", meeting.id);
-  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "restore", [meeting.id]);
-  return response({ restored: 1, scope: "occurrence", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ deletion?: unknown; scope?: "occurrence" | "future" | "selection" }>(request);
+  const deletion = meetingDeletion(input.deletion, meetingId);
+  await restoreMeetingDeletion(db, deletion);
+  await writeAudit(db, principal, input.scope === "future" ? "meeting.series_restored" : "meeting.restored", "meeting", meetingId, { restored: deletion.meetingIds.length, meetingIds: deletion.meetingIds });
+  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "restore", deletion.meetingIds);
+  return response({ restored: deletion.meetingIds.length, scope: input.scope ?? "occurrence", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual" | "simulator", actorId?: string): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required");
@@ -1471,7 +1463,20 @@ async function reportCsvExport(request: Request, env: Env): Promise<Response> {
   return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-report-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
 }
 async function reportDetailCsvExport(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(db, principal, input.definition); if (run.definition.dataset !== "attendance.members") throw new HttpError(400, "Detailed attendance export requires an Attendance member report"); if (run.state === "paused") throw new HttpError(409, "Detailed attendance export is paused until Attendance access returns", run.pausedReasons); const meetingMap = new Map(run.meetings.map((meeting) => [meeting.id, meeting])); const official = new Map(run.officialMembers.map((item) => [item.member.id, item])); const labelNames = new Map(run.labels.map((label) => [label.id, label.name]));
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<ReportQueryInput>(request); let run = await runReportDefinition(db, principal, input.definition);
+  if (reportDatasetDefinition(run.definition.dataset)?.rowIdentity !== "core.member.identity") throw new HttpError(400, "Detailed attendance export requires a Members report");
+  if (run.state === "paused") throw new HttpError(409, "Detailed attendance export is paused until its unavailable source returns or the report is edited", run.pausedReasons);
+  if (run.definition.dataset !== "attendance.members") {
+    const scoped = await moduleReportDatabase(db, principal, "attendance.members");
+    if (!scoped) throw new HttpError(403, "Detailed attendance export requires Attendance workspace access");
+    const attendanceDefinition = projectionDefinition(run.definition, "attendance.members");
+    const projection = await attendanceReportProjection(scoped, attendanceDefinition, { from: run.resolvedPeriod.from, to: run.resolvedPeriod.to, today: policyLocalDate(new Date().toISOString(), run.timeZone) });
+    const members = new Map(projection.periodMembers.map((member) => [member.member.id, member]));
+    // Keep the complete report's member selection and order, including filters
+    // on other modules, while expanding each matching member into meeting rows.
+    run = { ...run, ...projection, rows: run.rows, periodMembers: run.rows.flatMap((row) => { const member = members.get(row.id); return member ? [member] : []; }) };
+  }
+  const meetingMap = new Map(run.meetings.map((meeting) => [meeting.id, meeting])); const official = new Map(run.officialMembers.map((item) => [item.member.id, item])); const labelNames = new Map(run.labels.map((label) => [label.id, label.name]));
   const headers = ["meeting", "meetingStart", "meetingEnd", "audience", "required", "attendanceWeight", "memberId", "firstName", "lastName", "memberLabels", "disposition", "eligibility", "regularEligible", "regularWeight", "regularWeightedPresent", "regularRate", "regularAttended", "regularRequired", "regularFrom", "regularTo", "policyEligible", "policyWeight", "policyWeightedPresent", "policyLabel", "policyRuleType", "policyExcusedHandling", "policyStatus", "policyTarget", "policyAttended", "policyRequired", "policyRate", "policyFrom", "policyTo", "policyResults", "policyHistory", "weeklyTarget", "weekStartsOn", "weekSegmentStartsOn", "weekSegmentEndsOn", "checkedInAt", "checkedOutAt", "reason"];
   const rows: Record<string, unknown>[] = run.periodMembers.flatMap((period) => { const item = official.get(period.member.id) ?? period; return period.rows.flatMap((row) => { const meeting = meetingMap.get(row.meetingId); if (!meeting) return []; const date = policyLocalDate(meeting.startsAt, run.timeZone); const week = period.weeks.find((candidate) => candidate.segmentStartsOn <= date && date <= candidate.segmentEndsOn); const policy = item.currentCompliance; return [{ meeting: meeting.title, meetingStart: meeting.startsAt, meetingEnd: meeting.endsAt, audience: row.audience, required: Boolean(meeting.required), attendanceWeight: meeting.attendanceWeight, memberId: period.member.memberId, firstName: period.member.firstName, lastName: period.member.lastName, memberLabels: row.memberLabelIds.map((labelId) => labelNames.get(labelId) ?? "Retired label").join("; "), disposition: row.disposition, eligibility: row.eligibility, regularEligible: row.regularEligible, regularWeight: row.regularWeight, regularWeightedPresent: row.regularEligible && row.attended ? row.regularWeight : 0, regularRate: period.regularAttendance.rate ?? "", regularAttended: period.regularAttendance.attended, regularRequired: period.regularAttendance.required, regularFrom: period.regularAttendance.from ?? "", regularTo: period.regularAttendance.to, policyEligible: row.rateEligible, policyWeight: row.weight, policyWeightedPresent: row.rateEligible && row.attended ? row.weight : 0, policyLabel: policy.labelName ?? "", policyRuleType: policy.ruleType ?? "", policyExcusedHandling: policy.excusedHandling ?? "", policyStatus: policy.status, policyTarget: policy.threshold ?? "", policyAttended: policy.attended, policyRequired: policy.required, policyRate: policy.rate ?? "", policyFrom: policy.status === "no_rule" ? "" : policy.from, policyTo: policy.status === "no_rule" ? "" : policy.to, policyResults: JSON.stringify(item.currentCompliances), policyHistory: JSON.stringify(item.historySummaries), weeklyTarget: week?.target ?? "", weekStartsOn: week?.weekStartsOn ?? "", weekSegmentStartsOn: week?.segmentStartsOn ?? "", weekSegmentEndsOn: week?.segmentEndsOn ?? "", checkedInAt: row.checkedInAt, checkedOutAt: row.checkedOutAt, reason: row.reason }]; }); });
   const csv = [headers.join(","), ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(","))].join("\r\n") + "\r\n"; await writeAudit(db, principal, "report.exported", "saved_report", null, { format: "detail", rows: rows.length });
@@ -3159,7 +3164,7 @@ const tableColumns = {
   attendance_corrections: ["id", "installation_id", "member_id", "meeting_id", "disposition", "reason", "created_by", "created_at"],
   setup_progress: ["installation_id", "step", "completed_at", "completed_by"],
   pairing_codes: ["id", "installation_id", "code_hash", "expires_at", "redeemed_at", "created_by", "created_at", "purpose"],
-  kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version", "pending_events", "last_sync_at", "error_category", "pairing_bound", "authentication_method"],
+  kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version", "pending_events", "last_sync_at", "error_category", "pairing_bound", "authentication_method", "configured_authentication_method"],
   simulated_kiosk_sessions: ["installation_id", "pairing_code_id", "name", "active", "online", "last_seen_at", "created_by", "created_at"],
   encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at", "verified_at"],
   google_calendar_authorizations: ["installation_id", "ciphertext", "iv", "key_version", "authorized_at", "verified_at", "updated_at"],
@@ -3192,7 +3197,7 @@ const rosterTables: BackupTable[] = ["members", "member_labels", "member_label_c
 const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const safeBackupValue = (value: unknown) => value === null || ["string", "number", "boolean"].includes(typeof value);
-const backupSchemaVersion = 39;
+const backupSchemaVersion = 40;
 const backupEnvelopeFormat = "lancerlogin-community-modular";
 const backupEnvelopeVersion = 1;
 
@@ -3322,7 +3327,7 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = table === "carpool_plans" && schemaVersion < 39 ? tableColumns.carpool_plans.filter(column => !["time_zone", "outbound_departure_at", "return_departure_at"].includes(column) && (schemaVersion >= 38 || !["group_settings_json", "last_rebuild_json"].includes(column)) && (schemaVersion >= 37 || column !== "trip_scope") && (schemaVersion >= 33 || column !== "meeting_id")) : table === "carpool_people" && schemaVersion < 37 ? tableColumns.carpool_people.filter(column => !column.endsWith("_location_source") && !column.endsWith("_location_label")) : schemaVersion < 36 && table === "hours_publication_operations" ? tableColumns.hours_publication_operations.slice(0, schemaVersion < 29 ? -2 : -1) : schemaVersion < 33 && table === "hours_correction_requests" ? tableColumns.hours_correction_requests.slice(0, -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : schemaVersion < 28 && table === "kiosks" ? tableColumns.kiosks.slice(0, -2) : schemaVersion < 31 && table === "kiosks" ? tableColumns.kiosks.slice(0, -1) : schemaVersion < 29 && table === "hours_activities" ? tableColumns.hours_activities.slice(0, -4) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -10) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -8) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -6) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
+    const columns = table === "carpool_plans" && schemaVersion < 39 ? tableColumns.carpool_plans.filter(column => !["time_zone", "outbound_departure_at", "return_departure_at"].includes(column) && (schemaVersion >= 38 || !["group_settings_json", "last_rebuild_json"].includes(column)) && (schemaVersion >= 37 || column !== "trip_scope") && (schemaVersion >= 33 || column !== "meeting_id")) : table === "carpool_people" && schemaVersion < 37 ? tableColumns.carpool_people.filter(column => !column.endsWith("_location_source") && !column.endsWith("_location_label")) : schemaVersion < 36 && table === "hours_publication_operations" ? tableColumns.hours_publication_operations.slice(0, schemaVersion < 29 ? -2 : -1) : schemaVersion < 33 && table === "hours_correction_requests" ? tableColumns.hours_correction_requests.slice(0, -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 40 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -3 : schemaVersion < 31 ? -2 : -1) : schemaVersion < 29 && table === "hours_activities" ? tableColumns.hours_activities.slice(0, -4) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -10) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -8) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -6) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column])) || (sourceSchemaVersion >= 31 || community22) && Object.keys(row).some((column) => !(columns as readonly string[]).includes(column))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
@@ -3352,7 +3357,8 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, thread_created_at: null, delivery_id: null, ...row }));
   if (tables.discord_attendance_recipients) tables.discord_attendance_recipients = tables.discord_attendance_recipients.map((row) => ({ delivery_id: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
-  if (tables.kiosks) tables.kiosks = tables.kiosks.map((row) => ({ pairing_bound: 0, ...row, ...(schemaVersion < 31 ? { authentication_method: "fingerprint" } : {}) }));
+  if (tables.kiosks) tables.kiosks = tables.kiosks.map((row) => ({ pairing_bound: 0, ...row, ...(schemaVersion < 31 ? { authentication_method: "fingerprint" } : {}), ...(schemaVersion < 40 ? { configured_authentication_method: tables.organization_settings.find(settings => settings.installation_id === row.installation_id)?.kiosk_authentication_method ?? "fingerprint" } : {}) }));
+  if (tables.kiosks.some(row => !kioskAuthenticationMethods.has(row.configured_authentication_method as KioskAuthenticationMethod) || !kioskAuthenticationMethods.has(row.authentication_method as KioskAuthenticationMethod))) throw new HttpError(400, "Backup contains an invalid kiosk authentication method");
   if (schemaVersion < 29) {
     tables.hours_activities = tables.hours_activities.map((row) => ({ ...row, event_start_local: null, event_end_local: null, event_start_occurrence: null, event_end_occurrence: null }));
     tables.hours_publication_operations = tables.hours_publication_operations.map((row) => ({ ...row, action: "publish" }));
@@ -3576,7 +3582,7 @@ export const registeredCoreSchedulerJobs: readonly SchedulerJob<Env>[] = Object.
 const registeredPlatformSchedulerJobs = Object.freeze([...registeredCoreSchedulerJobs, ...registeredModuleSchedulerJobs]);
 export const PlatformScheduler = schedulerClass<Env>(registeredPlatformSchedulerJobs, async (request, env) => {
   try { await requireRole(request, env, ["admin"]); return true; } catch { return false; }
-}, (env) => env.PLATFORM_SCHEDULER_MODE === "durable");
+}, (env) => env.PLATFORM_SCHEDULER_MODE === "durable", webUpdateMaintenance);
 
 async function platformScheduler(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]);
@@ -3678,16 +3684,17 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
       const principal = await requireRole(request, env, ["admin"]);
       result = await fingerprintResetRoute(request, { db: requireDatabase(env), actor: { kind: "admin", userId: principal.userId }, readJson: parseJson, respond: response });
     }
-    else if (url.pathname === "/admin/kiosks/fingerprint-vault") {
+    else if (url.pathname === "/admin/kiosks/fingerprint-vault" || url.pathname.startsWith("/admin/kiosks/fingerprint-vault/enrollments")) {
       const principal = await requireRole(request, env, ["admin"]);
       result = await fingerprintVaultRoute(request, { db: requireDatabase(env), actor: { kind: "admin", userId: principal.userId }, secret: env.FINGERPRINT_VAULT_KEY, readJson: parseJson, respond: response });
     }
     else if (url.pathname === "/admin/kiosks/fingerprint-sync") {
-      const principal = await requireRole(request, env, ["admin"]);
-      result = await fingerprintRelayRoute(request, { db: requireDatabase(env), actor: { kind: "admin", userId: principal.userId }, readJson: parseJson, respond: response });
+      await requireRole(request, env, ["admin"]);
+      throw new HttpError(410, "Peer fingerprint sharing has been retired. Use cloud fingerprint storage.");
     }
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
     else if (url.pathname === "/admin/kiosks/authentication-method" && request.method === "PATCH") result = await kioskAuthenticationConfiguration(request, env);
+    else if (/^\/admin\/kiosks\/[^/]+\/authentication-method$/.test(url.pathname) && request.method === "PATCH") result = await kioskAuthenticationConfiguration(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageKiosk(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "POST") result = await queueKioskCommand(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "GET") result = await kioskCommandStatus(request, env, decodeURIComponent(url.pathname.split("/")[3]));
@@ -3779,14 +3786,14 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
       result = await fingerprintVaultRoute(request, { db: requireDatabase(env), actor: { kind: "kiosk", ...kiosk, credentialHash }, secret: env.FINGERPRINT_VAULT_KEY, readJson: parseJson, respond: response });
     }
     else if (url.pathname === "/kiosk/fingerprint-sync" || url.pathname.startsWith("/kiosk/fingerprint-sync/")) {
-      const kiosk = await kioskFor(request, env);
-      const credentialHash = await sha256(request.headers.get("authorization")!.slice(7));
-      result = await fingerprintRelayRoute(request, { db: requireDatabase(env), actor: { kind: "kiosk", ...kiosk, credentialHash }, readJson: parseJson, respond: response });
+      await kioskFor(request, env);
+      if (url.pathname === "/kiosk/fingerprint-sync" && request.method === "GET") result = response({ enabled: false, syncId: null });
+      else throw new HttpError(410, "Peer fingerprint sharing has been retired. Use cloud fingerprint storage.");
     }
     else if (url.pathname === "/kiosk/poll" && request.method === "GET") {
       const authorization = request.headers.get("authorization");
       if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
-      result = await kioskPoll(request, { db: requireDatabase(env), credentialHash: await sha256(authorization.slice(7)), secret: env.FINGERPRINT_VAULT_KEY, maintenanceEnabled: Boolean(env.UPDATE_REPOSITORY), respond: response });
+      result = await kioskPoll(request, { db: requireDatabase(env), credentialHash: await sha256(authorization.slice(7)), secret: env.FINGERPRINT_VAULT_KEY, respond: response });
     }
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env, context);
     else if (url.pathname === "/kiosk/config" && request.method === "GET") result = await kioskConfiguration(request, env);
@@ -3810,10 +3817,13 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
 }, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
   if (await webUpdateMaintenance(env)) return;
   const db = requireDatabase(env);
-  for (let pass = 0; pass < 8; pass += 1) { const cleanup = await runModuleCleanup(db); if (cleanup.status !== "progress") break; }
+  for (let pass = 0; pass < 8; pass += 1) { if (await webUpdateMaintenance(env)) return; const cleanup = await runModuleCleanup(db); if (cleanup.status !== "progress") break; }
   if (env.PLATFORM_SCHEDULER_MODE === "durable") return;
   if (controller.cron === "*/5 * * * *") {
-    for (const job of registeredPlatformSchedulerJobs) try { if (await job.enabled?.(env) !== false) await job.run(env); } catch { /* Each registered job retries independently on the next scheduled pass. */ }
+    for (const job of registeredPlatformSchedulerJobs) {
+      if (await webUpdateMaintenance(env)) return;
+      try { if (await job.enabled?.(env) !== false) await job.run(env); } catch { /* Each registered job retries independently on the next scheduled pass. */ }
+    }
   }
 } };
 export default worker;

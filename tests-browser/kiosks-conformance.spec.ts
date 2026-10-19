@@ -32,6 +32,7 @@ function kioskFor(state: KioskState, authenticationMethod = "fingerprint") {
 }
 
 async function useKioskContext(page: Page, { role = "admin", state = "healthy", discordConfigured = true, configuredAuthenticationMethod = "fingerprint", reportedAuthenticationMethod = "fingerprint" }: { role?: Role; state?: KioskState; discordConfigured?: boolean; configuredAuthenticationMethod?: string; reportedAuthenticationMethod?: string } = {}) {
+  await page.route("**/admin/update-channel", route => route.fulfill({ json: { channel: "stable", revision: 0 } }));
   await page.route("**/admin/kiosks/fingerprint-sync", route => route.fulfill({ json: { enabled: false } }));
   await page.route("**/admin/kiosks/fingerprint-vault", route => route.fulfill({ json: { enabled: false, keyStatus: "ready", storedFingerprints: 0, serverManagedKeys: true } }));
   await page.route("**/setup/status", (route) => route.fulfill({
@@ -55,15 +56,15 @@ async function useKioskContext(page: Page, { role = "admin", state = "healthy", 
   await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role } }) }));
   await page.route("**/admin/setup/progress", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }) }));
   await page.route("**/integrations/capabilities", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: false, configured: false }, discord: { enabled: discordConfigured, configured: discordConfigured } } }) }));
-  await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [...kioskFor(state, reportedAuthenticationMethod), retiredKiosk], authenticationMethod: configuredAuthenticationMethod }) }));
+  await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [...kioskFor(state, reportedAuthenticationMethod).map(kiosk => ({ ...kiosk, configuredAuthenticationMethod })), retiredKiosk], authenticationMethod: configuredAuthenticationMethod }) }));
   await page.route("**/admin/simulator", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ simulator: { name: "Browser test", active: 1, online: 1, lastSeenAt: iso(0), readerOnline: false, releaseVersion: "browser simulator" } }) }));
   await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: "v0.19.0", html_url: "https://example.test/release" }) }));
 }
 
 test("Fingerprint sharing cards use one themed spacing interval", async ({ page }) => {
   await useKioskContext(page);
-  await page.goto("/kiosks");
-  for (const title of ["Peer sync", "Cloud storage"]) {
+  await page.goto("/settings/fingerprint-sharing");
+  for (const title of ["Cloud storage"]) {
     const card = page.getByRole("article", { name: title, exact: true });
     await expect(card).toBeVisible();
     const rhythm = await card.evaluate(element => {
@@ -93,7 +94,7 @@ for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
       }
       await route.fulfill({ json: { enabled, keyStatus: "ready", storedFingerprints: enabled ? 2 : 0, serverManagedKeys: true } });
     });
-    await page.goto("/kiosks");
+    await page.goto("/settings/fingerprint-sharing");
     const panel = page.getByRole("article", { name: "Cloud storage", exact: true });
     const toggle = panel.getByRole("button", { name: "Enable cloud storage", exact: true });
     await expect(toggle).toBeEnabled(); await toggle.scrollIntoViewIfNeeded();
@@ -115,41 +116,16 @@ for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
     await expect(panel).toContainText("cloud templates deleted"); expect(writes).toBe(2);
     await expectResponsiveFit(page);
   });
-  test(`Fingerprint sync opt-in is themed and confirmed at ${width} in ${theme}`, async ({ page }) => {
+  test(`Cloud-only sync has no peer controls at ${width} in ${theme}`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
     await useKioskContext(page);
-    let enabled = false, writes = 0, finishPatch: (() => void) | undefined;
-    await page.route("**/admin/kiosks/fingerprint-sync", async route => {
-      if (route.request().method() === "PATCH") {
-        writes++; enabled = route.request().postDataJSON().enabled;
-        await new Promise<void>(resolve => { finishPatch = resolve; });
-      }
-      await route.fulfill({ json: { enabled } });
-    });
-    await page.goto("/kiosks");
-    const panel = page.getByRole("article", { name: "Peer sync", exact: true });
-    const toggle = panel.getByRole("button", { name: "Enable sync", exact: true });
-    await expect(toggle).toBeEnabled(); await toggle.scrollIntoViewIfNeeded();
-    await expect(panel).toContainText("Installation sync: Off");
-    const style = await toggle.evaluate(element => {
-      const css = getComputedStyle(element); const probe = document.createElement("span");
-      probe.style.background = "var(--primary)"; element.append(probe);
-      const primary = getComputedStyle(probe).backgroundColor; probe.remove();
-      return { background: css.backgroundColor, primary, color: css.color, border: css.borderTopStyle, borderWidth: parseFloat(css.borderTopWidth), radius: parseFloat(css.borderTopLeftRadius), height: element.getBoundingClientRect().height };
-    });
-    expect(style.background).toBe(style.primary); expect(style.color).not.toBe(style.background);
-    expect(style.border).toBe("solid"); expect(style.borderWidth).toBeGreaterThan(0); expect(style.radius).toBeGreaterThan(0); expect(style.height).toBeGreaterThanOrEqual(44);
-    await toggle.focus(); await expect(toggle).toBeFocused();
-    expect(await toggle.evaluate(element => parseFloat(getComputedStyle(element).outlineWidth))).toBeGreaterThan(0);
-    await toggle.hover(); await expect(toggle).toBeEnabled();
-    page.once("dialog", dialog => dialog.dismiss()); await toggle.click(); expect(writes).toBe(0);
-    page.once("dialog", dialog => dialog.accept()); await toggle.click();
-    await expect(panel.getByRole("button", { name: "Please wait…" })).toBeDisabled();
-    await expect(panel.getByRole("button", { name: "Refresh sync settings" })).toBeDisabled();
-    await expect.poll(() => Boolean(finishPatch)).toBe(true); finishPatch!();
-    await expect(panel.getByRole("button", { name: "Disable sync" })).toBeEnabled();
-    await expect(panel).toContainText("Installation sync: On"); expect(writes).toBe(1);
+    const requests: string[] = [];
+    page.on("request", request => { if (new URL(request.url()).pathname.endsWith("/admin/kiosks/fingerprint-sync")) requests.push(request.url()); });
+    await page.goto("/settings/fingerprint-sharing");
+    await expect(page.getByRole("article", { name: "Cloud storage", exact: true })).toBeVisible();
+    await expect(page.getByRole("article", { name: "Peer sync", exact: true })).toHaveCount(0);
+    expect(requests).toEqual([]);
     await expectResponsiveFit(page);
   });
 }
@@ -162,7 +138,7 @@ test("Missing or changed vault keys fail closed but allow cloud deletion and ref
     if (route.request().method() === "PATCH") enabled = route.request().postDataJSON().enabled;
     await route.fulfill({ json: { enabled, keyStatus, storedFingerprints: enabled ? 1 : 0, serverManagedKeys: true } });
   });
-  await page.goto("/kiosks"); const panel = page.getByRole("article", { name: "Cloud storage", exact: true });
+  await page.goto("/settings/fingerprint-sharing"); const panel = page.getByRole("article", { name: "Cloud storage", exact: true });
   await expect(panel.getByRole("button", { name: "Enable cloud storage", exact: true })).toBeDisabled();
   await expect(panel.getByRole("alert")).toContainText("is missing");
   enabled = true; keyStatus = "changed"; await panel.getByRole("button", { name: "Refresh cloud storage" }).click();
@@ -175,18 +151,6 @@ test("Missing or changed vault keys fail closed but allow cloud deletion and ref
   await expect(panel.getByRole("button", { name: "Enable cloud storage", exact: true })).toBeEnabled();
 });
 
-test("Fingerprint sync settings fail closed and recover through refresh", async ({ page }) => {
-  await useKioskContext(page);
-  let fail = true;
-  await page.route("**/admin/kiosks/fingerprint-sync", route => fail ? route.fulfill({ status: 503, json: { error: "Sync settings temporarily unavailable" } }) : route.fulfill({ json: { enabled: false } }));
-  await page.goto("/kiosks");
-  const panel = page.getByRole("article", { name: "Peer sync", exact: true });
-  await expect(panel.getByRole("alert")).toContainText("temporarily unavailable");
-  await expect(panel.getByRole("button", { name: "Enable sync", exact: true })).toBeDisabled();
-  fail = false; await panel.getByRole("button", { name: "Refresh sync settings" }).click();
-  await expect(panel.getByRole("button", { name: "Enable sync", exact: true })).toBeEnabled();
-  await expect(panel.getByRole("alert")).toHaveCount(0);
-});
 
 async function expectResponsiveFit(page: Page) {
   const geometry = await page.evaluate(() => ({
@@ -215,16 +179,40 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
       await expect(page.locator("main h1")).toHaveCount(1);
       await expect(page.getByRole("heading", { level: 1, name: "Kiosks" })).toBeVisible();
+      const edit = page.getByRole("button", { name: `Rename ${longDeviceName}`, exact: true });
+      await edit.focus();
+      const iconOffset = await edit.evaluate(button => { const box = button.getBoundingClientRect(), icon = button.querySelector("svg")!.getBoundingClientRect(); return { x: Math.abs(icon.x + icon.width / 2 - box.x - box.width / 2), y: Math.abs(icon.y + icon.height / 2 - box.y - box.height / 2) }; });
+      expect(iconOffset.x).toBeLessThan(1); expect(iconOffset.y).toBeLessThan(1);
+      const style = await edit.evaluate(element => {
+        const css = getComputedStyle(element), probe = document.createElement("span");
+        probe.style.cssText = "color:var(--ui-text);background:var(--ui-surface-subtle);border:1px solid var(--ui-border);border-radius:var(--radius-control)";
+        element.append(probe); const tokens = getComputedStyle(probe);
+        const value = { background: css.backgroundColor, text: css.color, border: css.borderTopColor, radius: css.borderTopLeftRadius, expectedBackground: tokens.backgroundColor, expectedText: tokens.color, expectedBorder: tokens.borderTopColor, expectedRadius: tokens.borderTopLeftRadius, outline: parseFloat(css.outlineWidth), width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height };
+        probe.remove(); return value;
+      });
+      expect(style.background).toBe(style.expectedBackground); expect(style.text).toBe(style.expectedText); expect(style.border).toBe(style.expectedBorder); expect(style.radius).toBe(style.expectedRadius);
+      expect(style.width).toBeGreaterThanOrEqual(44); expect(style.height).toBeGreaterThanOrEqual(44); expect(style.outline).toBeGreaterThan(0);
+      await page.keyboard.press("Enter"); await expect(page.getByLabel("Device name", { exact: true })).toBeFocused();
+      await page.keyboard.press("Escape"); await expect(edit).toBeFocused();
       await expect(page.getByText("Healthy", { exact: true })).toHaveAttribute("data-tone", "success");
-      await expect(page.getByText("Available on selected track", { exact: true })).toBeVisible();
+      await expect(page.getByText("Latest stable release", { exact: true })).toBeVisible();
       await expect(page.getByText("Update available", { exact: true })).toBeVisible();
-      await expect(page.getByRole("table", { name: "Retired kiosk history" })).toContainText("Retired workshop kiosk");
+      await expect(page.getByRole("heading", { name: "Device history" })).toHaveCount(0);
       await expect(page.getByRole("link", { name: "Open simulator" })).toHaveAttribute("href", "/simulator");
       const controls = page.locator(".kiosk-device-card button, .kiosk-simulator-card a, .kiosk-simulator-card button");
       for (const height of await controls.evaluateAll((items) => items.map((item) => item.getBoundingClientRect().height))) expect(height).toBeGreaterThanOrEqual(44);
+      await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
+      await page.getByText("Authentication settings", { exact: true }).click();
+      await page.keyboard.press("Tab");
       await page.getByRole("button", { name: "Authentication maintenance" }).focus();
       expect(await page.getByRole("button", { name: "Authentication maintenance" }).evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
+      await page.goto("/settings/fingerprint-sharing");
+      const cloud = page.getByRole("article", { name: "Cloud storage", exact: true });
+      await expect(cloud).toBeVisible();
+      const actionCenters = await cloud.evaluate(element => [...element.querySelectorAll(".kiosk-actions button")].map(button => { const box = button.getBoundingClientRect(); return box.y + box.height / 2; }));
+      expect(actionCenters[0]).toBeCloseTo(actionCenters[1]!, 0);
       await expectResponsiveFit(page);
+      await page.screenshot({ path: test.info().outputPath(`kiosks-${viewport.width}-${theme}.png`), fullPage: true });
     });
   }
 }
@@ -236,6 +224,8 @@ for (const state of ["degraded", "offline", "unpaired"] as const) {
     const expected = state === "unpaired" ? "Not paired" : state[0].toUpperCase() + state.slice(1);
     await expect(page.getByText(expected, { exact: true }).first()).toBeVisible();
     if (state === "degraded") {
+      await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
+      await page.getByText("Diagnostics", { exact: true }).click();
       await expect(page.getByText("offline queue", { exact: true })).toBeVisible();
       await expect(page.getByText("17", { exact: true })).toBeVisible();
     }
@@ -250,13 +240,13 @@ test("multiple active kiosks remain independently selectable and manageable", as
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [frontDesk, workshop, retiredKiosk], authenticationMethod: "fingerprint" }) }));
   await page.goto("/kiosks");
 
-  const switcher = page.getByRole("tablist", { name: "Active physical kiosks" });
-  await expect(switcher.getByRole("tab")).toHaveCount(2);
+  const switcher = page.getByRole("group", { name: "Active physical kiosks" });
+  await expect(switcher.locator(".kiosk-device-select")).toHaveCount(2);
   await expect(page.getByText("2 active devices", { exact: true })).toBeVisible();
-  await switcher.getByRole("tab", { name: /Workshop entrance/ }).click();
-  await expect(switcher.getByRole("tab", { name: /Workshop entrance/ })).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator(".kiosk-state").getByText("Workshop entrance", { exact: true })).toBeVisible();
-  await expect(page.locator(".kiosk-diagnostics")).toContainText("0.17.0");
+  await switcher.getByRole("button", { name: /^Workshop entrance/ }).click();
+  await expect(switcher.getByRole("button", { name: /^Workshop entrance/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".kiosk-device-card > .kiosk-state")).toHaveCount(0);
+  await expect(page.locator(".kiosk-summary")).toContainText("0.17.0");
 
   await page.getByRole("button", { name: "Add kiosk" }).click();
   const dialog = page.getByRole("dialog", { name: "Add physical kiosk" });
@@ -286,8 +276,11 @@ test("Admin pairing, maintenance, action feedback, and long errors remain focuse
   await expect(dialog).toHaveCount(0);
   await expect(add).toBeFocused();
 
+  await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
+  await page.getByText("Authentication settings", { exact: true }).click();
   await page.getByRole("button", { name: "Authentication maintenance" }).click();
   await expect(page.getByText("Open maintenance on the physical kiosk", { exact: true })).toBeVisible();
+  await page.getByText("Device maintenance", { exact: true }).click();
   await page.getByRole("button", { name: "Reload display" }).click();
   const actionStatus = page.getByRole("status").filter({ hasText: "Display reload queued." });
   await expect(actionStatus).toHaveText("Display reload queued. The kiosk normally receives it within five seconds.");
@@ -301,6 +294,8 @@ test("configured authentication stays visibly pending until the physical kiosk r
   const authentication = page.locator(".kiosk-diagnostics > div").filter({ has: page.getByText("Authentication", { exact: true }) });
   await expect(authentication).toContainText("Fingerprint");
   await expect(authentication).toContainText("QR code configured - waiting for kiosk sync");
+  await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
+  await page.getByText("Authentication settings", { exact: true }).click();
   const selector = page.getByLabel("Authentication method");
   await expect(selector).toHaveValue("qr");
   await expect(selector).toHaveClass(/ui-native-select/);
@@ -314,15 +309,173 @@ test("configured authentication stays visibly pending until the physical kiosk r
   await expect(authentication).toContainText("QR code configured - waiting for kiosk sync");
 });
 
-test("Operator sees health and history without Admin management, simulator, or unconfigured Discord controls", async ({ page }) => {
+test("selected-device authentication and inline rename leave other kiosks unchanged", async ({ page }) => {
+  await useKioskContext(page);
+  const devices = [{ ...kioskFor("healthy")[0]!, name: "Front entrance", configuredAuthenticationMethod: "fingerprint" }, { ...kioskFor("healthy", "rfid")[0]!, id: "kiosk-2", name: "Workshop entrance", configuredAuthenticationMethod: "nfc" }];
+  const writes: string[] = [];
+  await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: [...devices, retiredKiosk] } }));
+  await page.route("**/admin/kiosks/kiosk-2/authentication-method", async route => { writes.push(route.request().url()); devices[1]!.configuredAuthenticationMethod = route.request().postDataJSON().authenticationMethod; await route.fulfill({ json: { kioskId: "kiosk-2", authenticationMethod: devices[1]!.configuredAuthenticationMethod } }); });
+  await page.route("**/admin/kiosks/kiosk-2", async route => { devices[1]!.name = route.request().postDataJSON().name; await route.fulfill({ json: { kiosk: devices[1] } }); });
+  await page.goto("/kiosks");
+  const selector = page.getByLabel("Authentication method for selected kiosk");
+  await expect(selector).toHaveCount(0);
+  await page.getByRole("button", { name: /^Workshop entrance/ }).click();
+  await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
+  await page.getByText("Authentication settings", { exact: true }).click();
+  await expect(selector).toHaveValue("nfc");
+  await expect(page.locator(".kiosk-summary")).toContainText("NFC badge configured - waiting for kiosk sync");
+  await selector.selectOption("qr"); await page.getByRole("button", { name: "Save method", exact: true }).click();
+  await expect(page.locator(".kiosk-summary")).toContainText("QR code configured - waiting for kiosk sync");
+  expect(writes).toHaveLength(1);
+  await page.getByRole("link", { name: "← Kiosks", exact: true }).click();
+  await page.getByRole("button", { name: "Rename Workshop entrance", exact: true }).click();
+  await page.getByLabel("Device name", { exact: true }).fill("Workshop door"); await page.getByRole("button", { name: "Save name", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Rename Workshop door", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /^Front entrance/ }).click();
+  await expect(page.locator(".kiosk-summary")).toContainText("Fingerprint");
+  expect(devices[0]!.configuredAuthenticationMethod).toBe("fingerprint");
+  await expect(page.locator(".kiosk-device-card > .kiosk-state")).toHaveCount(0);
+  await expect(page.getByText("Device history", { exact: true })).toHaveCount(0);
+});
+
+test("release label stays neutral until the server confirms Beta", async ({ page }) => {
+  await useKioskContext(page);
+  let confirm!: () => void; const ready = new Promise<void>(resolve => { confirm = resolve; });
+  await page.route("**/admin/update-channel", async route => { await ready; await route.fulfill({ json: { channel: "beta", revision: 1 } }); });
+  await page.route("**/admin/releases/latest?channel=beta", route => route.fulfill({ json: discovered({ tag_name: "v2.0.0-beta.4", prerelease: true }, Date.now(), "beta") }));
+  await page.goto("/kiosks");
+  await expect(page.getByText("Latest release", { exact: true })).toBeVisible();
+  await expect(page.getByText("Latest stable release", { exact: true })).toHaveCount(0);
+  confirm(); await expect(page.getByText("Latest beta release", { exact: true })).toBeVisible();
+});
+
+test("Cloud storage fills the sharing row without an empty peer column", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 }); await useKioskContext(page);
+  await page.route("**/admin/kiosks/fingerprint-vault", route => route.fulfill({ json: { enabled: false, keyStatus: "missing", storedFingerprints: 0, serverManagedKeys: true } }));
+  await page.goto("/settings/fingerprint-sharing");
+  const cloud = page.getByRole("article", { name: "Cloud storage", exact: true });
+  await expect(cloud.getByRole("alert")).toBeVisible();
+  await expect(page.getByRole("article", { name: "Peer sync", exact: true })).toHaveCount(0);
+  const fit = await cloud.evaluate(element => {
+    const box = element.getBoundingClientRect(), parent = element.parentElement!.getBoundingClientRect();
+    return { width: box.width, available: parent.width };
+  });
+  expect(fit.width).toBeGreaterThanOrEqual(fit.available - 2);
+  await expectResponsiveFit(page);
+});
+
+test("Operator sees health without Admin management, simulator, or unconfigured Discord controls", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await useKioskContext(page, { role: "operator", state: "degraded", discordConfigured: false });
   await page.goto("/kiosks");
 
   await expect(page.getByText("Degraded", { exact: true })).toBeVisible();
-  await expect(page.getByRole("table", { name: "Retired kiosk history" })).toBeVisible();
+  await expect(page.getByRole("table", { name: "Retired kiosk history" })).toHaveCount(0);
   await expect(page.getByText("Unavailable until the Discord integration is enabled, saved, and verified.")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Add kiosk|Rename|Reload display|Restart software|Reboot Pi|Reset network PIN|Retire kiosk|Sync Discord status/ })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Browser simulator" })).toHaveCount(0);
   await expectResponsiveFit(page);
 });
+
+for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
+  test(`cloud enrollment retirement is explicit and preserves other enrollments ${theme} ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
+    await useKioskContext(page);
+    await page.route("**/admin/kiosks/fingerprint-vault", route => route.fulfill({ json: { enabled: true, keyStatus: "ready", storedFingerprints: 2, serverManagedKeys: true } }));
+    const rows = ["a", "b"].map(letter => ({ fingerprintId: letter.repeat(64), vaultId: "c".repeat(64), rosterId: "member", memberId: "SYN-001", firstName: "Synthetic", lastName: "Member with a long display name", createdAt: Date.now() }));
+    let deletes = 0;
+    await page.route("**/admin/kiosks/fingerprint-vault/enrollments**", route => {
+      if (route.request().method() === "DELETE") {
+        deletes++; expect(route.request().postDataJSON()).toEqual({ vaultId: "c".repeat(64), rosterId: "member", confirmation: "RETIRE ENROLLMENT EVERYWHERE" });
+        return route.fulfill({ json: { retired: true, readerTemplatesRetained: true } });
+      }
+      return route.fulfill({ json: { enrollments: rows } });
+    });
+    await page.goto("/settings/fingerprint-sharing"); const panel = page.getByRole("article", { name: "Cloud storage", exact: true });
+    await panel.getByRole("button", { name: "Review cloud enrollments" }).click();
+    const retire = panel.getByRole("button", { name: "Retire everywhere" }); await expect(retire).toHaveCount(2);
+    await expect(panel).toContainText("Historical imported copies");
+    await retire.first().scrollIntoViewIfNeeded();
+    expect(await retire.first().evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    page.once("dialog", dialog => dialog.dismiss()); await retire.first().click(); expect(deletes).toBe(0);
+    page.once("dialog", dialog => { expect(dialog.message()).toContain("Reader templates remain stored"); return dialog.accept(); });
+    await retire.first().click(); await expect(retire).toHaveCount(1); expect(deletes).toBe(1);
+    await expect(panel).toContainText("1 stored fingerprint"); await expect(panel).toContainText("Enrollment retired");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`enrollment-retirement-${theme}-${width}.png`), fullPage: true });
+  });
+}
+
+test("development kiosk replacement requires confirmation and sends only consent", async ({ page }) => {
+  await useKioskContext(page);
+  const writes: unknown[] = [];
+  await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: kioskFor("healthy").map(kiosk => ({ ...kiosk, releaseVersion: "0.18.0-dev.kiosk-list.fe4c8f2" })), authenticationMethod: "fingerprint" } }));
+  await page.route("**/admin/kiosks/kiosk-1/commands", route => {
+    if (route.request().method() === "POST") writes.push(route.request().postDataJSON());
+    return route.fulfill({ status: 202, json: { command: { id: "synthetic-update" } } });
+  });
+  await page.goto("/kiosks");
+  const update = page.getByRole("button", { name: "Update kiosk", exact: true });
+  await expect(update).toBeEnabled();
+  page.once("dialog", dialog => dialog.dismiss()); await update.click();
+  expect(writes).toEqual([]);
+  page.once("dialog", dialog => { expect(dialog.message()).toContain("Development-only changes may be removed"); return dialog.accept(); });
+  await update.click();
+  await expect.poll(() => writes).toEqual([{ command: "install_latest", replaceDevelopmentBuild: true }]);
+});
+
+test("management route uses the selected kiosk and never falls back for a missing device", async ({ page }) => {
+  await useKioskContext(page);
+  const devices = [kioskFor("healthy")[0]!, { ...kioskFor("healthy")[0]!, id: "kiosk-2", name: "Studio kiosk", releaseVersion: "0.19.0" }];
+  const commands: string[] = [];
+  await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: [...devices, retiredKiosk] } }));
+  await page.route("**/admin/kiosks/*/commands", route => { commands.push(route.request().url()); return route.fulfill({ json: {} }); });
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.goto("/kiosks");
+  await expect(page.getByRole("article", { name: "Cloud storage", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: /^Studio kiosk/ }).click();
+  await expect(page.getByText("Up to date", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Update kiosk", exact: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
+  await expect(page).toHaveURL(/\/kiosks\/kiosk-2\/manage$/);
+  await expect(page.locator(".page-intro")).toContainText("Studio kiosk");
+  for (const title of ["Diagnostics", "Authentication settings", "Device maintenance", "Retire kiosk"]) {
+    const summary = page.locator(".kiosk-management-section > summary").filter({ hasText: title });
+    await expect(summary).toBeVisible();
+    const bounds = await summary.boundingBox();
+    expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    expect(bounds!.height).toBeLessThanOrEqual(56);
+  }
+  await page.getByText("Device maintenance", { exact: true }).click();
+  await page.getByRole("button", { name: "Reload display", exact: true }).click();
+  await expect.poll(() => commands.length).toBe(1);
+  expect(commands[0]).toContain("/kiosk-2/commands");
+  await expectResponsiveFit(page);
+  for (const id of ["missing", "retired-1"]) {
+    await page.goto("/kiosks/" + id + "/manage");
+    await expect(page.locator('[data-walkthrough-page="kiosks"]')).toHaveAttribute("data-walkthrough-ready", "true");
+    await expect(page.getByText("This kiosk is unavailable or retired.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Reload display|Retire kiosk|Save method/ })).toHaveCount(0);
+  }
+  expect(commands).toHaveLength(1);
+});
+
+test("operator management remains read-only and fingerprint sharing stays Admin-only", async ({ page }) => {
+  await useKioskContext(page, { role: "operator" });
+  await page.goto("/kiosks/kiosk-1/manage");
+  await page.getByText("Diagnostics", { exact: true }).click();
+  await expect(page.getByText("Last successful sync", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Reload display|Retire kiosk|Save method|Update kiosk/ })).toHaveCount(0);
+  await page.goto("/settings/fingerprint-sharing");
+  await expect(page.getByRole("heading", { name: "Page unavailable" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Enable cloud storage" })).toHaveCount(0);
+});
+
+for (const role of ["admin", "operator"] as const) for (const state of ["offline", "degraded"] as const) {
+  test("managed kiosk retains " + state + " health for " + role, async ({ page }) => {
+    await useKioskContext(page, { role, state });
+    await page.goto("/kiosks/kiosk-1/manage");
+    await expect(page.locator(".page-intro .status-pill")).toHaveText(state === "offline" ? "Offline" : "Degraded");
+  });
+}

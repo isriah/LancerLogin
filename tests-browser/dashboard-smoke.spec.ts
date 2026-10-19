@@ -142,23 +142,23 @@ test("branding controls and dark surfaces are themed", async ({ page }) => {
 
 test("theme switch supports keyboard, pointer, and saved state", async ({ page }) => {
   await page.goto("/settings/organization");
-  const toggle = page.getByRole("switch", { name: "Dark mode" });
-  await expect(toggle).toBeChecked();
+  const toggle = page.getByRole("switch", { name: "Light mode" });
+  await expect(toggle).not.toBeChecked();
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
 
   await toggle.press("Space");
-  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toBeChecked();
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
-  await expect(toggle.locator(".theme-toggle-label")).toHaveText("Light");
+  await expect(toggle.locator(".theme-toggle-label")).toHaveText("Light mode");
   await page.reload();
-  await expect(page.getByRole("switch", { name: "Dark mode" })).not.toBeChecked();
+  await expect(page.getByRole("switch", { name: "Light mode" })).toBeChecked();
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
 
-  await page.getByRole("switch", { name: "Dark mode" }).click();
-  await expect(page.getByRole("switch", { name: "Dark mode" })).toBeChecked();
+  await page.getByRole("switch", { name: "Light mode" }).click();
+  await expect(page.getByRole("switch", { name: "Light mode" })).not.toBeChecked();
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
   await page.reload();
-  await expect(page.getByRole("switch", { name: "Dark mode" })).toBeChecked();
+  await expect(page.getByRole("switch", { name: "Light mode" })).not.toBeChecked();
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "dark");
 });
 

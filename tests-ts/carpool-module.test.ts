@@ -71,6 +71,74 @@ async function createPlan(db: Database, title = "Competition rides") { return cr
 async function addPerson(db: Database, planId: string, value: Record<string, unknown>) { return carpoolRoute(db, "admin", request(`/admin/carpool/plans/${planId}/people`, "POST"), value); }
 const count = (db: Database, table: string) => Number((db.sqlite.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count);
 
+test("automatic location batches progress across both trips and preserve manual pins and terminal misses", async () => {
+  const db = new Database();
+  try {
+    const id = (await createPlan(db)).plan.id; const calls: string[] = [];
+    for (let index = 0; index < 10; index++) await addPerson(db, id, basePerson({ displayName: `Lookup ${index}`, outboundAddress: `${index} Synthetic St, Example, PA 19000`, returnAddress: `${index} Return St, Example, PA 19000`, outboundLatitude: null, outboundLongitude: null, returnLatitude: null, returnLongitude: null, returnSameAsOutbound: false }));
+    await addPerson(db, id, basePerson({ displayName: "Manual pin", outboundAddress: "Short manual address" }));
+    const provider = { id: "synthetic", async resolve(address: string) { calls.push(address); return address.startsWith("9 ") ? null : { latitude: 40.1, longitude: -74.1 }; } };
+    const context = async (configured = true) => (await carpoolRoute(db, "admin", request(`/admin/carpool/context?planId=${id}`), undefined, configured ? provider : undefined)).body as any;
+    const unconfigured = await context(false); assert.equal(unconfigured.locationLookup.state, "unconfigured"); assert.equal(calls.length, 0);
+    let state = await context(); let batches = 0;
+    while (state.locationLookup.state === "queued") {
+      const before = calls.length; const saved = (await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}/locations/resolve`, "POST"), { automatic: true, planRevision: state.detail.plan.revision }, provider)).body as any;
+      assert.ok(calls.length - before <= 8); state = { detail: saved, locationLookup: saved.locationLookup }; assert.ok(++batches <= 3);
+    }
+    assert.equal(state.locationLookup.state, "complete"); assert.equal(batches, 3); assert.equal(calls.length, 20);
+    const manual = state.detail.people.find((person: any) => person.displayName === "Manual pin"); assert.equal(manual.outboundLatitude, 40); assert.equal(manual.outboundLocationSource, "manual");
+    const missing = state.detail.people.find((person: any) => person.displayName === "Lookup 9"); assert.equal(missing.outboundLocationSource, "no-match"); assert.equal(missing.returnLocationSource, "no-match");
+    assert.equal(state.detail.readiness.directions.outbound.issues.find((issue: any) => issue.riderId === missing.id).reason, "needs-review");
+    await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}/locations/resolve`, "POST"), { automatic: true }, provider); assert.equal(calls.length, 20); assert.equal((await context()).locationLookup.state, "complete");
+    const backup = (await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}/export?kind=backup`))).body as any; assert.equal("locationLookup" in backup, false); assert.doesNotMatch(JSON.stringify(backup), /lease_token|input_key/);
+    await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}`, "DELETE"), { planRevision: state.detail.plan.revision }); assert.equal(count(db, "carpool_location_resolution"), 0);
+  } finally { db.close(); }
+});
+
+test("automatic lookup failures are durable until explicit retry or changed addresses", async () => {
+  const db = new Database();
+  try {
+    const id = (await createPlan(db)).plan.id; await addPerson(db, id, basePerson({ outboundLatitude: null, outboundLongitude: null, returnLatitude: null, returnLongitude: null }));
+    let calls = 0; let failing = true; const provider = { id: "synthetic", async resolve() { calls++; if (failing) throw new Error("synthetic provider unavailable"); return { latitude: 40, longitude: -74 }; } };
+    const resolve = (retry = false) => carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}/locations/resolve`, "POST"), { automatic: true, retry }, provider);
+    const failed = (await resolve()).body as any; assert.equal(failed.locationLookup.state, "failed"); assert.equal(failed.locationLookup.errorCode, "provider");
+    for (let index = 0; index < 3; index++) { await resolve(); const context = (await carpoolRoute(db, "admin", request(`/admin/carpool/context?planId=${id}`), undefined, provider)).body as any; assert.equal(context.locationLookup.state, "failed"); } assert.equal(calls, 1);
+    db.sqlite.prepare("UPDATE carpool_people SET outbound_address='Changed saved address',return_address='Changed saved address',revision=revision+1").run();
+    await resolve(); assert.equal(calls, 2); failing = false;
+    const saved = (await resolve(true)).body as any; assert.equal(saved.locationLookup.state, "complete"); assert.equal(calls, 3); assert.equal(saved.people[0].returnLatitude, 40);
+  } finally { db.close(); }
+});
+
+test("automatic return-only lookup preserves the unplanned outbound location", async () => {
+  const db = new Database();
+  try {
+    const plan = await createCarpoolPlan(db, "admin", { title: "Return only", tripScope: "return" }); const id = String(plan.plan.id);
+    await addPerson(db, id, basePerson({ outboundLatitude: 41, outboundLongitude: -73, returnSameAsOutbound: false, returnLatitude: null, returnLongitude: null, returnAddress: "2 Synthetic Return St, Example, PA 19000" }));
+    const saved = (await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}/locations/resolve`, "POST"), { automatic: true }, { id: "synthetic", async resolve() { return { latitude: 40, longitude: -74 }; } })).body as any;
+    assert.equal(saved.locationLookup.state, "complete"); assert.equal(saved.people[0].outboundLatitude, 41); assert.equal(saved.people[0].outboundLongitude, -73); assert.equal(saved.people[0].returnLatitude, 40);
+  } finally { db.close(); }
+});
+
+test("automatic lookup has one plan lease and cannot overwrite a concurrent manual save or expired authority", async () => {
+  const db = new Database();
+  try {
+    const id = (await createPlan(db)).plan.id; await addPerson(db, id, basePerson({ outboundLatitude: null, outboundLongitude: null, returnLatitude: null, returnLongitude: null }));
+    let release!: () => void; let entered!: () => void; const pending = new Promise<void>(resolve => { release = resolve; }); const started = new Promise<void>(resolve => { entered = resolve; }); let calls = 0;
+    const provider = { id: "synthetic", async resolve() { calls++; entered(); await pending; return { latitude: 40.2, longitude: -74.2 }; } };
+    const resolving = carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}/locations/resolve`, "POST"), { automatic: true }, provider); await started;
+    const second = (await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}/locations/resolve`, "POST"), { automatic: true }, provider)).body as any; assert.equal(second.locationLookup.state, "running"); assert.equal(calls, 1);
+    const saved = (await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}/people/${second.people[0].id}`, "PATCH"), { ...basePerson({ outboundLatitude: 41, outboundLongitude: -73, returnLatitude: 41, returnLongitude: -73 }), revision: second.people[0].revision, planRevision: second.plan.revision })).body as any;
+    release(); await assert.rejects(resolving, (error: unknown) => error instanceof HttpError && error.status === 409);
+    const current = (await carpoolRoute(db, "admin", request(`/admin/carpool/context?planId=${id}`), undefined, provider)).body as any; assert.equal(current.detail.people[0].outboundLatitude, 41); assert.equal(current.detail.plan.revision, saved.plan.revision);
+    db.sqlite.prepare("UPDATE carpool_people SET outbound_lat=NULL,outbound_lon=NULL,return_lat=NULL,return_lon=NULL,outbound_location_source=NULL,return_location_source=NULL").run();
+    db.sqlite.prepare("UPDATE carpool_location_resolution SET state='running',lease_token='expired',lease_expires_at='2000-01-01T00:00:00Z'").run();
+    const expired = (await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}/locations/resolve`, "POST"), { automatic: true }, provider)).body as any; assert.equal(expired.locationLookup.state, "failed"); assert.equal(expired.locationLookup.errorCode, "interrupted"); assert.equal(calls, 1);
+    db.sqlite.prepare("UPDATE carpool_people SET outbound_address='New address after interruption',return_address='New address after interruption'").run();
+    const changed = (await carpoolRoute(db, "admin", request(`/admin/carpool/context?planId=${id}`), undefined, provider)).body as any; assert.equal(changed.locationLookup.state, "queued");
+    const retried = (await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${id}/locations/resolve`, "POST"), { automatic: true }, provider)).body as any; assert.equal(retried.locationLookup.state, "complete"); assert.equal(calls, 2);
+  } finally { db.close(); }
+});
+
 test("Carpool trip times retain exact instants and require a choice across clock changes", () => {
   assert.equal(carpoolLocalInstant("2026-10-14T08:00", "America/New_York"), "2026-10-14T12:00:00.000Z");
   assert.equal(carpoolLocalTime("2026-10-14T12:00:37.123Z", "America/New_York").value, "2026-10-14T08:00:37.123");
@@ -220,6 +288,7 @@ test("location refresh invalidates only affected people and maintains a shared r
     const planId = (await createPlan(db)).plan.id;
     await addPerson(db, planId, basePerson({ displayName: "Driver", outboundStatus: "offer", outboundSeats: 2, returnStatus: "offer", returnSeats: 2, outboundAddress: "1 Complete St, Philadelphia, PA 19103" }));
     await addPerson(db, planId, basePerson({ displayName: "One", outboundAddress: "Short St" }));
+    db.sqlite.prepare("UPDATE carpool_people SET outbound_location_source='lookup',return_location_source='lookup' WHERE display_name='One'").run();
     await addPerson(db, planId, basePerson({ displayName: "Two", outboundAddress: "2 Complete St, Philadelphia, PA 19103" }));
     const detail = (await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${planId}/generate/both`, "POST"), {})).body as any;
     const calls: string[] = []; const geocoder = { id: "synthetic", resolve: async (address: string) => { calls.push(address); return { latitude: 40.01, longitude: -74.01 }; } };
@@ -578,6 +647,7 @@ test("short addresses can be re-resolved near the median of complete event addre
     const planId = (await createPlan(db)).plan.id;
     await addPerson(db, planId, basePerson({ displayName: "Complete address", outboundAddress: "123 Market St, Philadelphia, PA 19103", outboundLatitude: 39.9526, outboundLongitude: -75.1652, returnAddress: "123 Market St, Philadelphia, PA 19103", returnLatitude: 39.9526, returnLongitude: -75.1652 }));
     await addPerson(db, planId, basePerson({ displayName: "Short address", outboundAddress: "456 Local Street", outboundLatitude: 34, outboundLongitude: -118, returnAddress: "456 Local Street", returnLatitude: 34, returnLongitude: -118 }));
+    db.sqlite.prepare("UPDATE carpool_people SET outbound_location_source='lookup',return_location_source='lookup' WHERE display_name='Short address'").run();
     const calls: Array<{ address: string; bias?: CarpoolGeocodeBias }> = [];
     const geocoder = { id: "recording", async resolve(address: string, bias?: CarpoolGeocodeBias) { calls.push({ address, bias }); return { latitude: 39.96, longitude: -75.17, label: "Nearby result" }; } };
     const result = await carpoolRoute(db, "admin", request(`/admin/carpool/plans/${planId}/locations/resolve`, "POST"), { refreshAmbiguous: true }, geocoder);

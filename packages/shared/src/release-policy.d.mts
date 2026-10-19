@@ -5,3 +5,5 @@ export function compareReleaseVersions(left: string, right: string): -1 | 0 | 1 
 export function releaseAllowed(tag: unknown, channel?: UpdateChannel, prerelease?: unknown): boolean;
 export function completeOfficialRelease(value: unknown, channel?: UpdateChannel): OfficialRelease | undefined;
 export function newestOfficialRelease(values: unknown, channel?: UpdateChannel): OfficialRelease | undefined;
+
+export function kioskReleaseTransition(candidate: unknown, installed: unknown): "upgrade" | "current" | "replace-development" | "unavailable";

@@ -28,7 +28,7 @@ export function moduleSchedulerJobs<E>(application: {
   })) : []));
 }
 
-export function schedulerClass<E>(jobs: readonly SchedulerJob<E>[], authorize: (request: Request, env: E) => Promise<boolean>, configured: (env: E) => boolean) {
+export function schedulerClass<E>(jobs: readonly SchedulerJob<E>[], authorize: (request: Request, env: E) => Promise<boolean>, configured: (env: E) => boolean, suspended: (env: E) => Promise<boolean> = async () => false) {
   if (!jobs.length || new Set(jobs.map((job) => job.id)).size !== jobs.length || jobs.some((job) => !Number.isSafeInteger(job.interval) || job.interval < 300_000)) throw new Error("Invalid scheduler registry");
   return class {
     private tail: Promise<unknown> = Promise.resolve();
@@ -83,6 +83,13 @@ export function schedulerClass<E>(jobs: readonly SchedulerJob<E>[], authorize: (
       return this.serial(async () => {
         const value = await this.load();
         if (!value.enabled || !configured(this.env)) { await this.state.storage.deleteAlarm(); return; }
+        // Keep due work intact while maintenance is active or its state cannot be read.
+        // A bounded retry resumes automatically without requiring another start command.
+        try {
+          if (await suspended(this.env)) { await this.state.storage.setAlarm(Date.now() + 30_000); return; }
+        } catch {
+          await this.state.storage.setAlarm(Date.now() + 30_000); return;
+        }
         const job = jobs.filter((item) => value.jobs[item.id]!.next <= Date.now()).sort((left, right) => value.jobs[left.id]!.next - value.jobs[right.id]!.next)[0];
         if (!job) { await this.save(value); return; }
         const entry = value.jobs[job.id]!;

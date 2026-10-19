@@ -25,7 +25,7 @@ export function createFingerprintJournal(path, binding, { allowSuperseded = fals
   };
   const validRecord = (record) => record && fields.slice(0, 6).every((field) => field === "memberId" ? memberId(record[field]) : id(record[field])) && digest(record.senderKeyId) && digest(record.envelopeDigest)
     && Number.isSafeInteger(record.revision) && record.revision > 0 && Number.isInteger(record.slot) && record.slot >= 0 && record.slot < 1024
-    && [...phases, "needs_review", ...(allowSuperseded ? ["superseded"] : [])].includes(record.phase) && Object.keys(record).length === fields.length + 2;
+    && [...phases, "needs_review", ...(allowSuperseded ? ["superseded", "retiring"] : [])].includes(record.phase) && Object.keys(record).length === fields.length + 2;
   async function directory() {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const stat = await lstat(dirname(path));
@@ -109,6 +109,25 @@ export function createFingerprintJournal(path, binding, { allowSuperseded = fals
       }
       if (slot >= capacity) throw new Error("Fingerprint reader has no available slot");
       const record = { ...request, slot, phase: "reserved" }; state.records.push(record); return record;
+    }),
+    suppressSlot: (slot, member) => mutate(state => {
+      if (!allowSuperseded || !Number.isInteger(slot) || !memberId(member)) return fail();
+      const records = state.records.filter(record => record.slot === slot && record.phase !== "superseded");
+      if (records.some(record => record.memberId !== member || !["complete", "stored", "mapped"].includes(record.phase))) return fail();
+      for (const record of records) record.phase = "superseded";
+      return { suppressed: records.length };
+    }),
+    suppress: (context, slot, { pending = false } = {}) => mutate(state => {
+      if (!allowSuperseded || context?.installationId !== bound.installationId || context?.recipientId !== bound.kioskId || context?.recipientPairingId !== bound.pairingId) return fail();
+      const record = { ...Object.fromEntries(fields.map(field => [field, field === "envelopeDigest" ? "0".repeat(64) : context[field]])), slot, phase: pending ? "retiring" : "superseded" };
+      if (!validRecord(record)) return fail();
+      const existing = state.records.find(item => item.transferId === record.transferId);
+      if (existing) {
+        if (existing.memberId !== record.memberId || existing.slot !== slot) return fail();
+        existing.phase = pending ? "retiring" : "superseded"; return existing;
+      }
+      if (state.records.length >= 1024) return fail();
+      state.records.push(record); return record;
     }),
     advance: (transferId, expectedPhase, nextPhase) => mutate((state) => {
       const record = state.records.find((item) => item.transferId === transferId);

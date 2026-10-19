@@ -366,7 +366,7 @@ export const attendanceModule = freeze<ModuleDefinition>({
       "label_weekly_targets", "label_attendance_rules", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
       "attendance_events", "attendance_corrections", "pairing_codes", "kiosks", "simulated_kiosk_sessions",
       "kiosk_fingerprint_sync", "kiosk_fingerprint_keys", "kiosk_fingerprint_deliveries",
-      "kiosk_fingerprint_vault_settings", "kiosk_fingerprint_vault_templates",
+      "kiosk_fingerprint_vault_settings", "kiosk_fingerprint_vault_templates", "kiosk_fingerprint_vault_enrollments", "kiosk_fingerprint_vault_retirements",
       "kiosk_fingerprint_review_requests", "kiosk_fingerprint_review_manifests", "kiosk_fingerprint_review_slots", "kiosk_fingerprint_reset_batches", "kiosk_fingerprint_reset_commands",
       "kiosk_fingerprint_retired_review_grants",
       "google_calendar_event_mappings", "google_calendar_operations", "discord_calendar_event_mappings", "discord_calendar_operations",
@@ -393,7 +393,7 @@ export const attendanceModule = freeze<ModuleDefinition>({
   },
   backup: {
     version: 2,
-    nonPortableTables: ["kiosk_fingerprint_sync", "kiosk_fingerprint_keys", "kiosk_fingerprint_deliveries", "kiosk_fingerprint_vault_settings", "kiosk_fingerprint_vault_templates", "kiosk_fingerprint_review_requests", "kiosk_fingerprint_review_manifests", "kiosk_fingerprint_review_slots", "kiosk_fingerprint_reset_batches", "kiosk_fingerprint_reset_commands", "kiosk_fingerprint_retired_review_grants"],
+    nonPortableTables: ["kiosk_fingerprint_sync", "kiosk_fingerprint_keys", "kiosk_fingerprint_deliveries", "kiosk_fingerprint_vault_settings", "kiosk_fingerprint_vault_templates", "kiosk_fingerprint_vault_enrollments", "kiosk_fingerprint_vault_retirements", "kiosk_fingerprint_review_requests", "kiosk_fingerprint_review_manifests", "kiosk_fingerprint_review_slots", "kiosk_fingerprint_reset_batches", "kiosk_fingerprint_reset_commands", "kiosk_fingerprint_retired_review_grants"],
     tables: [
       "label_weekly_targets", "label_attendance_rules", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
       "attendance_events", "attendance_corrections", "pairing_codes", "kiosks", "simulated_kiosk_sessions",
@@ -410,7 +410,7 @@ export const attendanceModule = freeze<ModuleDefinition>({
       "platform_module_setup_progress:attendance", "setup_progress:attendance", "platform_module_assignments:attendance",
       "members.attendance_required_from", "organization_settings:attendance", "label_weekly_targets",
       "kiosk_fingerprint_deliveries", "kiosk_fingerprint_keys", "kiosk_fingerprint_sync",
-      "kiosk_fingerprint_vault_templates", "kiosk_fingerprint_vault_settings",
+      "kiosk_fingerprint_vault_enrollments", "kiosk_fingerprint_vault_retirements", "kiosk_fingerprint_vault_templates", "kiosk_fingerprint_vault_settings",
       "kiosk_fingerprint_review_slots", "kiosk_fingerprint_review_manifests", "kiosk_fingerprint_review_requests", "kiosk_fingerprint_reset_commands", "kiosk_fingerprint_reset_batches",
       "kiosk_fingerprint_retired_review_grants",
     ],
@@ -521,12 +521,12 @@ export const carpoolModule = freeze<ModuleDefinition>({
     { path: "/admin/carpool", match: "prefix", access: "workspace" },
   ],
   persistence: {
-    tables: ["carpool_settings", "carpool_geocoding_credentials", "carpool_plans", "carpool_people", "carpool_assignments", "carpool_unresolved", "carpool_import_profiles", "carpool_location_cache"],
+    tables: ["carpool_settings", "carpool_geocoding_credentials", "carpool_location_resolution", "carpool_plans", "carpool_people", "carpool_assignments", "carpool_unresolved", "carpool_import_profiles", "carpool_location_cache"],
     sharedFields: [],
     transientAuthority: [],
   },
-  backup: { version: 1, nonPortableTables: ["carpool_geocoding_credentials"], tables: ["carpool_settings", "carpool_plans", "carpool_people", "carpool_assignments", "carpool_unresolved", "carpool_import_profiles", "carpool_location_cache"] },
-  lifecycle: { cleanupTargets: ["carpool_geocoding_credentials", "carpool_settings", "carpool_assignments", "carpool_unresolved", "carpool_people", "carpool_plans", "carpool_import_profiles", "carpool_location_cache", "platform_module_setup_progress:carpool", "platform_module_assignments:carpool"] },
+  backup: { version: 1, nonPortableTables: ["carpool_geocoding_credentials", "carpool_location_resolution"], tables: ["carpool_settings", "carpool_plans", "carpool_people", "carpool_assignments", "carpool_unresolved", "carpool_import_profiles", "carpool_location_cache"] },
+  lifecycle: { cleanupTargets: ["carpool_geocoding_credentials", "carpool_location_resolution", "carpool_settings", "carpool_assignments", "carpool_unresolved", "carpool_people", "carpool_plans", "carpool_import_profiles", "carpool_location_cache", "platform_module_setup_progress:carpool", "platform_module_assignments:carpool"] },
   deletedData: ["Carpool plans and optional event snapshots", "Participants, locations, vehicles, assignments, imports, and unresolved ride reasons"],
 });
 

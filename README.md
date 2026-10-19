@@ -4,13 +4,13 @@ LancerLogin is standalone, open-source, self-hosted attendance software for club
 
 The current stable public release is **1.2.6**. The public repository contains source, reviewed releases, and public documentation. Create a separate **private** repository from the template for an installation. That private repository holds deployment history and secrets.
 
-This source is **2.0.0-beta.4**, an opt-in Modular beta. Stable remains the default update track. Follow the Community bridge prerequisites below before opting in.
+This source is **2.0.0-beta.5**, an opt-in Modular beta. Stable remains the default update track. Follow the Community bridge prerequisites below before opting in.
 
 ## What it does
 
 - Records kiosk check-in and check-out using fingerprint, RFID badge, NFC badge, member ID, or QR code identity input.
 - Lets Administrators and Operators manage meetings, attendance, reports, and roster information within their assigned permissions.
-- Keeps fingerprint templates in the optional R503 sensor by default. Optional peer-approved sync encrypts transfers for the destination kiosk. Separate Admin-enabled cloud storage uses server-managed encryption so new kiosks can receive verified enrollments while other kiosks are offline. Raw fingerprint images, badge values, and QR values are not uploaded. See the [privacy boundary](docs/PRIVACY.md).
+- Keeps fingerprint templates in the optional R503 sensor by default. Admin-enabled cloud storage uses server-managed encryption so new kiosks can receive verified enrollments while other kiosks are offline. Raw fingerprint images, badge values, and QR values are not uploaded. See the [privacy boundary](docs/PRIVACY.md).
 - Queues kiosk scans locally while the network is unavailable, then retries them safely when the connection returns.
 - Provides backup-first web updates and a separately managed physical-kiosk update path.
 

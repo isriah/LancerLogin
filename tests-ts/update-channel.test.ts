@@ -131,6 +131,12 @@ test("kiosk commands pin official targets, require the installed helper and lock
     const proof = (await pending.json() as { command: { targetTag: string; targetCommit: string; channel: string } }).command;
     assert.deepEqual({ targetTag: proof.targetTag, targetCommit: proof.targetCommit, channel: proof.channel }, { targetTag: tag, targetCommit: sha, channel: "beta" });
     database.sqlite.exec("UPDATE kiosk_commands SET completed_at = created_at, success = 0");
+    database.sqlite.exec("UPDATE kiosks SET release_version = '2.0.0-dev.kiosk-list.fe4c8f2'");
+    assert.equal((await command({ command: "install_latest" })).status, 409);
+    assert.equal((await command({ command: "install_latest", replaceDevelopmentBuild: false })).status, 400);
+    assert.equal((await command({ command: "restart", replaceDevelopmentBuild: true })).status, 400);
+    assert.equal((await command({ command: "install_latest", replaceDevelopmentBuild: true })).status, 202);
+    database.sqlite.exec("UPDATE kiosk_commands SET completed_at = created_at, success = 0");
     await changeUpdateChannel(environment, { channel: "stable", revision: 1 }, "admin");
   } finally { globalThis.fetch = originalFetch; }
 });

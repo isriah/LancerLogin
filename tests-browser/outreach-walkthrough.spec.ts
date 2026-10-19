@@ -48,13 +48,19 @@ async function routeOutreach(page: Page, role: "admin" | "operator", state: { pr
 }
 
 for (const view of [
-  { width: 1280, height: 900, theme: "light", role: "admin" as const },
-  { width: 390, height: 844, theme: "dark", role: "operator" as const },
+  { width: 1280, height: 900, theme: "light", role: "admin" as const, view: "calendar" },
+  { width: 390, height: 844, theme: "dark", role: "operator" as const, view: "calendar" },
+  { width: 1280, height: 900, theme: "light", role: "admin" as const, view: "table" },
+  { width: 390, height: 844, theme: "dark", role: "operator" as const, view: "table" },
 ]) {
-  test(`Outreach walkthrough follows the safe staff flow at ${view.width} for ${view.role}`, async ({ page }) => {
+  test(`Outreach walkthrough follows the safe staff flow at ${view.width} for ${view.role} in ${view.view}`, async ({ page }) => {
     await page.setViewportSize(view);
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), view.theme);
+    await page.addInitScript(({ theme, view }) => {
+      localStorage.setItem("lancerlogin-theme", theme);
+      if (view === "table") localStorage.setItem("lancerlogin-outreach-activity-view", view);
+      else localStorage.removeItem("lancerlogin-outreach-activity-view");
+    }, { theme: view.theme, view: view.view });
     const state = { progress: { pageId: "outreach", version: 1, status: "not_started", stepId: null } as Progress };
     await routeOutreach(page, view.role, state);
     const writes: string[] = [];
@@ -78,7 +84,24 @@ for (const view of [
     for (const [index, title] of titles.entries()) {
       await expect(panel).toContainText(`Step ${index + 1} of ${titles.length}`);
       await expect(panel.getByRole("heading", { name: title })).toBeFocused();
-      await expect(page.locator(".walkthrough-highlight").first()).toBeVisible();
+      await expect(page.locator(".walkthrough-highlight").first(), `${title} highlights an available control`).toBeVisible();
+      if (title === "Review the Submission Log") {
+        await expect(panel).toContainText("Expand Submission Log below the activity browser");
+        await expect(page.locator(".outreach-submission-disclosure")).not.toHaveAttribute("open");
+      }
+      if (title === "Use staff entry only for an exception") {
+        await expect(panel).toContainText("In Calendar, choose the activity date, or switch to Table");
+        const directEntryTarget = page.locator('[data-walkthrough="outreach-staff-exception"]');
+        if (view.view === "calendar") {
+          // The selected day has no activity. The browser remains a useful tour target.
+          await expect(page.locator(".calendar-selected-day")).toContainText("No selected activity types scheduled.");
+          await expect(directEntryTarget).toHaveCount(0);
+          const browser = page.locator('[data-walkthrough="outreach-activities"]');
+          await expect(browser).toBeVisible();
+          const width = (await browser.boundingBox())!.width;
+          expect(await page.locator(".walkthrough-highlight").first().evaluate(element => parseFloat((element as HTMLElement).style.width))).toBeCloseTo(width, 0);
+        } else await expect(directEntryTarget).toHaveCount(1);
+      }
       if (title === "Continue into Reports") {
         await expect(page.locator('#primary-dashboard-navigation a[href="/reports"]')).toBeVisible();
         if (view.width <= 760) await expect(page.locator("#primary-dashboard-navigation")).toHaveClass(/mobile-open/);
@@ -92,9 +115,11 @@ for (const view of [
     await expect(page.locator("#primary-dashboard-navigation")).not.toHaveClass(/mobile-open/);
     await expect.poll(() => state.progress.status).toBe("completed");
     expect(writes).toEqual([]);
+    expect(await page.evaluate(() => localStorage.getItem("lancerlogin-outreach-activity-view"))).toBe(view.view === "table" ? "table" : null);
 
     await page.reload();
     await expect(panel).toHaveCount(0);
+    await page.getByText("Page help (debug)", { exact: true }).click();
     const reset = page.getByRole("button", { name: "Reset page walkthrough" });
     await expect(reset).toBeVisible();
     await reset.click();

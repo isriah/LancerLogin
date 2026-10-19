@@ -63,6 +63,8 @@ const attendanceSteps: readonly CleanupStep[] = [
   { kind: "delete", table: "kiosk_fingerprint_reset_commands" },
   { kind: "delete", table: "kiosk_fingerprint_reset_batches" },
   { kind: "delete", table: "kiosk_fingerprint_retired_review_grants" },
+  { kind: "delete", table: "kiosk_fingerprint_vault_enrollments" },
+  { kind: "delete", table: "kiosk_fingerprint_vault_retirements" },
 ];
 
 const outreachSteps: readonly CleanupStep[] = [

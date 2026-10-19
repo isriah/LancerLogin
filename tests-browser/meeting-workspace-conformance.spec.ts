@@ -104,7 +104,7 @@ test("meeting browser empty, loading, error, success, and partial Discord outcom
   const overlay = page.locator(".dashboard-loading-overlay");
   await expect(overlay).toBeVisible();
   await expect(overlay.locator(".dashboard-loading-indicator")).toHaveCSS("animation-name", "none");
-  await expect(page.getByText("No meetings are scheduled in this five-week range.")).toBeVisible();
+  await expect(page.getByText("No meetings scheduled.")).toBeVisible();
   await expect(page.locator(".dashboard-meeting-status")).toHaveCount(0);
   await expect(page.getByText("Dashboard data is current.")).toHaveCount(0);
   await page.getByRole("radio", { name: "Table" }).check();
@@ -144,6 +144,8 @@ for (const context of dashboardConformanceReferences.viewports.flatMap((viewport
       await expect(firstAttendanceRow.getByText("Check-in", { exact: true })).toBeVisible();
       await expect(firstAttendanceRow.getByText("Check-out", { exact: true })).toBeVisible();
     }
+    for (const toggle of await page.getByRole("button", { name: /^Adjust attendance for/ }).all()) await toggle.click();
+    await page.locator(".meeting-more-actions > summary").click();
     await expect(page.getByRole("button", { name: "Clear" })).toHaveCount(context.role === "admin" ? 3 : 0);
     await expect(page.locator(".attendance-state.active")).toContainText("Active · not checked out");
     await expect(page.locator(".attendance-state.present")).toContainText("present");
@@ -169,7 +171,7 @@ for (const context of dashboardConformanceReferences.viewports.flatMap((viewport
     });
     expect(actionAppearance.actual).toEqual(actionAppearance.expected);
     expect(actionAppearance.height).toBeGreaterThanOrEqual(44);
-    await discordAction.focus();
+    await discordAction.focus(); await page.keyboard.press("Tab"); await page.keyboard.press("Shift+Tab");
     await expect(discordAction).toBeFocused();
     expect(await discordAction.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
     await expectContained(page);
@@ -199,6 +201,7 @@ test("meeting detail distinguishes timing gates, unavailable configuration, empt
   await page.route("**/calendars/sync", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ providers: [{ provider: "discord", synced: 0, queued: 0, skipped: 0, failed: 1 }] }) }));
   await page.goto("/meetings/upcoming");
   await expect(page.locator(".meeting-lifecycle")).toHaveText("Upcoming");
+  await page.locator(".meeting-more-actions > summary").click();
   await expect(page.getByRole("button", { name: "Sync configured calendars" })).toBeEnabled();
   const disabledDiscordAction = page.getByRole("button", { name: "Send Discord absence notice" });
   await expect(disabledDiscordAction).toBeDisabled();

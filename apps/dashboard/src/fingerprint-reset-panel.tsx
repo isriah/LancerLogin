@@ -50,14 +50,21 @@ export function FingerprintResetPanel({ onSharingChanged }: { onSharingChanged?(
     const loaded = await load(); onSharingChanged?.();
     setNotice({ message: loaded ? "Fingerprint reset queued. Reader templates remain. Cloud storage and peer sync are disabled; each kiosk below is pending until its durable reset acknowledgement." : "Fingerprint reset queued, but its status could not be refreshed. Reader templates remain and sharing is disabled. Refresh status to check pending kiosks.", failed: !loaded });
   }
-  return <article className="task-card ui-form fingerprint-reset-panel" aria-labelledby="fingerprint-reenrollment-title">
-    <h2 id="fingerprint-reenrollment-title">Fingerprint re-enrollment</h2>
-    <p>After upgrading, re-enroll older fingerprints using Authentication maintenance on a kiosk while it is online. Older mappings cannot be approved for sharing by looking up a member ID. New enrollments can use automatic fingerprint sharing.</p>
-    <p>To start over, explicitly reset fingerprint mappings below, then wait for every kiosk to complete the reset before re-enrolling. This does not erase reader templates. Replace only a known occupied slot during re-enrollment; never overwrite an unknown slot.</p>
-    <div className="kiosk-actions"><button className="ui-button" type="button" disabled={busy} onClick={() => void load()}>Refresh status</button><button className="ui-button ui-button--danger" type="button" disabled={busy || !overview} onClick={() => setResetOpen(true)}>Reset all fingerprint mappings</button></div>
-    {notice && <p className="ui-status" data-tone={notice.failed ? "error" : "success"} role={notice.failed ? "alert" : "status"}>{notice.message}</p>}
-    {overview && !overview.resetCommands.length && <p>No fingerprint resets have been requested.</p>}
-    {overview?.resetCommands.length ? <section className="ui-form" aria-labelledby="fingerprint-reset-status-title"><h3 id="fingerprint-reset-status-title">Fingerprint reset status</h3><p>Offline kiosks can continue using old associations until they reconnect. Acknowledgement confirms durable local mapping removal, not reader erasure.</p><ul>{overview.resetCommands.map(command => <li key={command.id}>{command.kioskName}: {command.acknowledgedAt !== null ? "Completed" : command.currentPairing ? "Pending - waiting for kiosk" : "Previous pairing - no longer authorized"}</li>)}</ul></section> : null}
+  return <article className="fingerprint-reset-panel" aria-labelledby="fingerprint-reenrollment-title">
+    <section className="task-card ui-form" aria-labelledby="fingerprint-reset-status-title"><h2 id="fingerprint-reset-status-title">Reset status</h2>
+      {notice && <p className="ui-status" data-tone={notice.failed ? "error" : "success"} role={notice.failed ? "alert" : "status"}>{notice.message}</p>}
+      {overview && !overview.resetCommands.length && <p>No fingerprint resets have been requested.</p>}
+      {overview?.resetCommands.length ? <><p>Offline kiosks can continue using old associations until they reconnect. Acknowledgement confirms durable local mapping removal, not reader erasure.</p><ul>{overview.resetCommands.map(command => <li key={command.id}>{command.kioskName}: {command.acknowledgedAt !== null ? "Completed" : command.currentPairing ? "Pending - waiting for kiosk" : "Previous pairing - no longer authorized"}</li>)}</ul></> : null}
+      <button className="ui-button" type="button" disabled={busy} onClick={() => void load()}>Refresh status</button>
+    </section>
+    <section className="task-card ui-form" aria-labelledby="fingerprint-reenrollment-title"><h2 id="fingerprint-reenrollment-title">Fingerprint re-enrollment</h2>
+      <p>After upgrading, re-enroll older fingerprints using Authentication maintenance on a kiosk while it is online.</p><p>Older mappings cannot be approved for sharing by looking up a member ID. New enrollments can use automatic fingerprint sharing.</p>
+    </section>
+    <section className="task-card ui-form" aria-labelledby="fingerprint-start-over-title"><h2 id="fingerprint-start-over-title">Start over</h2>
+      <ol><li>Explicitly reset fingerprint mappings below.</li><li>Wait for every kiosk to complete the reset before re-enrolling.</li></ol>
+      <div className="warning-callout"><p>This does not erase reader templates.</p><p>Replace only a known occupied slot during re-enrollment; never overwrite an unknown slot.</p></div>
+      <button className="ui-button ui-button--danger" type="button" disabled={busy || !overview} onClick={() => setResetOpen(true)}>Reset all fingerprint mappings</button>
+    </section>
     {resetOpen && <ResetDialog resetId={resetId.current} onClose={() => setResetOpen(false)} onReset={onReset} />}
   </article>;
 }

@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createFingerprintVault } from "../apps/kiosk/src/fingerprint-vault.mjs";
+import { createKioskPollClient } from "../apps/kiosk/src/kiosk-poll.mjs";
 import { createFingerprintVaultClient } from "../apps/kiosk/src/fingerprint-vault-client.mjs";
 import { createFingerprintReset } from "../apps/kiosk/src/fingerprint-reset.mjs";
 import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
@@ -16,7 +17,7 @@ import { createFingerprintJournal } from "../apps/kiosk/src/fingerprint-journal.
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { bundledModuleRegistry } from "../packages/shared/src/module-platform.ts";
-import { fingerprintVaultBase64, fingerprintVaultKeyId, sealFingerprintVault, openFingerprintVault } from "../apps/api/src/fingerprint-vault-crypto.ts";
+import { fingerprintVaultBase64, fingerprintVaultEnrollmentId, fingerprintVaultKeyId, sealFingerprintVault, openFingerprintVault } from "../apps/api/src/fingerprint-vault-crypto.ts";
 
 const sessionSecret = "A".repeat(43), vaultSecret = Buffer.alloc(32, 7).toString("base64url");
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("base64url");
@@ -154,6 +155,11 @@ test("poll keeps commands available during vault failure, pending reset and main
   assert.equal(data.fingerprints.vault.status, "unavailable"); assert.equal(data.fingerprints.vault.vaultId, null);
   assert.equal(data.fingerprints.peer.status, "unavailable"); assert.deepEqual(data.fingerprints.peer.deliveries, []);
   assert.equal((await f.call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "synthetic" }, "source-token")).status, 503);
+  delete f.env.UPDATE_REPOSITORY;
+  const withoutUpdater = await f.call("/kiosk/poll?v=1&fingerprints=1&config=1", undefined, "source-token");
+  assert.equal(withoutUpdater.status, 200); assert.deepEqual(await withoutUpdater.json(), data);
+  assert.equal((await f.call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "synthetic" }, "source-token")).status, 503);
+  assert.equal((await f.call("/kiosk/fingerprint-vault", undefined, "source-token")).status, 503);
 });
 
 test("poll retains the existing ten-thousand-member roster limit and refuses a truncated authority snapshot", async context => {
@@ -328,7 +334,7 @@ async function runtimeFixture(context: TestContext, existing: Awaited<ReturnType
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-synthetic-vault-"));
   context.after(() => rm(directory, { recursive: true, force: true }));
   const mappings = createMappingStore(join(directory, "mappings.json")), models = new Map<number, Uint8Array>();
-  let writes = 0, reads = 0, dropUploadAck = false, failMapping = false;
+  let writes = 0, reads = 0, dropUploadAck = false, failMapping = false, failRemoval = false;
   const config = { kioskId: kiosk, pairingId: kiosk === "source" ? "pair-a" : "pair-b", apiUrl: "https://api.example.test", kioskToken: `${kiosk}-token` };
   const request = async (path: string, body?: unknown) => {
     const result = await existing.call(path, body, config.kioskToken);
@@ -348,14 +354,17 @@ async function runtimeFixture(context: TestContext, existing: Awaited<ReturnType
     exportTemplate: async (slot: number) => { reads++; const bytes = models.get(slot); if (!bytes) throw new Error("Synthetic slot empty"); return new Uint8Array(bytes); },
     importTemplate: async (slot: number, bytes: Uint8Array) => { assert.equal(models.has(slot), false, "Never overwrite an occupied synthetic slot"); writes++; models.set(slot, new Uint8Array(bytes)); return { slot, verified: true }; },
   };
-  const wrappedMappings = { ...mappings, assignIfUnmapped: async (...args: Parameters<typeof mappings.assignIfUnmapped>) => {
+  const wrappedMappings = { ...mappings, replace: async (value: Parameters<typeof mappings.replace>[0]) => {
+    if (failRemoval) { failRemoval = false; throw new Error("Synthetic removal interrupted"); }
+    return mappings.replace(value);
+  }, assignIfUnmapped: async (...args: Parameters<typeof mappings.assignIfUnmapped>) => {
     if (failMapping) { failMapping = false; throw new Error("Synthetic mapping interrupted"); }
     return mappings.assignIfUnmapped(...args);
   } };
   let lock = Promise.resolve();
   const withSensor = <T>(operation: () => Promise<T>) => { const current = lock.then(operation); lock = current.then(() => undefined, () => undefined); return current; };
   const factory = () => createFingerprintVault({ directory, config, client, sensor, templates, mappings: wrappedMappings, withSensor, fetchRoster: () => request("/kiosk/roster"), capacity });
-  return { directory, config, client, request, models, mappings, sensor, templates, withSensor, factory, counts: () => ({ reads, writes }), loseUploadAck: () => { dropUploadAck = true; }, interruptMapping: () => { failMapping = true; } };
+  return { directory, config, client, request, models, mappings, sensor, templates, withSensor, factory, counts: () => ({ reads, writes }), loseUploadAck: () => { dropUploadAck = true; }, interruptMapping: () => { failMapping = true; }, interruptRemoval: () => { failRemoval = true; } };
 }
 
 const freshEnrollment = (id = "11111111-1111-4111-8111-111111111111") => ({ id, occurredAt: 1 });
@@ -511,4 +520,295 @@ test("real Worker cloud refuses legacy association backfill, shares fresh re-enr
   assert.equal((await sourceVault.tick()).status, "disabled"); assert.equal((await resetController.tick()).status, "reset"); assert.deepEqual(await source.mappings.read(), {});
   assert.equal((await sourceVault.tick()).status, "reset"); assert.deepEqual([...source.models.keys()], [4, 0]); assert.equal(source.models.get(4)?.[0], 52);
   assert.equal(current.db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_reset_commands WHERE acknowledged_at IS NULL").get()?.n, 1, "The offline destination remains visibly pending");
+});
+
+
+test("stable enrollment receipts deduplicate changed bytes, concurrent retries and legacy source backfill", async context => {
+  const f = await fixture(context), vaultId = await f.enable();
+  const responses = await Promise.all([f.upload(vaultId, new Uint8Array(1536).fill(71)), f.upload(vaultId, new Uint8Array(1536).fill(72))]);
+  for (const response of responses) assert.equal(response.status, 200, await response.clone().text());
+  const first = await responses[0].json() as any, second = await responses[1].json() as any;
+  assert.equal(first.fingerprintId, second.fingerprintId);
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_templates").get()?.n, 1);
+  const original = f.db.sqlite.prepare("SELECT ciphertext,nonce FROM kiosk_fingerprint_vault_templates").get();
+  f.db.sqlite.exec("DELETE FROM kiosk_fingerprint_vault_enrollments");
+  const retry = await f.upload(vaultId, new Uint8Array(1536).fill(73));
+  assert.equal(retry.status, 200); assert.equal((await retry.json() as any).templateMatches, false);
+  assert.deepEqual(f.db.sqlite.prepare("SELECT ciphertext,nonce FROM kiosk_fingerprint_vault_templates").get(), original);
+  assert.equal((await f.upload(vaultId, new Uint8Array(1536).fill(74), "SYN-002")).status, 409);
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_templates").get()?.n, 1);
+});
+
+test("source restart preserves changed reader bytes without exporting or adding cloud enrollments", async context => {
+  const f = await fixture(context); await f.enable(); const source = await runtimeFixture(context, f);
+  source.models.set(1, new Uint8Array(1536).fill(75));
+  await source.mappings.replace({ 1: { memberId: "SYN-001", rosterId: "member", finger: "unspecified", enrollment: freshEnrollment() } });
+  assert.equal((await source.factory().tick()).uploaded, 1);
+  const reads = source.counts().reads;
+  source.models.get(1)!.fill(76);
+  for (let i = 0; i < 3; i++) assert.equal((await source.factory().tick()).errors, 0);
+  assert.equal(source.counts().reads, reads); assert.equal(source.counts().writes, 0);
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_templates").get()?.n, 1);
+  assert.equal(source.models.get(1)![0], 76);
+});
+
+test("lost upload response followed by reader evolution recovers original enrollment without overwrite", async context => {
+  const f = await fixture(context); await f.enable(); const source = await runtimeFixture(context, f);
+  source.models.set(1, new Uint8Array(1536).fill(77));
+  await source.mappings.replace({ 1: { memberId: "SYN-001", rosterId: "member", finger: "unspecified", enrollment: freshEnrollment() } });
+  source.loseUploadAck(); await source.factory().tick(); source.models.get(1)!.fill(78);
+  assert.equal((await source.factory().tick()).errors, 0);
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_templates").get()?.n, 1);
+  assert.equal(source.models.get(1)![0], 78); assert.equal(source.counts().writes, 0);
+  assert.ok((await source.mappings.read())[1].cloud);
+});
+
+test("completed destination keeps evolved bytes and explicit local removal survives offline restart", async context => {
+  const f = await fixture(context), vaultId = await f.enable(); await f.upload(vaultId);
+  const destination = await runtimeFixture(context, f, "destination"); await destination.factory().tick();
+  destination.models.get(0)!.fill(79); const reads = destination.counts().reads;
+  assert.equal((await destination.factory().tick()).errors, 0); assert.equal(destination.counts().reads, reads);
+  const controller = destination.factory(), mapping = (await destination.mappings.read())[0];
+  context.mock.method(destination.client, "configuration", async () => { throw new Error("Synthetic offline"); });
+  await destination.withSensor(async () => { await controller.suppressLocal(0, mapping); await destination.mappings.replace({}); });
+  context.mock.restoreAll();
+  assert.equal((await destination.factory().tick()).errors, 0);
+  assert.deepEqual(await destination.mappings.read(), {}); assert.equal(destination.models.get(0)![0], 79); assert.equal(destination.counts().writes, 1);
+});
+
+test("explicit retirement deletes cloud ciphertext and suppresses source replay and recipient access", async context => {
+  const f = await fixture(context); const vaultId = await f.enable(); const source = await runtimeFixture(context, f), destination = await runtimeFixture(context, f, "destination");
+  source.models.set(1, new Uint8Array(1536).fill(80)); const enrollment = freshEnrollment();
+  await source.mappings.replace({ 1: { memberId: "SYN-001", rosterId: "member", finger: "unspecified", enrollment } });
+  await source.factory().tick(); await destination.factory().tick(); destination.models.get(0)!.fill(81);
+  const list = await (await f.call("/admin/kiosks/fingerprint-vault/enrollments")).json() as any;
+  assert.equal(list.enrollments.length, 1); assert.equal(JSON.stringify(list).includes("template"), false);
+  const id = list.enrollments[0].fingerprintId;
+  const retire = () => f.call("/admin/kiosks/fingerprint-vault/enrollments/" + id, { vaultId, rosterId: "member", confirmation: "RETIRE ENROLLMENT EVERYWHERE" }, undefined, "DELETE");
+  assert.equal((await retire()).status, 200); assert.equal((await retire()).status, 200);
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_templates").get()?.n, 0);
+  const replay = await f.call("/kiosk/fingerprint-vault/templates", { vaultId, memberId: "SYN-001", rosterId: "member", enrollmentId: enrollment.id, template: fingerprintVaultBase64(new Uint8Array(1536).fill(82)) }, "source-token");
+  assert.equal(replay.status, 409);
+  assert.equal((await source.factory().tick()).errors, 0); assert.equal((await destination.factory().tick()).errors, 0);
+  assert.deepEqual(await source.mappings.read(), {}); assert.deepEqual(await destination.mappings.read(), {});
+  assert.equal(source.models.get(1)![0], 80); assert.equal(destination.models.get(0)![0], 81);
+  assert.equal((await f.call("/kiosk/fingerprint-vault/templates/" + id, undefined, "destination-token")).status, 404);
+});
+
+test("retirement refuses operator authority and does not remove a reused source slot", async context => {
+  const f = await fixture(context), vaultId = await f.enable(), source = await runtimeFixture(context, f);
+  source.models.set(1, new Uint8Array(1536).fill(83)); await source.mappings.replace({ 1: { memberId: "SYN-001", rosterId: "member", finger: "unspecified", enrollment: freshEnrollment() } });
+  await source.factory().tick(); const id = (await source.mappings.read())[1].cloud!.fingerprintId;
+  const path = "/admin/kiosks/fingerprint-vault/enrollments/" + id;
+  const cookie = `lancerlogin_session=${await createSessionCodec(sessionSecret).issue({ userId: "operator", role: "operator" })}`;
+  const input = { vaultId, rosterId: "member", confirmation: "RETIRE ENROLLMENT EVERYWHERE" };
+  assert.equal((await worker.fetch(new Request("https://api.example.test" + path, { method: "DELETE", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(input) }), f.env)).status, 403);
+  await source.mappings.replace({ 1: { memberId: "SYN-002", rosterId: "other", finger: "unspecified", enrollment: freshEnrollment() } });
+  source.models.get(1)!.fill(84);
+  assert.equal((await f.call(path, input, undefined, "DELETE")).status, 200);
+  await source.factory().tick(); assert.equal((await source.mappings.read())[1].memberId, "SYN-002"); assert.equal(source.models.get(1)![0], 84);
+});
+
+
+test("retirement reaches a source with a lost acknowledgement and fresh re-enrollment stays possible", async context => {
+  const f = await fixture(context); const vaultId = await f.enable(), source = await runtimeFixture(context, f);
+  const enrollment = freshEnrollment(), model = new Uint8Array(1536).fill(86);
+  source.models.set(1, model); await source.mappings.replace({ 1: { memberId: "SYN-001", rosterId: "member", finger: "unspecified", enrollment } });
+  source.loseUploadAck(); await source.factory().tick();
+  assert.equal((await source.mappings.read())[1].cloud, undefined);
+  const list = await (await f.call("/admin/kiosks/fingerprint-vault/enrollments")).json() as any;
+  const id = list.enrollments[0].fingerprintId;
+  const retire = (rosterId: string, confirmation: string) => f.call("/admin/kiosks/fingerprint-vault/enrollments/" + id, { vaultId, rosterId, confirmation }, undefined, "DELETE");
+  assert.equal((await retire("member", "wrong")).status, 400);
+  assert.equal((await retire("other", "RETIRE ENROLLMENT EVERYWHERE")).status, 409);
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_templates").get()?.n, 1);
+  assert.equal((await retire("member", "RETIRE ENROLLMENT EVERYWHERE")).status, 200);
+  await source.factory().tick(); assert.deepEqual(await source.mappings.read(), {}); assert.equal(source.models.get(1), model);
+  const next = await f.call("/kiosk/fingerprint-vault/templates", { vaultId, memberId: "SYN-001", rosterId: "member", enrollmentId: freshEnrollment("22222222-2222-4222-8222-222222222222").id, template: fingerprintVaultBase64(model) }, "source-token");
+  assert.equal(next.status, 200); assert.notEqual((await next.json() as any).fingerprintId, id);
+});
+
+test("source receipts are member-bound and generation reset removes operational receipt state", async context => {
+  const f = await fixture(context), vaultId = await f.enable(); await f.upload(vaultId);
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_enrollments").get()?.n, 1);
+  assert.equal((await f.call("/admin/kiosks/fingerprint-vault", { enabled: false, confirmation: "DISABLE CLOUD FINGERPRINT STORAGE" }, undefined, "PATCH")).status, 200);
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_enrollments").get()?.n, 0);
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_retirements").get()?.n, 0);
+  assert.notEqual(await f.enable(), vaultId);
+});
+
+
+test("retirement resumes after durable intent but interrupted mapping removal", async context => {
+  const f = await fixture(context), vaultId = await f.enable(); const reply = await f.upload(vaultId), id = (await reply.json() as any).fingerprintId;
+  const destination = await runtimeFixture(context, f, "destination"); await destination.factory().tick();
+  await f.call("/admin/kiosks/fingerprint-vault/enrollments/" + id, { vaultId, rosterId: "member", confirmation: "RETIRE ENROLLMENT EVERYWHERE" }, undefined, "DELETE");
+  destination.interruptRemoval(); assert.equal((await destination.factory().tick()).errors, 1);
+  assert.equal((await destination.mappings.read())[0].memberId, "SYN-001");
+  assert.equal((await destination.factory().tick()).errors, 0); assert.deepEqual(await destination.mappings.read(), {});
+  assert.equal(destination.models.size, 1); assert.equal(destination.counts().writes, 1);
+});
+
+test("importer trusts completed receipts after byte changes but refuses conflicting roster identity", async context => {
+  const f = await fixture(context), vaultId = await f.enable(); const id = (await (await f.upload(vaultId)).json() as any).fingerprintId;
+  const destination = await runtimeFixture(context, f, "destination"); await destination.factory().tick();
+  const journal = createFingerprintJournal(join(destination.directory, "destination-pair-b", vaultId, "received.json"), { installationId: vaultId, kioskId: "destination", pairingId: "pair-b" }, { allowSuperseded: true });
+  const record = (await journal.list())[0];
+  const binding = { installationId: vaultId, recipientId: "destination", recipientPairingId: "pair-b", ...record, rosterId: "member" };
+  const importer = createFingerprintImporter({ journal, sensor: destination.sensor, templates: destination.templates, mappings: destination.mappings, withSensor: destination.withSensor, isMemberActive: async () => true });
+  destination.models.get(0)!.fill(87); const reads = destination.counts().reads;
+  assert.equal((await importer.receive(binding, new Uint8Array(1536).fill(11), record.envelopeDigest)).status, "complete");
+  assert.equal(destination.counts().reads, reads); assert.equal(destination.models.get(0)![0], 87);
+  await assert.rejects(importer.receive({ ...binding, rosterId: "another-identity" }, new Uint8Array(1536).fill(11), record.envelopeDigest), /review/);
+  assert.equal(destination.models.get(0)![0], 87);
+});
+
+
+test("interrupted import still requires exact bytes before completing its receipt", async context => {
+  const f = await fixture(context), vaultId = await f.enable(); await f.upload(vaultId);
+  const destination = await runtimeFixture(context, f, "destination"); destination.interruptMapping();
+  assert.equal((await destination.factory().tick()).errors, 1);
+  destination.models.get(0)!.fill(88);
+  assert.equal((await destination.factory().tick()).errors, 1);
+  assert.deepEqual(await destination.mappings.read(), {}); assert.equal(destination.counts().writes, 1); assert.equal(destination.models.get(0)![0], 88);
+});
+
+
+test("removing a duplicate local source receipt preserves the other slot and survives restart", async context => {
+  const f = await fixture(context); await f.enable(); const source = await runtimeFixture(context, f);
+  source.models.set(1, new Uint8Array(1536).fill(81)); source.models.set(2, new Uint8Array(1536).fill(81));
+  await source.mappings.replace({
+    1: { memberId: "SYN-001", rosterId: "member", finger: "unspecified", enrollment: freshEnrollment() },
+    2: { memberId: "SYN-001", rosterId: "member", finger: "unspecified", enrollment: { ...freshEnrollment(), id: "33333333-3333-3333-3333-333333333333" } },
+  });
+  assert.equal((await source.factory().tick()).uploaded, 2);
+  const mappings = await source.mappings.read();
+  assert.equal(mappings[1].cloud.fingerprintId, mappings[2].cloud.fingerprintId);
+  await source.factory().suppressLocal(2, mappings[2]); delete mappings[2]; await source.mappings.replace(mappings);
+  assert.equal((await source.factory().tick()).status, "ready");
+  assert.deepEqual(Object.keys(await source.mappings.read()), ["1"]);
+  assert.equal(source.models.size, 2); assert.equal(source.counts().writes, 0);
+});
+
+
+test("revision catalog returns the full snapshot and batches enforce authority and revision", async context => {
+  const f = await fixture(context), vaultId = await f.enable();
+  const ids: string[] = [];
+  for (let i = 0; i < 12; i++) {
+    const response = await f.call("/kiosk/fingerprint-vault/templates", { vaultId, memberId: "SYN-001", rosterId: "member", enrollmentId: `synthetic-batch-${i}`, template: fingerprintVaultBase64(new Uint8Array(1536).fill(i + 1)) }, "source-token");
+    assert.equal(response.status, 200); ids.push((await response.json() as any).fingerprintId);
+  }
+  const revision = Number(f.db.sqlite.prepare("SELECT catalog_revision AS n FROM kiosk_fingerprint_vault_settings").get()?.n);
+  const catalog = await f.call(`/kiosk/fingerprint-vault/catalog?revision=${revision}`, undefined, "destination-token");
+  assert.equal(catalog.status, 200); const snapshot = await catalog.json() as any;
+  assert.equal(snapshot.catalogRevision, revision); assert.equal(snapshot.fingerprints.length, 12);
+  assert.equal((await f.call(`/kiosk/fingerprint-vault/catalog?revision=${revision - 1}`, undefined, "destination-token")).status, 409);
+  const batch = (fingerprintIds = ids.slice(0, 8), catalogRevision = revision, token = "destination-token") => f.call("/kiosk/fingerprint-vault/batch", { vaultId, catalogRevision, fingerprintIds }, token);
+  const result = await batch(); assert.equal(result.status, 200); assert.equal((await result.json() as any).templates.length, 8);
+  for (const bad of [[], ids, [ids[0], ids[0]], ["invalid"], ["f".repeat(64)]]) assert.notEqual((await batch(bad)).status, 200);
+  assert.equal((await batch(ids.slice(0, 1), revision - 1)).status, 409);
+  // Revocation after decryption must prevent the entire response.
+  let reads = 0;
+  f.db.beforeRun = sql => {
+    if (sql.includes("SELECT 1 AS valid") && ++reads === 2) f.db.sqlite.exec("UPDATE kiosks SET active=0 WHERE id='destination'");
+  };
+  assert.notEqual((await batch()).status, 200);
+  assert.equal((await batch()).status, 401);
+});
+
+test("catalog refresh discovers early sorted enrollments immediately and batches only missing copies across restart", async context => {
+  const f = await fixture(context), vaultId = await f.enable();
+  const destination = await runtimeFixture(context, f, "destination", 30);
+  let catalogReads = 0, batchReads = 0, templateReads = 0;
+  const fetchImpl = async (url: string, options?: RequestInit) => {
+    const path = new URL(url).pathname + new URL(url).search;
+    if (path.includes("/catalog")) catalogReads++;
+    if (path.endsWith("/batch")) batchReads++;
+    if (/templates\/[a-f0-9]/.test(path)) templateReads++;
+    return f.call(path, options?.body ? JSON.parse(String(options.body)) : undefined, "destination-token", options?.method);
+  };
+  const client = createFingerprintVaultClient(destination.config, { fetchImpl });
+  const poll = createKioskPollClient(destination.config, { fetchImpl });
+  const make = () => createFingerprintVault({ directory: destination.directory, config: destination.config, client, sensor: destination.sensor, templates: destination.templates, mappings: destination.mappings, withSensor: destination.withSensor, fetchRoster: () => destination.request("/kiosk/roster"), capacity: 30 });
+  const tick = async (controller: ReturnType<typeof make>) => {
+    const metadata = (await poll.poll({ fingerprints: true })).fingerprints!;
+    return controller.tick({ ...metadata.vault, roster: metadata.roster });
+  };
+  for (let i = 0; i < 12; i++) {
+    assert.equal((await f.call("/kiosk/fingerprint-vault/templates", { vaultId, memberId: "SYN-001", rosterId: "member", enrollmentId: `synthetic-refresh-${i}`, template: fingerprintVaultBase64(new Uint8Array(1536).fill(i + 20)) }, "source-token")).status, 200);
+  }
+  destination.models.set(29, new Uint8Array(1536).fill(250));
+  const controller = make();
+  const first = await tick(controller); assert.equal(first.received, 8); assert.equal(first.pendingDownloads, 4); assert.equal(first.status, "waiting");
+  const second = await tick(controller); assert.equal(second.received, 4); assert.equal(second.pendingDownloads, 0);
+  assert.equal(catalogReads, 1); assert.equal(batchReads, 2); assert.equal(templateReads, 0);
+  const existing = new Map([...destination.models].map(([slot, model]) => [slot, new Uint8Array(model)]));
+  for (let i = 0; i < 3; i++) await tick(controller);
+  await tick(make()); assert.equal(batchReads, 2); assert.equal(catalogReads, 1);
+  // Add a new enrollment whose ID sorts before the old final page.
+  const firstId = String(f.db.sqlite.prepare("SELECT min(fingerprint_id) AS id FROM kiosk_fingerprint_vault_templates").get()?.id);
+  let enrollmentId = "";
+  for (let i = 0; i < 10000; i++) {
+    const candidate = `synthetic-before-cursor-${i}`;
+    const id = await fingerprintVaultEnrollmentId({ vaultId, keyId: await fingerprintVaultKeyId(vaultSecret), memberId: "member", sourceKioskId: "source", sourcePairingId: "pair-a", enrollmentId: candidate, templateDigest: "", createdAt: 0 });
+    if (id < firstId) { enrollmentId = candidate; break; }
+  }
+  assert.ok(enrollmentId, "construct a new enrollment before every existing catalog entry");
+  const uploaded = await f.call("/kiosk/fingerprint-vault/templates", { vaultId, memberId: "SYN-001", rosterId: "member", enrollmentId, template: fingerprintVaultBase64(new Uint8Array(1536).fill(99)) }, "source-token");
+  assert.equal(uploaded.status, 200); assert.ok((await uploaded.json() as any).fingerprintId < firstId);
+  const result = await tick(controller); assert.equal(result.received, 1); assert.equal(result.pendingDownloads, 0); assert.equal(catalogReads, 2); assert.equal(batchReads, 3);
+  for (const [slot, model] of existing) assert.deepEqual(destination.models.get(slot), model);
+  assert.equal(templateReads, 0);
+});
+
+
+test("batch loss, interrupted sensor commit and local removal remain resumable without overwrite", async context => {
+  const f = await fixture(context), vaultId = await f.enable(); await f.upload(vaultId);
+  const destination = await runtimeFixture(context, f, "destination");
+  let batches = 0, drop = true;
+  Object.assign(destination.client, {
+    catalog: (revision: number) => destination.request(`/kiosk/fingerprint-vault/catalog?revision=${revision}`),
+    batch: async (vaultId: string, catalogRevision: number, fingerprintIds: string[]) => {
+      batches++;
+      const result = await destination.request("/kiosk/fingerprint-vault/batch", { vaultId, catalogRevision, fingerprintIds });
+      if (drop) { drop = false; throw new Error("Synthetic response lost"); }
+      return result;
+    },
+  });
+  const poll = createKioskPollClient(destination.config, { fetchImpl: async (url: string) => f.call(new URL(url).pathname + new URL(url).search, undefined, "destination-token") });
+  const tick = async (controller: ReturnType<typeof destination.factory>) => {
+    const metadata = (await poll.poll({ fingerprints: true })).fingerprints!;
+    return controller.tick({ ...metadata.vault, roster: metadata.roster });
+  };
+  const controller = destination.factory();
+  assert.equal((await tick(controller)).pendingDownloads, 1); assert.equal(destination.counts().writes, 0);
+  destination.interruptMapping(); assert.equal((await tick(controller)).pendingDownloads, 1); assert.equal(destination.counts().writes, 1);
+  assert.equal((await tick(destination.factory())).pendingDownloads, 0); assert.equal(destination.counts().writes, 1);
+  const mapping = (await destination.mappings.read())["0"];
+  await controller.suppressLocal(0, mapping); await destination.mappings.replace({});
+  const before = batches;
+  await tick(destination.factory()); assert.equal(batches, before); assert.equal(destination.counts().writes, 1); assert.deepEqual(await destination.mappings.read(), {});
+});
+
+test("full catalog and batch reject revision races and current membership, pairing and generation revocation", async context => {
+  for (const change of [
+    "UPDATE members SET active=0 WHERE id='member'",
+    "UPDATE kiosks SET token_hash='replacement' WHERE id='destination'",
+    "UPDATE kiosk_fingerprint_vault_settings SET enabled=0",
+    "UPDATE platform_modules SET phase='retained',disabled_at='2026-01-01',delete_after='2026-01-08' WHERE module_id='attendance'",
+  ]) {
+    const f = await fixture(context), vaultId = await f.enable();
+    const uploaded = await f.upload(vaultId); const fingerprintId = (await uploaded.json() as any).fingerprintId;
+    const revision = Number(f.db.sqlite.prepare("SELECT catalog_revision AS n FROM kiosk_fingerprint_vault_settings").get()?.n);
+    f.db.beforeRun = sql => {
+      if (sql.includes("SELECT catalog_revision AS revision")) { f.db.beforeRun = undefined; f.db.sqlite.exec(change); }
+    };
+    const response = await f.call("/kiosk/fingerprint-vault/batch", { vaultId, catalogRevision: revision, fingerprintIds: [fingerprintId] }, "destination-token");
+    assert.equal(response.status, change.includes("platform_modules") ? 403 : 409); assert.equal((await response.text()).includes("template"), false);
+  }
+  const f = await fixture(context), vaultId = await f.enable(); await f.upload(vaultId);
+  const revision = Number(f.db.sqlite.prepare("SELECT catalog_revision AS n FROM kiosk_fingerprint_vault_settings").get()?.n);
+  f.db.beforeRun = sql => {
+    if (sql.includes("SELECT catalog_revision AS revision")) { f.db.beforeRun = undefined; f.db.sqlite.exec("DELETE FROM kiosk_fingerprint_vault_templates"); }
+  };
+  assert.equal((await f.call(`/kiosk/fingerprint-vault/catalog?revision=${revision}`, undefined, "destination-token")).status, 409);
 });

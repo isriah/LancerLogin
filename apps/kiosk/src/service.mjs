@@ -138,7 +138,7 @@ function recordFingerprintFailure(component, error, fallback) {
 async function fingerprintDiagnostics() {
   const paired = Boolean((await loadPairing())?.pairingId);
   const reset = fingerprintDiagnostic("reset", !paired ? { status: "unavailable", reasonCode: "unpaired" } : fingerprintFailures.reset ?? fingerprintReset?.diagnostics());
-  const components = { peer: fingerprintSync, vault: fingerprintVault };
+  const components = { vault: fingerprintVault };
   return { reset, ...Object.fromEntries(Object.entries(components).map(([component, controller]) => {
     const value = !paired ? { status: "unavailable", reasonCode: "unpaired" }
       : reset.state === "blocked" ? { ...controller?.diagnostics(), status: "unavailable", state: "blocked", reasonCode: "reset_recovery" }
@@ -195,23 +195,6 @@ async function vaultController() {
   }
   return fingerprintVault;
 }
-async function fingerprintController() {
-  const config = await loadPairing();
-  if (!config?.pairingId || !sensor) throw new Error("Pair this kiosk and connect its fingerprint reader first");
-  await restoreResetBoundary();
-  const binding = `${config.kioskId}:${config.pairingId}`;
-  if (fingerprintPairing && fingerprintPairing !== binding) throw new Error("Kiosk pairing changed; restart and review fingerprint sync");
-  if (!fingerprintSync) {
-    fingerprintPairing = binding;
-    fingerprintSync = createFingerprintSync({
-      directory: `${process.env.LANCERLOGIN_FINGERPRINT_SYNC ?? `${dirname(configPath)}/fingerprint-sync`}${fingerprintResetEpoch ? `/after-reset-${fingerprintResetEpoch}` : ""}`, config,
-      client: createFingerprintCloudClient(config), sensor, mappings, withSensor: useSensor,
-      templates: createR503TemplateTransfer(createR503Transaction(process.env.LANCERLOGIN_SENSOR_PATH ?? "/dev/serial0")),
-      fetchRoster: () => fetchFingerprintRoster(config),
-    });
-  }
-  return fingerprintSync;
-}
 function pollFingerprintSync() { return pollCloud({ forceFingerprints: true }); }
 async function pollFingerprintSyncNow(metadata) {
   if (!fingerprintPolling) fingerprintPolling = (async () => {
@@ -221,7 +204,6 @@ async function pollFingerprintSyncNow(metadata) {
     try { reset = await (await resetController()).tick(metadata?.reset); delete fingerprintFailures.reset; } catch (error) { recordFingerprintFailure("reset", error, "local_state_review"); return; }
     await synchronizeResetEpoch(reset.resetEpoch);
     if (reset.blocked || authenticationMethod !== "fingerprint" || !sensor) return;
-    try { await (await fingerprintController()).tick(metadata ? { ...metadata.peer, roster: metadata.roster } : undefined); delete fingerprintFailures.peer; } catch (error) { recordFingerprintFailure("peer", error, "local_state_review"); }
     try { await (await vaultController()).tick(metadata ? { ...metadata.vault, roster: metadata.roster } : undefined); delete fingerprintFailures.vault; } catch (error) { recordFingerprintFailure("vault", error, "local_state_review"); }
   })().finally(() => { fingerprintRoster?.reader.endRound(); fingerprintPolling = undefined; });
   return fingerprintPolling;
@@ -269,7 +251,7 @@ async function pollCloud(options) {
         commands: command => installationActivities.run(() => pollCommandsNow(command, config)),
         configuration: remote => installationActivities.run(() => applyRemoteConfiguration(config, remote)),
         fingerprints: metadata => installationActivities.run(() => pollFingerprintSyncNow(metadata)),
-        fingerprintBusy: () => Boolean(fingerprintPolling), peerAfter: () => fingerprintSync?.pollCursor(),
+        fingerprintBusy: () => Boolean(fingerprintPolling),
         legacy: { commands: () => installationActivities.run(() => pollCommandsNow(undefined, config)), configuration: () => installationActivities.run(async () => applyRemoteConfiguration(config, await fetchKioskConfiguration(config, { fetchImpl: boundedCloudFetch }))), fingerprints: () => installationActivities.run(() => pollFingerprintSyncNow()) },
         onError: (error, section) => { if (section === "transport" || section === "fingerprints") { fingerprintSync?.invalidateAuthority(); fingerprintVault?.invalidateAuthority(); recordFingerprintFailure("reset", error, "network_unavailable"); } },
       });
@@ -493,32 +475,13 @@ async function handleRequest(request, response) {
     try { await requireNetworkSession(); } catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock local settings before reviewing fingerprint diagnostics" })); return; }
     response.end(JSON.stringify(await fingerprintDiagnostics())); return;
   }
-  if (pathname === "/fingerprint-sync" || /^\/fingerprint-sync\/peers(?:\/[^/]+)?$/.test(pathname)) {
-    try { await requireNetworkSession(); }
-    catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock network settings first" })); return; }
-    try {
-      const sync = await fingerprintController();
-      if (pathname === "/fingerprint-sync" && request.method === "GET") response.end(JSON.stringify(await sync.status()));
-      else if (pathname === "/fingerprint-sync" && request.method === "PATCH") {
-        const input = await body(request); response.end(JSON.stringify(await sync.setEnabled(input.enabled))); void pollFingerprintSync();
-      } else if (pathname === "/fingerprint-sync/peers" && request.method === "POST") {
-        const input = await body(request); response.end(JSON.stringify(await sync.approvePeer(input.kioskId, input.fingerprint))); void pollFingerprintSync();
-      } else if (pathname.startsWith("/fingerprint-sync/peers/") && request.method === "DELETE") {
-        response.end(JSON.stringify(await sync.revokePeer(decodeURIComponent(pathname.split("/")[3])))); void pollFingerprintSync();
-      } else { response.statusCode = 405; response.end(JSON.stringify({ error: "Method not allowed" })); }
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "";
-      const review = /identity changed|local review|compare fingerprints|before replacing|before enabling/i.test(detail);
-      response.statusCode = review ? 409 : 503;
-      response.end(JSON.stringify({ error: review
-        ? "Fingerprint sync needs local review. Verify the kiosk pairing and compare peer device fingerprints again. Existing reader fingerprints are unchanged."
-        : "Fingerprint sync is unavailable. Check the kiosk pairing, reader, network and installation sync setting, then refresh. Maintenance remains unlocked." }));
-    }
-    return;
+  if (pathname === "/fingerprint-sync" || pathname.startsWith("/fingerprint-sync/")) {
+    try { await requireNetworkSession(); } catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock local settings first" })); return; }
+    response.statusCode = 410; response.end(JSON.stringify({ error: "Peer sharing has been retired. Use cloud sync diagnostics." })); return;
   }
   if (pathname === "/mappings" && request.method === "GET") { try { await requireNetworkSession(); response.end(JSON.stringify({ mappings: await mappings.read() })); } catch (error) { response.statusCode = 403; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Mappings unavailable" })); } return; }
-  if (pathname === "/mappings" && request.method === "PUT") { try { await requireNetworkSession(); const input = await body(request); response.end(JSON.stringify({ mappings: await useSensor(async () => { await assertFingerprintMutationAllowed(); return mappings.replaceFromMaintenance(input.mappings ?? {}); }) })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Invalid mappings" })); } return; }
-  if (/^\/mappings\/\d{1,3}$/.test(pathname) && request.method === "DELETE") { try { await requireNetworkSession(); const slot = pathname.split("/")[2]; const updated = await useSensor(async () => { await assertFingerprintMutationAllowed(); const current = await mappings.read(); delete current[slot]; return mappings.replace(current); }); response.end(JSON.stringify({ mappings: updated, sensorTemplateRetained: true })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Could not remove mapping" })); } return; }
+  if (pathname === "/mappings" && request.method === "PUT") { try { await requireNetworkSession(); const input = await body(request); const vault = (await loadPairing())?.pairingId ? await vaultController() : undefined; response.end(JSON.stringify({ mappings: await useSensor(async () => { await assertFingerprintMutationAllowed(); return mappings.replaceFromMaintenance(input.mappings ?? {}, { beforeRemove: (slot, mapping) => vault?.suppressLocal(slot, mapping) }); }) })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Invalid mappings" })); } return; }
+  if (/^\/mappings\/\d{1,3}$/.test(pathname) && request.method === "DELETE") { try { await requireNetworkSession(); const slot = pathname.split("/")[2]; const vault = (await loadPairing())?.pairingId ? await vaultController() : undefined; const updated = await useSensor(async () => { await assertFingerprintMutationAllowed(); const current = await mappings.read(); if (current[slot] && vault) await vault.suppressLocal(Number(slot), current[slot]); delete current[slot]; return mappings.replace(current); }); response.end(JSON.stringify({ mappings: updated, sensorTemplateRetained: true })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Could not remove mapping" })); } return; }
   if (pathname === "/sensor/test" && request.method === "POST") { try { await requireNetworkSession(); if (enrollmentInProgress) { response.statusCode = 409; response.end(JSON.stringify({ error: "Enrollment is using the reader. Wait for it to finish." })); return; } response.end(JSON.stringify(await testSensor())); } catch (error) { response.statusCode = 403; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Reader test unavailable" })); } return; }
   if (pathname === "/credential-mappings" && request.method === "GET") { try { await requireNetworkSession(); response.end(JSON.stringify({ mappings: await credentials.list() })); } catch (error) { response.statusCode = 403; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Credential mappings unavailable" })); } return; }
   if (pathname === "/credential-mappings" && request.method === "POST") { try { await requireNetworkSession(); const input = await body(request); if (!await rosterCache.has(input.memberId)) throw new Error("Choose an active roster member"); const mapping = await credentials.add({ method: authenticationMethod, credential: input.credential, memberId: input.memberId, label: input.label, replaceExisting: input.replaceExisting === true }); response.statusCode = 201; response.end(JSON.stringify({ mapping })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Credential mapping could not be saved" })); } return; }
@@ -559,7 +522,8 @@ async function handleRequest(request, response) {
       const config = await loadPairing();
       if (!config) throw new EnrollmentError("roster_unavailable", "Pair this kiosk before enrolling.", 503);
       const rosterId = await verifyEnrollmentMember(memberId, () => fetchKioskRoster(config, { fetchImpl: (url, options) => fetch(url, { ...options, redirect: "error", signal: AbortSignal.timeout(8000) }) }));
-      const result = await enrollFingerprint({ sensor, mappings, withSensor: useSensor, slot, memberId, rosterId, finger: "unspecified", replaceExisting: input.replaceExisting === true, onProgress: id => showDisplay(id), isEnrollmentAllowed: async () => {
+      const enrollmentVault = await vaultController();
+      const result = await enrollFingerprint({ sensor, mappings, withSensor: useSensor, slot, memberId, rosterId, finger: "unspecified", replaceExisting: input.replaceExisting === true, beforeReplace: (slot, mapping) => enrollmentVault.suppressLocal(slot, mapping), onProgress: id => showDisplay(id), isEnrollmentAllowed: async () => {
         const current = await loadPairing();
         if (current?.pairingId !== config.pairingId || current?.kioskId !== config.kioskId) throw new Error("Kiosk pairing changed. Refresh and retry enrollment.");
         await assertFingerprintMutationAllowed(); return true;

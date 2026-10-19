@@ -243,7 +243,7 @@ test("local rejected-scan review shows safe reasons and review does not change a
 });
 
 
-test("dashboard name stays readable beside separated footer sections and a compact development version", async ({ page }) => {
+test("dashboard name stays readable beside separated footer sections and a full kiosk development version", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 480 });
   let name = "Workshop entrance", online = true;
   await page.route(`${kioskBaseUrl}/display-state`, async route => {
@@ -257,8 +257,8 @@ test("dashboard name stays readable beside separated footer sections and a compa
   await expect(page.locator("#kiosk-name")).toHaveText(name);
   await expect(page.locator("#kiosk-name")).toHaveAttribute("title", name);
   await expect(page.locator("#reader-status")).toHaveText("Reader offline");
-  await expect(page.locator("#kiosk-version")).toHaveText("v2.0.0-dev");
-  await expect(page.locator("#kiosk-version")).toHaveAttribute("title", "Software version 2.0.0-dev.kiosk-improvements.ef2e129");
+  await expect(page.locator("#kiosk-version")).toHaveText("Kiosk v2.0.0-dev.kiosk-improvements.ef2e129");
+  await expect(page.locator("#kiosk-version")).toHaveAttribute("title", "Kiosk software version 2.0.0-dev.kiosk-improvements.ef2e129");
   const boxes = await Promise.all(["kiosk-name", "kiosk-version", "reader-status", "queue-status", "uptime"].map(id => page.locator(`#${id}`).boundingBox()));
   for (const box of boxes) {
     expect(box!.y).toBeCloseTo(boxes[0]!.y, 0);
@@ -268,6 +268,7 @@ test("dashboard name stays readable beside separated footer sections and a compa
   expect(boxes[0]!.width).toBeGreaterThanOrEqual(128);
   for (const id of ["kiosk-version", "reader-status", "queue-status", "uptime"]) {
     expect(await page.locator(`#${id}`).evaluate(e => getComputedStyle(e).borderInlineStartWidth)).toBe("1px");
+    expect(await page.locator(`#${id}`).evaluate(e => e.scrollWidth <= e.clientWidth), `${id} fits without clipping`).toBe(true);
   }
   await page.screenshot({ path: test.info().outputPath("single-line-footer.png") });
 });

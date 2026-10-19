@@ -1,12 +1,10 @@
 import type { D1Database } from "./d1-usage.ts";
 import { HttpError } from "./http-error.ts";
-import { fingerprintDeliveryAuthority } from "./fingerprint-relay.ts";
 import { fingerprintVaultFormat, fingerprintVaultKeyId } from "./fingerprint-vault-crypto.ts";
 
-type Context = { db: D1Database; credentialHash: string; secret?: string; maintenanceEnabled?: boolean; respond(value: unknown, status?: number): Response };
+type Context = { db: D1Database; credentialHash: string; secret?: string; respond(value: unknown, status?: number): Response };
 type Row = { id: string; name: string; pairingBound: number; command: string | null; configuration?: string | null;
-  reset?: string | null; rosterRevision?: number; members?: string | null; peerEnabled?: number | null; syncId?: string | null;
-  deliveries?: string | null; vaultEnabled?: number | null; vaultId?: string | null; keyId?: string | null; catalogRevision?: number | null; maintenance?: number };
+  reset?: string | null; rosterRevision?: number; members?: string | null; vaultEnabled?: number | null; vaultId?: string | null; keyId?: string | null; catalogRevision?: number | null; maintenance?: number };
 
 /** One current-authority transaction replaces independent background reads.
  * The caller supplies the Attendance-scoped database, whose before/after guards
@@ -14,7 +12,7 @@ type Row = { id: string; name: string; pairingBound: number; command: string | n
  * The authenticated kiosk CTE gates every result, including conditional replies.
  * This snapshot is metadata only; transfer routes independently check authority.
  */
-export async function kioskPoll(request: Request, { db, credentialHash, secret, maintenanceEnabled = false, respond }: Context): Promise<Response> {
+export async function kioskPoll(request: Request, { db, credentialHash, secret, respond }: Context): Promise<Response> {
   const query = new URL(request.url).searchParams;
   const fields = new Set(["v", "fingerprints", "config", "rosterRevision", "peerAfter"]);
   let invalidQuery = false;
@@ -26,12 +24,12 @@ export async function kioskPoll(request: Request, { db, credentialHash, secret, 
   if (revisionText !== null && (!/^\d{1,16}$/.test(revisionText) || !Number.isSafeInteger(Number(revisionText))) || after && !/^[A-Za-z0-9._:-]{1,128}$/.test(after)) throw new HttpError(400, "Invalid kiosk poll revision or cursor");
   if (!fingerprints && (revisionText !== null || query.has("peerAfter"))) throw new HttpError(400, "Fingerprint state requires the fingerprint section");
   const bindings: unknown[] = [credentialHash, new Date(Date.now() - 15 * 60_000).toISOString()];
-  if (fingerprints) bindings.push(revisionText === null ? -1 : Number(revisionText), Date.now(), after);
+  if (fingerprints) bindings.push(revisionText === null ? -1 : Number(revisionText));
   const row = await db.prepare(`WITH current_kiosk AS MATERIALIZED (
-      SELECT id,name,pairing_code_id AS pairingId,pairing_bound AS pairingBound FROM kiosks
+      SELECT id,name,pairing_code_id AS pairingId,pairing_bound AS pairingBound,configured_authentication_method AS authenticationMethod FROM kiosks
       WHERE installation_id='primary' AND token_hash=? AND active=1
     )${fingerprints ? `, maintenance_lock AS MATERIALIZED (
-      ${maintenanceEnabled ? "SELECT 1 FROM web_update_requests WHERE installation_id='primary' AND maintenance=1 LIMIT 1" : "SELECT 1 WHERE 0"}
+      SELECT 1 FROM web_update_requests WHERE installation_id='primary' AND maintenance=1 LIMIT 1
     ), fingerprint_kiosk AS MATERIALIZED (
       SELECT * FROM current_kiosk WHERE pairingBound=1 AND NOT EXISTS(SELECT 1 FROM maintenance_lock)
     ), pending_reset AS MATERIALIZED (
@@ -46,7 +44,7 @@ export async function kioskPoll(request: Request, { db, credentialHash, secret, 
         'targetCommit',c.requested_release_sha,'channel',c.update_channel) FROM kiosk_commands c
         WHERE c.installation_id='primary' AND c.kiosk_id=k.id AND c.completed_at IS NULL AND c.created_at>=? ORDER BY c.created_at LIMIT 1) AS command
       ${configuration ? `,(SELECT json_object('organizationName',organization_name,'subtitle',subtitle,'logoData',logo_data,
-        'primaryColor',primary_color,'secondaryColor',secondary_color,'logoBackdrop',logo_backdrop,'authenticationMethod',kiosk_authentication_method)
+        'primaryColor',primary_color,'secondaryColor',secondary_color,'logoBackdrop',logo_backdrop,'authenticationMethod',k.authenticationMethod)
         FROM organization_settings WHERE installation_id='primary') AS configuration` : ""}
       ${fingerprints ? `,EXISTS(SELECT 1 FROM maintenance_lock) AS maintenance,
       (SELECT json_object('id',id,'createdAt',createdAt,'kind','reset_fingerprint_mappings') FROM pending_reset) AS reset,
@@ -54,13 +52,6 @@ export async function kioskPoll(request: Request, { db, credentialHash, secret, 
       CASE WHEN (SELECT revision FROM report_data_revision WHERE installation_id='primary')<>? AND k.pairingBound=1 THEN
         (SELECT json_group_array(json_object('rosterId',id,'memberId',external_id,'firstName',first_name,'lastName',last_name))
           FROM (SELECT id,external_id,first_name,last_name FROM members WHERE installation_id='primary' AND active=1 ORDER BY last_name,first_name LIMIT 10001)) END AS members,
-      (SELECT s.enabled FROM kiosk_fingerprint_sync s,sharing_kiosk me WHERE s.installation_id='primary') AS peerEnabled,
-      (SELECT s.sync_id FROM kiosk_fingerprint_sync s,sharing_kiosk me WHERE s.installation_id='primary') AS syncId,
-      (SELECT json_group_array(envelopeJson) FROM (
-        SELECT d.envelope_json AS envelopeJson ${fingerprintDeliveryAuthority}
-        JOIN sharing_kiosk me ON me.id=d.recipient_id AND me.pairingId=d.recipient_pairing_id
-        WHERE d.installation_id='primary' AND d.status='pending' AND d.expires_at>? AND d.transfer_id>?
-        ORDER BY d.transfer_id LIMIT 8)) AS deliveries,
       (SELECT v.enabled FROM kiosk_fingerprint_vault_settings v,sharing_kiosk me WHERE v.installation_id='primary') AS vaultEnabled,
       (SELECT v.vault_id FROM kiosk_fingerprint_vault_settings v,sharing_kiosk me WHERE v.installation_id='primary') AS vaultId,
       (SELECT v.key_id FROM kiosk_fingerprint_vault_settings v,sharing_kiosk me WHERE v.installation_id='primary') AS keyId,
@@ -84,11 +75,7 @@ export async function kioskPoll(request: Request, { db, credentialHash, secret, 
         vault = { status: "ok", enabled: true, vaultId: row.vaultId, format: fingerprintVaultFormat, catalogRevision: row.catalogRevision };
       } catch { vault = { status: "unavailable", enabled: false, vaultId: null, catalogRevision: null }; }
     }
-    let peer: Record<string, unknown> = { status, enabled: status === "ok" && Boolean(row.peerEnabled), syncId: status === "ok" ? row.syncId ?? null : null, deliveries: [] };
-    if (status === "ok" && row.peerEnabled) {
-      try { peer.deliveries = (JSON.parse(row.deliveries ?? "[]") as string[]).map(envelope => JSON.parse(envelope)); }
-      catch { peer = { status: "unavailable", enabled: false, syncId: null, deliveries: [] }; }
-    }
+    const peer = { status, enabled: false, syncId: null, deliveries: [] };
     result.fingerprints = {
       reset: { status: bound && !row.maintenance ? "ok" : "unavailable", commands: bound && !row.maintenance && reset ? [reset] : [] },
       roster,

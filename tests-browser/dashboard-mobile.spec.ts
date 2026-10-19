@@ -106,9 +106,14 @@ test("Settings keeps its parent bubble and the current subpage at desktop and mo
     await expect(settings).not.toHaveAttribute("aria-current");
     if (viewport.width < 700) await page.getByRole("button", { name: "Close navigation" }).click();
     await expect(page.locator(".settings-module-disclosure")).toHaveAttribute("data-active", "true");
+    if (viewport.width < 700) await page.getByRole("button", { name: "Settings · Attendance", exact: true }).click();
     await page.getByRole("button", { name: "Modules", exact: true }).click();
-    const currentCategory = page.getByRole("navigation", { name: "Settings categories" }).getByRole("link", { name: "Configuration" });
-    await expect(currentCategory).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("group", { name: "Module settings" }).getByRole("link", { name: "Attendance", exact: true })).toHaveAttribute("aria-current", "page");
+    if (viewport.width < 700) await expect(page.getByRole("combobox", { name: "Attendance section", exact: true })).toHaveValue("/settings/configuration");
+    else {
+      const currentCategory = page.getByRole("navigation", { name: "Attendance settings sections" }).getByRole("link", { name: "Meeting configuration" });
+      await expect(currentCategory).toHaveAttribute("aria-current", "page");
+    }
     await expect(page.getByText("Changes apply to every meeting after you save them")).toHaveCount(0);
   }
 });
@@ -130,7 +135,7 @@ test("meeting selection remains reachable beside meeting data on a narrow screen
   await expect(page).toHaveURL(meetingDirectoryUrl);
 });
 
-test("roster actions remain available below member data on a narrow screen", async ({ page }) => {
+test("roster pencil stays centered beside member data and opens member actions on a narrow screen", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route("**/admin/members", (route) => route.fulfill({
     status: 200,
@@ -148,24 +153,38 @@ test("roster actions remain available below member data on a narrow screen", asy
   const actions = row.locator(".roster-action-cell");
   await expect(header).toBeHidden();
   await expect(row.locator(".roster-discord-id")).toBeVisible();
-  await expect(actions.getByRole("button")).toHaveCount(3);
+  await expect(actions.getByRole("button")).toHaveCount(1);
   await expect(row.locator(".roster-member-id")).toHaveCSS("text-align", "right");
   expect(await row.locator(".roster-discord-id").evaluate((element) => getComputedStyle(element, "::before").content)).toBe('"Discord ID"');
   const [identityBounds, actionsBounds] = await Promise.all([identity.boundingBox(), actions.boundingBox()]);
-  expect(actionsBounds!.y).toBeGreaterThan(identityBounds!.y + identityBounds!.height);
-  for (const button of await actions.getByRole("button").all()) expect((await button.boundingBox())!.width).toBeGreaterThan(80);
+  const rowBounds = (await row.boundingBox())!;
+  expect(Math.abs(actionsBounds!.y + actionsBounds!.height / 2 - rowBounds.y - rowBounds.height / 2)).toBeLessThan(2);
+  expect(actionsBounds!.x).toBeGreaterThan(identityBounds!.x);
+  const pencil = actions.getByRole("button");
+  expect((await pencil.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+  await pencil.click();
+  const editor = page.getByRole("dialog", { name: "Edit roster member" });
+  await expect(editor.getByRole("button", { name: "Deactivate member", exact: true })).toBeVisible();
+  await expect(editor.getByRole("button", { name: "Delete member", exact: true })).toBeVisible();
 });
 
 test("data deletion requires an exact typed confirmation", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/settings/data");
   const roster = page.locator(".data-category").filter({ has: page.getByRole("heading", { name: "Roster", exact: true }) });
-  await roster.getByRole("button", { name: "Delete" }).click();
+  const opener = roster.getByRole("button", { name: "Delete roster data", exact: true });
+  await expect(opener).toBeHidden();
+  await roster.getByText("Restore or delete data", { exact: true }).click();
+  await opener.click();
   const dialog = page.getByRole("dialog", { name: "Delete Roster" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("alert")).toContainText("permanently deletes");
   const deletion = dialog.getByRole("button", { name: "Delete roster" });
   await expect(deletion).toBeDisabled();
+  for (const phrase of ["DELETE ATTENDANCE", "delete roster", "DELETE ROSTER EXTRA"]) {
+    await dialog.getByLabel("Type DELETE ROSTER to confirm").fill(phrase);
+    await expect(deletion).toBeDisabled();
+  }
   await dialog.getByLabel("Type DELETE ROSTER to confirm").fill("DELETE ROSTER");
   await expect(deletion).toBeEnabled();
 });

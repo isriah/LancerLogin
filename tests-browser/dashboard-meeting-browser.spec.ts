@@ -24,13 +24,15 @@ test("Dashboard owns meeting navigation and remembers the selected browser", asy
 
 test("calendar range controls and all meeting choices open canonical detail routes", async ({ page }) => {
   await page.goto("/dashboard");
-  const range = page.locator(".calendar-heading p");
-  const initialRange = await range.textContent();
-  await page.getByRole("button", { name: "Show next five weeks" }).click();
-  await expect(range).not.toHaveText(initialRange!);
-  await page.getByRole("button", { name: "Show previous five weeks" }).click();
-  await expect(range).toHaveText(initialRange!);
+  await expect(page.locator(".calendar-heading p")).toHaveCount(0);
+  const firstDay = page.locator(".compact-calendar-day").first();
+  const initialDay = await firstDay.getAttribute("aria-label");
+  await page.getByRole("button", { name: "Next month of meetings" }).click();
+  await expect(firstDay).not.toHaveAttribute("aria-label", initialDay!);
+  await page.getByRole("button", { name: "Previous month of meetings" }).click();
+  await expect(firstDay).toHaveAttribute("aria-label", initialDay!);
 
+  await page.getByRole("radio", { name: "Table" }).check();
   const meetingSelector = page.getByRole("combobox", { name: "Meeting" });
   await meetingSelector.focus();
   await expect(meetingSelector).toBeFocused();
@@ -38,7 +40,8 @@ test("calendar range controls and all meeting choices open canonical detail rout
   await expect(page).toHaveURL(/\/meetings\/next-week$/);
   await page.goBack();
   await expect(page).toHaveURL(/\/dashboard$/);
-  await page.locator('.calendar-day button[title^="Build session,"]').click();
+  await page.getByRole("radio", { name: "Calendar" }).check();
+  await page.getByRole("button", { name: "Open meeting Build session", exact: true }).click();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await page.goBack();
   await page.goForward();
@@ -71,6 +74,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       }));
 
       await page.goto("/dashboard");
+      await page.getByRole("radio", { name: "Table" }).check();
       const selector = page.getByRole("combobox", { name: "Meeting" });
       await expect(selector).toBeVisible();
       await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
@@ -186,7 +190,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.getByRole("radio", { name: "Table" })).toBeChecked();
       const rows = page.locator(".meeting-browser-row");
       await expect(rows).toHaveCount(4);
-      await expect(rows.locator(".meeting-title-cell > strong")).toHaveText([
+      await expect(rows.locator(".meeting-title-cell > a")).toHaveText([
         "Oldest meeting",
         "Same start first",
         "Same start second",
@@ -243,7 +247,8 @@ test("creation recovers API validation and preserves duplication, recurrence, an
   await page.goto("/dashboard");
   await page.getByRole("button", { name: "Add meeting" }).click();
   const dialog = page.getByRole("dialog", { name: "Create meeting" });
-  await dialog.getByLabel("Duplicate an existing meeting").selectOption("active-meeting");
+  await dialog.locator(".meeting-duplicate-disclosure > summary").click();
+  await dialog.getByLabel("Source meeting").selectOption("active-meeting");
   await expect(dialog.getByLabel("Title", { exact: true })).toHaveValue("Build session");
   await expect(dialog.getByLabel("Frequency")).toHaveValue("weekly");
   await expect(dialog.getByLabel("Series end date")).not.toHaveValue("");
@@ -306,8 +311,8 @@ test("successful creation refreshes the selected calendar or table and the meeti
   let dialog = page.getByRole("dialog", { name: "Create meeting" });
   await dialog.getByLabel("Title", { exact: true }).fill("Calendar planning");
   await dialog.getByRole("button", { name: "Create meeting", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Meeting" }).getByRole("option", { name: /Calendar planning/ })).toHaveCount(1);
-  await expect(page.locator('.calendar-day button[title^="Calendar planning,"]')).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Meeting", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open meeting Calendar planning", exact: true })).toBeVisible();
   await expect(page.getByRole("radio", { name: "Calendar" })).toBeChecked();
 
   await page.getByRole("radio", { name: "Table" }).check();

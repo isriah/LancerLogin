@@ -49,10 +49,67 @@ test("Operator Outreach view does not expose or request Admin privacy settings",
 test("supported team program is a required FIRST dropdown", async ({ page }) => {
   await settingsFixture(page); const writes: Record<string, unknown>[] = [];
   await page.route("**/admin/hours/teams*", route => { if (route.request().method() === "POST") writes.push(route.request().postDataJSON()); return route.fulfill({ json: { items: [], nextCursor: null } }); });
-  await page.goto("/settings/outreach-setup"); await page.getByRole("button", { name: /^Supported teams(?: \(|$)/ }).click(); await page.getByRole("button", { name: "Add team", exact: true }).click();
+  await page.goto("/settings/outreach-setup"); await page.getByRole("link", { name: /^Supported teams(?: \(|$)/ }).click(); await page.getByRole("button", { name: "Add team", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Add supported team" }); await dialog.getByLabel("Team name").fill("Synthetic team");
   const program = dialog.getByRole("combobox", { name: "Program", exact: true }); await expect(program).toHaveAttribute("required", "");
   await expect(program.locator("option")).toHaveText(["Choose program", "Explore", "Challenge", "FTC", "FRC"]); await expect(dialog.getByRole("button", { name: "Add team", exact: true })).toBeDisabled();
   await program.selectOption("FTC"); await dialog.getByRole("button", { name: "Add team", exact: true }).click(); await expect(page.getByText("Team added.")).toBeVisible();
   expect(writes[0]).toMatchObject({ name: "Synthetic team", program: "FTC" });
+});
+
+test("Outreach section links retain bookmarks, reloads and browser history", async ({ page }) => {
+  await settingsFixture(page);
+  await page.goto("/settings/outreach-setup?section=labels");
+  const sections = page.getByRole("navigation", { name: "Outreach settings sections" });
+  await expect(sections.getByRole("link", { name: "Labels", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", { name: "Outreach labels" })).toBeVisible();
+  await sections.getByRole("link", { name: "Supported teams", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/section=teams$/);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Supported teams" })).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Outreach labels" })).toBeVisible();
+  await page.goForward();
+  await expect(page.getByRole("heading", { name: "Supported teams" })).toBeVisible();
+  await sections.getByRole("link", { name: "General", exact: true }).click();
+  await expect(page).toHaveURL(/section=general$/);
+  await expect(page.getByLabel("Public form privacy mode")).toBeVisible();
+});
+
+test("Operator bookmarks cannot open the Admin General section", async ({ page }) => {
+  const state = await settingsFixture(page, "operator");
+  await page.goto("/settings/outreach-setup?section=general");
+  await expect(page.getByRole("heading", { name: "Supported teams" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "General", exact: true })).toHaveCount(0);
+  expect(state.readCount()).toBe(0);
+});
+
+test("mobile supported team records keep program, number and revisioned archive in edit", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await settingsFixture(page);
+  const team = { id: "team-901", name: "Synthetic team", program: "FTC", number: "901", archived: false, revision: 3 };
+  const writes: unknown[] = [];
+  await page.route("**/admin/hours/teams**", route => {
+    if (route.request().method() === "PATCH") writes.push(route.request().postDataJSON());
+    return route.fulfill({ json: { items: [team], nextCursor: null, total: 1 } });
+  });
+  await page.goto("/settings/outreach-setup?section=teams");
+  const record = page.locator(".outreach-team-record");
+  await expect(record).toContainText("FTC · #901"); await expect(record).toContainText("Active");
+  await record.getByRole("button", { name: "Edit Synthetic team", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Edit supported team" });
+  expect(writes).toEqual([]); await dialog.getByRole("button", { name: "Archive team", exact: true }).click();
+  await expect.poll(() => writes).toEqual([{ revision: 3, archived: true }]);
+  await expect(dialog).toBeHidden(); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("mobile empty Labels keeps section picker and add action without empty pagination", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await settingsFixture(page);
+  await page.goto("/settings/outreach-setup?section=labels");
+  await expect(page.getByRole("combobox", { name: "Outreach section", exact: true })).toHaveValue("/settings/outreach-setup?section=labels");
+  await expect(page.getByText("No matching labels.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Previous", exact: true })).toHaveCount(0);
+  const add = page.getByRole("button", { name: "Add label", exact: true });
+  const bounds = await add.boundingBox(); expect(bounds!.height).toBeGreaterThanOrEqual(44);
+  await add.click(); await expect(page.getByRole("dialog", { name: "Add Outreach label" })).toBeVisible();
 });

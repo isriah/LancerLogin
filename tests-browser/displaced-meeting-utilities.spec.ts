@@ -1,5 +1,6 @@
 import { setDashboardTheme } from "./dashboard-theme";
 import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 test("Dashboard delegates live attendance and contest review to complete replacement paths", async ({ page }) => {
   let attendanceLoads = 0;
@@ -12,10 +13,11 @@ test("Dashboard delegates live attendance and contest review to complete replace
   await expect(page.getByRole("button", { name: /attendance contest awaiting review/i })).toBeVisible();
   expect(attendanceLoads).toBe(0);
 
-  await page.locator('.calendar-day button[title^="Build session,"]').click();
+  await page.getByRole("button", { name: "Open meeting Build session", exact: true }).click();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Meeting actions" })).toHaveCount(0);
+  await page.locator(".meeting-more-actions > summary").click();
   await expect(page.getByRole("group", { name: "Meeting actions" })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Calendar delivery|Discord operations/ })).toHaveCount(0);
   await expect(page.getByRole("table", { name: "Meeting attendance" })).toContainText("Active · not checked out");
@@ -34,6 +36,15 @@ test("meeting contest card stays hidden when that meeting has no contests", asyn
 });
 
 test("Saved reports retain summary and detailed attendance CSV exports", async ({ page }) => {
+  let savedReport: Record<string, unknown> | undefined;
+  await page.route("**/reports/views", async (route) => {
+    if (route.request().method() === "POST") {
+      savedReport = { ...route.request().postDataJSON(), id: "export-report", ownerUserId: "admin-1", revision: 1, warnings: [], errors: [] };
+      return route.fulfill({ status: 201, json: { report: savedReport } });
+    }
+    return route.fulfill({ json: { reports: savedReport ? [savedReport] : [] } });
+  });
+  await page.route("**/reports/views/export-report", (route) => route.fulfill({ json: { report: savedReport } }));
   await page.route("**/exports/report.csv", (route) => route.fulfill({
     status: 200,
     contentType: "text/csv",
@@ -47,16 +58,31 @@ test("Saved reports retain summary and detailed attendance CSV exports", async (
     body: "member_id,status\nA-101,present\n",
   }));
   await page.goto("/reports/new");
+  await page.getByLabel("Report name").fill("Attendance review");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page).toHaveURL(/\/reports\/view\/export-report$/);
+  const exportMenu = page.locator(".report-menu").filter({ has: page.locator("summary").filter({ hasText: /^Export$/ }) });
 
+  await exportMenu.locator("summary").click();
   const summary = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download report CSV" }).click();
-  await expect((await summary).suggestedFilename()).toBe("lancerlogin-report.csv");
+  const summaryFile = await summary;
+  expect(summaryFile.suggestedFilename()).toMatch(/^lancerlogin-attendance-review-\d{4}-\d{2}-\d{2}\.csv$/);
+  expect(await readFile((await summaryFile.path())!, "utf8")).toBe("Member,Regular attendance\nAvery Stone,100%\n");
+  await exportMenu.locator("summary").click();
   const detail = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download detailed attendance CSV" }).click();
-  await expect((await detail).suggestedFilename()).toBe("lancerlogin-report-detail.csv");
+  const detailFile = await detail;
+  expect(detailFile.suggestedFilename()).toMatch(/^lancerlogin-attendance-review-\d{4}-\d{2}-\d{2}-detail\.csv$/);
+  expect(await readFile((await detailFile.path())!, "utf8")).toBe("member_id,status\nA-101,present\n");
 });
 
-test("Kiosks exposes verified Discord status sync beside physical health and stays responsive", async ({ page }) => {
+test("Kiosk management exposes verified Discord status sync and stays responsive", async ({ page }) => {
+  const openMaintenance = async () => {
+    await page.goto("/kiosks");
+    await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
+    await page.locator(".kiosk-management-section > summary").filter({ hasText: /^Device maintenance$/ }).click();
+  };
   let syncRequests = 0;
   await page.route("**/discord/kiosk-status", async (route) => {
     syncRequests += 1;
@@ -68,8 +94,8 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
 
   for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
-    await page.goto("/kiosks");
-    const physical = page.locator(".kiosk-grid > .task-card").filter({ has: page.getByRole("heading", { name: "Physical kiosks" }) });
+    await openMaintenance();
+    const physical = page.locator(".kiosk-grid > .task-card");
     await expect(physical.getByRole("region", { name: "Discord kiosk status" })).toHaveCount(0);
     const syncButton = physical.getByRole("button", { name: "Sync Discord status" });
     expect((await syncButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
@@ -81,7 +107,7 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
     await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
   }
 
-  await page.goto("/kiosks");
+  await openMaintenance();
   await page.getByRole("button", { name: "Sync Discord status" }).click();
   await expect(page.locator('.kiosk-notice[role="status"]')).toHaveText("Persistent Discord kiosk status updated.");
   expect(syncRequests).toBe(1);
@@ -101,7 +127,7 @@ test("Kiosks exposes verified Discord status sync beside physical health and sta
     contentType: "application/json",
     body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: false } } }),
   }));
-  await page.goto("/kiosks");
+  await openMaintenance();
   await expect(page.getByRole("button", { name: "Sync Discord status" })).toHaveCount(0);
 
   await page.route("**/integrations/capabilities", (route) => route.fulfill({

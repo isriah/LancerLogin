@@ -20,7 +20,7 @@ for (const viewport of references.viewports) for (const theme of references.them
     await page.goto("/roster");
     const header = page.locator(".dashboard-toolbar");
     await expect(header.getByRole("link", { name: "Go to Dashboard" })).toBeVisible();
-    await expect(page.getByRole("switch", { name: "Dark mode" })).toHaveCount(0);
+    await expect(page.getByRole("switch", { name: "Light mode" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
     if (viewport.width <= 760) {
       expect((await header.locator(".brand-heading").boundingBox())!.width).toBeGreaterThan(80);
@@ -34,7 +34,7 @@ for (const viewport of references.viewports) for (const theme of references.them
     const row = page.locator(".roster-row").filter({ hasText: "Alexandria-Catherine" });
     const name = await row.locator(".roster-identity").boundingBox();
     const id = await row.locator(".roster-member-id").boundingBox();
-    expect(id!.x - name!.x - name!.width).toBeGreaterThanOrEqual(15);
+    expect(id!.x - name!.x - name!.width).toBeGreaterThanOrEqual(viewport.width <= 760 ? 7 : 15);
     await expect(row.locator(".roster-member-id")).toHaveAttribute("role", "cell");
     await expect(row).not.toContainText("Required from");
     const identityLink = row.locator(".member-link");
@@ -43,12 +43,12 @@ for (const viewport of references.viewports) for (const theme of references.them
     const email = await identityLink.locator("small").first().boundingBox();
     expect(email!.y - title!.y - title!.height).toBeLessThanOrEqual(1);
     await expect(header.locator(".primary-navigation a")).toHaveText(["Meetings", "Roster", "Reports", "Kiosks", "Settings"]);
-    await row.getByRole("button", { name: "Edit", exact: true }).click();
+    await row.getByRole("button", { name: /^Edit / }).click();
     const editor = page.getByRole("dialog", { name: "Edit roster member" });
     await expect(editor.getByLabel("Attendance required from")).toHaveValue("2026-09-01");
     await page.keyboard.press("Escape");
     await expect(editor).not.toBeVisible();
-    await expect(row.getByRole("button", { name: "Edit", exact: true })).toBeFocused();
+    await expect(row.getByRole("button", { name: /^Edit / })).toBeFocused();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath("roster.png"), fullPage: true });
   });
@@ -91,7 +91,8 @@ for (const viewport of references.viewports) for (const theme of references.them
     const button = await read.boundingBox();
     const controls = await page.locator(".simulator-controls").boundingBox();
     expect(Math.abs(button!.x + button!.width / 2 - controls!.x - controls!.width / 2)).toBeLessThan(2);
-    expect(button!.width).toBeLessThan(controls!.width - 32);
+    if (viewport.width <= 760) expect(button!.width).toBeCloseTo((await page.getByLabel("Roster member").boundingBox())!.width, 0);
+    else expect(button!.width).toBeLessThan(controls!.width - 32);
     await read.press("Enter");
     await expect(preview.getByRole("heading", { name: "Welcome", exact: true })).toBeVisible();
     await expect(preview.locator("#display-name")).toHaveText("Avery Stone");
@@ -117,18 +118,18 @@ test("Access renders mixed-case email addresses in lowercase", async ({ page }) 
 test("Operator can change theme and sign out through Settings without Admin access", async ({ page }) => {
   await context(page, "operator");
   await page.goto("/dashboard");
-  await expect(page.getByRole("switch", { name: "Dark mode" })).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "Light mode" })).toHaveCount(0);
   await page.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page).toHaveURL(/\/settings\/session$/);
   const settingsNav = page.getByRole("navigation", { name: "Settings categories" });
   await expect(settingsNav.getByRole("link", { name: "Session" })).toBeVisible();
   await expect(settingsNav.getByRole("link", { name: "Attendance" })).toBeVisible();
   await expect(settingsNav.getByRole("link")).toHaveCount(2);
-  const toggle = page.getByRole("switch", { name: "Dark mode" });
+  const toggle = page.getByRole("switch", { name: "Light mode" });
   await toggle.press("Space");
   await expect(page.locator(".app")).toHaveAttribute("data-theme", "light");
   await page.reload();
-  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toBeChecked();
   let logout = false;
   await page.route("**/auth/logout", route => { logout = true; return route.fulfill({ json: {} }); });
   await page.getByRole("button", { name: "Sign out", exact: true }).press("Enter");

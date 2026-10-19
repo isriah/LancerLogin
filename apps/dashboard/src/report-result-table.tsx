@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import "./mobile-roster-reports.css";
+import { reportDisplayDataset } from "./member-report-types";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { RouteLink } from "./router";
 import { reportColumnId, reportColumnLabel, type ReportCatalog, type ReportColumn, type ReportDefinition, type ReportDurationUnit, type ReportQueryResult } from "./saved-reports";
 
@@ -37,12 +39,14 @@ function placePopover(kind: PopoverState["kind"], button: HTMLButtonElement, col
   return kind === "add" ? { kind, top, left } : { kind, columnId: columnId!, top, left };
 }
 
-export function EditableReportTable({ catalog, definition, result, loading, editable, onChange, onNavigate, onNotice }: {
+export function EditableReportTable({ catalog, definition, result, loading, editable, filterable = true, onChange, onNavigate, onNotice, toolbar }: {
+  toolbar?: ReactNode;
   catalog: ReportCatalog;
   definition: ReportDefinition;
   result?: ReportQueryResult;
   loading: boolean;
   editable: boolean;
+  filterable?: boolean;
   onChange: (mutator: (next: ReportDefinition) => void) => void;
   onNavigate: (path: string) => void;
   onNotice: (message: string) => void;
@@ -54,23 +58,24 @@ export function EditableReportTable({ catalog, definition, result, loading, edit
   const [draggingId, setDraggingId] = useState<string>();
   const menu = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
+  const addButton = useRef<HTMLButtonElement | null>(null);
   const labelNames = useMemo(() => new Map(catalog.labels.map((label) => [label.id, label.name])), [catalog.labels]);
-  const dataset = catalog.datasets.find((item) => item.id === definition.dataset)!;
+  const dataset = reportDisplayDataset(catalog, definition.dataset);
   const selectedIds = useMemo(() => new Set(definition.columns.map(reportColumnId)), [definition.columns]);
   const columnGroups = useMemo(() => {
     const query = columnSearch.trim().toLowerCase();
     const labelMatch = catalog.labels.some((label) => label.name.toLowerCase().includes(query));
     const groups = new Map<string, CatalogItem[]>();
     for (const item of catalog.columns) {
-      if (!item.datasets.includes(definition.dataset) || item.key === dataset.defaultColumns[0]) continue;
+      if (!item.datasets.includes(dataset.id) || item.key === dataset.defaultColumns[0]) continue;
       if (query && !item.label.toLowerCase().includes(query) && !item.group.toLowerCase().includes(query) && !(item.requiresLabel && labelMatch)) continue;
       const items = groups.get(item.group) ?? [];
       items.push(item);
       groups.set(item.group, items);
     }
     return [...groups.entries()];
-  }, [catalog.columns, catalog.labels, columnSearch, dataset.defaultColumns, definition.dataset]);
-  const labelCategory = labelCategoryKey ? catalog.columns.find((item) => item.key === labelCategoryKey && item.requiresLabel && item.datasets.includes(definition.dataset)) : undefined;
+  }, [catalog.columns, catalog.labels, columnSearch, dataset.defaultColumns, dataset.id]);
+  const labelCategory = labelCategoryKey ? catalog.columns.find((item) => item.key === labelCategoryKey && item.requiresLabel && item.datasets.includes(dataset.id)) : undefined;
   const visibleLabels = useMemo(() => catalog.labels.filter((label) => label.name.toLowerCase().includes(labelSearch.toLowerCase())), [catalog.labels, labelSearch]);
 
   function columnName(column: ReportColumn) {
@@ -87,7 +92,7 @@ export function EditableReportTable({ catalog, definition, result, loading, edit
     setColumnSearch("");
     setLabelSearch("");
     setLabelCategoryKey(undefined);
-    if (returnFocus) window.requestAnimationFrame(() => trigger.current?.focus());
+    if (returnFocus) window.requestAnimationFrame(() => (trigger.current?.isConnected ? trigger.current : addButton.current)?.focus());
   }
   function openPopover(next: PopoverState["kind"], button: HTMLButtonElement, columnId?: string) {
     if (!editable) return;
@@ -183,12 +188,14 @@ export function EditableReportTable({ catalog, definition, result, loading, edit
   const popoverStyle = popover ? { "--report-popover-top": `${popover.top}px`, "--report-popover-left": `${popover.left}px` } as CSSProperties : undefined;
 
   return <>
-    <div className="report-table-scroll">
+    <div className="report-results-toolbar">{toolbar}<button ref={addButton} className="ui-button report-add-column-button" type="button" disabled={!editable} aria-haspopup="dialog" aria-expanded={popover?.kind === "add"} onClick={(event) => openPopover("add", event.currentTarget)}><ColumnIcon name="add" /><span>Add column</span></button></div>
+    <p className="report-table-help">{filterable ? "Open a column header to sort or filter." : "Choose your columns, then save the report to filter results."} Scroll the table to see more columns; the first column stays visible.</p>
+    <div className="report-table-scroll" tabIndex={0} role="region" aria-label="Scrollable report results">
       <table className={`report-table-data editable-report-table${editable ? " is-editable" : " is-read-only"}`}>
         <caption className="visually-hidden">{editable ? "Report results. Drag column headers to reorder them, or open a column header for sorting and column actions." : "Report results."}</caption>
         <thead><tr>{definition.columns.map((column, index) => {
           const id = reportColumnId(column); const sorted = reportColumnId(definition.sort.column) === id; const filtered = (definition.columnFilters ?? []).some((filter) => reportColumnId(filter.column) === id); const availability = columnAvailability(column); const unavailableLabel = availability.available ? undefined : `${columnName(column)} is unavailable. ${availability.explanation ?? "This report source is unavailable."}`;
-          return <th scope="col" key={id} data-column-id={id} draggable={editable && index > 0}
+          return <th scope="col" key={id} aria-sort={sorted ? definition.sort.direction === "asc" ? "ascending" : "descending" : undefined} data-column-id={id} data-value-kind={catalog.columns.find((item) => item.key === column.key)?.filterKind ?? "text"} draggable={editable && index > 0}
             className={`${draggingId === id ? "is-dragging" : ""}${editable && index > 0 ? " is-draggable" : ""}`}
             onDragStart={(event) => { if (!editable || index === 0) { event.preventDefault(); return; } setDraggingId(id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", id); closePopover(); }}
             onDragEnd={() => setDraggingId(undefined)}
@@ -196,8 +203,8 @@ export function EditableReportTable({ catalog, definition, result, loading, edit
             onDrop={(event) => { if (!editable) return; event.preventDefault(); const source = event.dataTransfer.getData("text/plain") || draggingId; if (source) moveColumnTo(source, id); setDraggingId(undefined); }}>
             <div className="report-column-header">{editable ? <><span className="report-column-drag" aria-hidden="true"><ColumnIcon name="drag" /></span><button className="report-column-trigger" type="button" aria-label={unavailableLabel ? `${unavailableLabel} Column options.` : `${columnName(column)} column options`} title={availability.explanation} aria-haspopup="dialog" aria-expanded={popover?.kind === "column" && popover.columnId === id} onClick={(event) => openPopover("column", event.currentTarget, id)}><span className={availability.available ? undefined : "report-unavailable-marker"} data-explanation={availability.explanation}>{columnName(column)}{!availability.available && <small>Unavailable</small>}</span>{filtered && <ColumnIcon name="filter" />}{sorted && <ColumnIcon name={definition.sort.direction === "asc" ? "sort-asc" : "sort-desc"} />}<ColumnIcon name="down" /></button></> : <span className={`report-column-label${availability.available ? "" : " report-unavailable-marker"}`} tabIndex={availability.available ? undefined : 0} role={availability.available ? undefined : "note"} aria-label={unavailableLabel} title={availability.explanation} data-explanation={availability.explanation}><span>{columnName(column)}{!availability.available && <small>Unavailable</small>}</span>{sorted && <ColumnIcon name={definition.sort.direction === "asc" ? "sort-asc" : "sort-desc"} />}</span>}</div>
           </th>;
-        })}{editable && <th scope="col" className="report-add-column"><button className="ui-button report-add-column-button" type="button" aria-haspopup="dialog" aria-expanded={popover?.kind === "add"} onClick={(event) => openPopover("add", event.currentTarget)}><ColumnIcon name="add" />Add column</button></th>}</tr></thead>
-        <tbody>{result?.rows.map((row) => <tr key={row.id}>{definition.columns.map((column, index) => { const id = reportColumnId(column); return <td key={id}>{index === 0 && row.href ? <RouteLink href={row.href} currentPath="" navigate={onNavigate}>{row.cells[id]?.text ?? row.label}</RouteLink> : <ReportCell value={row.cells[id]} />}</td>; })}{editable && <td className="report-add-column-spacer" aria-hidden="true" />}</tr>)}</tbody>
+        })}</tr></thead>
+        <tbody>{result?.rows.map((row) => <tr key={row.id}>{definition.columns.map((column, index) => { const id = reportColumnId(column); return <td key={id} data-value-kind={catalog.columns.find((item) => item.key === column.key)?.filterKind ?? "text"}>{index === 0 && row.href ? <RouteLink href={row.href} currentPath="" navigate={onNavigate}>{row.cells[id]?.text ?? row.label}</RouteLink> : <ReportCell value={row.cells[id]} />}</td>; })}</tr>)}</tbody>
       </table>
       {!loading && result?.state !== "paused" && !result?.rows.length && <p className="empty-state">No {dataset.label.toLocaleLowerCase()} match this report.</p>}
     </div>
@@ -214,10 +221,10 @@ export function EditableReportTable({ catalog, definition, result, loading, edit
       </> : activeColumn && <>
         <div className="report-column-popover-heading"><strong>{columnName(activeColumn)}</strong>{activeFilter && <span>Filtered</span>}</div>{!columnAvailability(activeColumn).available && <p className="ui-status" data-tone="warning">{columnAvailability(activeColumn).explanation} Remove this column or its controls to change the preserved definition.</p>}
         {activeCatalog?.sortable && <fieldset className="report-column-sort"><legend className="visually-hidden">Sort column</legend><button className={`ui-button${definition.sort.direction === "asc" && reportColumnId(definition.sort.column) === reportColumnId(activeColumn) ? " is-selected" : ""}`} type="button" aria-pressed={definition.sort.direction === "asc" && reportColumnId(definition.sort.column) === reportColumnId(activeColumn)} onClick={() => { setSort(activeColumn, "asc"); closePopover(true); }}><ColumnIcon name="sort-asc" />Ascending</button><button className={`ui-button${definition.sort.direction === "desc" && reportColumnId(definition.sort.column) === reportColumnId(activeColumn) ? " is-selected" : ""}`} type="button" aria-pressed={definition.sort.direction === "desc" && reportColumnId(definition.sort.column) === reportColumnId(activeColumn)} onClick={() => { setSort(activeColumn, "desc"); closePopover(true); }}><ColumnIcon name="sort-desc" />Descending</button></fieldset>}
-        {activeCatalog?.filterKind === "text" && <div className="report-column-filter-control"><label className="report-column-filter">Contains<input type="search" value={activeFilter?.value ?? ""} placeholder="Type to filter" onChange={(event) => setFilter(activeColumn, "contains", event.target.value)} /></label>{activeFilter && <button className="ui-button" type="button" onClick={() => setFilter(activeColumn, "contains", "")}>Clear filter</button>}</div>}
+        {filterable && activeCatalog?.filterKind === "text" && <div className="report-column-filter-control"><label className="report-column-filter">Contains<input type="search" value={activeFilter?.value ?? ""} placeholder="Type to filter" onChange={(event) => setFilter(activeColumn, "contains", event.target.value)} /></label>{activeFilter && <button className="ui-button" type="button" onClick={() => setFilter(activeColumn, "contains", "")}>Clear filter</button>}</div>}
         {activeCatalog?.durationUnits && <label className="report-column-filter">Units<select value={activeColumn.unit ?? "minutes"} onChange={(event) => setDurationUnit(activeColumn, event.target.value as ReportDurationUnit)}>{activeCatalog.durationUnits.map((unit) => <option key={unit} value={unit}>{unit === "hours" ? "Hours" : "Minutes"}</option>)}</select></label>}
-        {activeCatalog?.filterKind === "number" && <div className="report-column-filter-control"><label className="report-column-filter">Minimum{activeCatalog.durationUnits ? ` (${activeColumn.unit ?? "minutes"})` : ""}<input type="number" value={activeFilter?.value ?? ""} placeholder={activeColumn.unit === "hours" ? "0.00" : "0"} onChange={(event) => setFilter(activeColumn, "minimum", event.target.value)} /></label>{activeFilter && <button className="ui-button" type="button" onClick={() => setFilter(activeColumn, "minimum", "")}>Clear filter</button>}</div>}
-        {activeIndex > 0 && <div className="report-column-actions"><button className="ui-button" type="button" disabled={activeIndex <= 1} onClick={() => { moveColumn(reportColumnId(activeColumn), -1); closePopover(true); }}><ColumnIcon name="left" />Move left</button><button className="ui-button ui-button--danger report-remove-column" type="button" onClick={() => { toggleColumn(activeColumn, false); closePopover(); }}><ColumnIcon name="trash" />Delete</button><button className="ui-button" type="button" disabled={activeIndex >= definition.columns.length - 1} onClick={() => { moveColumn(reportColumnId(activeColumn), 1); closePopover(true); }}>Move right<ColumnIcon name="right" /></button></div>}
+        {filterable && activeCatalog?.filterKind === "number" && <div className="report-column-filter-control"><label className="report-column-filter">Minimum{activeCatalog.durationUnits ? ` (${activeColumn.unit ?? "minutes"})` : ""}<input type="number" value={activeFilter?.value ?? ""} placeholder={activeColumn.unit === "hours" ? "0.00" : "0"} onChange={(event) => setFilter(activeColumn, "minimum", event.target.value)} /></label>{activeFilter && <button className="ui-button" type="button" onClick={() => setFilter(activeColumn, "minimum", "")}>Clear filter</button>}</div>}
+        {activeIndex > 0 && <div className="report-column-actions"><button className="ui-button" type="button" disabled={activeIndex <= 1} onClick={() => { moveColumn(reportColumnId(activeColumn), -1); closePopover(true); }}><ColumnIcon name="left" />Move left</button><button className="ui-button report-remove-column" type="button" onClick={() => { toggleColumn(activeColumn, false); closePopover(true); }}><ColumnIcon name="trash" />Remove column</button><button className="ui-button" type="button" disabled={activeIndex >= definition.columns.length - 1} onClick={() => { moveColumn(reportColumnId(activeColumn), 1); closePopover(true); }}>Move right<ColumnIcon name="right" /></button></div>}
       </>}
     </div>}
   </>;

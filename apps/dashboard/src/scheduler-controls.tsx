@@ -73,19 +73,16 @@ export function SchedulerControls() {
   }
 
   return <section className="scheduler-controls" aria-labelledby={`${id}-title`}>
-    <h2 id={`${id}-title`}>Background scheduler</h2>
-    <p>Run background checks even when the dashboard is closed. Stopping waits for the current job pass and cannot retract a provider request already sent.</p>
+    <h2 id={`${id}-title`}>Scheduler status</h2>
     {notice && <p className="ui-status" data-tone={notice.error ? "error" : "success"} role={notice.error ? "alert" : "status"}>{notice.text}</p>}
     {busy && <p role="status">Checking scheduler state...</p>}
     {stored && <p>Last loaded scheduler state: <strong>{stored.enabled ? "Running" : "Stopped"}</strong>.{mustReload && " This snapshot may be out of date."}</p>}
+    <p>Run background checks even when the dashboard is closed. Stopping waits for the current job pass and cannot retract a provider request already sent.</p>
     <div className="scheduler-actions">
-      {stored && <button ref={actionButton} type="button" className="primary-button" disabled={busy || mustReload} onClick={() => void change()}>{stored.enabled ? "Stop scheduler" : "Start scheduler"}</button>}
+      {stored && <button ref={actionButton} type="button" className={stored.enabled ? "danger-button" : "primary-button"} disabled={busy || mustReload} onClick={() => void change()}>{stored.enabled ? "Stop scheduler" : "Start scheduler"}</button>}
       <button ref={reloadButton} type="button" className="quiet-button" disabled={busy} onClick={() => void reload()}>Reload scheduler status</button>
     </div>
     <p>Job outcomes describe one pass, not delivery to a provider. <a href="/settings/integrations">Review provider status in Integrations</a>.</p>
-    {stored && <><h3>Last loaded job activity</h3>{Object.keys(stored.jobs).length === 0 ? <p>No job activity was reported.</p> : <dl className="scheduler-jobs">{Object.entries(stored.jobs).map(([jobId, job]) => <div key={jobId}>
-      <dt>{labels[jobId] ?? jobId}</dt>
-      <dd><span>{outcomes[job.outcome]}</span><span>Last attempt: {displayTime(job.last)}</span><span>{stored.enabled ? "Next eligible pass" : "Retained next-pass time"}: {displayTime(job.next)}</span></dd>
-    </div>)}</dl>}</>}
+    {stored && <><h3>Last loaded job activity</h3>{Object.keys(stored.jobs).length === 0 ? <p>No job activity was reported.</p> : <div className="scheduler-jobs">{Object.entries(stored.jobs).map(([jobId, job]) => <details className="settings-disclosure scheduler-job" key={jobId}><summary><strong>{labels[jobId] ?? jobId}</strong><span>{outcomes[job.outcome]}</span></summary><dl><dt>Last attempt</dt><dd>{displayTime(job.last)}</dd><dt>{stored.enabled ? "Next eligible pass" : "Retained next-pass time"}</dt><dd>{displayTime(job.next)}</dd></dl></details>)}</div>}</>}
   </section>;
 }

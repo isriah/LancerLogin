@@ -30,15 +30,17 @@ test('reactivating a member keeps inactive meetings out of attendance totals', a
     await page.goto('/roster');
     await page.getByRole('button', { name: "Don't show automatically again", exact: true }).click();
     const row = page.getByRole('row').filter({ hasText: 'GAP001' });
-    await row.getByRole('button', { name: 'Deactivate', exact: true }).click();
+    await row.getByRole('button', { name: 'Edit Synthetic Member', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Edit roster member' }).getByRole('button', { name: 'Deactivate member', exact: true }).click();
     await expect(row).toHaveCount(0);
     await page.getByRole('combobox', { name: 'Show', exact: true }).selectOption('all');
     await expect(row.getByText('Inactive', { exact: true })).toBeVisible();
     // Move only the synthetic interval back in time to exercise a completed meeting.
     await db.prepare("UPDATE members SET inactive_periods_json=? WHERE id='member'").bind(JSON.stringify([['2026-02-01T00:00:00.000Z', null]])).run();
     await db.prepare("INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) VALUES ('gap','primary','Inactive meeting','2026-02-02T12:00:00.000Z','2026-02-02T13:00:00.000Z','admin','2026-01-01')").run();
-    await row.getByRole('button', { name: 'Activate', exact: true }).click();
-    await expect(row.getByRole('button', { name: 'Deactivate', exact: true })).toBeVisible();
+    await row.getByRole('button', { name: 'Edit Synthetic Member', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Edit roster member' }).getByRole('button', { name: 'Activate member', exact: true }).click();
+    await expect(row.getByText('Inactive', { exact: true })).toHaveCount(0);
     await expect(row.locator('.roster-attendance-rate')).toContainText('N/A');
     const report = await worker.fetch(new Request('https://fixture.test/reports/attendance', { headers: { cookie } }), { DB: db, SESSION_KEY: secret, APP_MODE: 'configured', ALLOWED_ORIGIN: 'https://fixture.test' });
     expect(report.status).toBe(200);

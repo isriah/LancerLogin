@@ -26,7 +26,7 @@ An unfinished installation opens Guided Setup instead of the normal dashboard fo
 | --- | --- | --- |
 | Dashboard and meeting details | Create, edit, duplicate, and delete meetings; manage attendance | Create, edit, duplicate, and delete meetings; manage attendance |
 | Reports and roster | Manage roster; create personal or shared reports; export reports | View roster; create personal or shared reports; export reports |
-| Kiosks | Pair, replace, name, retire, and manage maintenance actions | View status and use permitted attendance operations |
+| Kiosks | Pair, name, retire, and manage maintenance actions | View status and use permitted attendance operations |
 | Settings | Full access | Theme and sign-out only |
 
 Roster membership does not grant dashboard access. An Administrator creates, links, deactivates, or changes dashboard roles in **Settings → Access**.
@@ -58,13 +58,15 @@ In saved reports, **Current membership** uses each member's labels today through
 
 ## Kiosks and simulator
 
-Open **Kiosks** to review every physical kiosk's pairing, reader, network, pending scans, last successful sync, installed release, and heartbeat. Select a device to manage it. Administrators can choose **Add kiosk**, download the guided Pi installer, and create a time-limited pairing key without interrupting existing kiosks. Paste that key into the new Pi's local pairing page.
+Open **Kiosks**, select a device, and choose **Manage kiosk → Diagnostics** to review its pairing, reader, network, pending scans, last successful sync, installed release, and heartbeat. The selected device's **Manage kiosk** page also groups Administrator controls under **Authentication settings**, **Device maintenance**, and **Retire kiosk**. Administrators can choose **Add kiosk**, download the guided Pi installer, and create a time-limited pairing key without interrupting existing kiosks. Paste that key into the new Pi's local pairing page.
 
-Administrators can select fingerprint, RFID badge, NFC badge, member ID, or QR code authentication for the installation. Fingerprint remains selected for existing installations until an Administrator changes it. The page shows the configured method separately from the method most recently reported by each selected kiosk. A pending message means that kiosk has not yet applied or acknowledged the new selection. Use **Authentication maintenance** separately at each Pi for fingerprint enrollment or local badge and QR mappings; member ID entry needs no enrollment.
+Administrators can select fingerprint, RFID badge, NFC badge, member ID, or QR code authentication for each device under **Manage kiosk → Authentication settings**. Fingerprint remains selected for existing installations until an Administrator changes it. The page shows the configured method separately from the method most recently reported by each selected kiosk. A pending message means that kiosk has not yet applied or acknowledged the new selection. Use **Authentication maintenance** separately at each Pi for fingerprint enrollment or local badge and QR mappings; member ID entry needs no enrollment.
+
+Organization-wide cloud storage controls are in **Settings → Attendance → Fingerprint sharing**. Fingerprint recovery remains a separate Attendance settings section.
 
 ### Re-enroll older fingerprints
 
-The **Fingerprint re-enrollment** card replaces legacy identity review. Staff re-enroll members through **Authentication maintenance** on an online kiosk. Older and review-derived mappings cannot be approved for sharing by looking up a member ID. New online enrollments retain immutable roster identities and can use optional automatic sharing.
+The **Fingerprint re-enrollment** card in **Settings → Attendance → Fingerprint recovery** replaces legacy identity review. Staff re-enroll members through **Authentication maintenance** on an online kiosk. Older and review-derived mappings cannot be approved for sharing by looking up a member ID. New online enrollments retain immutable roster identities and can use optional automatic sharing.
 
 To start over, back up protected kiosk state, use the explicit mappings reset below, and wait for every active kiosk to acknowledge it before re-enrolling. Reader templates remain. Replace only known occupied slots deliberately, not unidentified fingerprints.
 
@@ -94,7 +96,7 @@ Every user can turn on **Debug mode** in the Settings navigation bar. Debug mode
 
 Web and physical-kiosk updates are separate. For a web update, open **Settings → Updates**, review the release notes, select **Back up and begin update**, download the entire-installation backup, check the saved-backup confirmation, and select **Start update** once. Refreshing only restores progress; it does not start another update. Select **Reload updated dashboard** only after the page reports verified completion.
 
-The kiosk card may offer **Update to latest stable** when the kiosk is online and a fresh compatible release check succeeds. The completed 1.0.2 migration used the terminal updater through Raspberry Pi Connect remote shell. Dashboard-driven kiosk release lookup acceptance remains unproven, so follow [kiosk operations](KIOSK.md) for the physical-kiosk path.
+The selected device on **Kiosks** may offer **Update kiosk** when the kiosk is online and a fresh compatible release check succeeds. The completed 1.0.2 migration used the terminal updater through Raspberry Pi Connect remote shell. Dashboard-driven kiosk release lookup acceptance remains unproven, so follow [kiosk operations](KIOSK.md) for the physical-kiosk path.
 
 ## If something fails
 

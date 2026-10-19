@@ -73,6 +73,35 @@ test("Linux installer replaces an older root helper with verified packaged bytes
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
+test("Linux installer replaces old desktop shortcuts with links to installed applications", { skip: process.platform !== "linux" || process.getuid?.() !== 0 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-desktop-entry-"));
+  try {
+    const installer = (await readFile("apps/kiosk/scripts/install-lancerlogin.sh", "utf8")).replaceAll("\r\n", "\n");
+    const start = installer.indexOf("  install -d -m 0755 /usr/local/share/applications");
+    const end = installer.indexOf('  echo "Chromium will open', start);
+    assert.ok(start > 0 && end > start);
+    const home = join(scratch, "home"), applications = join(scratch, "applications");
+    const desktop = join(home, "Desktop/LancerLogin Kiosk.desktop");
+    await mkdir(join(home, "Desktop"), { recursive: true });
+    await writeFile(desktop, "[Desktop Entry]\nType=Application\nExec=old-launcher\n", { mode: 0o755 });
+    const block = installer.slice(start, end).replaceAll("/usr/local/share/applications", applications);
+    // Redirect account lookup to a disposable home; all entry creation and
+    // ownership commands are the real installer block. No desktop is touched.
+    const setup = `export SUDO_USER=daemon\ngetent() { printf 'daemon:x:1:1::%s:/usr/sbin/nologin\\n' '${home}'; }\n`;
+    for (let run = 0; run < 2; run++) {
+      execFileSync("/usr/bin/bash", ["-euc", setup + block]);
+      const application = join(applications, "lancerlogin-kiosk.desktop");
+      assert.match(await readFile(desktop, "utf8"), /^Type=Link$/m);
+      assert.ok((await readFile(desktop, "utf8")).includes(`URL=${application}\n`));
+      assert.doesNotMatch(await readFile(desktop, "utf8"), /^Exec=/m);
+      assert.match(await readFile(application, "utf8"), /^Exec=\/usr\/local\/bin\/lancerlogin-open-kiosk$/m);
+      assert.match(await readFile(application, "utf8"), /^Terminal=false$/m);
+      assert.equal(execFileSync("stat", ["-c", "%U:%G:%a", application], { encoding: "utf8" }).trim(), "root:root:644");
+      assert.equal(execFileSync("stat", ["-c", "%U:%G:%a", desktop], { encoding: "utf8" }).trim(), "daemon:daemon:644");
+    }
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
 test("Linux in-place installer preserves protected pairing, mappings and offline queue bytes", { skip: process.platform !== "linux" || process.getuid?.() !== 0 }, async () => {
   const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-retained-state-"));
   try {
@@ -227,4 +256,24 @@ test("Linux root-owned artifacts start as another account, and mode 700 actually
 test("Linux CI mandates the distinct-account artifact regression gate", async () => {
   const workflow = await readFile(".github/workflows/ci.yml", "utf8");
   assert.match(workflow, /run: sudo "\$\(command -v node\)" --test tests\/kiosk-artifacts\.test\.mjs/);
+});
+
+test("installer archives obsolete version assignments and preserves unrelated overrides", async () => {
+  const { cleanDevelopmentVersionOverrides, withoutDevelopmentVersionOverrides } = await import("../apps/kiosk/src/clean-version-overrides.mjs");
+  const root = await mkdtemp(join(tmpdir(), "kiosk-overrides-"));
+  try {
+    const overrides = join(root, "overrides"), backups = join(root, "backups"); await mkdir(overrides);
+    const official = "[Service]\nEnvironment=LANCERLOGIN_VERSION=2.0.0-beta.4\n";
+    const old = '[Service]\nEnvironment="LANCERLOGIN_VERSION=2.0.0-dev.gesture.abcdef0"\nEnvironment=READER_PORT=/dev/ttyUSB0\n';
+    await writeFile(join(overrides, "10-version.conf"), official);
+    await writeFile(join(overrides, "99-gesture.conf"), old);
+    const result = await cleanDevelopmentVersionOverrides(overrides, backups);
+    assert.equal(result.changed, 1);
+    assert.equal(await readFile(join(result.backup, "99-gesture.conf"), "utf8"), old);
+    assert.equal(await readFile(join(overrides, "99-gesture.conf"), "utf8"), "[Service]\nEnvironment=READER_PORT=/dev/ttyUSB0\n");
+    assert.equal(await readFile(join(overrides, "10-version.conf"), "utf8"), official);
+    assert.deepEqual(await cleanDevelopmentVersionOverrides(overrides, backups), { changed: 0 });
+    assert.equal(withoutDevelopmentVersionOverrides(official), official);
+    assert.throws(() => withoutDevelopmentVersionOverrides('Environment="LANCERLOGIN_VERSION=2.0.0-dev.foo.abcdef0" "OTHER=yes"\n'), /compound/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

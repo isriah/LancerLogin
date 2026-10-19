@@ -17,7 +17,7 @@ test("fresh Admin chooses modules before opening the workspace", async ({ page }
   await page.goto("/dashboard");
   await expect(page.getByRole("heading", { name: "Choose modules" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Primary dashboard navigation" })).toHaveCount(0);
-  await page.getByRole("checkbox", { name: /Attendance/ }).check();
+  await page.getByRole("switch", { name: /Attendance/ }).check();
   await page.getByRole("button", { name: "Continue" }).click();
   await expect.poll(() => saved).toEqual({ enabled: ["attendance"], revision: 0, confirmDisable: [] });
   await expect(page.getByRole("link", { name: "Meetings" })).toBeVisible();

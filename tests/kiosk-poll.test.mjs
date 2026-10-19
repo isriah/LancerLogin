@@ -142,3 +142,27 @@ test("cached manifest replay still detects a missing local mapping or reader tem
   assert.equal((await tick()).errors, 1); assert.equal((await mappings.read())[0].memberId, "synthetic");
   assert.equal(imports, 1); assert.equal(downloads, 1); assert.equal(manifestReads, 1);
 });
+
+
+test("complete catalog cache is revision-bound, fresh-authorized and refuses racing snapshots", async () => {
+  let time = 1000, body = reply(), reads = 0;
+  const client = createKioskPollClient(config, { now: () => time, fetchImpl: async () => Response.json(body) });
+  const read = async revision => { reads++; return { ...manifest(), catalogRevision: revision }; };
+  const first = await client.poll({ fingerprints: true });
+  const catalog = await first.fingerprints.vault.catalog(read); catalog.fingerprints.length = 0;
+  assert.equal((await first.fingerprints.vault.catalog(read)).fingerprints.length, 1); assert.equal(reads, 1);
+  time += 15000;
+  const second = await client.poll({ fingerprints: true }); await second.fingerprints.vault.catalog(read); assert.equal(reads, 1);
+  body.fingerprints.vault.catalogRevision++;
+  const changed = await client.poll({ fingerprints: true });
+  await assert.rejects(first.fingerprints.vault.catalog(read));
+  await assert.rejects(changed.fingerprints.vault.catalog(async () => ({ ...manifest(), catalogRevision: 1 })));
+  await changed.fingerprints.vault.catalog(read); assert.equal(reads, 2);
+  client.invalidate(); await assert.rejects(changed.fingerprints.vault.catalog(read));
+  const next = await client.poll({ fingerprints: true });
+  await assert.rejects(next.fingerprints.vault.catalog(async revision => {
+    client.invalidate(); return { ...manifest(), catalogRevision: revision };
+  }));
+  const last = await client.poll({ fingerprints: true }); time += 60000;
+  await assert.rejects(last.fingerprints.vault.catalog(read));
+});

@@ -21,13 +21,15 @@ const settings = {
 
 const routes = [
   ["/settings/organization", "Organization"],
-  ["/settings/configuration", "Configuration"],
+  ["/settings/configuration", "Meeting configuration"],
   ["/settings/access", "Dashboard access"],
   ["/settings/integrations", "Integrations"],
   ["/settings/data", "Data management"],
   ["/settings/guided-setup", "Attendance Setup"],
   ["/settings/updates", "Updates"],
 ] as const;
+
+async function openSettingsNavigation(page: Page) { const button = page.locator(".settings-navigation-toggle"); if (await button.isVisible() && await button.getAttribute("aria-expanded") !== "true") await button.click(); }
 
 async function useSettingsContext(page: Page, role: "admin" | "operator" = "admin") {
   await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot() }));
@@ -104,6 +106,7 @@ test("Settings keeps navigation and user controls together and persists Debug mo
   let preference: Record<string, unknown> | undefined;
   await page.route("**/auth/preferences", async (route) => { preference = route.request().postDataJSON() as Record<string, unknown>; await route.fulfill({ json: preference }); });
   await page.goto("/settings/configuration");
+  await openSettingsNavigation(page);
   const toolbar = page.locator(".settings-toolbar");
   const navigation = toolbar.getByRole("navigation", { name: "Settings categories" });
   await expect(navigation).toBeVisible();
@@ -111,7 +114,7 @@ test("Settings keeps navigation and user controls together and persists Debug mo
   expect(containment[0].border).not.toBe("0px");
   expect(containment[1].border).toBe("0px");
   expect(containment[1].background).toBe("rgba(0, 0, 0, 0)");
-  const darkMode = toolbar.getByRole("switch", { name: "Dark mode" });
+  const darkMode = toolbar.getByRole("switch", { name: "Light mode" });
   await expect(darkMode).toBeVisible();
   await expect(toolbar.getByRole("button", { name: "Sign out" })).toBeVisible();
   const debug = toolbar.getByRole("switch", { name: "Debug mode" });
@@ -135,28 +138,31 @@ test("Settings keeps navigation and user controls together and persists Debug mo
       bounds: [bounds.height, trackBounds.width, trackBounds.height],
     };
   });
-  const darkModeAppearance = await toggleAppearance(darkMode);
-  await expect.poll(() => toggleAppearance(debug)).toEqual(darkModeAppearance);
+  await darkMode.click(); await expect(darkMode).toBeChecked();
+  await expect.poll(async () => JSON.stringify(await toggleAppearance(debug)) === JSON.stringify(await toggleAppearance(darkMode))).toBe(true);
   const description = page.locator(".info-tip-content").filter({ hasText: "Scans close this many minutes" });
   await expect(description).toBeHidden();
   await page.locator(".configuration-grid label").first().locator(".info-tip-glyph").hover();
   await expect(description).toBeVisible();
 });
 
-test("Settings links directly to single-page modules and nests Attendance", async ({ page }) => {
+test("Settings uses one direct link per enabled module", async ({ page }) => {
   await useSettingsContext(page);
   const snapshot = attendanceSnapshot(); snapshot.modules[1] = outreachSnapshot().modules[1]!; snapshot.modules[2] = carpoolSnapshot().modules[2]!;
   snapshot.capabilities = snapshot.modules.flatMap(module => module.effectiveCapabilities);
   await page.route("**/platform/modules", route => route.fulfill({ json: snapshot }));
   await page.goto("/settings/organization");
-  const modules = page.getByRole("button", { name: "Modules", exact: true }); await modules.click();
+  const modules = page.getByRole("button", { name: "Modules", exact: true }); await openSettingsNavigation(page); await modules.click();
   const menu = page.getByRole("group", { name: "Module settings" });
-  const attendance = menu.getByRole("button", { name: "Attendance", exact: true }); await expect(attendance).toHaveAttribute("aria-expanded", "false");
+  const attendance = menu.getByRole("link", { name: "Attendance", exact: true }); await expect(attendance).toHaveAttribute("href", "/settings/attendance");
+  await expect(menu.getByRole("button")).toHaveCount(0);
   const outreach = menu.getByRole("link", { name: "Outreach", exact: true }); const carpool = menu.getByRole("link", { name: "Carpool", exact: true });
   await expect(outreach).toHaveAttribute("href", "/settings/outreach-setup"); await expect(carpool).toHaveAttribute("href", "/settings/carpool");
-  await attendance.focus(); await page.keyboard.press("Enter"); await expect(menu.getByRole("link", { name: "Attendance Setup" })).toBeVisible();
+  await attendance.focus(); await page.keyboard.press("Enter"); await expect(page).toHaveURL(/\/settings\/attendance$/);
+  await expect(page.getByRole("navigation", { name: "Attendance settings sections" }).getByRole("link", { name: "Attendance rules" })).toHaveAttribute("aria-current", "page");
+  await openSettingsNavigation(page); await modules.click();
   await expect(menu.getByRole("link", { name: "Kiosk Simulator" })).toHaveCount(0);
-  await attendance.click(); await expect(menu.getByRole("link", { name: "Attendance Setup" })).toBeHidden(); await expect(outreach).toBeVisible(); await expect(carpool).toBeVisible();
+  await expect(menu.getByRole("link")).toHaveCount(4); await expect(outreach).toBeVisible(); await expect(carpool).toBeVisible();
   await page.keyboard.press("Escape"); await expect(modules).toBeFocused();
 });
 
@@ -164,24 +170,66 @@ for (const width of [1280, 390]) test(`Modules disclosure dismisses without obsc
   await page.setViewportSize({ width, height: 900 });
   await useSettingsContext(page);
   await page.goto("/settings/configuration");
+  await openSettingsNavigation(page);
   const modules = page.getByRole("button", { name: "Modules", exact: true });
   const menu = page.getByRole("group", { name: "Module settings" });
   await expect(modules).toHaveAttribute("aria-expanded", "false");
-  await modules.click();
+  await openSettingsNavigation(page); await modules.click();
   await expect(menu).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
   await expect(modules).toBeFocused();
-  await modules.click();
-  await menu.getByRole("link", { name: "Meeting configuration", exact: true }).click();
+  await openSettingsNavigation(page); await modules.click();
+  await menu.getByRole("link", { name: "Attendance", exact: true }).click();
   await expect(menu).toBeHidden();
-  await modules.click();
-  await page.locator(".settings-toolbar").getByRole("switch", { name: "Dark mode", exact: true }).click();
+  await openSettingsNavigation(page); await modules.click();
+  await page.locator(".settings-toolbar").getByRole("switch", { name: "Light mode", exact: true }).click();
   await expect(menu).toBeHidden();
-  await modules.click();
-  await menu.getByRole("link", { name: "Attendance settings", exact: true }).click();
+  await openSettingsNavigation(page); await modules.click();
+  await menu.getByRole("link", { name: "Attendance", exact: true }).click();
   await expect(page).toHaveURL(/\/settings\/attendance$/);
   await expect(menu).toBeHidden();
+});
+
+for (const theme of ["light", "dark"] as const) for (const width of [1280, 390]) test(`Attendance sections preserve deep links and themed keyboard navigation at ${width} in ${theme}`, async ({ page }) => {
+  await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+  await page.addInitScript(saved => localStorage.setItem("lancerlogin-theme", saved), theme);
+  await useSettingsContext(page);
+  await page.route("**/attendance/policy", route => route.fulfill({ json: { labels: [], rules: [], recentDays: 30 } }));
+  await page.route("**/admin/integrations/discord/label-roles", route => route.fulfill({ json: { mappings: [], integrationAvailable: false } }));
+  await page.goto("/settings/attendance");
+  const picker = page.getByRole("combobox", { name: "Attendance section", exact: true });
+  const sections = page.getByRole("navigation", { name: "Attendance settings sections" });
+  if (width === 390) {
+    await expect(sections).toBeHidden(); await picker.focus();
+    await picker.selectOption("/settings/configuration"); await expect(picker).toHaveValue("/settings/configuration");
+    expect((await picker.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  } else {
+    await expect(picker).toBeHidden(); const configuration = sections.getByRole("link", { name: "Meeting configuration", exact: true });
+    await configuration.focus(); await page.keyboard.press("Enter"); await expect(configuration).toHaveAttribute("aria-current", "page");
+    expect((await configuration.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  }
+  await expect(page).toHaveURL(/\/settings\/configuration$/); await page.reload();
+  if (width === 390) await picker.selectOption("/settings/fingerprint-recovery");
+  else await sections.getByRole("link", { name: "Fingerprint recovery", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Fingerprint recovery" })).toBeVisible();
+  await page.goBack(); await expect(page).toHaveURL(/\/settings\/configuration$/);
+  await page.goBack(); await expect(page).toHaveURL(/\/settings\/attendance$/);
+  await expectResponsiveFit(page);
+});
+
+test("disabled modules and Operator-only sections retain their visibility rules", async ({ page }) => {
+  await useSettingsContext(page);
+  await page.goto("/settings/organization"); await openSettingsNavigation(page); await page.getByRole("button", { name: "Modules", exact: true }).click();
+  const menu = page.getByRole("group", { name: "Module settings" });
+  await expect(menu.getByRole("link", { name: "Outreach", exact: true })).toHaveCount(0);
+  await expect(menu.getByRole("link", { name: "Carpool", exact: true })).toHaveCount(0);
+  await useSettingsContext(page, "operator"); await page.goto("/settings/attendance");
+  const sections = page.getByRole("navigation", { name: "Attendance settings sections" });
+  await expect(sections.getByRole("link")).toHaveCount(1);
+  await expect(page.getByRole("link", { name: "Guided setup", exact: true })).toHaveCount(0);
+  await page.goto("/settings/configuration");
+  await expect(page.getByRole("heading", { name: "Page unavailable" })).toBeVisible();
 });
 
 test("information tips use hover and keyboard focus on desktop but toggle on touch", async ({ page, browser }) => {
@@ -365,7 +413,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
           await expect(name).toBeFocused();
           await page.keyboard.press("Tab");
           await expect(page.getByRole("textbox", { name: "Subtitle (optional)", exact: true })).toBeFocused();
-          await expect(page.locator(".settings-form > label").filter({ hasText: "Subtitle" }).locator("span")).toHaveCSS("font-weight", "500");
+          await expect(page.locator(".settings-form > label").filter({ hasText: "Subtitle" }).locator("span span")).toHaveCSS("font-weight", "500");
           await page.screenshot({ path: test.info().outputPath("organization.png") });
           await test.info().attach("Organization typography", { path: test.info().outputPath("organization.png"), contentType: "image/png" });
         }
@@ -374,10 +422,11 @@ for (const viewport of dashboardConformanceReferences.viewports) {
         await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
         if (["/settings/configuration", "/settings/guided-setup"].includes(path)) {
           await expect(page.locator(".settings-module-disclosure")).toHaveAttribute("data-active", "true");
-          await page.getByRole("button", { name: "Modules", exact: true }).click();
+          await openSettingsNavigation(page); await page.getByRole("button", { name: "Modules", exact: true }).click();
         }
-        await expect(page.getByRole("navigation", { name: "Settings categories" }).getByRole("link", { name: heading === "Dashboard access" ? "Access" : heading === "Data management" ? "Data" : heading })).toHaveAttribute("aria-current", "page");
-        if (["/settings/configuration", "/settings/guided-setup"].includes(path)) await page.getByRole("button", { name: "Modules", exact: true }).click();
+        await openSettingsNavigation(page);
+        await expect(page.getByRole("navigation", { name: "Settings categories" }).getByRole("link", { name: ["/settings/configuration", "/settings/guided-setup"].includes(path) ? "Attendance" : heading === "Dashboard access" ? "Access" : heading === "Data management" ? "Data" : heading })).toHaveAttribute("aria-current", "page");
+        if (["/settings/configuration", "/settings/guided-setup"].includes(path)) await openSettingsNavigation(page); await page.getByRole("button", { name: "Modules", exact: true }).click();
         const controls = page.locator("main button:visible, main a.primary-button:visible, main input:not([type='radio']):not([type='checkbox']):visible, main select:visible, main label:has(input[type='radio']:visible), main label:has(input[type='checkbox']:visible)");
         for (const height of await controls.evaluateAll((items) => items.map((item) => item.getBoundingClientRect().height))) expect(height).toBeGreaterThanOrEqual(44);
         await expectResponsiveFit(page);
@@ -454,6 +503,7 @@ test("Settings validation, integration states and data dialogs remain explicit a
   await useSettingsContext(page);
 
   await page.goto("/settings/access");
+  await page.getByText("Grant dashboard access", { exact: true }).click();
   await page.getByLabel("Temporary password", { exact: true }).fill("long-enough-password");
   const confirmation = page.getByLabel("Confirm temporary password", { exact: true });
   await confirmation.fill("different-password");
@@ -464,15 +514,18 @@ test("Settings validation, integration states and data dialogs remain explicit a
   await expect(page.getByText("Configured", { exact: true })).toHaveAttribute("data-tone", "success");
   await expect(page.getByText("Verification required", { exact: true })).toHaveAttribute("data-tone", "warning");
   await expect(page.getByText("Disabled", { exact: true }).first()).toHaveAttribute("data-tone", "neutral");
-  await expect(page.getByRole("group").filter({ hasText: "Set up Resend email" })).toBeVisible();
+  const resend = page.locator(".integration-card").filter({ hasText: "Resend email" });
+  if (!await resend.getByLabel("Sending API key").isVisible()) await resend.getByText("Configure integration", { exact: true }).click();
+  await expect(resend.getByLabel("Sending API key")).toBeVisible();
 
   await page.goto("/settings/privacy");
   await expect(page).toHaveURL(/\/settings\/data$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Data" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Data management" })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: "Allow anonymous usage reporting" })).toHaveCount(0);
 
   await page.goto("/settings/data");
-  const opener = page.getByRole("button", { name: "Delete" }).last();
+  await page.locator(".data-category").last().getByText("Restore or delete data", { exact: true }).click();
+  const opener = page.getByRole("button", { name: "Delete installation data", exact: true });
   await opener.click();
   const dialog = page.getByRole("dialog", { name: "Delete Entire installation" });
   await expect(dialog).toHaveAttribute("aria-describedby", "data-action-description");
@@ -592,5 +645,97 @@ test("Operator role cannot open administrative Settings routes", async ({ page }
     await expect(settingsNav.getByRole("link", { name: "Session" })).toBeVisible();
     await expect(settingsNav.getByRole("link", { name: "Attendance" })).toBeVisible();
     await expect(settingsNav.getByRole("link")).toHaveCount(2);
+  }
+});
+
+test("mobile Settings navigation collapses with keyboard access to every category and session control", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  await page.goto("/settings/organization");
+  const toggle = page.getByRole("button", { name: "Settings · Organization" });
+  const nav = page.getByRole("navigation", { name: "Settings categories" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false"); await expect(nav).toBeHidden();
+  await toggle.focus(); await page.keyboard.press("Enter"); await expect(nav).toBeVisible();
+  for (const name of ["Organization", "Access", "Integrations", "Data", "Updates"]) await expect(nav.getByRole("link", { name, exact: true })).toBeVisible();
+  await expect(page.locator(".settings-session-actions").getByRole("switch", { name: "Light mode" })).toBeVisible();
+  await expect(page.locator(".settings-session-actions").getByRole("switch", { name: "Debug mode" })).toBeVisible();
+  await page.keyboard.press("Escape"); await expect(nav).toBeHidden(); await expect(toggle).toBeFocused();
+  await toggle.click(); await nav.getByRole("link", { name: "Access", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\/access$/); await expect(nav).toBeHidden();
+  await expectResponsiveFit(page);
+});
+
+test("mobile access disclosures preserve account updates and password validation without writes on open", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  const writes: unknown[] = [];
+  await page.route("**/admin/users/user-1", route => { writes.push(route.request().postDataJSON()); return route.fulfill({ json: {} }); });
+  await page.goto("/settings/access");
+  const role = page.getByRole("combobox", { name: "Role for admin", exact: true });
+  await expect(role).toBeHidden();
+  const edit = page.getByRole("button", { name: "Edit Avery Stone access" });
+  await edit.focus(); await page.keyboard.press("Enter"); await expect(role).toBeVisible(); expect(writes).toEqual([]);
+  await role.selectOption("operator"); await expect.poll(() => writes).toEqual([{ role: "operator" }]);
+  await edit.click(); await expect(role).toBeHidden();
+  await page.getByText("Grant dashboard access", { exact: true }).click();
+  await page.getByLabel("Temporary password", { exact: true }).fill("long-enough-password");
+  await page.getByLabel("Confirm temporary password", { exact: true }).fill("different-password");
+  await expect(page.locator("#password-confirmation-error")).toContainText("Passwords do not match");
+  await expectResponsiveFit(page);
+});
+
+test("Data disclosures retain category-specific destructive confirmation and focus return", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  let writes = 0;
+  await page.route("**/admin/data", route => { writes++; return route.fulfill({ json: {} }); });
+  await page.goto("/settings/data");
+  const roster = page.locator(".data-category").filter({ has: page.getByRole("heading", { name: "Roster", exact: true }) });
+  const remove = roster.getByRole("button", { name: "Delete roster data", exact: true });
+  await expect(remove).toBeHidden(); await roster.getByText("Restore or delete data", { exact: true }).click();
+  await remove.click(); const dialog = page.getByRole("dialog", { name: "Delete Roster", exact: true });
+  const submit = dialog.getByRole("button", { name: "Delete roster", exact: true });
+  await expect(submit).toBeDisabled(); await dialog.getByRole("textbox").fill("DELETE ATTENDANCE"); await expect(submit).toBeDisabled();
+  await dialog.getByRole("textbox").fill("DELETE ROSTER"); await expect(submit).toBeEnabled(); expect(writes).toBe(0);
+  await page.keyboard.press("Escape"); await expect(dialog).toBeHidden(); await expect(remove).toBeFocused();
+});
+
+test("module switches retain draft save and disable review", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  const writes: unknown[] = [];
+  await page.route("**/admin/modules", route => { writes.push(route.request().postDataJSON()); return route.fulfill({ json: {} }); });
+  await page.goto("/settings/modules");
+  const attendance = page.getByRole("switch", { name: /^Attendance/ });
+  await expect(attendance).toBeChecked(); await attendance.uncheck(); expect(writes).toEqual([]);
+  await page.getByRole("button", { name: "Review module disable", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Confirm module disable" })).toBeFocused();
+  expect(writes).toEqual([]); await page.getByRole("button", { name: "Cancel", exact: true }).click(); expect(writes).toEqual([]);
+});
+
+test("scheduler job disclosures retain complete timestamps and provider-delivery distinction", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  await page.route("**/admin/preferences", route => route.fulfill({ json: { developerSchedulerEnabled: true, revision: 1 } }));
+  const jobs = Object.fromEntries(["core.discord-commands", "attendance.google-calendar", "attendance.discord-calendar", "attendance.discord-channel", "attendance.discord-notices", "attendance.discord-anomalies", "attendance.discord-label-roles", "hour-tracking.publication"].map(id => [id, { next: 1_797_600_000_000, last: 1_797_599_000_000, outcome: "ok" }]));
+  await page.route("**/admin/scheduler", route => route.fulfill({ json: { enabled: true, jobs } }));
+  await page.goto("/settings/background-scheduler");
+  await expect(page.getByText("Last loaded scheduler state:")).toContainText("Running");
+  await expect(page.getByText(/Job outcomes describe one pass, not delivery to a provider/)).toBeVisible();
+  const job = page.locator(".scheduler-job").first(); await expect(job.getByText("Last attempt", { exact: true })).toBeHidden();
+  await job.locator("summary").click(); await expect(job.getByText("Last attempt", { exact: true })).toBeVisible();
+  await expect(job.locator("dd")).toHaveCount(2); await expectResponsiveFit(page);
+});
+
+for (const theme of ["light", "dark"] as const) test(`Settings keeps approved compact pages within 320px in ${theme}`, async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 }); await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
+  await useSettingsContext(page);
+  await page.route("**/attendance/policy", route => route.fulfill({ json: { labels: [], rules: [], recentDays: 30 } }));
+  await page.route("**/admin/integrations/discord/label-roles", route => route.fulfill({ json: { mappings: [], integrationAvailable: false } }));
+  await page.route("**/admin/kiosks/fingerprint-reset", route => route.fulfill({ json: { resetCommands: [] } }));
+  for (const [path] of [...routes, ["/settings/modules"], ["/settings/attendance"], ["/settings/fingerprint-recovery"]]) {
+    await page.goto(path); await expect(page.locator("main h1")).toBeVisible();
+    await expectResponsiveFit(page);
+    if (path === "/settings/modules") {
+      const row = page.locator(".module-setting-choice").first();
+      const title = await row.locator("strong").boundingBox(), toggle = await row.getByRole("switch").boundingBox();
+      expect(Math.abs(title!.y + title!.height / 2 - toggle!.y - toggle!.height / 2)).toBeLessThan(2);
+    }
+    await page.screenshot({ path: test.info().outputPath(`${path.split("/").pop()}-${theme}-320.png`), fullPage: true });
   }
 });

@@ -1,0 +1,80 @@
+.app button.member-pencil-button,.member-history-correction > summary { box-sizing: border-box; max-width: var(--control-min-block-size); display: inline-grid; place-items: center; width: var(--control-min-block-size); min-width: var(--control-min-block-size); height: var(--control-min-block-size); padding: var(--space-2); border: 1px solid var(--ui-border); border-radius: var(--radius-control); color: var(--ui-text); background: var(--ui-surface-subtle); cursor: pointer; }
+.member-pencil-button svg,.member-history-correction > summary svg { width: var(--space-5); height: var(--space-5); fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.app button.member-pencil-button:hover,.member-history-correction > summary:hover { border-color: var(--primary); }
+.member-history-correction > summary::-webkit-details-marker { display: none; }
+.member-history-correction > summary { list-style: none; }
+.member-history-correction > summary:focus-visible,.member-roster-link:focus-visible,.roster-label-csv > summary:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+.roster-page .roster-row { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) var(--control-min-block-size); }
+.roster-page .roster-row.with-discord { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) var(--control-min-block-size); }
+.roster-page .roster-row.bulk-selecting { grid-template-columns: var(--control-min-block-size) minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) var(--control-min-block-size); }
+.roster-page .roster-row.with-discord.bulk-selecting { grid-template-columns: var(--control-min-block-size) minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) var(--control-min-block-size); }
+.roster-label-csv { padding: var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-card); }
+.roster-label-csv > summary { display: flex; align-items: center; min-height: var(--control-min-block-size); cursor: pointer; }
+.roster-label-csv[open] > summary { margin-bottom: var(--space-3); }
+.roster-member-dialog { position: relative; z-index: 1; }
+.roster-member-dialog form > label:has(> span) { display: block; }
+.roster-member-dialog form > label > span { color: var(--ui-text-muted); font-size: var(--text-small); }
+.roster-member-dialog form > label > input { display: block; margin-top: var(--space-2); }
+.roster-member-dialog .member-lifecycle-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); padding-top: var(--space-4); border-top: 1px solid var(--ui-border); }
+.member-detail-page .member-roster-link { display: inline-flex; align-items: center; justify-self: start; min-height: var(--control-min-block-size); padding: 0; border: 0; background: transparent; border-radius: 0; font-size: var(--text-body); }
+.member-profile-card .panel-heading { flex-direction: row; align-items: center; }
+.member-profile-details { grid-template-columns: 1fr; gap: 0; }
+.member-profile-details > div { grid-template-columns: minmax(10rem,.5fr) minmax(0,1fr); align-items: baseline; gap: var(--space-4); padding: var(--space-3) 0; border: 0; border-bottom: 1px solid var(--ui-border); border-radius: 0; background: transparent; }
+.member-profile-details > div:last-child { border-bottom: 0; }
+.member-profile-details dt { font-size: var(--text-small); font-weight: 500; text-transform: none; }
+.member-detail-page .member-history { min-width: 0; }
+.member-detail-page .member-history-row { grid-template-columns: minmax(12rem,1fr) minmax(9rem,.75fr) minmax(9rem,.75fr) minmax(8rem,.65fr) auto; }
+.member-history-correction { min-width: 0; }
+.member-history-correction[open] .member-attendance-actions { margin-top: var(--space-2); display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.compact-leaderboard.report-table { min-width: 0; }
+.compact-leaderboard .report-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: var(--space-3); min-height: var(--control-min-block-size); padding: 0 var(--space-3); }
+.compact-leaderboard .report-row.header { padding-block: var(--space-2); }
+.compact-leaderboard .report-row > span { display: block; }
+.compact-leaderboard .report-row > span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.compact-leaderboard a { display: flex; align-items: center; min-height: var(--control-min-block-size); color: var(--ui-text); text-decoration: underline; text-underline-offset: var(--space-1); overflow-wrap: anywhere; }
+.report-results .editable-report-table { min-width: 100%; width: 100%; table-layout: auto; }
+.report-results .editable-report-table th,.report-results .editable-report-table td { padding: var(--space-2); min-width: 6rem; }
+.report-results .editable-report-table th:first-child,.report-results .editable-report-table td:first-child { min-width: 8rem; max-width: 12rem; }
+.report-results .editable-report-table [data-value-kind="number"] { text-align: right; font-variant-numeric: tabular-nums; }
+.report-results .report-column-trigger > span { min-width: 0; overflow-wrap: anywhere; }
+.report-results .report-column-trigger { padding: var(--space-1); gap: var(--space-1); }
+.report-results .report-column-header { align-items: center; }
+.report-edit-settings > summary { min-height: var(--control-min-block-size); }
+@media (max-width: 900px) {
+  .roster-page .roster-row,.roster-page .roster-row.with-discord,.roster-page .roster-row.bulk-selecting,.roster-page .roster-row.with-discord.bulk-selecting { grid-template-columns: minmax(0,1fr) minmax(0,.7fr) var(--control-min-block-size); grid-template-rows: auto auto auto; gap: var(--space-1) var(--space-2); padding: var(--space-3) var(--space-2); align-items: start; }
+  .roster-page .roster-row.header { display: none; }
+  .roster-page .roster-identity { grid-column: 1; grid-row: 1 / 4; align-self: start; }
+  .roster-page .roster-row .roster-member-id { grid-column: 2; grid-row: 1; justify-self: stretch; text-align: right; }
+  .roster-page .roster-row .roster-member-id::before { content: none; }
+  .roster-page .roster-row .roster-attendance-rate { grid-column: 2; grid-row: 2; text-align: right; font-size: var(--text-caption); overflow-wrap: anywhere; }
+  .roster-page .roster-row .roster-attendance-rate::before { content: none; }
+  .roster-page .roster-row .roster-discord-id { grid-column: 2; grid-row: 3; text-align: right; font-size: var(--text-caption); }
+  .roster-page .roster-row .roster-discord-id::before { font-size: var(--text-caption); }
+  .roster-page .roster-row .roster-action-cell { grid-column: 3; grid-row: 1 / 4; width: auto; align-self: center; justify-self: end; }
+  .roster-page .roster-row.bulk-selecting > [role="cell"]:first-child { grid-column: 1 / -1; grid-row: 1; }
+  .roster-page .roster-row.bulk-selecting .roster-identity { grid-row: 2 / 5; }
+  .roster-page .roster-row.bulk-selecting .roster-member-id { grid-row: 2; }
+  .roster-page .roster-row.bulk-selecting .roster-attendance-rate { grid-row: 3; }
+  .roster-page .roster-row.bulk-selecting .roster-discord-id { grid-row: 4; }
+  .roster-page .roster-row.bulk-selecting .roster-action-cell { grid-row: 2 / 5; }
+  .member-profile-details > div { grid-template-columns: minmax(0,.8fr) minmax(0,1fr); gap: var(--space-3); }
+  .member-detail-page .member-history-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr) var(--control-min-block-size); }
+  .member-detail-page .member-history-row.header { display: none; }
+  .member-detail-page .member-history-meeting { grid-column: 1 / 3; grid-row: 1; }
+  .member-detail-page .member-history-check-in { grid-column: 1; grid-row: 2; }
+  .member-detail-page .member-history-check-out { grid-column: 2; grid-row: 2; }
+  .member-detail-page .member-history-outcome { grid-column: 1 / 3; grid-row: 3; }
+  .member-detail-page .member-history-action-cell { grid-column: 1 / -1; grid-row: 4; }
+  .member-history-correction > summary { margin-left: auto; }
+  .member-detail-page .member-history-row { position: relative; }
+  .member-detail-page .member-history-meeting { padding-right: var(--space-2); }
+  .member-history-correction > summary { position: absolute; top: var(--space-3); right: var(--space-3); }
+  .member-history-correction[open] { padding-top: var(--space-2); }
+  .report-results .editable-report-table th,.report-results .editable-report-table td { min-width: 5rem; font-size: var(--text-small); }
+  .report-results .editable-report-table th:first-child,.report-results .editable-report-table td:first-child { min-width: 7rem; max-width: 9rem; }
+  .report-results .report-column-drag { display: none; }
+  .report-results .report-column-trigger { flex-wrap: wrap; }
+  .report-results .report-column-trigger > span { flex-basis: 100%; }
+  .report-results .report-column-trigger .report-column-icon { width: var(--space-3); height: var(--space-3); }
+  .report-results .report-pagination { border-top: 1px solid var(--ui-border); padding-top: var(--space-3); }
+}

@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import worker, { type Env } from "../apps/api/src/index.ts";
+import worker, { PlatformScheduler, type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { officialWebRelease, newerRelease, prepareWebUpdate, startWebUpdate, recordUpdateBackup, webUpdateStatus, latestUpdate, fixedWorkflowPath, updateCredentialMinimumValidityMs } from "../apps/api/src/web-updates.ts";
 import { sendAttendance } from "../apps/kiosk/src/cloud-client.mjs";
@@ -302,10 +302,38 @@ test("Worker uses current Admin role, origin and strict no-selector prepare", as
   database.sqlite.exec("UPDATE users SET role = 'operator' WHERE id = 'admin'");
   assert.equal((await worker.fetch(request({}), env)).status, 403);
 });
+
+test("installation maintenance pauses cron and the production durable scheduler without updater configuration", async () => {
+  const database = new D1(); const env = environment(database);
+  await withGitHub(async () => { await prepared(env); });
+  database.sqlite.exec("UPDATE web_update_requests SET state='recovery_required', maintenance=1");
+  delete env.UPDATE_REPOSITORY;
+  const before = database.sqlite.prepare("SELECT total_changes() AS n").get();
+  await worker.scheduled({ cron: "*/5 * * * *" }, env);
+  assert.deepEqual(database.sqlite.prepare("SELECT total_changes() AS n").get(), before);
+  env.PLATFORM_SCHEDULER_MODE = "durable";
+  let alarm: number | null = null, writes = 0;
+  const state = { enabled: true, jobs: { "core.discord-commands": { next: 0, last: null, outcome: "waiting" } } };
+  const scheduler = new PlatformScheduler({ storage: {
+    get: async <T>() => structuredClone(state) as T,
+    put: async () => { writes++; }, transaction: async callback => callback(),
+    getAlarm: async () => alarm, setAlarm: async value => { alarm = value; }, deleteAlarm: async () => { alarm = null; },
+  } }, env);
+  await scheduler.alarm();
+  assert.equal(writes, 0); assert.ok(alarm! > Date.now());
+  assert.deepEqual(database.sqlite.prepare("SELECT total_changes() AS n").get(), before);
+  const login = await worker.fetch(new Request("https://api.test/auth/local", { method: "POST" }), env);
+  assert.equal(login.status, 415);
+  const blocked = await worker.fetch(new Request("https://api.test/kiosk/attendance", { method: "POST" }), env);
+  assert.equal(blocked.status, 503);
+  database.sqlite.exec("UPDATE web_update_requests SET maintenance=0");
+  assert.notEqual((await worker.fetch(new Request("https://api.test/kiosk/attendance", { method: "POST" }), env)).status, 503);
+});
 test("operational locks survive category backup/delete and kiosk scans retry503 across restart", async () => {
   const database = new D1(); const env = environment(database);
   await withGitHub(async () => { await prepared(env); });
   database.sqlite.exec("UPDATE web_update_requests SET state = 'recovery_required', maintenance = 1");
+  delete env.UPDATE_REPOSITORY;
   const temp = await mkdtemp(join(tmpdir(), "ll-synthetic-queue-")); const config = { apiUrl: "https://api.test", kioskToken: "synthetic" };
   const event = { eventId: "synthetic-event", memberId: "synthetic-member", occurredAt: new Date().toISOString() };
   try {

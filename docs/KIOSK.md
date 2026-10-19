@@ -1,6 +1,6 @@
 # Physical kiosk
 
-This guide is for Operators who run attendance and Administrators who pair, monitor, or recover a Raspberry Pi kiosk. Supported hardware is a Raspberry Pi 3B+, 4, or 5 with at least 1 GB RAM, a Waveshare 7-inch DSI LCD (E), and Wi-Fi or Ethernet. Administrators can select fingerprint, RFID badge, NFC badge, member ID, or QR code authentication. Fingerprint mode uses an R503 reader; RFID, NFC, and QR mode accept bounded keyboard-wedge input; member ID mode uses the touch display or an attached keyboard.
+This guide is for Operators who run attendance and Administrators who pair, monitor, or recover a Raspberry Pi kiosk. Supported hardware is a Raspberry Pi 3B+, 4, or 5 with at least 1 GB RAM, a Waveshare 7-inch DSI LCD (E), and Wi-Fi or Ethernet. Administrators can select fingerprint, RFID badge, NFC badge, member ID, or QR code authentication independently for each kiosk. On the Kiosks page, select a device, open **Manage kiosk → Authentication settings**, and save its authentication method. The diagnostic shows the reported method and a waiting-for-sync message until that device applies its configuration. Use the pencil beside a device name to rename it. Fingerprint mode uses an R503 reader; RFID, NFC, and QR mode accept bounded keyboard-wedge input; member ID mode uses the touch display or an attached keyboard.
 
 The dashboard's Kiosks page keeps each physical device's heartbeat, reader, network, queue, sync, and release health together. When Discord is enabled and verified, the same physical-health card lets an Admin or Operator manually refresh the persistent all-kiosk status message; automatic heartbeat and five-minute reconciliation remain best-effort and never block kiosk operation.
 
@@ -77,11 +77,11 @@ If power or file access interrupts archival, scanning, pairing and installation 
 
 ## Choose the authentication method
 
-An Administrator chooses the installation-wide method on dashboard **Kiosks**. Fingerprint remains the default for an existing installation and after an upgrade. The configured method is delivered to every active kiosk on its normal sync. The dashboard separately shows the method most recently reported by the selected kiosk. When those values differ, the change is pending or unconfirmed; stale reader health is not relabeled as proof that the new method is active.
+An Administrator selects a physical device on dashboard **Kiosks**, opens **Manage kiosk → Authentication settings**, and saves that device's authentication method. Existing kiosks keep their effective configured method during the per-device upgrade; new pairings start with fingerprint. Each device receives only its own configured method on its normal sync. The dashboard separately shows the method most recently reported by the selected kiosk. When those values differ, the change is pending or unconfirmed; stale reader health is not relabeled as proof that the new method is active.
 
 RFID, NFC, and QR support expects a reader that behaves like a keyboard and submits one complete token with Enter. LancerLogin does not add a camera, vendor SDK, or direct device driver for those methods. Reader models, key layouts, prefixes, suffixes, USB behavior, and physical placement must be validated on the installation's hardware. This software acceptance does not claim live RFID, NFC, QR camera, R503, or Pi validation.
 
-LancerLogin permits multiple active physical kiosks. Each active kiosk has a unique device name, credential, pairing identity, heartbeat, command queue, and owner-only local state. Pairing another device leaves all existing kiosk credentials active. Retire only the specific kiosk that should stop working; its history remains visible and every other active kiosk continues normally.
+LancerLogin permits multiple active physical kiosks. Each active kiosk has a unique device name, credential, pairing identity, heartbeat, command queue, and owner-only local state. Pairing another device leaves all existing kiosk credentials active. Retire only the specific kiosk that should stop working; its historical records are retained and every other active kiosk continues normally.
 
 Every new pairing gives that kiosk a pairing identity. New scans capture that identity when they enter the local queue, and replay sends the captured value. A scan queued by one kiosk can never attach to another kiosk's pairing. The Worker rejects it, and the originating kiosk retains it in **Review rejected scans** with a pairing-mismatch explanation. Do not copy a queue between devices or into a newly paired installation.
 
@@ -152,7 +152,7 @@ Mapping removal retains the sensor template. Return to kiosk closes the local PI
 
 The member presents the same finger twice; the R503 creates and stores the template internally. Lift the finger when prompted after the first capture, then place the same finger again. After enrollment is saved, lift the finger again before returning to attendance. A finger left on the reader must not become an attendance scan. If the reader disconnects after storage, enrollment may already be saved; resolve the reader/removal warning rather than immediately replacing the occupied slot. Slot suggestions check the reader's occupied slots as well as local mappings, so a fresh SD card cannot make existing fingerprints appear available for replacement. Enrollment checks occupancy again before capturing a finger and refuses to proceed if that check fails. Replacing an occupied slot requires explicit confirmation even when its local mapping is missing. Reader errors are shown as plain recovery guidance rather than protocol codes.
 
-The owner-only local mapping records the sensor slot and roster member ID, retaining legacy fields for compatibility. New verified enrollments record an enrollment identifier, time and immutable roster identity for optional sharing. Historical local-only or legacy mappings without this identity require fresh online enrollment before sharing. Review-derived mappings are not fresh enrollments. Removing a mapping does not delete the sensor template. With both sharing options off, templates stay inside the R503. With approved peer sync or cloud storage enabled, eligible templates are read briefly into memory; raw templates are not intentionally written to files or logs.
+The owner-only local mapping records the sensor slot and roster member ID, retaining legacy fields for compatibility. New verified enrollments record an enrollment identifier, time and immutable roster identity for optional sharing. Historical local-only or legacy mappings without this identity require fresh online enrollment before sharing. Review-derived mappings are not fresh enrollments. Removing a mapping does not delete the sensor template. With cloud storage off, templates stay inside the R503. With cloud storage enabled, eligible templates are read briefly into memory; raw templates are not intentionally written to files or logs.
 
 Badge and QR raw values, keyed digests, and the kiosk secret are never included in Worker requests, D1, logs, fixtures, or portable dashboard backups. Portable restore, Attendance disablement, and kiosk retirement revoke server-side records but cannot remotely erase local mappings or R503 templates. Before repurposing or decommissioning a Pi, open **Authentication maintenance** on that device and remove its local mappings. LancerLogin intentionally provides no remote destructive wipe.
 
@@ -164,7 +164,7 @@ Exit is available only when the installed dedicated launcher is connected. An or
 
 ### Diagnose fingerprint synchronization
 
-The authenticated fingerprint-sync tools show separate reset, peer-sharing and cloud-storage status, with the latest attempt, historical success and actionable reasons where available. Attendance cloud connectivity alone does not establish that fingerprint sharing is ready.
+The authenticated fingerprint-sync tools show separate reset-recovery and cloud-storage status, with the latest attempt, historical success and actionable reasons where available. Attendance cloud connectivity alone does not establish that fingerprint sharing is ready.
 
 Disabled sharing, an unavailable reader or roster, rejected cloud authentication, pending reset recovery and protected-state problems need different remedies. Follow the displayed guidance. An earlier successful poll is historical evidence, not confirmation that a later transfer succeeded. A count of enrollments without verified roster identity means those members need fresh online enrollment; it is not permission to infer identities or delete mappings.
 
@@ -172,7 +172,7 @@ Do not delete state locks, rewrite journals, overwrite unknown slots or wipe the
 
 ### Provision new kiosks from encrypted cloud copies
 
-**Kiosks → Fingerprint cloud storage** is a separate Admin opt-in, off by default. Its server-managed key allows a newly paired R503 kiosk to receive retained verified fingerprints while every other kiosk is offline. Confirm organizational permission for this biometric storage and preserve the separate installation key. The server can decrypt the stored copies; this is not peer-only end-to-end encryption.
+**Settings → Attendance → Fingerprint sharing → Fingerprint cloud storage** is a separate Admin opt-in, off by default. Its server-managed key allows a newly paired R503 kiosk to receive retained verified fingerprints while every other kiosk is offline. Confirm organizational permission for this biometric storage and preserve the separate installation key. The server can decrypt the stored copies; this is not peer-only end-to-end encryption.
 
 1. As an Admin, enable cloud storage and accept its explicit confirmation.
 2. Leave a source kiosk online while identity-verified mapped fingerprints upload. Existing mappings without immutable identity require re-enrollment while the kiosk is online. Unknown reader slots are untouched.
@@ -185,26 +185,17 @@ Cloud storage retains distinct verified models while the member is active, up to
 
 Legacy identity review has been removed. A roster lookup cannot establish who owns an existing sensor template. Re-enroll the member through PIN-protected Authentication maintenance while the kiosk is online to obtain a fresh immutable identity. Retired review grants and imported descendants cannot become fresh upload sources. Updating software does not automatically reset mappings or erase the reader.
 
-A mappings-only reset clears cloud copies and fingerprint mappings on each currently paired kiosk as it reconnects. Offline kiosks remain pending until they durably clear mappings and acknowledge the command. Local enrollment and mapping edits pause during an interrupted reset, and a lost server acknowledgement retries without clearing a later enrollment. Pairing, attendance queues, local settings PIN and alternative credential mappings remain unchanged. Previous sharing keys and journals remain in a non-active reset namespace, so re-enabling sharing needs fresh local enablement and peer approvals.
+A mappings-only reset clears cloud copies and fingerprint mappings on each currently paired kiosk as it reconnects. Offline kiosks remain pending until they durably clear mappings and acknowledge the command. Local enrollment and mapping edits pause during an interrupted reset, and a lost server acknowledgement retries without clearing a later enrollment. Pairing, attendance queues, local settings PIN and alternative credential mappings remain unchanged. Previous sharing keys and journals remain in a non-active reset namespace for recovery. Peer sharing remains retired; cloud sharing resumes only after the pending reset is acknowledged and its current authorization checks pass.
 
 This reset does not erase reader templates or free reader slots. Existing enrolled fingers may trigger the reader's duplicate-fingerprint check. Use an available slot for a genuinely new finger, or the existing explicitly confirmed occupied-slot replacement workflow when replacing a known enrollment. Do not overwrite unknown slots, edit private proof state or remove recovery locks to bypass a pending reset. Removing a local mapping retains its reader bytes and is not template erasure. Physical reader acceptance and duplicate handling still require device testing.
 
-### Share new fingerprints between kiosks
+### Retired peer fingerprint sharing
 
-Fingerprint sync is optional and off by default. It works between compatible R503 kiosks paired to the same installation, including kiosks on different Wi-Fi or Ethernet networks. Both need outbound access to the installation service; no port forwarding is required. Obtain the organization's permission to share biometric templates before enabling it.
-
-1. As an Admin, open dashboard **Kiosks → Fingerprint sync** and enable installation sync.
-2. On each participating kiosk, unlock **Authentication maintenance**, choose **Sync**, and choose **Enable on this kiosk**.
-3. Refresh the peer list. Compare a peer's complete device fingerprint with **This kiosk device fingerprint** shown on that physical kiosk, using a trusted channel if it is elsewhere. Choose **Compare and approve** only when every group matches. Repeat in the other direction.
-4. Enroll the member on one kiosk. Leave both kiosks online while the encrypted transfer completes, then test the same finger on the other kiosk. The destination chooses a free slot; it need not use the source's slot number.
-
-Only recent enrollments created by the local enrollment workflow are eligible, for seven days from enrollment. Existing unidentified reader slots, imported legacy mappings, and received copies are not automatically exported. Enabling sync is not a bulk reader migration. A destination with no safe free slot or conflicting retry state stops that transfer without overwriting another fingerprint.
-
-**Disable on this kiosk** works from retained local state even if the relay is unavailable. It stops local transfers and clears pending local ciphertext; remote registration revocation is best-effort while offline. **Revoke trust** stops locally authorized transfers with that peer. Dashboard disablement removes relay registrations and deliveries. These controls retain private device identities and do not erase templates or mappings already stored on any reader. Removing a source mapping does not retract a copy already queued at the relay or imported elsewhere. Review affected devices individually when removing access.
+Cloud storage is the only supported fingerprint synchronization path. Peer enablement, approval, registration and transfer endpoints are retired. Older clients receive disabled peer metadata; transfer requests are rejected. Upgrading does not enable cloud storage automatically or delete reader templates, local mappings, historical keys, encrypted outboxes or import journals. Preserve this protected historical state for recovery. Previously retained relay ciphertext and backups are not erased by this software change; any historical cleanup requires a separately reviewed procedure.
 
 ### Sync recovery boundary
 
-Check network access, the current active roster, installation enablement, local enablement, peer approvals, and reader health when sync needs attention. Normal offline attendance remains separate from template transfer. Do not repeatedly re-enroll or choose occupied slots to work around an unresolved transfer.
+Check network access, the current active roster, cloud storage enablement and reader health when sync needs attention. Normal offline attendance remains separate from template transfer. Do not repeatedly re-enroll or choose occupied slots to work around an unresolved transfer.
 
 Sync stores keys, trust, encrypted outbox messages, and a receiver journal in the owner-only local state directory. A mismatched pairing or installation identity, corrupt file, unsafe permissions, or existing write lock fails closed. A lock may be left by an interrupted process, but its presence alone is not proof that it is stale. Do not automatically delete locks, edit journals, or reset identity files. Stop for authorized recovery: preserve current state securely, verify no writer is running, and reconcile reader occupancy, local mappings, pending attendance, and transfer state before any reviewed repair. Re-pairing or restoring a portable backup does not make old sync state safe to reuse.
 
@@ -222,7 +213,7 @@ The helper writes `lancerlogin-roster-import.csv` for the dashboard roster impor
 
 ## Dashboard management and recovery
 
-Operators can select any active kiosk and monitor its online state, reported authentication method and input state, pending scan count, last successful sync, installed release, heartbeat, pairing time, and scrubbed issue category. Admins can also configure the shared authentication method, add devices, rename or retire one device, view history, and queue device-specific recovery actions:
+Operators can select any active kiosk and open **Manage kiosk → Diagnostics** to monitor its online state, reported authentication method and input state, pending scan count, last successful sync, installed release, heartbeat, pairing time, and scrubbed issue category. Admins can also configure that device's authentication method, add devices, rename or retire one device, and queue device-specific recovery actions. **Manage kiosk** groups **Authentication settings**, **Device maintenance**, and **Retire kiosk** for the selected device:
 
 - **Reload display** asks the local browser page to reload.
 - **Restart software** restarts the sandboxed systemd service.
@@ -236,8 +227,8 @@ The paired kiosk polls for these commands every five seconds. Commands expire fr
 
 The kiosk update is separate from a web update. It changes the Raspberry Pi software only. It does not create a dashboard backup, deploy the web installation, or repair a failed web update.
 
-1. As an Administrator, open **Kiosks** or **Settings → Updates**. Select the intended physical kiosk, confirm it is online, and confirm that a newer compatible release on the selected installation track is shown.
-2. Choose **Update to latest on Beta** or **Update to latest stable**, according to the selected track, for that device. It normally receives the fixed command within five seconds, then its update card reports the result and the kiosk returns online with its installed release. Other kiosks continue working independently.
+1. As an Administrator, open **Kiosks**. Select the intended physical kiosk, confirm it is online, and confirm that a newer compatible release on the selected installation track is shown.
+2. Choose **Update kiosk** for that device. The target follows the selected installation track. It normally receives the fixed command within five seconds, then its update card reports the result and the kiosk returns online with its installed release. Other kiosks continue working independently.
 3. If the release lookup is unavailable or the card does not show a successful installed version, do not assume an update was queued or completed. Check the kiosk status and use the approved on-device recovery path instead of repeatedly submitting the command.
 
 Use the Administrator's available access method for an approved on-device recovery procedure. Raspberry Pi Connect remote shell, SSH, and direct local access are all compatible with LancerLogin when the installation permits them. An authorized operator can start the existing no-argument `lancerlogin-update.service` when an operational recovery procedure calls for it. The unit invokes only the installed verified helper, which defaults to the official stable release when no authenticated target proof exists and accepts no user-supplied arguments. Beta requires a fresh server-pinned command; starting the unit manually cannot opt in.
@@ -259,3 +250,53 @@ An isolated rehearsal can retain a stale reload card after a manual version chan
 The existing guided-setup simulator is Admin-only and credential-separated. It can submit simulated attendance to an Admin-selected active meeting without claiming fingerprint, badge, NFC, QR, UART, Pi, Chromium, or physical queue acceptance.
 
 The browser simulator reuses the physical kiosk display styles and state transitions in a scaled 800 by 480 preview, including organization branding, scan feedback and the footer. It omits physical network and maintenance controls. The themed member and meeting selectors replace reader input, and resulting attendance remains marked as simulated.
+
+
+## Enrollment synchronization and removal
+
+Cloud uploads use a stable source enrollment identity, separate from the digest
+that authenticates template bytes. Confirmed uploads are recorded in local
+mapping metadata, so a restart does not export another copy. A lost upload
+response retries the same enrollment and returns its existing cloud receipt.
+Historical cloud records are retained; installing this version does not merge,
+delete, or overwrite historical fingerprints.
+
+A new import must pass exact byte verification before its delivery completes.
+After completion, synchronization checks the receipt, current member/roster
+binding and occupied slot. Reader bytes can change after recognition, so a later
+digest difference alone is not a failed delivery. Incomplete or conflicting
+imports still stop for review without overwriting an occupied slot.
+
+Maintenance removal affects one kiosk: it removes the attendance mapping and
+suppresses automatic cloud restoration, retaining the reader template. Confirmed
+replacement also suppresses the old delivery before enrollment starts. Unfinished
+or ambiguous history requires review rather than automatic repair.
+
+Admins can review cloud enrollments and choose **Retire everywhere**. This
+explicit action deletes one cloud template and publishes a retirement record.
+Compatible cloud-sync kiosks remove matching attendance mappings when they next
+sync, retain physical reader templates, and preserve newer slot assignments.
+Offline and older kiosks may continue recognizing the enrollment until they
+reconnect and run compatible software. Independent peer copies and separate
+historical enrollments are not inferred to be the same finger or removed.
+Retirement is not a physical sensor wipe. A new explicit enrollment receives a
+new identity and may be shared again.
+
+The sync panel shows waiting uploads, downloads in the current batch and records
+needing attention. Counts describe enrollment delivery, not a claim that every
+reader has identical bytes or that every historical finger has been tested.
+Upgrade the API before kiosks to enable durable source enrollment idempotency.
+Review and physical acceptance are separate from deployment and historical cleanup.
+
+
+### Revision-based cloud discovery
+
+Compatible API and kiosk versions refresh the full enrollment list on startup or when the cloud catalog revision changes. Subsequent unchanged polls revalidate authority without downloading that list again. Missing templates are requested in batches of up to eight, then written and verified individually using the existing recovery journal. Pending-download counts include the whole discovered catalog, even when several rounds are needed to provision a reader.
+
+Existing occupied slots, confirmed imports and deliberate local removals retain their protections. A changed reader export is not a reason to overwrite a completed import. Catalog and batch responses are bound to the vault generation and revision; a concurrent change causes a retry on the next poll. No template bundle is persisted on disk. Deploy the compatible API before kiosks. Older kiosks continue using the original paginated endpoints.
+
+### Kiosk version and development builds
+
+The kiosk footer reports the local service version, including the development suffix. The dashboard receives that identity through the kiosk heartbeat. A recognized development build may be replaced with a verified official release on the selected update track at the same or a newer base version, after explicit confirmation. Development-only changes may be removed. Unknown versions and older base releases remain blocked.
+
+The installer archives obsolete stand-alone development version assignments from systemd drop-ins under `/var/backups/lancerlogin-version-overrides-*` before removing those assignments. Other settings, including the reader port, remain intact. Compound assignments require local review. Official release targets still require complete verified artifacts and the installed update helper. Older helpers that reject development versions need a one-time verified installer upgrade before this replacement workflow is available.

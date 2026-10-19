@@ -46,7 +46,7 @@ test("Updates shows local information while the release feed stalls, then degrad
   expect(releaseAttempts).toBeGreaterThan(stalledReleaseRoutes.length);
 });
 
-test("Updates keeps a confirmed kiosk release visible across responsive branded themes", async ({ page }, testInfo) => {
+test("Updates keeps dashboard versions visible across responsive branded themes", async ({ page }, testInfo) => {
   const cases = [
     { width: 1280, height: 900, theme: "light" },
     { width: 1280, height: 900, theme: "dark" },
@@ -79,9 +79,7 @@ test("Updates keeps a confirmed kiosk release visible across responsive branded 
     expect(await checkAction.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
     await action.focus();
     expect(await action.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
-    const status = page.getByRole("status").filter({ hasText: "Installed successfully. This kiosk now reports 0.22.0." });
-    await expect(status).toBeVisible();
-    await expect(status).toHaveAttribute("data-tone", "success");
+    await expect(page.getByRole("heading", { name: "Physical kiosk", exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     installed = "0.23.0";
     await page.reload();
@@ -102,27 +100,14 @@ test("Updates keeps a confirmed kiosk release visible across responsive branded 
   }
 });
 
-test("Updates renders and queues commands for each active kiosk independently", async ({ page }) => {
-  const now = new Date().toISOString();
-  await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "0.22.0", workflowUrl: "https://github.example.test/deploy" } }));
-  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: "0.22.0" } }));
-  await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: "v0.23.0" }) }));
-  await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [
-    { id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: now, releaseVersion: "0.21.0" },
-    { id: "kiosk-2", name: "Workshop entrance", active: 1, lastSeenAt: now, releaseVersion: "0.20.0" },
-  ] } }));
-  const queued: string[] = [];
-  for (const kioskId of ["kiosk-1", "kiosk-2"]) await page.route(`**/admin/kiosks/${kioskId}/commands`, (route) => {
-    if (route.request().method() === "POST") queued.push(kioskId);
-    return route.fulfill({ json: route.request().method() === "GET" ? { commands: [] } : {} });
-  });
-
+test("Settings Updates reads dashboard status without loading or mutating kiosks", async ({ page }) => {
+  let kioskRequests = 0;
+  await page.route("**/admin/kiosks**", route => { kioskRequests++; return route.fulfill({ json: { kiosks: [] } }); });
   await page.goto("/settings/updates");
-  await expect(page.getByRole("heading", { name: "Physical kiosk", exact: true })).toHaveCount(2);
-  const workshop = page.locator(".release-comparisons > article").filter({ hasText: "Workshop entrance" });
-  await expect(workshop).toContainText("0.20.0");
-  await workshop.getByRole("button", { name: "Update to latest stable" }).click();
-  await expect.poll(() => queued).toEqual(["kiosk-2"]);
+  await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Physical kiosk", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Update to latest/ })).toHaveCount(0);
+  expect(kioskRequests).toBe(0);
 });
 
 for (const scenario of [
@@ -178,15 +163,15 @@ test("rate-limit cooldown persists on reload and stale data cannot queue an upda
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [{ id: "kiosk-1", active: 1, name: "Front desk", lastSeenAt: new Date().toISOString(), releaseVersion: "0.22.0" }] } }));
   await page.route("**/admin/kiosks/kiosk-1/commands", (route) => { if (route.request().method() === "POST") commands++; return route.fulfill({ json: { commands: [] } }); });
   await page.route("**/admin/releases/latest", (route) => { releases++; return limited ? route.fulfill({ status: 429, json: { fresh: false, code: "rate_limited", retryAt: Date.now() + 3600_000 }, headers: { "retry-after": "3600" } }) : route.fulfill({ json: discovered({ tag_name: "v0.23.0" }) }); });
-  await page.goto("/settings/updates"); await expect(page.getByRole("button", { name: "Update to latest stable", exact: true })).toBeEnabled();
+  await page.goto("/settings/updates"); await expect(page.getByRole("button", { name: "Back up and begin update" })).toBeEnabled();
   limited = true; await page.getByRole("button", { name: "Check for updates", exact: true }).click();
   await expect(page.locator("#release-check-status")).toContainText("Previously checked release");
   await expect(page.getByRole("button", { name: "Check for updates", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Back up and begin update" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Update to latest stable", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /Update to latest/ })).toHaveCount(0);
   expect(releases).toBe(2); await page.reload();
   await expect(page.getByRole("button", { name: "Check for updates", exact: true })).toBeDisabled(); await expect(page.locator("#release-check-status")).toContainText("Next check after"); expect(releases).toBe(2);
-  await page.getByRole("button", { name: "Update to latest stable", exact: true }).evaluate((button: HTMLButtonElement) => button.click()); expect(commands).toBe(0);
+  await page.getByRole("button", { name: "Back up and begin update" }).evaluate((button: HTMLButtonElement) => button.click()); expect(commands).toBe(0);
 });
 
 test("browser GitHub blocking and the old saved cooldown do not block API release discovery", async ({ page }) => {

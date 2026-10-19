@@ -22,7 +22,9 @@ For each participant, record outbound and return details independently:
 
 People shows both trip summaries in one searchable list. Filter drivers, ride requests, unassigned riders, or people needing attention, and open **Edit** to review identity, contact, notes, and both trips. Address and seat fields appear when relevant.
 
-Return travel can reuse the outbound location. Use **Locate address** to preview an automatically matched address, or place a manual pin using the map or advanced coordinates. Lookup and pin changes remain drafts until **Save participant**. Changing an address clears the old pin. Closing the editor keeps unsaved changes while the plan is open; **Cancel changes** discards them. Failed saves preserve edits, and conflicts expose the newer saved values for review before retrying.
+Return travel can reuse the outbound location. Saved addresses are located automatically in small batches when lookup is configured. Pending lookups appear separately from people needing manual review. Unmatched addresses, missing addresses, and incomplete transportation responses remain visible for staff review. A provider failure pauses automatic lookup until **Retry location lookup** or an address change; refreshing the page does not repeatedly call the provider. Manual pins and valid saved matches are retained.
+
+Use **Locate address** to preview an automatically matched address, or place a manual pin using the map or advanced coordinates. Lookup and pin changes in the editor remain drafts until **Save participant**. Changing an address clears the old pin. Closing the editor keeps unsaved changes while the plan is open; **Cancel changes** discards them. Failed saves preserve edits, and conflicts expose the newer saved values for review before retrying. Automatic saved-address lookup retains these local drafts as well.
 
 ## Build and review groups
 
@@ -58,7 +60,7 @@ Administrators configure the Geoapify API key in **Settings > Modules > Carpool*
 
 ## Backup and removal
 
-An entire-installation backup includes every Carpool-owned table and is the primary disaster-recovery artifact. Under **Share > Advanced: portable event backup**, staff can download a portable plan backup containing assignments, group labels and colors, unresolved reasons, locks, trip times and time zone, and validated import metadata. The Carpool workspace does not offer event-backup restore. Provider credentials are never included.
+An entire-installation backup includes Carpool plans, participants, assignments, settings, and the location cache and is the primary disaster-recovery artifact. Under **Share > Advanced: portable event backup**, staff can download a portable plan backup containing assignments, group labels and colors, unresolved reasons, locks, trip times and time zone, and validated import metadata. The Carpool workspace does not offer event-backup restore. Provider credentials and temporary lookup execution state are excluded from backups.
 
 In Event settings, **Archive event** removes a saved plan from the active list without deleting it. Choose **Archived events** or **All events** in **Show events**, select the plan, and use **Restore event** to return it to the active list. Event settings also lets staff delete one reviewed plan and its people and assignments while retaining the installation-wide location cache. Disabling Carpool follows the normal delayed module-cleanup lifecycle. Its owned plans, people, assignments, import profiles, and location cache are removed only when the reviewed cleanup runs. Core roster members and other modules are never changed.
 

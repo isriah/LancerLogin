@@ -71,6 +71,21 @@ export function createKioskPollClient(config, { fetchImpl = fetch, now = Date.no
           },
           vault: {
             configuration: async () => { fresh(); if (!validVault) throw unavailable(); return structuredClone(vault); },
+            catalog: async read => {
+              fresh(); if (!binding || binding !== vaultBinding || !currentRoster) throw unavailable();
+              const key = "full";
+              if (manifestPages.has(key)) return structuredClone(manifestPages.get(key));
+              try {
+                const catalog = await read(vault.catalogRevision); fresh();
+                if (binding !== vaultBinding || catalog?.vaultId !== vault.vaultId || catalog.catalogRevision !== vault.catalogRevision || !Array.isArray(catalog.fingerprints) || catalog.fingerprints.length > 10000) throw unavailable();
+                let previous = "";
+                for (const item of catalog.fingerprints) {
+                  if (!hash(item?.fingerprintId) || item.fingerprintId <= previous || !memberId(item.memberId) || !identifier(item.rosterId) || item.retired !== undefined && item.retired !== true) throw unavailable();
+                  previous = item.fingerprintId;
+                }
+                manifestPages.set(key, structuredClone(catalog)); return catalog;
+              } catch (error) { manifestPages.clear(); throw error; }
+            },
             list: async (after, read) => {
               fresh(); if (!binding || binding !== vaultBinding || !currentRoster) throw unavailable();
               const key = after ?? ""; if (key && !hash(key)) throw unavailable();

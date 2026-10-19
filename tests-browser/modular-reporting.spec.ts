@@ -86,8 +86,8 @@ const values: Record<string, { id: string; label: string; href?: string; values:
   ],
 };
 
-function reportResult(definition: Definition, pageSize: number | "all" = 25) {
-  const dataset = datasets.find((item) => item.id === definition.dataset)!;
+function reportResult(definition: Definition, pageSize: number | "all" = 25, sources = datasets) {
+  const dataset = sources.find((item) => item.id === definition.dataset)!;
   const availability = new Map(dataset.fields.map((field) => [field.id, field]));
   const unavailableControls = [...definition.groupBy, definition.sort.column.key, ...definition.columnFilters.map((filter) => filter.column.key)].filter((key) => availability.get(key)?.available === false);
   const paused = !dataset.available || unavailableControls.length > 0;
@@ -149,13 +149,16 @@ test("Outreach-only reports expose member, activity, entry, and supported-team d
   await expect(page.getByRole("heading", { level: 1, name: "Reports" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Build a report" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Leaderboard", exact: true })).toHaveCount(0);
-  for (const name of ["Members", "Members - combined", "Members - Outreach", "Outreach activities", "Outreach entries", "Supported teams"]) await expect(page.getByRole("heading", { level: 3, name, exact: true })).toBeVisible();
+  for (const name of ["Members", "Outreach activities", "Outreach entries", "Supported teams"]) await expect(page.getByRole("heading", { level: 3, name, exact: true })).toBeVisible();
+  await expect(page.locator(".report-dataset-cards article")).toHaveCount(4);
 
-  await page.locator(".report-dataset-cards article").filter({ hasText: "Members - Outreach" }).getByRole("button", { name: "Create report" }).click();
+  await page.locator(".report-dataset-cards article").filter({ has: page.getByRole("heading", { name: "Members", exact: true }) }).getByRole("button", { name: "Create report" }).click();
   await expect(page).toHaveURL(/\/reports\/new$/);
-  const rows = page.getByRole("combobox", { name: "Report rows", exact: true });
+  const rows = page.getByRole("combobox", { name: "Report type", exact: true });
   const memberTable = page.getByRole("table", { name: /Report results/ });
-  await expect(rows).toHaveValue("outreach.members");
+  await expect(rows).toHaveValue("core.combined-members");
+  await expect(rows.locator("option").filter({ hasText: /Members/ })).toHaveCount(1);
+  await expect(memberTable).not.toContainText("Unavailable");
   await expect(page.getByRole("button", { name: "Outreach hours column options" })).toBeVisible();
   await expect(memberTable).toContainText("2.75");
   await page.getByRole("button", { name: "Outreach hours column options" }).click();
@@ -171,10 +174,9 @@ test("Outreach-only reports expose member, activity, entry, and supported-team d
   await expect(page.getByRole("table", { name: /Report results/ })).toContainText("Distinct participants");
 
   await page.getByRole("button", { name: "Minutes column options" }).click();
-  await page.getByLabel("Minimum").fill("60");
-  await page.getByRole("heading", { level: 2, name: "New report" }).click();
-  await expect.poll(() => seen.at(-1)?.columnFilters).toEqual([{ column: { key: "outreach.activity.minutes", unit: "minutes" }, operator: "minimum", value: "60" }]);
-  await expect(page.getByRole("table", { name: /Report results/ })).not.toContainText("Team 901 design review");
+  await expect(page.getByLabel("Minimum")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect.poll(() => seen.at(-1)?.columnFilters).toEqual([]);
 
   await rows.selectOption("outreach.teams");
   await expect(page.getByText("Supported-team participation totals from designated team-support activities.")).toBeVisible();
@@ -189,7 +191,7 @@ test("Outreach-only reports expose member, activity, entry, and supported-team d
   await rows.selectOption("outreach.entries");
   await expect(table).toContainText("Submission channel");
   await expect(table).toContainText("public");
-  await expect.poll(() => new Set(seen.map((definition) => definition.dataset))).toEqual(new Set(["outreach.members", "outreach.activities", "outreach.teams", "outreach.entries"]));
+  await expect.poll(() => new Set(seen.map((definition) => definition.dataset))).toEqual(new Set(["core.combined-members", "outreach.activities", "outreach.teams", "outreach.entries"]));
 
   await page.setViewportSize({ width: 390, height: 844 });
   const width = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
@@ -200,24 +202,43 @@ test("combined reports mute unavailable columns and pause unavailable controls",
   const seen: Definition[] = [];
   await routeOutreachReports(page, seen);
 
-  await page.goto("/reports");
-  await page.locator(".report-dataset-cards article").filter({ hasText: "Members - combined" }).getByRole("button", { name: "Create report" }).click();
+  await page.route("**/reports/views", (route) => route.fulfill({ json: { reports: [{ id: "combined-history", ownerUserId: "admin-1", scope: "shared", name: "Combined history", definition: definitionFor("core.combined-members"), revision: 1, createdAt: "2026-09-20T00:00:00Z", updatedAt: "2026-09-28T00:00:00Z", pinnedPosition: 0, warnings: [], errors: [] }] } }));
+  await page.goto("/reports/view/combined-history");
   const table = page.getByRole("table", { name: /Report results/ });
   await expect(table).toContainText("Avery Member");
   await expect(table).toContainText("2.75");
   await expect(table).toContainText("Unavailable");
   const unavailable = page.getByRole("button", { name: /Regular attendance is unavailable/ });
   await expect(unavailable).toHaveAttribute("title", /Attendance is unavailable/);
+  const exportMenu = page.locator(".report-menu").filter({ has: page.locator("summary").filter({ hasText: /^Export$/ }) });
+  // Native details opens synchronously, before its queued toggle event updates React.
+  const immediateDismissal = await exportMenu.evaluate(element => {
+    const details = element as HTMLDetailsElement;
+    const summary = details.querySelector("summary")!;
+    summary.click();
+    const opened = details.open;
+    summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    return { opened, closed: !details.open, focusReturned: document.activeElement === summary };
+  });
+  expect(immediateDismissal).toEqual({ opened: true, closed: true, focusReturned: true });
+  await openReportExport(page);
   await expect(page.getByRole("button", { name: "Download report CSV" })).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(exportMenu).not.toHaveAttribute("open");
+  await page.getByText("Filters and report settings", { exact: true }).click();
   await page.getByRole("combobox", { name: "Membership" }).selectOption("historical");
   await expect.poll(() => seen.at(-1)?.membership).toBe("historical");
   await expect(table).toContainText("Avery Member");
+  await openReportExport(page);
   await expect(page.getByRole("button", { name: "Download report CSV" })).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(exportMenu).not.toHaveAttribute("open");
 
   await unavailable.click();
   await page.getByRole("button", { name: "Descending" }).click();
   await expect(page.getByText("Paused", { exact: true })).toBeVisible();
   await expect(page.getByText(/definition and its controls have been preserved/i)).toBeVisible();
+  await openReportExport(page);
   await expect(page.getByRole("button", { name: "Download report CSV" })).toBeDisabled();
   await expect.poll(() => seen.at(-1)?.sort.column.key).toBe("attendance.member.regular-rate");
 });
@@ -232,10 +253,70 @@ test("saved reports keep unavailable module definitions editable while results a
   await expect(page.getByRole("heading", { level: 2, name: "Attendance history" })).toBeVisible();
   await expect(page.getByText("Paused", { exact: true })).toBeVisible();
   await expect(page.getByText(/dataset is unavailable for your current module access/i)).toBeVisible();
+  await openReportExport(page);
   await expect(page.getByRole("button", { name: "Download report CSV" })).toBeDisabled();
 
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Report rows" })).toHaveValue("attendance.members");
+  await expect(page.getByRole("combobox", { name: "Report type" })).toHaveValue("core.combined-members");
+  expect(seen[0].dataset).toBe("attendance.members");
   await expect(page.getByRole("button", { name: /Regular attendance is unavailable/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  await page.getByLabel("Report name").fill("Revised attendance history");
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+});
+
+async function openReportExport(page: Page) {
+  const menu = page.locator(".report-menu").filter({ has: page.locator("summary").filter({ hasText: /^Export$/ }) });
+  if (await menu.getAttribute("open") === null) await menu.locator("summary").click();
+}
+
+test("saved Outreach member reports can add Roster and Attendance columns from the unified picker", async ({ page }) => {
+  const seen: Definition[] = [];
+  await routeOutreachReports(page, seen);
+  const sources = datasets.map((dataset) => ({ ...dataset, available: true, fields: dataset.fields.map((field) => ({ ...field, available: true, explanation: undefined })) }));
+  const definition = definitionFor("outreach.members");
+  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets: sources, columns, labels: [], outreachLabels: [], baseline: null, timeZone: "America/New_York", defaultDefinition: definition, role: "admin", attendanceAvailable: true } }));
+  await page.route("**/reports/views", (route) => route.fulfill({ json: { reports: [{ id: "outreach", ownerUserId: "admin-1", scope: "shared", name: "Outreach members", definition, revision: 1, createdAt: "2026-09-20T00:00:00Z", updatedAt: "2026-09-28T00:00:00Z", pinnedPosition: 0, warnings: [], errors: [] }] } }));
+  await page.route("**/reports/query", async (route) => {
+    const body = route.request().postDataJSON(); seen.push(structuredClone(body.definition));
+    await route.fulfill({ json: reportResult(body.definition, body.pageSize, sources) });
+  });
+  await page.goto("/reports/view/outreach");
+  await expect(page.getByRole("table", { name: /Report results/ })).toContainText("2.75");
+  expect(seen[0].dataset).toBe("outreach.members");
+  await page.getByRole("button", { name: "Add column", exact: true }).click();
+  for (const field of combinedMemberDataset.fields.filter((field) => field.id !== "core.member.name")) {
+    const label = reportColumnLabel({ key: field.id, unit: field.defaultDurationUnit }, field.label);
+    await expect(field.requiresLabel ? page.getByRole("button", { name: `Choose labels for ${label}` }) : page.getByRole("checkbox", { name: label, exact: true })).toBeEnabled();
+  }
+  await page.getByRole("checkbox", { name: "Email", exact: true }).check();
+  await page.getByRole("checkbox", { name: "Regular attendance", exact: true }).check();
+  await page.keyboard.press("Escape");
+  await expect.poll(() => seen.at(-1)?.dataset).toBe("core.combined-members");
+  await expect(page.getByRole("table", { name: /Report results/ })).toContainText("92");
+  expect(seen.at(-1)?.columns).toEqual([...definition.columns, { key: "core.member.email" }, { key: "attendance.member.regular-rate" }]);
+  await openReportExport(page);
+  await expect(page.getByRole("button", { name: "Download detailed attendance CSV" })).toBeEnabled();
+});
+
+test("legacy member reports keep their definition until a column edit and offer all accessible member fields", async ({ page }) => {
+  const seen: Definition[] = [];
+  await routeOutreachReports(page, seen);
+  const definition = definitionFor("core.members");
+  definition.roster = "all";
+  definition.columnFilters = [{ column: { key: "core.member.name" }, operator: "contains", value: "Avery" }];
+  await page.route("**/reports/views", (route) => route.fulfill({ json: { reports: [{ id: "roster", ownerUserId: "admin-1", scope: "shared", name: "Saved roster", definition, revision: 2, createdAt: "2026-09-20T00:00:00Z", updatedAt: "2026-09-28T00:00:00Z", pinnedPosition: 0, warnings: [], errors: [] }] } }));
+  await page.goto("/reports/view/roster");
+  await expect(page.getByRole("table", { name: /Report results/ })).toContainText("Avery Member");
+  expect(seen[0]).toMatchObject(definition);
+  await page.getByRole("button", { name: "Add column", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Email", exact: true })).toBeEnabled();
+  await expect(page.getByRole("checkbox", { name: /Regular attendance/ })).toBeDisabled();
+  await page.getByRole("checkbox", { name: "Outreach hours", exact: true }).check();
+  await page.keyboard.press("Escape");
+  await expect.poll(() => seen.at(-1)?.dataset).toBe("core.combined-members");
+  expect(seen.at(-1)).toMatchObject({ roster: "all", period: definition.period, columnFilters: definition.columnFilters });
+  expect(seen.at(-1)?.columns).toEqual([...definition.columns, { key: "outreach.member.minutes", unit: "hours" }]);
+  await expect(page.getByRole("table", { name: /Report results/ })).toContainText("2.75");
+  await expect(page.getByRole("button", { name: "Save view", exact: true })).toBeEnabled();
 });

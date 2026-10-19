@@ -47,6 +47,9 @@ test("Carpool is standalone and owns only its module surfaces", () => {
   assert.equal(bundledModuleRegistry.routeOwner("/admin/carpool/context")?.module.id, "carpool");
   assert.equal(bundledModuleRegistry.routeOwner("/module-setup/carpool/plan")?.route.access, "setup");
   assert.equal(bundledModuleRegistry.tableOwner("carpool_people")?.id, "carpool");
+  assert.equal(bundledModuleRegistry.tableOwner("carpool_location_resolution")?.id, "carpool");
+  assert.ok(carpoolModule.backup.nonPortableTables?.includes("carpool_location_resolution"));
+  assert.ok(carpoolModule.lifecycle.cleanupTargets.includes("carpool_location_resolution"));
   assert.equal(bundledModuleRegistry.tableOwner("members"), undefined);
   assert.equal(carpoolModule.persistence.tables.some((table) => table.startsWith("hours_") || table === "meetings"), false);
 });

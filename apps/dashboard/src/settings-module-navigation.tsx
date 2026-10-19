@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { RouteLink } from "./router";
 
-type ModuleNavigation = { id: string; label: string; links: [string, string][] };
+type ModuleNavigation = { id: string; label: string; href: string; paths?: string[] };
 type Props = {
   currentPath: string;
   navigate: (path: string) => void;
@@ -12,24 +12,17 @@ type Props = {
 
 export function SettingsModuleNavigation({ currentPath, navigate, attendanceReady, outreachReady, carpoolReady }: Props) {
   const modules: ModuleNavigation[] = [
-    ...(attendanceReady ? [{ id: "attendance", label: "Attendance", links: [
-      ["/settings/attendance", "Attendance settings"],
-      ["/settings/configuration", "Meeting configuration"],
-      ["/settings/guided-setup", "Attendance Setup"],
-      ["/settings/fingerprint-recovery", "Fingerprint recovery"],
-    ] as [string, string][] }] : []),
-    ...(outreachReady ? [{ id: "outreach", label: "Outreach", links: [["/settings/outreach-setup", "Outreach settings"]] as [string, string][] }] : []),
-    ...(carpoolReady ? [{ id: "carpool", label: "Carpool", links: [["/settings/carpool", "Carpool settings"]] as [string, string][] }] : []),
+    ...(attendanceReady ? [{ id: "attendance", label: "Attendance", href: "/settings/attendance", paths: ["/settings/configuration", "/settings/guided-setup", "/settings/fingerprint-sharing", "/settings/fingerprint-recovery"] }] : []),
+    ...(outreachReady ? [{ id: "outreach", label: "Outreach", href: "/settings/outreach-setup" }] : []),
+    ...(carpoolReady ? [{ id: "carpool", label: "Carpool", href: "/settings/carpool" }] : []),
   ];
-  const activeModule = modules.find((module) => module.links.some(([href]) => currentPath === href || currentPath.startsWith(`${href}/`)))?.id;
+  const activeModule = modules.find((module) => [module.href, ...(module.paths ?? [])].some((href) => currentPath === href || currentPath.startsWith(`${href}/`)))?.id;
   const [open, setOpen] = useState(false);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => activeModule ? { [activeModule]: true } : {});
   const disclosure = useRef<HTMLDivElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setOpen(false);
-    if (activeModule) setExpanded((current) => ({ ...current, [activeModule]: true }));
   }, [currentPath, activeModule]);
   useEffect(() => {
     if (!open) return;
@@ -56,14 +49,7 @@ export function SettingsModuleNavigation({ currentPath, navigate, attendanceRead
     </button>
     {open && <div className="settings-module-menu" id="settings-module-menu" role="group" aria-label="Module settings" onClick={(event) => { if ((event.target as Element).closest("a")) setOpen(false); }}>
       <RouteLink href="/settings/modules" currentPath={currentPath} navigate={navigate}>Manage modules</RouteLink>
-      {modules.map((module) => module.links.length === 1 ? <RouteLink key={module.id} href={module.links[0]![0]} currentPath={currentPath} navigate={navigate}>{module.label}</RouteLink> : <div className="settings-module-group" key={module.id}>
-        <button className="ui-button settings-module-branch" type="button" aria-expanded={Boolean(expanded[module.id])} aria-controls={`settings-module-${module.id}`} onClick={() => setExpanded((current) => ({ ...current, [module.id]: !current[module.id] }))}>
-          <span>{module.label}</span><span aria-hidden="true">{expanded[module.id] ? "▴" : "▾"}</span>
-        </button>
-        {expanded[module.id] && <div className="settings-module-links" id={`settings-module-${module.id}`} role="group" aria-label={`${module.label} settings`}>
-          {module.links.map(([href, label]) => <RouteLink key={href} href={href} currentPath={currentPath} navigate={navigate}>{label}</RouteLink>)}
-        </div>}
-      </div>)}
+      {modules.map((module) => <RouteLink key={module.id} href={module.href} currentPath={activeModule === module.id ? module.href : currentPath} navigate={navigate}>{module.label}</RouteLink>)}
     </div>}
   </div>;
 }

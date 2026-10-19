@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./dashboard-api";
-import { EditMemberDialog } from "./roster-page";
+import "./mobile-roster-reports.css";
+import { EditMemberDialog, MemberPencil } from "./roster-page";
 import { RouteLink, usePath } from "./router";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
 import type { RosterMember } from "./user-settings";
@@ -22,8 +23,6 @@ export function MemberDetailPage({ role, memberId, discordEnabled, debugMode }: 
   useDashboardLoadingOverlay(notice === "Loading member history…", "Loading member history…");
   async function load(message = "") { const [result, labels] = await Promise.all([api<Detail>(`/admin/members/${encodeURIComponent(memberId)}/history`), api<LabelData>("/labels")]); if (activeMember.current !== memberId) return; setDetail({ ...result, meanAnomalyMinutes: result.meanAnomalyMinutes ?? null }); setLabelData(labels); setNotice(message); }
   useEffect(() => { setDetail(undefined); setEditing(false); setHistoryNotices({}); setSavingMeetingId(undefined); setNotice("Loading member history…"); void load().catch((error: Error) => { if (activeMember.current === memberId) setNotice(error.message); }); }, [memberId]);
-  async function toggleActive() { if (!detail) return; try { await api(`/admin/members/${encodeURIComponent(detail.member.id)}`, { method: "PATCH", body: JSON.stringify({ active: !detail.member.active }) }); await load(`${detail.member.firstName} is now ${detail.member.active ? "inactive" : "active"}.`); } catch (error) { setNotice((error as Error).message); } }
-  async function remove() { if (!detail || !window.confirm(`Permanently delete ${detail.member.firstName} ${detail.member.lastName}? This is available only when they have no attendance history.`)) return; try { await api(`/admin/members/${encodeURIComponent(detail.member.id)}`, { method: "DELETE", body: JSON.stringify({ confirmation: `DELETE MEMBER ${detail.member.memberId}` }) }); navigate("/roster"); } catch (error) { setNotice((error as Error).message); } }
   function historyNotice(meetingId: string, message: string) {
     setHistoryNotices((current) => ({ ...current, [meetingId]: message }));
   }
@@ -60,11 +59,11 @@ export function MemberDetailPage({ role, memberId, discordEnabled, debugMode }: 
   }
   const policies = detail?.attendancePolicy ? detail.attendancePolicy.currentCompliances ?? [detail.attendancePolicy.currentCompliance] : [];
   return <section className="page-stack member-detail-page" aria-labelledby="member-detail-title" data-walkthrough-page="member" data-walkthrough-ready={detail ? "true" : undefined} tabIndex={-1}>
-    <RouteLink href="/roster" currentPath={path} navigate={navigate} className="back-link">← Back to roster</RouteLink>
+    <RouteLink href="/roster" currentPath={path} navigate={navigate} className="back-link member-roster-link">← Roster</RouteLink>
     <div className="page-intro"><h1 id="member-detail-title">{detail ? `${detail.member.firstName} ${detail.member.lastName}` : "Member detail"}</h1>{detail && <p>{detail.member.memberId}</p>}</div>
     {notice && <p className="setup-status" role="status">{notice}</p>}
     {detail ? <>
-      <article className="task-card member-profile-card" data-walkthrough="member-profile"><div className="panel-heading"><div><h2>Member profile</h2><span className="ui-status" data-tone={detail.member.active ? "success" : "neutral"}>{detail.member.active ? "Active roster member" : "Inactive roster member"}</span></div>{role === "admin" && <div className="roster-row-actions" role="group" aria-label="Member actions" data-walkthrough="member-actions"><button className="ui-button" type="button" onClick={() => setEditing(true)}>Edit</button><button className="ui-button" type="button" onClick={() => void toggleActive()}>{detail.member.active ? "Deactivate" : "Activate"}</button><button className="ui-button ui-button--danger" type="button" onClick={() => void remove()}>Delete</button></div>}</div>
+      <article className="task-card member-profile-card" data-walkthrough="member-profile"><div className="panel-heading"><div><h2>Member profile</h2><span className="ui-status" data-tone={detail.member.active ? "success" : "neutral"}>{detail.member.active ? "Active roster member" : "Inactive roster member"}</span></div>{role === "admin" && <div className="member-profile-actions" role="group" aria-label="Member actions" data-walkthrough="member-actions"><button className="ui-button member-pencil-button" type="button" aria-label={`Edit ${detail.member.firstName} ${detail.member.lastName}`} onClick={() => setEditing(true)}><MemberPencil /></button></div>}</div>
         <dl className="member-profile-details"><div><dt>Email</dt><dd>{detail.member.email || "No email on file"}</dd></div><div><dt>Attendance required from</dt><dd>{detail.member.attendanceRequiredFrom || "Roster-added date"}</dd></div><div data-walkthrough="member-labels"><dt>Current labels</dt><dd>{detail.labels.filter((label) => detail.attendancePolicy?.currentLabelIds.includes(label.id)).map((label) => label.name).join(", ") || "No labels"}</dd></div><div data-walkthrough="member-policies"><dt>Regular attendance</dt><dd>{detail.attendancePolicy ? `${attendanceRateText(detail.attendancePolicy.regularAttendance.rate)} · ${detail.attendancePolicy.regularAttendance.from ?? "First eligible meeting"} to ${detail.attendancePolicy.regularAttendance.to}` : "N/A"}</dd></div><div data-walkthrough="member-policies"><dt>Assigned policies</dt><dd>{policies.length ? <ul className="inline-policy-list">{policies.map((policy) => <li key={policy.labelId ?? "none"}>{policyResultText(policy)}{policy.status !== "no_rule" ? ` · ${policy.from} to ${policy.to}` : ""}</li>)}</ul> : "No assigned policy"}</dd></div><div><dt>Mean anomalous time</dt><dd>{detail.meanAnomalyMinutes === null ? "No anomalous scans" : `${detail.meanAnomalyMinutes} minutes`}</dd></div>{discordEnabled && <div><dt>Discord identity</dt><dd>{detail.member.discordUserId ? <code>{detail.member.discordUserId}</code> : <span className="member-discord-unlinked">Not linked</span>}</dd></div>}</dl>
         {detail.attendancePolicy?.belowTargetWeeks.length ? <p className="ui-status" data-tone="warning" role="status">Below target: {detail.attendancePolicy.belowTargetWeeks.map((week) => week.weekStartsOn).join(", ")}</p> : null}
       </article>
@@ -80,18 +79,18 @@ export function MemberDetailPage({ role, memberId, discordEnabled, debugMode }: 
             <span role="cell" className="member-history-check-out">{formatTime(row.checkedOutAt)}</span>
             <span role="cell" className="member-history-outcome"><strong className={`attendance-state ${row.disposition}`}>{row.disposition.replace("_", " ")}</strong><small>{row.eligibility?.replace("_", " ") ?? "required"} · {row.policy ?? "standard"}</small>{row.reason && <small>{row.reason}</small>}</span>
             <div role="cell" className="member-history-action-cell">
-              <div className="member-attendance-actions" role="group" aria-label={`Attendance actions for ${row.title}`}>
+              <details className="member-history-correction"><summary aria-label={`Correct attendance for ${row.title}`}><MemberPencil /></summary><div className="member-attendance-actions" role="group" aria-label={`Attendance actions for ${row.title}`}>
                 <button className="ui-button" type="button" disabled={Boolean(savingMeetingId) || row.disposition === "present"} onClick={() => void changeAttendance(row, "present")}>Present</button>
                 <button className="ui-button" type="button" disabled={Boolean(savingMeetingId) || row.disposition === "excused"} onClick={() => void changeAttendance(row, "excused")}>Excuse</button>
                 <button className="ui-button" type="button" disabled={Boolean(savingMeetingId) || row.disposition === "absent"} onClick={() => void changeAttendance(row, "absent")}>Absent</button>
                 {role === "admin" && <button className="ui-button ui-button--danger" type="button" disabled={Boolean(savingMeetingId) || row.disposition === "not_required"} onClick={() => void changeAttendance(row, "clear")}>Clear</button>}
-              </div>
+              </div></details>
               {historyNotices[row.meetingId] && <small role="status">{historyNotices[row.meetingId]}</small>}
             </div>
           </div>)}
         </div></div> : <p className="empty-state">No completed meetings are available for this member yet.</p>}
       </section>
-      <EditMemberDialog member={editing ? detail.member : undefined} labelData={labelData} attendanceEnabled onClose={() => setEditing(false)} onSaved={async () => { await load("Member updated."); }} />
+      <EditMemberDialog member={editing ? detail.member : undefined} labelData={labelData} attendanceEnabled onDeleted={() => navigate("/roster")} onClose={() => setEditing(false)} onSaved={async () => { await load("Member updated."); }} />
     </> : notice !== "Loading member history…" && <section className="task-card empty-page" aria-labelledby="member-unavailable-title"><h2 id="member-unavailable-title">Member unavailable</h2><p>This roster record could not be loaded. It may have been removed or the link may be out of date.</p><RouteLink href="/roster" currentPath={path} navigate={navigate}>Return to roster</RouteLink></section>}
   </section>;
 }

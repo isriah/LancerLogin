@@ -355,6 +355,21 @@
       "name": "0071_fingerprint_catalog_revision.sql",
       "sha256": "1349ecb9904a3eb65d0e50a7b5ecf7d2743af39d3a42c0e0182d864efc9d0c28",
       "forwardCompatible": true
+    },
+    {
+      "name": "0072_fingerprint_enrollment_receipts.sql",
+      "sha256": "32f9b4566342446e68090ecc6d9236c2a8dd8830359f2278938d53cdf62ad41f",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0073_per_kiosk_authentication.sql",
+      "sha256": "adfd82bc5f0a0533861a8355879645a52968ff147ccaabf4b8c621627e0f1484",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0074_carpool_location_resolution.sql",
+      "sha256": "2a050358470c8801eed7db495c9d356ad1abf27a0985a214c8a8ab3c079b6ac5",
+      "forwardCompatible": true
     }
   ]
 }

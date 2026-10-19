@@ -75,7 +75,7 @@ test("real service starts sync immediately, persists name, and gates held finger
   const f=await fixture(t); let runtime=await f.start();
   await until(()=>f.heartbeats()>0);
   const health = await (await runtime.request("/health")).json();
-  assert.deepEqual(Object.keys(health.fingerprintSync).sort(), ["peer", "reset", "vault"]);
+  assert.deepEqual(Object.keys(health.fingerprintSync).sort(), ["reset", "vault"]);
   assert.doesNotMatch(JSON.stringify(health.fingerprintSync), /synthetic-token|synthetic-pairing|synthetic-member|resetEpoch|privateKey/);
   assert.equal(JSON.parse(await readFile(join(f.root,"pairing.json"),"utf8")).kioskName,"Dashboard configured name");
   await runtime.presence("attendance"); await wait(350); assert.equal(f.attendance.length,0);
@@ -90,7 +90,7 @@ test("real service verifies roster before enrollment, preserves replacement, and
   assert.equal((await runtime.request("/fingerprint-diagnostics")).status,403);
   assert.equal((await runtime.request("/network/unlock",{pin:"123456"})).status,200);
   const diagnostics = await (await runtime.request("/fingerprint-diagnostics")).json();
-  assert.deepEqual(Object.keys(diagnostics).sort(),["peer","reset","vault"]);
+  assert.deepEqual(Object.keys(diagnostics).sort(),["reset","vault"]);
   assert.doesNotMatch(JSON.stringify(diagnostics), /synthetic-token|resetEpoch|synthetic-pairing/);
   const before=await readFile(join(f.root,"slot-mappings.json"),"utf8");
   for(const mode of ["offline","missing","no_identity"]){f.roster(mode);const response=await runtime.request("/enroll",{memberId:"synthetic-member",slot:0,replaceExisting:true});assert.ok([400,503].includes(response.status));assert.equal((await runtime.reader()).enrollCalls,0);assert.equal(await readFile(join(f.root,"slot-mappings.json"),"utf8"),before);}

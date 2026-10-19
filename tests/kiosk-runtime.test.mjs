@@ -997,7 +997,11 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.match(installer, /same network.*one-time pairing key/);
   assert.match(installer, /lancerlogin-open-kiosk/);
   assert.match(installer, /LancerLogin Kiosk\.desktop/);
-  assert.match(installer, /metadata::trusted/);
+  assert.match(installer, /application_file="\/usr\/local\/share\/applications\/lancerlogin-kiosk\.desktop"/);
+  assert.match(installer, /'Type=Link'.*"URL=\$application_file"/);
+  assert.match(installer, /chown root:root "\$application_file"/);
+  assert.match(installer, /chmod 0644 "\$desktop_file"/);
+  assert.doesNotMatch(installer, /quick_exec|metadata::trusted/);
   assert.match(installer, /SUDO_USER/);
   assert.doesNotMatch(installer, /Worker API URL from the GitHub workflow summary/);
   assert.match(installer, /node_major.*-ge 18/s);
@@ -1152,8 +1156,8 @@ test("loopback display state exposes only a safe release version and local Wi-Fi
     assert.equal(unavailableSlots.status, 503);
     assert.deepEqual(await unavailableSlots.json(), { error: "Cannot verify occupied sensor slots. Test the reader before enrolling." });
     const unavailableSync = await request("/fingerprint-sync");
-    assert.equal(unavailableSync.status, 503);
-    assert.match((await unavailableSync.json()).error, /Maintenance remains unlocked/);
+    assert.equal(unavailableSync.status, 410);
+    assert.match((await unavailableSync.json()).error, /retired/);
     assert.equal((await (await request("/maintenance/session")).json()).authorized, true);
     assert.equal((await request("/fingerprint-sync", { headers: { origin: "https://untrusted.example.test" } })).status, 403);
     const scan = await request("/network/wifi");

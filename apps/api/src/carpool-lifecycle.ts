@@ -9,4 +9,6 @@ export const carpoolCleanupSteps = Object.freeze([
   { kind: "assignments" as const },
   { kind: "delete" as const, table: "carpool_geocoding_credentials" },
   { kind: "delete" as const, table: "carpool_settings" },
+  // Appended to preserve the cursor positions of interrupted cleanup runs.
+  { kind: "delete" as const, table: "carpool_location_resolution" },
 ]);

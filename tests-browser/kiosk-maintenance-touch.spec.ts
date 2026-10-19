@@ -184,110 +184,22 @@ async function pin(page: Page, value = "123456") {
   await tap(page, page.locator("#unlock-form").getByRole("button", { name: "Unlock for five minutes" }));
 }
 
-test("fingerprint sync can be enabled and peers approved by touch at 800x480", async ({ page }) => {
+test("cloud sync sheet supports touch, focus containment and session expiration", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 480 });
   const mock = await fixture(page);
-  let enabled = false, approved = false;
-  const peer = { kioskId: "other-kiosk", pairingId: "other-pair", fingerprint: "b".repeat(64), name: "Second entrance" };
-  await page.route(`${base}/fingerprint-sync`, async route => {
-    if (route.request().method() === "PATCH") enabled = route.request().postDataJSON().enabled;
-    await route.fulfill({ json: { installationEnabled: true, enabled, fingerprint: enabled ? "a".repeat(64) : null, candidates: enabled ? [peer] : [], peers: approved ? [peer] : [], diagnostics: { status: "ready" } } });
-  });
-  await page.route(`${base}/fingerprint-sync/peers`, async route => {
-    expect(route.request().postDataJSON()).toEqual({ kioskId: peer.kioskId, fingerprint: peer.fingerprint });
-    approved = true; await route.fulfill({ json: { approved: true } });
-  });
+  await page.route(`${base}/fingerprint-diagnostics`, route => route.fulfill({ json: { reset: { reasonCode: "ready" }, vault: { reasonCode: "ready" } } }));
   await page.goto(`${base}/maintenance`); await pin(page);
-  await expect(page.locator("#message")).toContainText("Maintenance unlocked");
-  await page.screenshot({ path: test.info().outputPath("sync-entry.png") });
-  await tap(page, page.getByRole("button", { name: "Fingerprint sync", exact: true }));
-  const sheet = page.locator("#fingerprint-sync-sheet"), scroll = sheet.locator(".sync-content");
-  await expect(sheet).toBeVisible(); await expect(page.locator("#toggle-sync")).toBeEnabled();
-  await tap(page, page.locator("#toggle-sync"));
-  await expect(page.locator("#confirm-detail")).toContainText("encrypted messages");
-  await tap(page, page.locator("#accept-action"));
-  await expect(page.locator("#toggle-sync")).toHaveText("Disable on this kiosk");
-  await expect(page.locator("#sync-fingerprint-value")).toContainText("aaaa aaaa");
-  const approve = sheet.getByRole("button", { name: "Compare and approve" });
-  await reachable(page, approve, scroll); await tap(page, approve);
-  await expect(page.locator("#confirm-detail")).toContainText("bbbb bbbb");
-  expect(approved).toBe(false);
-  await tap(page, page.locator("#accept-action"));
-  await expect(sheet.getByText("Approved locally", { exact: true })).toBeVisible();
-  expect(approved).toBe(true);
-  for (const height of await sheet.locator("button").evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().height))) expect(height).toBeGreaterThanOrEqual(48);
-  expect(await scroll.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await page.screenshot({ path: test.info().outputPath("fingerprint-sync-touch.png") });
-  mock.expire(); await expect(sheet).toBeHidden();
-  await expect(page.locator("#unlock")).toBeVisible();
-});
-
-test("fingerprint sync confirmations contain keyboard focus and cancel without enabling", async ({ page }) => {
-  await page.setViewportSize({ width: 800, height: 480 });
-  const mock = await fixture(page); let writes = 0;
-  await page.route(`${base}/fingerprint-sync`, async route => {
-    if (route.request().method() === "PATCH") writes++;
-    await route.fulfill({ json: { installationEnabled: true, enabled: false, peers: [], candidates: [] } });
-  });
-  await page.goto(`${base}/maintenance`); await pin(page);
-  await expect(page.locator("#message")).toContainText("Maintenance unlocked");
   const open = page.getByRole("button", { name: "Fingerprint sync", exact: true });
-  await open.focus(); await page.keyboard.press("Enter");
-  await expect(page.locator("#toggle-sync")).toBeEnabled();
+  await tap(page, open);
   await expect(page.locator("#close-sync")).toBeFocused();
-  await page.keyboard.press("Tab"); await expect(page.locator("#toggle-sync")).toBeFocused();
-  await page.keyboard.press("Enter"); await expect(page.locator("#cancel-action")).toBeFocused();
-  await page.keyboard.press("Shift+Tab"); await expect(page.locator("#accept-action")).toBeFocused();
-  await page.keyboard.press("Tab"); await expect(page.locator("#cancel-action")).toBeFocused();
-  await page.keyboard.press("Escape"); await expect(page.locator("#confirm-sheet")).toBeHidden();
-  await expect(page.locator("#toggle-sync")).toBeFocused(); expect(writes).toBe(0);
-  await page.keyboard.press("Shift+Tab"); await expect(page.locator("#close-sync")).toBeFocused();
+  await expect(page.locator("#refresh-sync")).toBeEnabled();
   await page.keyboard.press("Shift+Tab"); await expect(page.locator("#refresh-sync")).toBeFocused();
   await page.keyboard.press("Tab"); await expect(page.locator("#close-sync")).toBeFocused();
   await page.keyboard.press("Escape"); await expect(open).toBeFocused();
-  await page.keyboard.press("Enter"); await expect(page.locator("#toggle-sync")).toBeEnabled();
-  await page.keyboard.press("Tab"); await page.keyboard.press("Enter");
-  await expect(page.locator("#confirm-sheet")).toBeVisible();
-  mock.expire(); await expect(page.locator("#confirm-sheet")).toBeHidden();
-  await expect(page.locator("#fingerprint-sync-sheet")).toBeHidden(); expect(writes).toBe(0);
-});
-
-test("fingerprint relay outage leaves PIN maintenance unlocked and refresh recovers", async ({ page }) => {
-  await page.setViewportSize({ width: 800, height: 480 });
-  await fixture(page);
-  let unavailable = true;
-  await page.route(`${base}/fingerprint-sync`, route => unavailable
-    ? route.fulfill({ status: 503, json: { error: "Fingerprint sync is unavailable. Maintenance remains unlocked." } })
-    : route.fulfill({ json: { installationEnabled: false, enabled: false, peers: [], candidates: [] } }));
-  await page.goto(`${base}/maintenance`); await pin(page);
-  await expect(page.locator("#message")).toContainText("Maintenance unlocked");
-  await tap(page, page.getByRole("button", { name: "Fingerprint sync", exact: true }));
-  await expect(page.locator("#sync-message")).toContainText("unavailable");
-  await expect(page.locator("#unlock")).toBeHidden();
-  await expect(page.locator("#toggle-sync")).toBeDisabled();
-  unavailable = false; await tap(page, page.locator("#refresh-sync"));
-  await expect(page.locator("#sync-message")).toContainText("An Admin must first enable");
-  await tap(page, page.locator("#close-sync"));
-  await expect(page.locator("#fingerprint-sync-sheet")).toBeHidden();
-  await expect(page.getByRole("button", { name: "Fingerprint sync", exact: true })).toBeFocused();
-});
-
-test("offline fingerprint sync can still be disabled by touch", async ({ page }) => {
-  await page.setViewportSize({ width: 800, height: 480 });
-  await fixture(page); let enabled = true;
-  await page.route(`${base}/fingerprint-sync`, async route => {
-    if (route.request().method() === "PATCH") { expect(route.request().postDataJSON()).toEqual({ enabled: false }); enabled = false; }
-    await route.fulfill({ json: { installationEnabled: false, offline: true, enabled, fingerprint: "a".repeat(64), peers: [], candidates: [], diagnostics: { status: "unavailable" } } });
-  });
-  await page.goto(`${base}/maintenance`); await pin(page);
-  await expect(page.locator("#message")).toContainText("Maintenance unlocked");
-  await tap(page, page.getByRole("button", { name: "Fingerprint sync", exact: true }));
-  await expect(page.locator("#sync-message")).toContainText("still disable local sync");
-  await expect(page.locator("#toggle-sync")).toBeEnabled();
-  await tap(page, page.locator("#toggle-sync")); await tap(page, page.locator("#accept-action"));
-  await expect(page.locator("#toggle-sync")).toHaveText("Enable on this kiosk");
-  await expect(page.locator("#toggle-sync")).toBeDisabled(); expect(enabled).toBe(false);
-  await expect(page.locator("#unlock")).toBeHidden();
+  await tap(page, open);
+  await expect(page.locator("#fingerprint-sync-sheet")).toBeVisible();
+  mock.expire(); await expect(page.locator("#fingerprint-sync-sheet")).toBeHidden();
+  await expect(page.locator("#unlock")).toBeVisible();
 });
 
 test("suggested slot skips sensor fingerprints missing from local mappings", async ({ page }) => {
@@ -716,4 +628,24 @@ for (const height of [480, 360]) test(`mobile roster keyboard keeps digits visib
   await search.evaluate(e => (e as HTMLInputElement).setSelectionRange(0, 1));
   await keyboard.getByRole("button", { name: "B", exact: true }).click();
   await expect(search).toHaveValue("B7");
+});
+
+for (const origin of ["row", "remove"] as const) test(`mapping list mouse drag from ${origin} scrolls without removing a fingerprint`, async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  await fixture(page); await page.goto(`${base}/maintenance`); await pin(page);
+  const list = page.locator("[data-fingerprint].mappings-card .table-wrap");
+  await expect(list.locator("tbody tr").first()).toBeVisible();
+  const before = await list.locator("tbody tr").count();
+  const points = await list.evaluate((element, origin) => {
+    const bounds = element.getBoundingClientRect();
+    const rows = [...element.querySelectorAll("tbody tr")].filter(row => { const box = row.getBoundingClientRect(); return box.top >= bounds.top && box.bottom <= bounds.bottom; });
+    const row = rows.at(-1)!;
+    const box = (origin === "remove" ? row.querySelector("button")! : row).getBoundingClientRect();
+    return { x: origin === "remove" ? box.x + box.width / 2 : box.x + 70, y: box.y + box.height / 2, end: bounds.top + 12 };
+  }, origin);
+  await page.mouse.move(points.x, points.y); await page.mouse.down();
+  await page.mouse.move(points.x, points.end, { steps: 12 }); await page.mouse.up();
+  expect(await list.evaluate(element => element.scrollTop)).toBeGreaterThan(20);
+  await expect(list.locator("tbody tr")).toHaveCount(before);
+  await expect(page.locator("#confirm-sheet")).toBeHidden();
 });

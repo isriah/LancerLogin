@@ -6,6 +6,7 @@ export type CarpoolStatePerson = {
   id: string; displayName: string;
   outboundStatus: CarpoolTravelStatus; outboundAddress: string; outboundLatitude: number | null; outboundLongitude: number | null; outboundSeats: number | null;
   returnStatus: CarpoolTravelStatus; returnAddress: string; returnLatitude: number | null; returnLongitude: number | null; returnSeats: number | null;
+  outboundLocationSource?: "lookup" | "manual" | "no-match" | null; returnLocationSource?: "lookup" | "manual" | "no-match" | null;
 };
 export type CarpoolStateAssignment = { riderId: string; vehiclePersonId: string; direction: CarpoolTripDirection };
 export type CarpoolStateIssue = { riderId: string; direction: CarpoolTripDirection; reason: string; detail: string };
@@ -36,7 +37,10 @@ export function carpoolReadiness(people: readonly CarpoolStatePerson[], assignme
       if (status === "unknown") detail = "Choose a transportation status.";
       else if (["offer", "needs-ride"].includes(status) && !person[`${direction}Address`].trim()) detail = "Add a pickup or drop-off address.";
       else if (status === "offer" && (!Number.isInteger(person[`${direction}Seats`]) || (person[`${direction}Seats`] ?? -1) < 0)) detail = "Enter a whole-number passenger seat count.";
-      else if (["offer", "needs-ride"].includes(status) && (person[`${direction}Latitude`] === null || person[`${direction}Longitude`] === null)) detail = "Locate or verify this address.";
+      else if (["offer", "needs-ride"].includes(status) && (person[`${direction}Latitude`] === null || person[`${direction}Longitude`] === null)) {
+        if (person[`${direction}LocationSource`] === "no-match") detail = "No clear address match was found. Verify the address or place a manual pin.";
+        else { issues.push({ riderId: person.id, direction, reason: "location-pending", detail: "Waiting for automatic location lookup." }); continue; }
+      }
       if (detail) issues.push({ riderId: person.id, direction, reason: "needs-review", detail });
       else if (status === "needs-ride" && !assignedIds.has(person.id)) issues.push(unresolved.find(item => item.direction === direction && item.riderId === person.id) ?? { riderId: person.id, direction, reason: "unassigned", detail: "Choose a car or build suggestions for this rider." });
     }

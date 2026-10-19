@@ -4,6 +4,8 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 > Release notes record what was true when a version shipped. For current procedures, use the linked guide rather than applying older transition steps out of context.
 
+- [v2.0.0-beta.5](v2.0.0-beta.5.md) - Mobile dashboard polish, kiosk management and report improvements
+- [v2.0.0-beta.4](v2.0.0-beta.4.md) - Kiosk enrollment, cloud efficiency and faster reports
 - [v2.0.0-beta.3](v2.0.0-beta.3.md) - Outreach activity management and Carpool workflow improvements
 - [v2.0.0-beta.2](v2.0.0-beta.2.md) - Preserve inactive periods in attendance reporting
 - [v2.0.0-beta.1](v2.0.0-beta.1.md) - Optional modules, multiple kiosks and Beta updates

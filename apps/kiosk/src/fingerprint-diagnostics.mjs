@@ -17,6 +17,8 @@ export const fingerprintDiagnosticMessages = Object.freeze({
   no_approved_peer: "No peer is approved locally. Compare device fingerprints before approving another kiosk.",
   enrollment_identity_missing: "Some enrollments lack verified roster identities and need fresh enrollment to be shared.",
   mapping_review: "Some mappings need review or belong to inactive members. They are not being shared.",
+  transfer_pending: "Fingerprint transfers are still queued. Leave the kiosk online to finish syncing.",
+  retirement_review: "An enrollment was retired, but its local slot has changed. Review that mapping before removing it.",
   transfer_retry: "Some fingerprint transfers need another attempt. Check reader, network and peer approval.",
   stale: "The last successful check is old. Current fingerprint sync health has not been verified.",
   unavailable: "Fingerprint sync could not be verified. Refresh or ask an Admin to review the kiosk.",
@@ -25,7 +27,7 @@ export const fingerprintDiagnosticMessages = Object.freeze({
 const codes = new Set(Object.keys(fingerprintDiagnosticMessages));
 const states = new Set(["starting", "ready", "disabled", "waiting", "blocked", "unavailable", "stale"]);
 const statuses = new Set(["starting", "ready", "disabled", "installation_disabled", "waiting", "needs_attention", "reset", "idle", "unavailable", "stale"]);
-const counts = ["received", "errors", "captured", "completed", "uploaded", "legacyMappings", "missingIdentityMappings", "unshareableMappings"];
+const counts = ["received", "errors", "captured", "completed", "uploaded", "legacyMappings", "missingIdentityMappings", "unshareableMappings", "pendingUploads", "pendingDownloads", "reviewRequired", "retiredEnrollments", "locallyRemoved"];
 const timestamp = value => typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 
 export function fingerprintDiagnostic(component, values = {}, now = Date.now()) {

@@ -97,7 +97,7 @@ test("guided setup keeps branding local and makes its compact progress accessibl
   assert.match(entry, /brandTheme\(branding\.primaryColor, branding\.secondaryColor\)/);
   assert.match(entry, /data-theme=\{theme\}/);
   assert.match(entry, /lancerlogin-theme/);
-  assert.match(entry, /role="switch" aria-checked=\{dark\} aria-label="Dark mode"/);
+  assert.match(entry, /role="switch" aria-checked=\{!dark\} aria-label="Light mode"/);
   assert.match(styles, /\.theme-toggle\[aria-checked="true"\] \.theme-toggle-track/);
   assert.match(workspace, /Logo contrast/);
   assert.match(settings, /id="organization-title">Organization/);
@@ -157,7 +157,8 @@ test("meeting detail keeps meeting-specific attendance, Discord, and contest ope
   assert.match(meetings, /Duplicate an existing meeting/);
   assert.doesNotMatch(meetings, />Edit<|>Delete this meeting<|meeting-actions-cell/);
   assert.match(meetings, /closest\("\.meeting-selection"\)/);
-  assert.match(home, /pendingMeetingDeletionKey/);
+  assert.match(home, /readMeetingDeletion/);
+  assert.doesNotMatch(home, /sessionStorage|pendingMeetingDeletionLifetimeMs/);
   assert.doesNotMatch(meetings, /template/i);
   assert.doesNotMatch(meetings, /Test meeting/);
 });
@@ -195,7 +196,8 @@ test("dashboard consolidates meeting navigation and keeps roster accounts togeth
   assert.match(modules, /<RouteLink href="\/settings\/modules"[^>]*>Manage modules<\/RouteLink>/);
   assert.match(modules, /className="settings-module-toggle"/);
   assert.match(modules, /<span>Modules<\/span>/);
-  assert.match(modules, /aria-expanded=\{Boolean\(expanded\[module.id\]\)\}/);
+  assert.doesNotMatch(modules, /settings-module-branch|settings-module-links|setExpanded/);
+  assert.match(modules, /href: "\/settings\/attendance"/);
   assert.match(shell, /CoreHomePage/);
   assert.match(users, /ModuleAssignmentControls/);
   assert.doesNotMatch(shell, /\["\/meetings", "Meetings"\]|\["\/attendance", "Attendance"\]/);
@@ -232,14 +234,15 @@ test("dashboard access sign-in method is a compact, accessible radio toggle grou
   assert.match(styles, /\.method-switch-options label:has\(input:focus-visible\)/);
 });
 
-test("Settings separates operational configuration, access, and kiosk update comparisons", async () => {
+test("Settings separates configuration, access, and dashboard updates", async () => {
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const modules = await readFile("apps/dashboard/src/settings-module-navigation.tsx", "utf8");
   const organization = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
   const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   const integrations = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
   const updates = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
-  assert.match(modules, /\["\/settings\/configuration", "Meeting configuration"\]/);
+  const sections = await readFile("apps/dashboard/src/settings-section-navigation.tsx", "utf8");
+  assert.match(sections, /\["\/settings\/configuration", "Meeting configuration"\]/);
   assert.match(shell, /\["\/settings\/access", "Access"\]/);
   assert.match(shell, /\["\/settings\/updates", "Updates"\]/);
   assert.match(shell, /role === "admin" && path === "\/settings\/access"/);
@@ -250,10 +253,9 @@ test("Settings separates operational configuration, access, and kiosk update com
   assert.match(integrations, /Contest window \(hours\)/);
   assert.match(integrations, /Manage the configured attendance channel/);
   assert.doesNotMatch(organization, /Late scan allowance|Discord contest window/);
-  assert.match(updates, /<h2>Physical kiosk<\/h2>/);
-  assert.match(updates, /<span>Current<\/span>/);
-  assert.match(updates, /<span>Available<\/span>/);
-  assert.match(updates, /className="version-grid"/);
+  assert.doesNotMatch(updates, /Physical kiosk|install_latest|loadCommands/);
+  assert.match(updates, /<WebUpdateCard/);
+  assert.match(sections, /\["\/settings\/fingerprint-sharing", "Fingerprint sharing"\]/);
 });
 
 test("settings subpages preserve the parent navigation bubble without duplicating the current-page label", async () => {
@@ -264,7 +266,7 @@ test("settings subpages preserve the parent navigation bubble without duplicatin
   const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   const integrations = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
   assert.ok(shell.includes('const viewingSettings = path.startsWith("/settings/")'));
-  assert.ok(shell.includes('label === "Settings" && viewingSettings && path !== href ? "active" : ""'));
+  assert.ok(shell.includes('label === "Settings" && viewingSettings && path !== href'));
   assert.ok(shell.includes('path === "/settings/configuration"'));
   assert.match(router, /aria-current=\{active \? "page" : undefined\}/);
   assert.match(styles, /\.primary-navigation a\.active,\.settings-navigation a\.active/);
@@ -278,11 +280,12 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const router = await readFile("apps/dashboard/src/router.tsx", "utf8");
-  assert.match(home, /length: 35/);
+  const calendar = await readFile("apps/dashboard/src/mobile-calendar.tsx", "utf8");
+  assert.match(home, /MonthCalendar/);
+  assert.match(calendar, /calendar-selected-day/);
   assert.match(home, /lancerlogin-dashboard-meeting-view/);
   assert.match(home, /Meeting view/);
-  assert.match(home, /BrowserViewIcon view="calendar"/);
-  assert.match(home, /BrowserViewIcon view="table"/);
+  assert.match(calendar, /BrowserViewIcon view=\{view\}/);
   assert.match(home, /className="meeting-browser-select"><span>Meeting<\/span><select className="ui-control ui-native-select"/);
   assert.match(home, /Add meeting/);
   assert.match(home, /setCalendarOffset/);
@@ -294,8 +297,7 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.doesNotMatch(meetings, /requestAnimationFrame\(\(\) => document\.getElementById\("meeting-create-error"\)/);
   assert.match(meetings, /onCreated\(result\.meetings\.length, result\.calendarSync, result\.calendarDelivery, result\.meetings\.map\(/);
   assert.match(meetings, /Duplicate an existing meeting/);
-  assert.match(home, /previousMonth/);
-  assert.match(home, /previous-month/);
+  assert.match(calendar, /outside-month/);
   assert.doesNotMatch(home, /Last week through the next three weeks/);
   assert.doesNotMatch(home, /Meetings in progress|live-roster|Active · not checked out/);
   assert.doesNotMatch(home, /Attendance contests|ContestReviewList|\/discord\/contests/);
@@ -320,7 +322,9 @@ test("update assistant uses backup-confirmed durable web updates and separate ki
   assert.match(source, /readDashboardReleaseState/);
   assert.match(card, /reloadAvailable/);
   assert.doesNotMatch(card, /window\.open|workflow_dispatch|token|localStorage/);
-  assert.match(source, /command: "install_latest"/);
+  assert.doesNotMatch(source, /command: "install_latest"/);
+  const kiosks = await readFile("apps/dashboard/src/kiosks-page.tsx", "utf8");
+  assert.match(kiosks, /install_latest/);
 });
 
 test("attendance actions preserve their layout and mute unavailable choices", async () => {
@@ -357,7 +361,10 @@ test("reports are a routed workspace with a paginated leaderboard and saved repo
   assert.match(reports, /Meeting type<select/);
   assert.match(reports, /Active roster/);
   assert.match(reports, /Team regular attendance trend/);
-  assert.match(await readFile("apps/dashboard/src/attendance-trend-chart.tsx", "utf8"), /role="img" aria-label=\{`Team regular attendance trend/);
+  const chart = await readFile("apps/dashboard/src/attendance-trend-chart.tsx", "utf8");
+  assert.match(chart, /role="group" aria-label="Team regular attendance trend"/);
+  assert.match(chart, /<button[^>]+aria-label=\{`\$\{dates\[index\]\.full\}/);
+  assert.match(chart, /aria-live="polite"/);
   assert.match(reports, /Review contest/);
   assert.match(reports, /Approve and mark present/);
   assert.match(reports, /\/discord\/contests\/resolve/);
@@ -365,14 +372,14 @@ test("reports are a routed workspace with a paginated leaderboard and saved repo
   assert.match(reports, /Operational baseline/);
   assert.match(reports, /All history/);
   assert.match(reports, /Browse reports/);
-  assert.match(reports, /aria-label="Create report"/);
+  assert.match(reports, />New report<\/button>/);
   assert.match(reports, /Download report CSV/);
   assert.match(reports, /Download detailed attendance CSV/);
   assert.match(reports, /\/exports\/report\.csv/);
   assert.match(reports, /\/exports\/report-detail\.csv/);
-  assert.match(reports, /Discard unsaved report changes/);
-  assert.match(reports, />Edit<\/button>/);
-  assert.match(reports, /report-settings-summary/);
+  assert.match(reports, /ReportLeaveDialog/);
+  assert.match(reports, /<span>Edit<\/span>/);
+  assert.match(reports, /Filters and report settings/);
   assert.doesNotMatch(reports, /className="tab-order"/);
   assert.match(styles, /\.report-filters/);
   assert.match(styles, /\.report-tabs/);
@@ -440,7 +447,7 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   assert.match(styles, /\.roster-directory \.panel-heading \{ align-items: start; flex-direction: column/);
   assert.match(styles, /\.roster-directory \.roster-actions \{ width: 100%; justify-content: space-between/);
   assert.match(styles, /\.roster-row-actions button \{ min-height: 2\.25rem/);
-  assert.match(roster, /className="roster-row-actions"/);
+  assert.match(roster, /className="ui-button member-pencil-button"/);
   assert.match(roster, /discordConfigured\s*\?\s*" with-discord"/);
   assert.match(roster, /className="roster-action-cell"/);
   assert.match(styles, /\.panel-heading \{[^}]*align-items: center/);
@@ -469,7 +476,7 @@ test("Dashboard and meeting workspace apply the shared conformance contract", as
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(home, /\(creationNotice \|\| notice\) && <p className="setup-status ui-status dashboard-meeting-status"[^>]+data-tone=\{noticeTone\}/);
   assert.doesNotMatch(home, /Dashboard data is current\./);
-  assert.match(home, /No meetings are scheduled in this five-week range\./);
+  assert.match(home, /No meetings scheduled\./);
   assert.match(meetings, /meeting-directory-heading/);
   assert.match(meetings, /className="ui-table"/);
   assert.match(attendance, /data-tone=\{calendarNoticeTone\}/);
@@ -543,13 +550,13 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(source, /\/admin\/pairing-codes/);
   assert.match(source, /Add kiosk/);
-  assert.match(source, /<div className="page-intro"><h1 id="kiosks-title">Kiosks<\/h1><\/div>/);
+  assert.match(source, /<h1 id="kiosks-title">\{managing \? "Manage kiosk" : "Kiosks"\}<\/h1>/);
   assert.match(source, /<div className="kiosk-card-heading"[^>]*><div><h2>Physical kiosks<\/h2>/);
   assert.match(source, /const activeKiosks = kiosks\.filter\(\(kiosk\) => kiosk\.active === 1\)/);
   assert.match(source, /aria-label="Active physical kiosks"/);
   assert.match(source, /Retire kiosk/);
   assert.match(source, /Update kiosk/);
-  assert.match(source, /Device history/);
+  assert.doesNotMatch(source, /Device history/);
   assert.match(source, /Reload display/);
   assert.match(source, /Restart software/);
   assert.match(source, /Reboot Pi/);
@@ -559,8 +566,8 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(source, /const healthy = Boolean\(kiosk && online && kiosk\.readerOnline/);
   assert.match(source, /healthy \? "healthy" : "degraded"/);
   assert.match(source, /health === "unpaired" \? "Not paired"/);
-  assert.match(source, /kiosk-state-\$\{health\}/);
-  assert.match(source, /kiosk-health-pill/);
+  assert.match(source, /kiosk-device-option/);
+  assert.match(source, /aria-pressed=\{active\?\.id === kiosk\.id\}/);
   assert.doesNotMatch(source, /Recovery guidance|recoveryGuidance/);
   assert.match(styles, /\.kiosk-state \{[^}]*align-items: center[^}]*min-height: var\(--control-min-block-size\)/);
   assert.match(styles, /\.kiosk-health-pill \{[^}]*min-height: var\(--control-min-block-size\)/);

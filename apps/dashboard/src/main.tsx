@@ -34,8 +34,8 @@ function savedTheme(): "light" | "dark" { try { return localStorage.getItem(them
 
 function ThemeToggle({ theme, onTheme }: { theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
   const dark = theme === "dark";
-  return <button className="theme-toggle" type="button" role="switch" aria-checked={dark} aria-label="Dark mode" onClick={() => onTheme(dark ? "light" : "dark")}>
-    <span className="theme-toggle-label" aria-hidden="true">{dark ? "Dark" : "Light"}</span>
+  return <button className="theme-toggle" type="button" role="switch" aria-checked={!dark} aria-label="Light mode" onClick={() => onTheme(dark ? "light" : "dark")}>
+    <span className="theme-toggle-label" aria-hidden="true">Light mode</span>
     <span className="theme-toggle-track" aria-hidden="true"><span /></span>
   </button>;
 }

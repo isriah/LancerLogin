@@ -38,7 +38,7 @@ test("real D1 idle cost stays within a bounded two-kiosk daily budget with a ful
     const cookie = `lancerlogin_session=${payload}.${createHmac("sha256", Buffer.from(secret, "base64url")).update(payload).digest("base64url")}`;
     async function call(path, { device, method = "GET", body, etag } = {}) {
       const result = await runtime.dispatchFetch(`https://example.test${path}`, { method, headers: { ...(device ? { authorization: `Bearer ${device}` } : { cookie }), ...(body ? { "content-type": "application/json" } : {}), ...(etag ? { "if-none-match": etag } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
-      assert.ok([200, 304].includes(result.status), `${path}: ${result.status} ${result.status >= 400 ? await result.text() : ""}`);
+      assert.ok([200, 304].includes(result.status) || path.includes("/fingerprint-sync") && result.status === 410, `${path}: ${result.status} ${result.status >= 400 ? await result.clone().text() : ""}`);
       return result;
     }
     await (await call("/admin/kiosks/fingerprint-sync", { method: "PATCH", body: { enabled: true } })).text();
@@ -91,9 +91,8 @@ test("real D1 idle cost stays within a bounded two-kiosk daily budget with a ful
     console.log(JSON.stringify({ benchmark: "two_kiosk_idle_day_projection", dailyReads, dailyWrites, includes: "all first/all/batch queries, current authority guards, command polling, heartbeat and completed update history", costs }));
     console.log(JSON.stringify({ benchmark: "older_client_rollout_projection", legacyDailyReads, cacheAssumption: "one cold reload per device every five minutes; extra isolates or revisions add reloads" }));
     // Price the identical two-device schedule after consolidating reads. Client
-    // metadata pages are still replayed through local recovery on every round;
-    // only unchanged catalog network reads disappear. Include every cold page,
-    // including the empty final page, rather than pricing an immortal edge cache.
+    // metadata snapshots are still replayed through local recovery on every round;
+    // only unchanged catalog network reads disappear. Include both cold catalogs, rather than pricing an immortal edge cache.
     let pollDailyReads = 0, pollDailyWrites = 0, coldCatalogReads = 0;
     const pollCosts = [];
     async function pollPrice(path, options, times) {
@@ -110,28 +109,19 @@ test("real D1 idle cost stays within a bounded two-kiosk daily budget with a ful
       await (await pollPrice(`/kiosk/poll?v=1&fingerprints=1&config=1&rosterRevision=${revision}`, { device }, 1439)).text();
       await (await pollPrice(`/kiosk/poll?v=1&fingerprints=1&rosterRevision=${revision}`, { device }, 4320)).text();
       await (await pollPrice("/kiosk/poll?v=1", { device }, 11520)).text();
-      const existingRegistration = costs.filter(cost => cost.path === "/kiosk/fingerprint-sync/identity");
-      for (const registration of existingRegistration.slice(0, 2)) {
-        pollDailyReads += registration.reads * registration.dailyCalls; pollDailyWrites += registration.writes * registration.dailyCalls;
-      }
       await (await pollPrice("/kiosk/heartbeat", { device, method: "POST", body: { readerOnline: true, releaseVersion: "synthetic-budget", authenticationMethod: "fingerprint" } }, 1440)).text();
-      let after = "", pages = 0, entries = 0;
-      while (true) {
-        const page = await pollPrice(`/kiosk/fingerprint-vault/templates${after ? `?after=${after}` : ""}`, { device }, 1);
-        coldCatalogReads += Number(page.headers.get("x-test-reads"));
-        const manifest = await page.json(); entries += manifest.fingerprints.length; pages++;
-        assert.ok(pages <= 26, "bounded catalog pagination");
-        if (!manifest.fingerprints.length) break;
-        after = manifest.fingerprints.at(-1).fingerprintId;
-      }
-      assert.equal(entries, 200); assert.equal(pages, 26);
+      const response = await pollPrice(`/kiosk/fingerprint-vault/catalog?revision=${snapshot.fingerprints.vault.catalogRevision}`, { device }, 1);
+      coldCatalogReads += Number(response.headers.get("x-test-reads"));
+      const catalog = await response.json();
+      assert.equal(catalog.fingerprints.length, 200);
+
     }
     assert.ok(pollDailyReads <= 1717494, JSON.stringify({ pollDailyReads, pollCosts }));
     assert.ok(pollDailyReads <= dailyReads / 2, "at least half the unchanged workload's reads");
     assert.ok(pollDailyWrites <= dailyWrites, "read polling adds no periodic writes");
     assert.ok(coldCatalogReads < 6000, "full two-reader cold recovery remains bounded");
     console.log(JSON.stringify({ benchmark: "combined_poll_two_kiosk_idle_day_projection", baselineReads: dailyReads, pollDailyReads, pollDailyWrites, coldCatalogReads,
-      reductionPercent: (1 - pollDailyReads / dailyReads) * 100, cacheAssumption: "bounded client metadata pages, fresh authority every fifteen seconds, no server cache reuse; all fifty-two cold catalog pages counted", costs: pollCosts.filter(cost => !cost.path.startsWith("/kiosk/fingerprint-vault/templates")) }));
+      reductionPercent: (1 - pollDailyReads / dailyReads) * 100, cacheAssumption: "revision-bound complete client catalogs, fresh authority every fifteen seconds, no server cache reuse; both complete cold catalogs counted", costs: pollCosts.filter(cost => !cost.path.startsWith("/kiosk/fingerprint-vault/templates")) }));
     await db.exec("UPDATE members SET first_name='Changed' WHERE id='member-1'; DELETE FROM kiosk_fingerprint_vault_templates WHERE fingerprint_id='0000000000000000000000000000000000000000000000000000000000000001'");
     const changed = await call("/kiosk/poll?v=1&fingerprints=1&rosterRevision=0", { device: "one" });
     const churnReads = Number(changed.headers.get("x-test-reads")); const changedSnapshot = await changed.json();
@@ -140,6 +130,22 @@ test("real D1 idle cost stays within a bounded two-kiosk daily budget with a ful
     assert.ok(churnReads < 500, "one revision change has bounded full-roster reload cost");
     console.log(JSON.stringify({ benchmark: "combined_poll_cold_and_revision_churn", churnReads, twoReaderCatalogReloadReads: coldCatalogReads,
       additionalReadsForHourlyTwoKioskRestarts: 23 * (coldCatalogReads + 2 * churnReads) }));
+    // A mixed active/retired catalog must stay indexed and paginate without gaps.
+    await db.exec(`INSERT INTO kiosk_fingerprint_vault_enrollments SELECT installation_id,vault_id,source_kiosk_id,source_pairing_id,enrollment_id,member_id,fingerprint_id FROM kiosk_fingerprint_vault_templates;
+      INSERT INTO kiosk_fingerprint_vault_retirements SELECT installation_id,vault_id,fingerprint_id,member_id,1 FROM kiosk_fingerprint_vault_templates WHERE fingerprint_id<'${(101).toString(16).padStart(64, "0")}';
+      DELETE FROM kiosk_fingerprint_vault_templates WHERE fingerprint_id IN (SELECT fingerprint_id FROM kiosk_fingerprint_vault_retirements);`.replace(/\n/g, " "));
+    let after, retirementCount = 0; const seen = new Set();
+    do {
+      const response = await call("/kiosk/fingerprint-vault/templates" + (after ? "?after=" + after : ""), { device: "one" });
+      assert.ok(Number(response.headers.get("x-test-reads")) < 180, "retirement pages do not scan the entire receipt catalog");
+      const page = (await response.json()).fingerprints;
+      for (const row of page) {
+        assert.ok(!seen.has(row.fingerprintId)); seen.add(row.fingerprintId);
+        if (row.retired) { retirementCount++; assert.equal(row.sourceEnrollmentIds.length, 1); }
+      }
+      after = page.length === 8 ? page.at(-1).fingerprintId : undefined;
+    } while (after);
+    assert.equal(seen.size, 199); assert.equal(retirementCount, 99);
     await db.prepare("UPDATE web_update_requests SET maintenance=1 WHERE id='update-0'").run();
     assert.equal((await db.prepare(maintenanceSql).all()).results.length, 1);
     const blocked = await runtime.dispatchFetch("https://example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer one", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "synthetic-budget" }) });

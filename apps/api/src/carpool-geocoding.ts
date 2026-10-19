@@ -50,7 +50,7 @@ export class GeoapifyCarpoolGeocoder implements CarpoolGeocodeTransport {
     if (bias) url.searchParams.set("bias", `proximity:${bias.longitude},${bias.latitude}`);
     url.searchParams.set("apiKey", this.apiKey);
     let response: Response;
-    try { response = await this.request(url, { headers: { accept: "application/json" } }); }
+    try { response = await this.request(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(5_000) }); }
     catch { throw new Error("The location provider could not be reached. Check this installation's network access and try again."); }
     if (response.status === 429) throw new Error("The location provider rate limit was reached. Wait a moment and resume the lookup.");
     if (!response.ok) throw new Error(`The location provider returned ${response.status}. Check the Carpool provider configuration.`);

@@ -52,16 +52,24 @@ for (const viewport of [{ width: 1280, height: 900, theme: "light" }, { width: 3
         await expect(panel(page).getByRole("heading")).toBeFocused();
         await expect(page.locator(".walkthrough-highlight").first()).toBeVisible();
         if (story.pageId === "reports" && index === 0) {
-          const [tab, outline] = await Promise.all([
-            page.locator('[data-walkthrough="reports-tabs"] > button').first().boundingBox(),
+          const tabs = page.locator('[data-walkthrough="reports-tabs"]');
+          const [tabArea, outline] = await Promise.all([
+            tabs.boundingBox(),
             page.locator(".walkthrough-highlight").first().boundingBox(),
           ]);
-          expect(tab).not.toBeNull();
+          expect(tabArea).not.toBeNull();
           expect(outline).not.toBeNull();
-          const topGap = tab!.y - outline!.y;
-          const bottomGap = outline!.y + outline!.height - tab!.y - tab!.height;
-          // The native horizontal scrollbar can reserve up to four pixels below the controls.
+          const topGap = tabArea!.y - outline!.y;
+          const bottomGap = outline!.y + outline!.height - tabArea!.y - tabArea!.height;
+          // The content-box outline adds a two-pixel border on each side.
           expect(Math.abs(topGap - bottomGap)).toBeLessThanOrEqual(4);
+          expect(await tabs.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+          for (const control of await tabs.locator(":scope > *").all()) {
+            const bounds = (await control.boundingBox())!;
+            expect(bounds.x).toBeGreaterThanOrEqual(tabArea!.x);
+            expect(bounds.x + bounds.width).toBeLessThanOrEqual(tabArea!.x + tabArea!.width + 1);
+            expect(bounds.y + bounds.height).toBeLessThanOrEqual(tabArea!.y + tabArea!.height + 1);
+          }
         }
         if (story.pageId === "roster" && index === 4) {
           const highlights = page.locator(".walkthrough-highlight");
@@ -110,7 +118,8 @@ for (const viewport of [{ width: 1280, height: 900, theme: "light" }, { width: 3
       await expect.poll(() => state.progress.status).toBe("completed");
       expect(writes).toEqual([]);
 
-      const reset = page.getByRole("button", { name: "Reset page walkthrough" });
+      await page.getByText("Page help (debug)", { exact: true }).click();
+    const reset = page.getByRole("button", { name: "Reset page walkthrough" });
       await expect(reset).toBeVisible();
       await reset.click();
       await expect(panel(page)).toContainText(story.welcome);
@@ -204,7 +213,7 @@ for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, 
     await page.goto("/kiosks");
     await expect(page.getByText("Example kiosk", { exact: true })).toBeVisible();
     await expect(page.getByText(/Example kiosk for this walkthrough/)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Rename", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Rename Example kiosk", exact: true })).toBeDisabled();
     await panel(page).getByRole("button", { name: "Start walkthrough" }).click();
     for (let index = 0; index < 12; index++) {
       await expect(panel(page)).toContainText(`Step ${index + 1} of 12`);

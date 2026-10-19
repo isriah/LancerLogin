@@ -1,6 +1,6 @@
 import { open, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
-import { completeOfficialRelease, compareReleaseVersions, releaseAllowed } from "../../../packages/shared/src/release-policy.mjs";
+import { completeOfficialRelease, kioskReleaseTransition, releaseAllowed } from "../../../packages/shared/src/release-policy.mjs";
 const apiRoot = "https://api.github.com/repos/isriah/LancerLogin";
 export async function resolveKioskRelease({ request, installedVersion, fetcher = fetch, now = Date.now() }) {
   async function get(path) {
@@ -16,7 +16,8 @@ export async function resolveKioskRelease({ request, installedVersion, fetcher =
   }
   const release = await get(tag ? `/releases/tags/${tag}` : "/releases/latest");
   const target = completeOfficialRelease(release, channel);
-  if (!target || tag && target.tag !== tag || compareReleaseVersions(target.tag, installedVersion) !== 1) throw new Error("newer_official_release_required");
+  const transition = target && kioskReleaseTransition(target.tag, installedVersion);
+  if (!target || tag && target.tag !== tag || !(transition === "upgrade" || transition === "replace-development" && request !== undefined)) throw new Error("newer_official_release_required");
   const commit = await get(`/commits/${target.tag}`);
   if (!/^[0-9a-f]{40}$/.test(commit.sha ?? "") || pinned && commit.sha !== pinned) throw new Error("release_commit_mismatch");
   return { tag: target.tag, version: target.tag.slice(1), sha: commit.sha };

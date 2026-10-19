@@ -4,7 +4,7 @@ import { schedulerClass } from "../apps/api/src/platform-scheduler.ts";
 import { registeredModuleSchedulerJobs } from "../apps/api/src/index.ts";
 import { bundledModuleRegistry } from "../packages/shared/src/module-platform.ts";
 
-function harness(jobs: Array<{ id: string; interval: number; enabled?: () => Promise<boolean>; run: () => Promise<void> }>, authorize = async () => true) {
+function harness(jobs: Array<{ id: string; interval: number; enabled?: () => Promise<boolean>; run: () => Promise<void> }>, authorize = async () => true, suspended = async () => false) {
   let value: { enabled: boolean; jobs: Record<string, { next: number; last: number | null; outcome: string }> } | undefined;
   let alarm: number | null = null, writes = 0;
   const storage = {
@@ -15,7 +15,7 @@ function harness(jobs: Array<{ id: string; interval: number; enabled?: () => Pro
     setAlarm: async (next: number) => { alarm = next; },
     deleteAlarm: async () => { alarm = null; },
   };
-  const Scheduler = schedulerClass(jobs, authorize, (env: { mode: string }) => env.mode === "durable");
+  const Scheduler = schedulerClass(jobs, authorize, (env: { mode: string }) => env.mode === "durable", suspended);
   return {
     create: (mode = "durable") => new Scheduler({ storage }, { mode }),
     due: () => { for (const job of Object.values(value!.jobs)) job.next = 0; },
@@ -64,4 +64,28 @@ test("scheduler supports additional static module jobs without a Core job-count 
   assert.equal((await scheduler.fetch(request("start"))).status, 200); fixture.due();
   for (let index = 0; index < jobs.length; index += 1) await scheduler.alarm();
   assert.deepEqual(calls, Array.from({ length: 32 }, (_, index) => index)); assert.equal(Object.keys(fixture.snapshot().jobs).length, 32); assert.ok((fixture.alarm() ?? 0) > Date.now());
+});
+
+test("maintenance retains due jobs across restart and resumes without another start", async () => {
+  let maintenance = true, calls = 0, eligibilityChecks = 0;
+  const fixture = harness([{ id: "fixture.job", interval: 300_000, enabled: async () => { eligibilityChecks++; return true; }, run: async () => { calls++; } }], async () => true, async () => maintenance);
+  const scheduler = fixture.create(); await scheduler.fetch(request("start")); fixture.due();
+  const before = structuredClone(fixture.snapshot()), writes = fixture.writes();
+  await scheduler.alarm(); await fixture.create().alarm();
+  assert.equal(calls, 0); assert.equal(eligibilityChecks, 0);
+  assert.deepEqual(fixture.snapshot(), before); assert.equal(fixture.writes(), writes);
+  assert.ok(fixture.alarm()! > Date.now() + 25_000); assert.ok(fixture.alarm()! <= Date.now() + 30_000);
+  maintenance = false; await fixture.create().alarm();
+  assert.equal(calls, 1); assert.equal(fixture.snapshot().jobs["fixture.job"].outcome, "ok");
+  await scheduler.alarm(); assert.equal(calls, 1);
+});
+
+test("maintenance read failure fails closed and a manual stop cancels its retry", async () => {
+  let calls = 0;
+  const fixture = harness([{ id: "fixture.job", interval: 300_000, run: async () => { calls++; } }], async () => true, async () => { throw new Error("database unavailable"); });
+  const scheduler = fixture.create(); await scheduler.fetch(request("start")); fixture.due();
+  const before = structuredClone(fixture.snapshot()); await scheduler.alarm();
+  assert.equal(calls, 0); assert.deepEqual(fixture.snapshot(), before); assert.ok(fixture.alarm());
+  await scheduler.fetch(request("stop")); await scheduler.alarm();
+  assert.equal(fixture.alarm(), null); assert.equal(calls, 0);
 });

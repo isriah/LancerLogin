@@ -48,12 +48,12 @@ for (const scenario of [{ width: 1280, height: 900, appearance: "light" }, { wid
 test("Meetings show inline car icons and multiple Carpool links with stable bidirectional routes", async ({ page }) => {
   await fixtures(page, "light");
   await page.goto("/dashboard");
-  const calendarMeeting = page.locator('.calendar-day button[title^="Build session,"]'); await expect(calendarMeeting.locator(".carpool-meeting-marker")).toHaveAttribute("title", "2 linked carpools");
+  const calendarMeeting = page.locator(".calendar-selected-record").filter({ hasText: "Build session" }); await expect(calendarMeeting.locator(".carpool-meeting-marker")).toHaveAttribute("title", "2 linked carpools");
   const marker = calendarMeeting.locator(".carpool-meeting-marker");
   await expect(marker).toHaveCSS("display", "inline-flex");
   // Re-resolve the live marker after asynchronous meeting-link renders.
   await expect.poll(() => marker.locator("svg").evaluate(element => element.isConnected ? element.getBoundingClientRect().height : 0)).toBeGreaterThan(15);
-  await calendarMeeting.click();
+  await calendarMeeting.getByRole("button", { name: "Open meeting Build session", exact: true }).click();
   const links = page.getByRole("navigation", { name: "Meeting carpools" }); await expect(links.getByRole("link")).toHaveCount(2);
   await links.getByRole("link", { name: /Second coordinator/ }).click(); await expect(page).toHaveURL(/\/carpool\/plans\/plan-2$/); await expect(page.getByLabel("Saved event")).toHaveValue("plan-2");
   await page.getByRole("link", { name: "Open meeting: Build session" }).click(); await expect(page).toHaveURL(/\/meetings\/active-meeting$/);

@@ -29,6 +29,10 @@ export function createFingerprintImporter({ journal, sensor, templates, mappings
         if (record.phase === "needs_review") return review();
         const previousMapping = current[String(record.slot)], previous = previousMapping?.memberId;
         if (previous && (previous !== record.memberId || context.rosterId && previousMapping.rosterId !== context.rosterId)) return review();
+        if (record.phase === "complete") {
+          if (!previousMapping || previousMapping.memberId !== record.memberId || context.rosterId && previousMapping.rosterId !== context.rosterId || !occupiedSlots.includes(record.slot)) return review();
+          return { transferId: record.transferId, slot: record.slot, status: "complete", digest: envelopeDigest };
+        }
         if (occupiedSlots.includes(record.slot)) {
           const stored = await templates.exportTemplate(record.slot);
           try { if (stored.length !== template.length || !timingSafeEqual(stored, template)) return await review(); }

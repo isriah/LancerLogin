@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseReleaseVersion, compareReleaseVersions, completeOfficialRelease, newestOfficialRelease } from "../packages/shared/src/release-policy.mjs";
+import { parseReleaseVersion, kioskReleaseTransition, compareReleaseVersions, completeOfficialRelease, newestOfficialRelease } from "../packages/shared/src/release-policy.mjs";
 import { releasePublicationPolicy, assertLatestPromotion } from "../scripts/release-channel.mjs";
 import { validateMigrationPolicy } from "../scripts/run-web-upgrade.mjs";
 import { resolveKioskRelease } from "../apps/kiosk/src/resolve-kiosk-release.mjs";
@@ -51,10 +51,21 @@ test("physical updater revalidates exact official tag and commit, consent and ex
   for (const invalid of [{ ...request, channel: "stable" }, { ...request, expiresAt: new Date(now).toISOString() }, { ...request, url: "https://evil.test" }]) await assert.rejects(resolveKioskRelease({ request: invalid, installedVersion: "1.2.6", fetcher, now }), /invalid_update_request/);
   await assert.rejects(resolveKioskRelease({ request: { ...request, targetCommit: "c".repeat(40) }, installedVersion: "1.2.6", fetcher, now }), /release_commit_mismatch/);
   await assert.rejects(resolveKioskRelease({ request, installedVersion: "2.0.0", fetcher, now }), /newer_official_release_required/);
+  assert.equal((await resolveKioskRelease({ request, installedVersion: "2.0.0-dev.kiosk-list.fe4c8f2", fetcher, now })).version, "2.0.0-beta.1");
+  await assert.rejects(resolveKioskRelease({ installedVersion: "2.0.0-dev.kiosk-list.fe4c8f2", fetcher, now }), /newer_official_release_required/);
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-target-test-")); const path = join(directory, "request.json");
   try {
     await prepareVerifiedKioskUpdate({ ...request, createdAt: new Date(now - 1_000).toISOString() }, path);
     assert.equal(JSON.parse(await readFile(path, "utf8")).targetCommit, sha);
     await prepareVerifiedKioskUpdate({ type: "install_latest" }, path); await assert.rejects(readFile(path), /ENOENT/);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("kiosk development replacement permits only official same-base or newer targets", () => {
+  const dev = "2.0.0-dev.kiosk-list.fe4c8f2";
+  for (const target of ["v2.0.0-beta.4", "2.0.0", "2.1.0-beta.1"]) assert.equal(kioskReleaseTransition(target, dev), "replace-development");
+  for (const target of ["1.2.6", dev, "2.0.0-rc.1", "unknown"]) assert.equal(kioskReleaseTransition(target, dev), "unavailable");
+  for (const installed of ["unknown", "development", "2.0.0-dev.bad", "02.0.0-dev.foo.abcdef0"]) assert.equal(kioskReleaseTransition("2.0.0", installed), "unavailable");
+  assert.equal(kioskReleaseTransition("2.0.0-beta.5", "2.0.0-beta.4"), "upgrade");
+  assert.equal(kioskReleaseTransition("2.0.0-beta.4", "2.0.0"), "current");
 });

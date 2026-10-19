@@ -47,9 +47,11 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
       expect(geometry.clipped).toEqual([]);
 
-      await expect(page.getByRole("switch", { name: "Dark mode" })).toHaveCount(0);
+      await expect(page.getByRole("switch", { name: "Light mode" })).toHaveCount(0);
       await page.goto("/settings/session");
-      const themeSwitch = page.getByRole("switch", { name: "Dark mode" });
+      if (viewport.width <= 800) await page.getByRole("button", { name: /^Settings ·/ }).click();
+      const themeSwitch = page.getByRole("switch", { name: "Light mode" });
+      await page.keyboard.press("Tab");
       await themeSwitch.focus();
       await expect(themeSwitch).toBeFocused();
       expect(await themeSwitch.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
@@ -63,6 +65,8 @@ test("mobile navigation contains keyboard focus, closes with Escape, and returns
   await useReferenceBrand(page);
   await page.goto("/dashboard");
   const opener = page.getByRole("button", { name: "Open navigation" });
+  const iconOffset = await opener.evaluate(button => { const box = button.getBoundingClientRect(); const lines = [...button.querySelectorAll("span")].map(line => line.getBoundingClientRect()); return { x: Math.max(...lines.map(line => Math.abs(line.x + line.width / 2 - box.x - box.width / 2))), y: Math.abs((lines[0]!.top + lines.at(-1)!.bottom) / 2 - box.y - box.height / 2) }; });
+  expect(iconOffset.x).toBeLessThan(1); expect(iconOffset.y).toBeLessThan(1);
   await opener.click();
   const navigation = page.getByRole("navigation", { name: "Primary dashboard navigation" });
   await expect(navigation.getByRole("link", { name: "Meetings" })).toBeFocused();

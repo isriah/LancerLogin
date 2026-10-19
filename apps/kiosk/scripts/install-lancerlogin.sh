@@ -103,6 +103,7 @@ install -m 0644 /opt/lancerlogin/polkit/49-lancerlogin-update.rules /etc/polkit-
 install -d -m 0755 /etc/systemd/system/lancerlogin-kiosk.service.d
 printf '[Service]\nEnvironment=LANCERLOGIN_VERSION=%s\n' "$VERSION" > /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
 chmod 0644 /etc/systemd/system/lancerlogin-kiosk.service.d/10-version.conf
+node /opt/lancerlogin/src/clean-version-overrides.mjs
 if [[ "$SENSOR_PATH_EXPLICIT" == true ]]; then
   printf '[Service]\nEnvironment=LANCERLOGIN_SENSOR_PATH=%s\n' "$SENSOR_PATH" > /etc/systemd/system/lancerlogin-kiosk.service.d/11-sensor.conf
   chmod 0644 /etc/systemd/system/lancerlogin-kiosk.service.d/11-sensor.conf
@@ -136,16 +137,23 @@ if [[ -n "$browser_path" ]]; then
   printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=LancerLogin Kiosk' 'Exec=/usr/local/bin/lancerlogin-open-kiosk' 'X-GNOME-Autostart-enabled=true' > /etc/xdg/autostart/lancerlogin-kiosk.desktop
   chmod 0644 /etc/xdg/autostart/lancerlogin-kiosk.desktop
 
+  # PCManFM launches links to installed applications without treating the
+  # desktop shortcut as an executable script. Keep global execution prompts.
+  install -d -m 0755 /usr/local/share/applications
+  application_file="/usr/local/share/applications/lancerlogin-kiosk.desktop"
+  printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=LancerLogin Kiosk' 'Comment=Open the local LancerLogin attendance screen full-screen' 'Exec=/usr/local/bin/lancerlogin-open-kiosk' 'Icon=chromium' 'Terminal=false' 'Categories=Utility;' > "$application_file"
+  chown root:root "$application_file"
+  chmod 0644 "$application_file"
+
   desktop_user="${SUDO_USER:-}"
   if [[ -n "$desktop_user" && "$desktop_user" != root ]] && id "$desktop_user" >/dev/null 2>&1; then
     desktop_home="$(getent passwd "$desktop_user" | cut -d: -f6)"
     if [[ -n "$desktop_home" && -d "$desktop_home" ]]; then
       install -d -m 0755 -o "$desktop_user" -g "$desktop_user" "$desktop_home/Desktop"
       desktop_file="$desktop_home/Desktop/LancerLogin Kiosk.desktop"
-      printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=LancerLogin Kiosk' 'Comment=Open the local LancerLogin attendance screen full-screen' 'Exec=/usr/local/bin/lancerlogin-open-kiosk' 'Terminal=false' 'Categories=Utility;' > "$desktop_file"
+      printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=LancerLogin Kiosk' 'Icon=chromium' "URL=$application_file" > "$desktop_file"
       chown "$desktop_user:$desktop_user" "$desktop_file"
-      chmod 0755 "$desktop_file"
-      runuser -u "$desktop_user" -- gio set "$desktop_file" metadata::trusted true 2>/dev/null || true
+      chmod 0644 "$desktop_file"
       echo "A LancerLogin Kiosk relaunch shortcut was added to ${desktop_user}'s desktop."
     fi
   fi

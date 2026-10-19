@@ -14,6 +14,7 @@ main:not(.locked)>#locked-return{display:none}
 .card,.table-wrap,.option-list,.sheet-panel{touch-action:pan-x pan-y;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .card button,.card input,.card select,.picker-button,header a,td button{min-height:44px!important}
 .card-heading{flex-shrink:0}
+.table-wrap{touch-action:pan-x pan-y;user-select:none;-webkit-user-select:none;min-height:0;overflow:auto}.table-wrap button{touch-action:pan-x pan-y}
 .mappings-card{display:flex;flex-direction:column;gap:8px}
 .table-wrap{height:auto;flex:1;max-height:none;min-height:80px}
 .reader-card{grid-template-rows:auto auto minmax(160px,1fr)}
@@ -509,7 +510,7 @@ function renderMappings() {
 }
 
 async function removeMapping(slot) {
-  if (!await confirmAction("Remove mapping?", "Remove the local mapping for slot " + slot + "? The sensor template will remain stored.")) return;
+  if (!await confirmAction("Remove mapping?", "Remove access on this kiosk for slot " + slot + "? Cloud copies and other kiosks are unchanged. This copy will not be restored automatically. The sensor template remains stored.")) return;
   try {
     const result = await call("/mappings/" + encodeURIComponent(slot), { method: "DELETE" });
     if (byId("workspace").hidden) return;
@@ -719,14 +720,14 @@ function showSearchKeyboard(visible) {
 byId("member-search").addEventListener("focus", () => showSearchKeyboard(true));
 byId("toggle-search-keyboard").addEventListener("click", () => showSearchKeyboard(byId("search-keyboard").hidden));
 // Preserve native touch scrolling and support displays that report swipes as mouse input.
+function enableListScrolling(rosterList) {
 let rosterPointer;
 let rosterDragged = false;
-const rosterList = byId("member-options");
 rosterList.addEventListener("pointerdown", (event) => {
   if (!event.isPrimary || event.button !== 0) return;
   const bounds = rosterList.getBoundingClientRect();
   if (event.clientX >= bounds.left + rosterList.clientLeft + rosterList.clientWidth) return;
-  rosterPointer = { id: event.pointerId, x: event.clientX, y: event.clientY, top: rosterList.scrollTop, manual: event.pointerType !== "touch" };
+  rosterPointer = { id: event.pointerId, x: event.clientX, y: event.clientY, top: rosterList.scrollTop, left: rosterList.scrollLeft, manual: event.pointerType !== "touch" };
   rosterDragged = false;
 }, true);
 rosterList.addEventListener("pointermove", (event) => {
@@ -736,6 +737,7 @@ rosterList.addEventListener("pointermove", (event) => {
     event.preventDefault();
     if (!rosterList.hasPointerCapture(event.pointerId)) rosterList.setPointerCapture(event.pointerId);
     rosterList.scrollTop = rosterPointer.top + rosterPointer.y - event.clientY;
+    rosterList.scrollLeft = rosterPointer.left + rosterPointer.x - event.clientX;
   }
 }, true);
 function endRosterPointer(event) {
@@ -749,6 +751,8 @@ rosterList.addEventListener("dragstart", event => event.preventDefault());
 rosterList.addEventListener("click", (event) => {
   if (rosterDragged && event.detail !== 0) { event.preventDefault(); event.stopImmediatePropagation(); }
 }, true);
+}
+for (const list of [byId("member-options"), ...document.querySelectorAll(".table-wrap")]) enableListScrolling(list);
 for (const link of document.querySelectorAll('a[href="/"]')) link.addEventListener("click", async (event) => {
   event.preventDefault();
   try { await operatorPresence.leave(); await call("/network/session", { method: "DELETE" }).catch(() => undefined); location.href = "/"; }

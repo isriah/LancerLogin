@@ -1,4 +1,4 @@
-import { expect,test,type Page } from "@playwright/test";
+import { expect,test,type Locator, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { attendanceSnapshot } from "./module-fixtures";
 
@@ -62,7 +62,6 @@ async function useReferenceContext(page: Page,role: Role="admin",debugMode=false
   await page.route("**/platform/modules",(route) => route.fulfill({ json: attendanceSnapshot() }));
   await page.route("**/integrations/capabilities",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ integrations: { google: { enabled: true,configured: true },resend: { enabled: false,configured: false },discord: { enabled: true,configured: true } } }) }));
   await page.route("**/admin/members",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ members: roster,discordConfigured: true }) }));
-  await page.route("**/admin/roster/history",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ imports: [{ createdAt: "2026-09-03T18:00:00Z",count: 2,mode: "merge",deactivated: 0 }] }) }));
   await page.route("**/labels",(route) => route.fulfill({ json: { labels: [{ id: "mentor",name: "Mentor",active: 1,formulaEnabled: 1 }],history: [],periods: [],today: "2026-09-22" } }));
   await page.route("**/reports/attendance*",(route) => {
     const from=new URL(route.request().url()).searchParams.get("from") ?? undefined;
@@ -90,7 +89,7 @@ async function useReferenceContext(page: Page,role: Role="admin",debugMode=false
     let rows=roster.map((member,index) => ({ id: member.id,label: `${member.firstName} ${member.lastName}`,href: `/roster/${member.memberId}`,cells: Object.fromEntries(columns.map((column) => [column.id,column.key==="core.member.name"?{ text: `${member.firstName} ${member.lastName}`,sortValue: member.lastName }:column.key==="attendance.member.regular-rate"?{ text: index?"0%":"100%",sortValue: index?0:100 }:column.key==="attendance.member.assigned-policies"?{ text: index?"No assigned policy":"Mentor: N/A",sortValue: null }:column.key==="attendance.detail.absent-dates"?{ text: absentDates.join("; "),sortValue: null,dates: absentDates }:{ text: index?"0":"1",sortValue: index?0:1 }] )) }));
     rows=rows.filter((row) => (body.definition.columnFilters??[]).every((filter) => { const value=row.cells[reportColumnId(filter.column)]; return filter.operator==="minimum" ? typeof value?.sortValue==="number"&&value.sortValue>=Number(filter.value) : value?.text.toLowerCase().includes(filter.value.toLowerCase()); }));
     const sortId=reportColumnId(body.definition.sort.column),direction=body.definition.sort.direction==="asc"?1:-1; rows.sort((left,right) => String(left.cells[sortId]?.sortValue??"").localeCompare(String(right.cells[sortId]?.sortValue??""))*direction);
-    return route.fulfill({ json: { definition: body.definition,warnings: [],resolvedPeriod: { to: "2026-09-22" },columns,rows,pagination: { page: body.page??1,pageSize: body.pageSize??25,totalRows: rows.length,totalPages: 1,rangeStart: 1,rangeEnd: rows.length } } });
+    return route.fulfill({ json: { definition: body.definition,warnings: [],resolvedPeriod: body.definition.period.type === "fixed" ? body.definition.period : { to: "2026-09-22" },columns,rows,pagination: { page: body.page??1,pageSize: body.pageSize??25,totalRows: rows.length,totalPages: 1,rangeStart: 1,rangeEnd: rows.length } } });
   });
   for(const path of ["report.csv","report-detail.csv"]) await page.route(`**/exports/${path}`,async (route) => route.fulfill({ status: 200,headers: { "content-type": "text/csv","content-disposition": `attachment; filename=${path}` },body: "Member,Absent dates\nAvery Stone,2026-09-01\n" }));
 }
@@ -122,26 +121,25 @@ test("roster filters share one desktop row and the Show pill has its filter icon
   }
 });
 
-test("all attendance trend dates split together on narrow charts and return to one line when space permits", async ({ page }) => {
+test("attendance trend dates and values remain readable in contained scrollers", async ({ page }) => {
   await useReferenceContext(page);
   const data = referenceAttendanceReport();
   const trend = Array.from({ length: 10 }, (_, index) => ({ meetingId: `trend-${index}`, title: `Synthetic meeting ${index}`, startsAt: `2026-09-${String(index + 10).padStart(2, "0")}T15:00:00Z`, rate: 50 + index }));
   await page.route("**/reports/leaderboard*", route => route.fulfill({ json: { ...data, pagination: { page: 1, pageSize: 25, totalRows: data.members.length, totalPages: 1, rangeStart: 1, rangeEnd: data.members.length }, insights: { policyAlerts: [], trend } } }));
   await page.setViewportSize({ width: 1440, height: 900 }); await page.goto("/reports");
   const chart = page.locator(".trend-chart"); await expect(chart.locator(".trend-day")).toHaveCount(10);
-  await expect(chart).not.toHaveAttribute("data-split-dates", "true");
-  for (const width of [800, 390]) {
-    await page.setViewportSize({ width, height: 900 }); await expect(chart).toHaveAttribute("data-split-dates", "true");
+  for (const width of [1440, 800, 390]) {
+    await page.setViewportSize({ width, height: 900 }); await expect(chart.locator(".trend-value")).toHaveCount(10);
     const positions = await chart.locator(".trend-date").evaluateAll(labels => labels.map(label => {
       const month = label.querySelector(".trend-month")!.getBoundingClientRect(), day = label.querySelector(".trend-day")!.getBoundingClientRect();
       return { month: month.y, day: day.y, visible: label.querySelector(".trend-day")!.clientWidth >= label.querySelector(".trend-day")!.scrollWidth };
     }));
-    expect(positions.every(value => value.day > value.month && Math.abs(value.day - positions[0].day) < 1 && value.visible)).toBe(true);
+    expect(positions.every(value => value.day >= value.month && Math.abs(value.day - positions[0].day) < 1 && value.visible)).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await chart.scrollIntoViewIfNeeded();
     await page.screenshot({ path: test.info().outputPath(`trend-dates-${width}.png`), fullPage: false });
   }
-  await page.setViewportSize({ width: 1440, height: 900 }); await expect(chart).not.toHaveAttribute("data-split-dates", "true");
+  expect(await chart.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
 });
 
 async function expectLabelButtonTheme(page: Page,name: string,kind: "secondary"|"primary"|"danger") {
@@ -159,9 +157,10 @@ async function expectLabelButtonTheme(page: Page,name: string,kind: "secondary"|
   expect(colors.height).toBeGreaterThanOrEqual(44);
 }
 
-async function expectReportButtonTheme(page: Page,name: string,primary=false) {
-  const button=page.locator(".report-control-actions").getByRole("button",{ name,exact: true });
+async function expectReportButtonTheme(page: Page | Locator,name: string,primary=false) {
+  const button=page.getByRole("button",{ name,exact: true });
   await expect(button).toBeVisible();
+  await expect(button).toBeEnabled();
   const colors=await button.evaluate((element,isPrimary) => {
     const app=element.closest(".app")!; const probe=document.createElement("button");
     probe.style.backgroundColor=`var(${isPrimary?"--primary":"--ui-surface-subtle"})`; probe.style.color=`var(${isPrimary?"--on-primary":"--ui-text"})`; probe.style.borderColor=`var(${isPrimary?"--primary":"--ui-border"})`; probe.style.borderStyle="solid"; probe.style.borderRadius="var(--radius-control)";
@@ -227,7 +226,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await expect(tabs.getByRole("button",{ name: "Leaderboard",exact: true })).toBeVisible();
       await expect(tabs.getByRole("button",{ name: "Class attendance",exact: true })).toBeVisible();
       await expect(tabs.getByText("Browse reports",{ exact: true })).toBeVisible();
-      await expect(tabs.getByRole("button",{ name: "Create report" })).toBeVisible();
+      await expect(tabs.getByRole("button",{ name: "New report" })).toBeVisible();
       const reportInfo=page.locator(".report-filters").getByRole("button",{ name: "More information" });
       await reportInfo.locator(".info-tip-glyph").hover();
       await expect(page.locator(".info-tip-content").filter({ hasText: "Choose the period, meetings, roster" })).toBeVisible();
@@ -235,7 +234,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await expect(controls.locator(".report-control-actions")).toHaveCount(0);
       await expect(page.locator(".report-action-card")).toHaveCount(0);
       await expect(page.getByRole("table",{ name: "Attendance leaderboard" })).toBeVisible();
-      await expect(page.getByRole("img",{ name: /Team regular attendance trend:/ })).toBeVisible();
+      await expect(page.getByRole("group",{ name: "Team regular attendance trend", exact: true })).toBeVisible();
       const leaderboardHeading=page.locator(".leaderboard-heading .info-heading h2");
       const leaderboardInfo=page.locator(".leaderboard-heading .info-tip-glyph");
       const headingBounds=await leaderboardHeading.boundingBox(); const infoBounds=await leaderboardInfo.boundingBox();
@@ -251,31 +250,38 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       expect(sortIconBounds!.x).toBeGreaterThanOrEqual(sortBounds!.x);
       expect(sortIconBounds!.x+sortIconBounds!.width).toBeLessThanOrEqual(sortBounds!.x+sortBounds!.width);
       expect(await sortControl.evaluate((element) => parseFloat(getComputedStyle(element).paddingLeft))).toBeGreaterThan(sortIconBounds!.x+sortIconBounds!.width-sortBounds!.x);
+      const leaderboard=page.getByRole("table",{ name: "Attendance leaderboard" });
+      await expect(leaderboard.getByRole("link",{ name: "Avery Stone",exact: true })).toHaveAttribute("href","/roster/A-101");
+      await expect(leaderboard).not.toContainText("A-101");
+      await expect(leaderboard.getByRole("row").nth(1).getByRole("cell")).toHaveCount(2);
       const reportingPeriod=page.getByLabel("Reporting period");
       expect((await reportingPeriod.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await reportingPeriod.focus();
       expect(await reportingPeriod.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
       await expectResponsiveFit(page);
-      if(viewport.width===390&&theme==="dark") {
+      {
         await page.screenshot({ path: testInfo.outputPath("reports-dark-mobile.png"),fullPage: true });
         await testInfo.attach("Reports dark mobile",{ path: testInfo.outputPath("reports-dark-mobile.png"),contentType: "image/png" });
       }
 
       await tabs.getByRole("button",{ name: "Class attendance",exact: true }).click();
-      await expect(page.locator(".report-settings-summary")).toBeVisible();
+      await expect(page.locator(".report-settings-summary")).toBeHidden();
       await expect(page.getByRole("button",{ name: "Edit",exact: true })).toBeVisible();
       await expect(page.getByLabel("Report name")).toHaveCount(0);
-      await expect(page.getByRole("button",{ name: "Add column",exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button",{ name: "Add column",exact: true })).toBeVisible();
+      await expect(page.getByRole("table", { name: /Report results/ })).toContainText("Avery Stone");
       await expectResponsiveFit(page);
-      if(viewport.width===390&&theme==="dark") {
+      {
         await page.screenshot({ path: testInfo.outputPath("saved-report-read-only-dark-mobile.png"),fullPage: true });
         await testInfo.attach("Saved report read-only dark mobile",{ path: testInfo.outputPath("saved-report-read-only-dark-mobile.png"),contentType: "image/png" });
       }
 
-      await tabs.getByRole("button",{ name: "Create report" }).click();
+      await tabs.getByRole("button",{ name: "New report" }).click();
       await expect(page.getByRole("heading",{ level: 2,name: "New report" })).toBeVisible();
       await expectReportButtonTheme(page,"Save",true);
+      await openReportExport(page);
       await expectReportButtonTheme(page,"Download report CSV");
+      await page.keyboard.press("Escape");
       await page.getByRole("button",{ name: "Add column",exact: true }).click();
       await expect(page.getByLabel("Search columns")).toBeVisible();
       const columnCheckbox=page.getByRole("checkbox",{ name: "Absent dates",exact: true });
@@ -285,11 +291,21 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       expect(checkboxStyle.height).toBeGreaterThanOrEqual(20);
       expect(checkboxStyle.border).toBe("solid");
       await expectResponsiveFit(page);
-      if(viewport.width===390&&theme==="dark") {
+      {
         await page.screenshot({ path: testInfo.outputPath("report-builder-dark-mobile.png"),fullPage: true });
         await testInfo.attach("Report builder dark mobile",{ path: testInfo.outputPath("report-builder-dark-mobile.png"),contentType: "image/png" });
       }
 
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Leaderboard", exact: true }).click();
+      const leaveDialog = page.getByRole("dialog", { name: "Save changes before leaving?" });
+      await expectReportButtonTheme(leaveDialog, "Cancel");
+      await expectReportButtonTheme(leaveDialog, "Save", true);
+      const dialogBounds = await leaveDialog.boundingBox();
+      expect(dialogBounds!.x).toBeGreaterThanOrEqual(0);
+      expect(dialogBounds!.x + dialogBounds!.width).toBeLessThanOrEqual(viewport.width);
+      await page.screenshot({ path: testInfo.outputPath("unsaved-report-dialog.png"), fullPage: false });
+      await leaveDialog.getByRole("button", { name: "Discard changes" }).click();
       await page.goto("/roster");
       await expect(page.locator("main h1")).toHaveCount(1);
       await expect(page.getByRole("heading",{ level: 1,name: "Roster" })).toBeVisible();
@@ -313,6 +329,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await page.route("**/attendance/policy/preview",(route) => route.fulfill({ json: { impact: [],previewToken: "policy-preview" } }));
       await page.route("**/labels/membership/preview",(route) => route.fulfill({ json: { changes: [{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "2026-09-01" }],impact: [],previewToken: "label-preview" } }));
       await page.goto("/settings/attendance");
+      await page.getByText("Add attendance rule", { exact: true }).click();
       await expect(page.getByLabel("Excused meetings")).toHaveValue("exclude");
       for(const name of ["Create label","Preview new rule","Preview window change"]) await expectLabelButtonTheme(page,name,"primary");
       for(const name of ["Remove","Preview removal"]) await expectLabelButtonTheme(page,name,"danger");
@@ -324,6 +341,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       if(viewport.width===390&&theme==="dark") await page.screenshot({ path: testInfo.outputPath("attendance-settings-dark-mobile.png"),fullPage: true });
       await page.goto("/roster");
       await page.getByRole("button",{ name: "Bulk edit" }).click();
+      await page.getByText("Import labels from CSV",{ exact: true }).click();
       await expectLabelButtonTheme(page,"Preview CSV import","primary");
       const chooser=page.getByLabel("Label changes CSV file");
       const fileStyle=await chooser.evaluate((element) => {
@@ -402,7 +420,7 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await page.goto("/reports");
   await page.getByText("Browse reports",{ exact: true }).click();
   await expect(page.getByRole("button",{ name: /Imported browser view/ })).toBeVisible();
-  await expect(page.getByRole("button",{ name: /Attendance dates/ })).toBeVisible();
+  await expect(page.getByRole("button",{ name: "Attendance dates personal",exact: true })).toBeVisible();
   const browseGeometry=await page.evaluate(() => { const trigger=document.querySelector(".report-browser > summary")!.getBoundingClientRect(); const popup=document.querySelector(".report-browser-popover")!.getBoundingClientRect(); return { triggerLeft: trigger.left,triggerBottom: trigger.bottom,popupLeft: popup.left,popupTop: popup.top }; });
   expect(Math.abs(browseGeometry.popupLeft-browseGeometry.triggerLeft)).toBeLessThanOrEqual(1);
   expect(browseGeometry.popupTop-browseGeometry.triggerBottom).toBeGreaterThanOrEqual(7);
@@ -413,8 +431,8 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await page.getByRole("button",{ name: /Imported browser view/ }).click();
   await expect(page).toHaveURL(/\/reports\/new$/);
   await expect(page.getByLabel("Report name")).toHaveValue("Imported attendance view");
-  await expect(page.getByLabel("Meetings")).toHaveValue("optional");
-  await expect(page.getByRole("combobox",{ name: "Roster",exact: true })).toHaveValue("all");
+  await expect(page.getByRole("combobox", { name: "Meetings", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("combobox",{ name: "Roster",exact: true })).toHaveCount(0);
   await page.getByRole("button",{ name: "Add column",exact: true }).click();
   const absentDatesOption=page.getByRole("checkbox",{ name: "Absent dates",exact: true });
   await expect(absentDatesOption).toBeVisible();
@@ -455,28 +473,32 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await page.locator('th[data-column-id="attendance.detail.absent-dates"]').dragTo(page.locator('th[data-column-id="attendance.member.regular-rate"]'));
   await expect.poll(async () => page.locator(".editable-report-table thead th .report-column-trigger span").allTextContents()).toEqual(["Member","Absent dates","Regular attendance","Assigned policies"]);
   const summaryDownload=page.waitForEvent("download");
+  await openReportExport(page);
   await page.getByRole("button",{ name: "Download report CSV" }).click();
-  expect((await summaryDownload).suggestedFilename()).toBe("lancerlogin-report.csv");
+  expect((await summaryDownload).suggestedFilename()).toMatch(/^lancerlogin-imported-attendance-view-\d{4}-\d{2}-\d{2}\.csv$/);
   const detailDownload=page.waitForEvent("download");
+  await openReportExport(page);
   await page.getByRole("button",{ name: "Download detailed attendance CSV" }).click();
-  expect((await detailDownload).suggestedFilename()).toBe("lancerlogin-report-detail.csv");
+  expect((await detailDownload).suggestedFilename()).toMatch(/^lancerlogin-imported-attendance-view-\d{4}-\d{2}-\d{2}-detail\.csv$/);
   await page.getByLabel("Report name").fill("Imported optional attendance");
   await page.getByRole("button",{ name: "Save",exact: true }).click();
   await expect(page).toHaveURL(/\/reports\/view\/report-3$/);
   await expect(page.getByRole("button",{ name: "Imported optional attendance",exact: true })).toBeVisible();
   await expect(page.getByRole("button",{ name: "Edit",exact: true })).toBeVisible();
   await expect(page.getByLabel("Report name")).toHaveCount(0);
-  await expect(page.getByRole("button",{ name: "Add column",exact: true })).toHaveCount(0);
-  await expect(page.locator(".report-settings-summary")).toContainText("Optional meetings");
+  await expect(page.getByRole("button",{ name: "Add column",exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove filter: Optional meetings", exact: true })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("lancerlogin-reports-view"))).toBeNull();
-  await page.getByRole("button",{ name: "Unpin",exact: true }).click();
-  await expect(page).toHaveURL(/\/reports$/);
+  expect(await page.evaluate(() => sessionStorage.getItem("lancerlogin-report-draft-v1"))).toBeNull();
+  await page.getByText("Report actions",{ exact: true }).click();
+  await page.getByRole("button",{ name: "Unpin report",exact: true }).click();
+  await expect(page.getByRole("button",{ name: "Close Imported optional attendance" })).toBeVisible();
   await page.goto("/reports/view/dates-report");
   await expect(page.getByRole("heading",{ name: "Attendance dates" })).toBeVisible();
-  await expect(page.getByRole("button",{ name: "Unpin Attendance dates" })).toBeVisible();
+  await expect(page.getByRole("button",{ name: "Close Attendance dates" })).toBeVisible();
   await expect(page.getByRole("button",{ name: /Move Attendance dates (left|right)/ })).toHaveCount(0);
-  await expect(page.getByRole("button",{ name: "Absent dates column options" })).toHaveCount(0);
-  await expect(page.getByRole("button",{ name: "Add column",exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button",{ name: "Absent dates column options" })).toBeVisible();
+  await expect(page.getByRole("button",{ name: "Add column",exact: true })).toBeVisible();
   await expect(page.locator(".report-settings-summary")).toContainText("Member, Absent dates");
   await expectResponsiveFit(page);
   await page.getByRole("button",{ name: "Edit",exact: true }).click();
@@ -485,30 +507,30 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await page.getByRole("button",{ name: "Absent dates column options" }).click();
   const columnActions=page.locator(".report-column-actions");
   const moveLeft=columnActions.getByRole("button",{ name: "Move left",exact: true });
-  const deleteColumn=columnActions.getByRole("button",{ name: "Delete",exact: true });
+  const deleteColumn=columnActions.getByRole("button",{ name: "Remove column",exact: true });
   const moveRight=columnActions.getByRole("button",{ name: "Move right",exact: true });
   const actionGeometry=await Promise.all([moveLeft,deleteColumn,moveRight].map(async (button) => { const bounds=await button.boundingBox(); const style=await button.evaluate((element) => ({ background: getComputedStyle(element).backgroundColor,border: getComputedStyle(element).borderTopStyle })); return { ...bounds!,...style }; }));
   expect(actionGeometry[0].x).toBeLessThan(actionGeometry[1].x);
   expect(actionGeometry[1].x).toBeLessThan(actionGeometry[2].x);
   expect(actionGeometry.every((item) => item.height>=44&&item.border==="solid")).toBe(true);
   await page.keyboard.press("Escape");
-  await page.getByRole("combobox",{ name: "Rows",exact: true }).selectOption("all");
+  await page.getByRole("combobox",{ name: "Rows per page",exact: true }).selectOption("all");
   await expect(page.locator(".report-pagination")).toContainText("1-2 of 2");
   const paginationGeometry=await page.evaluate(() => { const label=document.querySelector(".report-pagination label")!.getBoundingClientRect(); const select=document.querySelector(".report-pagination select")!.getBoundingClientRect(); const previous=document.querySelector<HTMLButtonElement>(".report-pagination button")!; return { labelCenter: label.top+label.height/2,selectCenter: select.top+select.height/2,buttonHeight: previous.getBoundingClientRect().height,buttonBorder: getComputedStyle(previous).borderTopStyle,buttonRadius: getComputedStyle(previous).borderTopLeftRadius }; });
   expect(Math.abs(paginationGeometry.labelCenter-paginationGeometry.selectCenter)).toBeLessThan(1);
   expect(paginationGeometry.buttonHeight).toBeGreaterThanOrEqual(44);
   expect(paginationGeometry.buttonBorder).toBe("solid");
   expect(parseFloat(paginationGeometry.buttonRadius)).toBeGreaterThan(0);
-  await page.getByRole("button",{ name: "Create report" }).click();
+  await page.getByRole("button",{ name: "New report" }).click();
   await page.getByLabel("Report name").fill("Dirty draft");
-  page.once("dialog",(dialog) => dialog.dismiss());
   await page.getByRole("navigation",{ name: "Primary dashboard navigation" }).getByRole("link",{ name: "Roster",exact: true }).click();
   await expect(page).toHaveURL(/\/reports\/new$/);
-  page.once("dialog",(dialog) => dialog.dismiss());
+  await page.getByRole("dialog", { name: "Save changes before leaving?" }).getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button",{ name: "Leaderboard",exact: true }).click();
   await expect(page).toHaveURL(/\/reports\/new$/);
-  page.once("dialog",(dialog) => dialog.accept());
+  await page.getByRole("dialog", { name: "Save changes before leaving?" }).getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button",{ name: "Leaderboard",exact: true }).click();
+  await page.getByRole("dialog", { name: "Save changes before leaving?" }).getByRole("button", { name: "Discard changes" }).click();
   await expect(page).toHaveURL(/\/reports$/);
 });
 
@@ -557,14 +579,14 @@ test("Admin member and import dialogs contain focus, report errors, and return f
   await expect(addMember).toBeFocused();
   await expectResponsiveFit(page);
 
-  await page.getByRole("button",{ name: "Edit",exact: true }).first().click();
+  await page.getByRole("button",{ name: "Edit Avery Stone",exact: true }).first().click();
   const editDialog=page.getByRole("dialog",{ name: "Edit roster member" });
   await expect(editDialog.getByRole("button",{ name: "Close member editor" })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
-  await expect(editDialog.getByRole("button",{ name: "Save member" })).toBeFocused();
+  await expect(editDialog.getByRole("button",{ name: "Delete member" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(editDialog).toHaveCount(0);
-  await expect(page.getByRole("button",{ name: "Edit",exact: true }).first()).toBeFocused();
+  await expect(page.getByRole("button",{ name: "Edit Avery Stone",exact: true }).first()).toBeFocused();
 });
 
 test("roster import loads CSV files and previews tab-separated spreadsheet rows",async ({ page }) => {
@@ -625,7 +647,7 @@ test("roster import loads CSV files and previews tab-separated spreadsheet rows"
   await expect(backToMember.locator("..")).toHaveClass(/dialog-actions/);
   const secondary=await backToMember.evaluate((element) => {
     const style=getComputedStyle(element);
-    const edit=getComputedStyle(document.querySelector<HTMLElement>(".roster-row-actions button")!);
+    const edit=getComputedStyle(document.querySelector<HTMLElement>(".roster-action-cell .member-pencil-button")!);
     return { color: style.color,background: style.backgroundColor,radius: style.borderRadius,height: element.getBoundingClientRect().height,editColor: edit.color,editBackground: edit.backgroundColor,editRadius: edit.borderRadius };
   });
   expect(secondary.color).toBe(secondary.editColor);
@@ -673,7 +695,7 @@ test("roster import back action follows the secondary theme at desktop and mobil
     await expect(back.locator("..")).toHaveClass(/dialog-actions/);
     const colors=await back.evaluate((element) => {
       const style=getComputedStyle(element);
-      const edit=getComputedStyle(document.querySelector<HTMLElement>(".roster-row-actions button")!);
+      const edit=getComputedStyle(document.querySelector<HTMLElement>(".roster-action-cell .member-pencil-button")!);
       return { back: [style.color,style.backgroundColor,style.borderColor,style.borderRadius],edit: [edit.color,edit.backgroundColor,edit.borderColor,edit.borderRadius] };
     });
     expect(colors.back).toEqual(colors.edit);
@@ -717,7 +739,8 @@ test("regular and Class policy attendance agree across Reports, Roster, and memb
   await page.goto("/reports");
   const reportRow=page.locator(".report-row:not(.header)").filter({ hasText: "Avery Stone" });
   await expect(reportRow.getByRole("cell").nth(1)).toContainText("60%");
-  await expect(reportRow.getByRole("cell").nth(2)).toContainText("Class: 75% of 75% · met");
+  await expect(reportRow.getByRole("cell")).toHaveCount(2);
+  await expect(reportRow.getByRole("link",{ name: "Avery Stone" })).toHaveAttribute("href","/roster/A-101");
   await page.goto("/roster");
   await expect(page.getByRole("row").filter({ hasText: "Avery Stone" }).locator(".roster-attendance-rate")).toHaveText("Regular: 60% · Class: 75% of 75% · met");
   await page.goto("/roster/A-101");
@@ -731,7 +754,7 @@ test("weekly assigned policies display meeting counts and pending status",async 
   await page.route("**/reports/attendance*",(route) => route.fulfill({ json: { meetings: [],members: [weeklyPolicy],labels: [{ id: "mentor",name: "Mentor",active: 1,formulaEnabled: 0 }],baseline: null,timeZone: "UTC" } }));
   await page.route("**/reports/leaderboard*",(route) => route.fulfill({ json: { meetings: [],members: [{ ...weeklyPolicy,currentCompliances: [weeklyPolicy.currentCompliance] }],labels: [{ id: "mentor",name: "Mentor",active: 1,formulaEnabled: 0 }],baseline: null,timeZone: "UTC",pagination: { page: 1,pageSize: 25,totalRows: 1,totalPages: 1,rangeStart: 1,rangeEnd: 1 },insights: { policyAlerts: [],trend: [] } } }));
   await page.goto("/reports");
-  await expect(page.locator(".report-row:not(.header)").filter({ hasText: "Avery Stone" }).getByRole("cell").nth(2)).toContainText("Mentor: 2 of 3 meetings · pending");
+  await expect(page.locator(".report-row:not(.header)").filter({ hasText: "Avery Stone" }).getByRole("cell").nth(1)).toHaveText("100%");
   await page.goto("/roster");
   await expect(page.getByRole("row").filter({ hasText: "Avery Stone" }).locator(".roster-attendance-rate")).toHaveText("Regular: 100% · Mentor: 2 of 3 meetings · pending");
 });
@@ -747,6 +770,7 @@ test("Admin previews and applies a separate dated label CSV; Operator sees label
   await page.route("**/labels/membership/apply",async (route) => { expect(route.request().postDataJSON()).toMatchObject({ previewToken: "preview" }); applied=true; await route.fulfill({ json: { applied: 1 } }); });
   await page.goto("/roster");
   await page.getByRole("button",{ name: "Bulk edit" }).click();
+  await page.getByText("Import labels from CSV",{ exact: true }).click();
   await page.getByLabel("CSV contents").fill("memberId,label,action,effectiveDate\nA-101,Mentor,add,2026-09-01");
   await page.getByRole("button",{ name: "Preview CSV import" }).click();
   await expect(page.getByRole("heading",{ name: "Review dated label changes" })).toBeVisible();
@@ -773,7 +797,7 @@ test("Roster quick labels, CSV defaults, and bulk selection preview changes befo
   await page.route("**/admin/members/bulk/preview",(route) => route.fulfill({ json: { members: [{ memberId: "A-101",name: "Avery Stone",active: true,willChange: true },{ memberId: "A-102",name: "Morgan Diaz",active: false,willChange: false }],changed: 1,previewToken: "status-preview" } }));
   await page.route("**/admin/members/bulk/apply",(route) => { expect(route.request().postDataJSON()).toMatchObject({ memberIds: ["member-1","member-2"],active: false,previewToken: "status-preview" }); statusApplied=true; return route.fulfill({ json: { applied: 1 } }); });
   await page.goto("/roster");
-  await page.getByRole("button",{ name: "Edit",exact: true }).first().click();
+  await page.getByRole("button",{ name: "Edit Avery Stone",exact: true }).first().click();
   const dialog=page.getByRole("dialog",{ name: "Edit roster member" });
   await expect(dialog.getByText("Current labels: None")).toBeVisible();
   const labelToggle=dialog.getByRole("button",{ name: "Change labels" });
@@ -797,7 +821,8 @@ test("Roster quick labels, CSV defaults, and bulk selection preview changes befo
   await dialog.getByRole("button",{ name: "Close member editor" }).click();
   await page.getByRole("button",{ name: "Bulk edit" }).click();
   const bulkCard=page.locator(".bulk-roster-actions");
-  const labelCard=page.getByRole("heading",{ name: "Bulk label changes" }).locator("xpath=ancestor::section[1]");
+  const labelCard=page.locator(".roster-label-csv");
+  await expect(labelCard).not.toHaveAttribute("open", "");
   const rosterTable=page.locator(".roster-table-scroll");
   const compactGaps=await bulkCard.evaluate((element) => {
     const children=Array.from(element.children).filter((child) => (child as HTMLElement).getClientRects().length > 0);
@@ -824,6 +849,7 @@ test("Roster quick labels, CSV defaults, and bulk selection preview changes befo
   expect(uncheckedTheme).toMatchObject({ appearance: "none",background: uncheckedTheme.expectedBackground,border: uncheckedTheme.expectedBorder });
   expect(uncheckedTheme.radius).not.toBe("0px");
   expect((await selectAllLabel.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await page.getByText("Import labels from CSV",{ exact: true }).click();
   await page.getByLabel("CSV contents").fill("memberId,label\nA-101,Mentor");
   await page.getByRole("button",{ name: "Preview CSV import" }).click();
   await expect(page.getByRole("heading",{ name: "Review dated label changes" })).toBeVisible();
@@ -862,7 +888,7 @@ test("member labels are edited inside the member editor and Debug mode controls 
   await page.route("**/labels/membership/preview",(route) => route.fulfill({ json: { changes: [{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "2026-09-22" }],impact: [],previewToken: "one-member" } }));
   await page.goto("/roster/A-101");
   await expect(page.getByRole("heading",{ name: "Assign member labels" })).toHaveCount(0);
-  await page.getByRole("button",{ name: "Edit",exact: true }).click();
+  await page.getByRole("button",{ name: "Edit Avery Stone",exact: true }).click();
   const editor=page.getByRole("dialog",{ name: "Edit roster member" });
   await editor.getByRole("button",{ name: "Change labels" }).click();
   await editor.getByRole("checkbox",{ name: "Mentor" }).check();
@@ -876,31 +902,36 @@ test("member labels are edited inside the member editor and Debug mode controls 
   await expect(page.getByRole("heading",{ name: "Label history" })).toBeVisible();
 });
 
-test("Recent roster imports is visible only in the current user's Debug mode",async ({ page }) => {
-  await useReferenceContext(page,"admin",false);
-  await page.goto("/roster");
-  await expect(page.getByRole("heading",{ name: "Recent roster imports" })).toHaveCount(0);
-  await useReferenceContext(page,"admin",true);
-  await page.reload();
-  await expect(page.getByRole("heading",{ name: "Recent roster imports" })).toBeVisible();
+test("Roster omits recent imports and their request in normal and Debug mode",async ({ page }) => {
+  let historyRequests=0;
+  page.on("request",(request) => { if(new URL(request.url()).pathname.endsWith("/admin/roster/history")) historyRequests++; });
+  for(const debugMode of [false,true]) {
+    await useReferenceContext(page,"admin",debugMode);
+    await page.goto("/roster");
+    await expect(page.getByRole("table",{ name: "Roster members" })).toContainText("Avery Stone");
+    await expect(page.getByRole("heading",{ name: "Recent roster imports" })).toHaveCount(0);
+  }
+  expect(historyRequests).toBe(0);
 });
 
 test("saved reports apply multi-label matching and membership filters to CSV exports",async ({ page }) => {
   await useReferenceContext(page);
   let exported: { definition?: { labelIds?: string[]; labelMatch?: string; membership?: string } }={};
   await page.route("**/exports/report.csv",async (route) => { exported=route.request().postDataJSON(); return route.fulfill({ status: 200,headers: { "content-type": "text/csv","content-disposition": "attachment; filename=report.csv" },body: "Member\nAvery Stone\n" }); });
-  await page.goto("/reports/new");
+  await page.goto("/reports/view/class-report");
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(page.getByRole("combobox",{ name: "Membership",exact: true })).toBeEnabled();
   await expect(page.getByText("Current membership applies today’s labels",{ exact: false })).toBeVisible();
   await page.getByRole("combobox",{ name: "Membership",exact: true }).selectOption("historical");
-  await expect(page.getByText("Historical membership uses the labels held on each meeting date.",{ exact: false })).toBeVisible();
+  await expect(page.getByText("Historical membership uses labels held on each meeting date.",{ exact: false })).toBeVisible();
   await page.getByText("Labels (all)",{ exact: true }).click();
   await page.getByRole("checkbox",{ name: "Mentor",exact: true }).check();
-  await page.getByRole("heading",{ level: 2,name: "New report" }).click();
+  await page.getByRole("heading",{ level: 2,name: "Class attendance" }).click();
   await expect(page.getByRole("checkbox",{ name: "Mentor",exact: true })).toBeHidden();
   await page.getByLabel("Label matching").selectOption("all");
   await page.getByLabel("Membership").selectOption("historical");
   const download=page.waitForEvent("download");
+  await openReportExport(page);
   await page.getByRole("button",{ name: "Download report CSV" }).click();
   await download;
   expect(exported.definition?.labelIds).toEqual(["mentor"]);
@@ -919,7 +950,10 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     await page.route("**/admin/integrations/discord/label-roles/apply",(route) => route.fulfill({ json: { jobId: "job-1",status: "pending",additions: 1,removals: 1 } }));
     await page.route("**/admin/integrations/discord/label-role-jobs/job-1",(route) => route.fulfill({ json: { id: "job-1",status: "completed",updatedAt: new Date().toISOString(),items: [{ discordUserId: "111111111111111111",action: "add",status: "completed",attempts: 1 },{ discordUserId: "222222222222222222",action: "remove",status: "completed",attempts: 1 }] } }));
     await page.goto("/settings/attendance");
-    await expect(page.getByRole("heading",{ name: "Discord roles" })).toBeVisible();
+    const discordRoles=page.locator(".settings-disclosure").filter({ has: page.locator("summary").filter({ hasText: /^Discord roles$/ }) });
+    await expect(discordRoles).not.toHaveAttribute("open", "");
+    await discordRoles.locator("summary").click();
+    await expect(discordRoles.getByRole("heading",{ name: "Discord roles" })).toBeVisible();
     await expectLabelButtonTheme(page,"Sync to Discord","primary");
     await page.getByRole("button",{ name: "Sync to Discord" }).click();
     await expect(page.getByRole("heading",{ name: "Review role changes for FRC 321" })).toBeVisible();
@@ -930,9 +964,266 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     await expect(page.getByRole("heading",{ name: "Role sync status" })).toBeVisible();
     await expect(page.getByText("2 completed, 0 pending, 0 failed.")).toBeVisible();
     await useReferenceContext(page,"operator"); await page.reload();
-    await expect(page.getByRole("heading",{ name: "Discord roles" })).toBeVisible();
+    const operatorRoles=page.getByRole("region",{ name: "Discord roles",exact: true });
+    await expect(operatorRoles.getByRole("heading",{ name: "Discord roles",exact: true })).toBeVisible();
+    await expect(operatorRoles).toContainText("FRC 321");
     await expect(page.getByRole("button",{ name: "Sync to Discord" })).toHaveCount(0);
     await expect(page.getByRole("button",{ name: "Unlink" })).toHaveCount(0);
     await expectResponsiveFit(page);
   });
 }
+
+async function openReportExport(page: Page) {
+  const menu = page.locator(".report-menu").filter({ has: page.locator("summary").filter({ hasText: /^Export$/ }) });
+  if (await menu.getAttribute("open") === null) await menu.locator("summary").click();
+}
+
+test("saved reports allow temporary search and sorting, then save explicitly with one pending write", async ({ page }) => {
+  await useReferenceContext(page);
+  const writes: string[] = [];
+  page.on("request", request => { if (request.method() !== "GET" && /\/reports\/(views|tabs)/.test(request.url())) writes.push(request.url()); });
+  await page.goto("/reports/view/class-report");
+  const table = page.getByRole("table", { name: /Report results/ });
+  await expect(table).toContainText("Morgan Diaz");
+  await expect(page.getByLabel("Report name")).toHaveCount(0);
+  await expect(page.locator(".report-settings-details")).not.toHaveAttribute("open", "");
+  await page.getByRole("searchbox", { name: "Search report results" }).fill("Avery");
+  await expect(table).toContainText("Avery Stone");
+  await expect(table).not.toContainText("Morgan Diaz");
+  await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove filter: Member contains Avery", exact: true })).toBeVisible();
+  expect(writes).toEqual([]);
+  await page.getByRole("button", { name: "Reset view", exact: true }).click();
+  await expect(table).toContainText("Morgan Diaz");
+  await page.getByRole("button", { name: "Member column options", exact: true }).click();
+  await page.getByRole("button", { name: "Descending", exact: true }).click();
+  await expect(table.locator("tbody tr").first()).toContainText("Avery Stone");
+  expect(writes).toEqual([]);
+  let releaseSave!: () => void;
+  const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+  await page.route("**/reports/views/class-report", async route => { await saveGate; await route.fallback(); });
+  await page.getByRole("button", { name: "Save view", exact: true }).click();
+  const saving = page.getByRole("button", { name: "Saving…", exact: true });
+  await expect(saving).toBeDisabled();
+  await saving.dispatchEvent("click");
+  expect(writes).toHaveLength(1);
+  releaseSave();
+  await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save view", exact: true })).toHaveCount(0);
+  await page.getByRole("searchbox", { name: "Search report results" }).fill("Morgan");
+  await expect(table).toContainText("Morgan Diaz");
+  await page.getByRole("button", { name: "Leaderboard", exact: true }).click();
+  await page.getByRole("dialog", { name: "Save changes before leaving?" }).getByRole("button", { name: "Discard changes" }).click();
+  await expect(page).toHaveURL(/\/reports$/);
+  expect(writes).toHaveLength(1);
+});
+
+test("new report filters appear after creation and result dates omit all-time and timezone details", async ({ page }) => {
+  await useReferenceContext(page);
+  await page.goto("/reports/new");
+  await expect(page.getByText("DRAFT", { exact: true })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Filter records", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("searchbox", { name: "Search report results" })).toHaveCount(0);
+  await expect(page.getByLabel("Applied report filters")).toHaveCount(0);
+  await page.getByRole("button", { name: "Regular attendance column options" }).click();
+  await expect(page.getByLabel("Minimum", { exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page.getByLabel("Report name").fill("New filtered report");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page).toHaveURL(/\/reports\/view\/report-3$/);
+  await expect(page.getByText("DRAFT", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Saved report", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("searchbox", { name: "Search report results" })).toBeVisible();
+  await expect(page.locator(".report-resolved-period")).toHaveCount(0);
+  await page.getByText("Filters and report settings", { exact: true }).click();
+  await page.getByRole("combobox", { name: "Period", exact: true }).selectOption("fixed");
+  await page.getByLabel("From", { exact: true }).fill("2026-09-01");
+  await page.getByLabel("To", { exact: true }).fill("2026-09-22");
+  await expect(page.locator(".report-resolved-period")).toHaveText("2026-09-01 - 2026-09-22");
+  await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Period", exact: true }).selectOption("all");
+  await expect(page.locator(".report-resolved-period")).toHaveCount(0);
+});
+
+test("closing a draft offers cancel, preserves failures and saves once before leaving", async ({ page }) => {
+  await useReferenceContext(page);
+  await page.goto("/reports/new");
+  await page.getByRole("button", { name: "Leaderboard", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Save changes before leaving?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Leaderboard", exact: true })).toBeFocused();
+  await page.getByLabel("Report name").fill("Draft to preserve");
+  let writes = 0;
+  let releaseSave!: () => void;
+  const gate = new Promise<void>(resolve => { releaseSave = resolve; });
+  await page.route("**/reports/views", async route => {
+    if (route.request().method() !== "POST") return route.fallback();
+    writes++;
+    if (writes === 1) return route.fulfill({ status: 503, json: { error: "Saving is temporarily unavailable" } });
+    await gate; return route.fallback();
+  });
+  await page.getByRole("button", { name: "Leaderboard", exact: true }).click();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Saving is temporarily unavailable");
+  await expect(page).toHaveURL(/\/reports\/new$/);
+  await expect(page.getByLabel("Report name")).toHaveValue("Draft to preserve");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Leaderboard", exact: true }).click();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+  await dialog.getByRole("button", { name: "Saving…", exact: true }).dispatchEvent("click");
+  expect(writes).toBe(2);
+  releaseSave();
+  await expect(page).toHaveURL(/\/reports$/);
+  expect(await page.evaluate(() => sessionStorage.getItem("lancerlogin-report-draft-v1"))).toBeNull();
+  await page.getByRole("button", { name: "Draft to preserve", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "Draft to preserve" })).toBeVisible();
+  await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toHaveCount(0);
+});
+
+test("closing a modified report can save or discard and row navigation preserves cancellation", async ({ page }) => {
+  await useReferenceContext(page);
+  const writes: string[] = [];
+  page.on("request", request => { if (request.method() === "PATCH" && request.url().includes("/reports/views/")) writes.push(request.url()); });
+  await page.goto("/reports/view/dates-report");
+  await page.getByRole("searchbox", { name: "Search report results" }).fill("Avery");
+  await page.getByRole("link", { name: "Avery Stone", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Save changes before leaving?" });
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page).toHaveURL(/\/reports\/view\/dates-report$/);
+  await expect(page.getByRole("searchbox", { name: "Search report results" })).toHaveValue("Avery");
+  await page.getByRole("button", { name: "Close Attendance dates" }).click();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page).toHaveURL(/\/reports$/);
+  expect(writes).toHaveLength(1);
+  await page.getByText("Browse reports", { exact: true }).click();
+  await page.getByRole("button", { name: "Attendance dates personal", exact: true }).click();
+  await expect(page.getByRole("searchbox", { name: "Search report results" })).toHaveValue("Avery");
+  await page.getByRole("searchbox", { name: "Search report results" }).fill("Morgan");
+  await page.getByRole("button", { name: "Close Attendance dates" }).click();
+  await dialog.getByRole("button", { name: "Discard changes" }).click();
+  await expect(page).toHaveURL(/\/reports$/);
+  expect(writes).toHaveLength(1);
+});
+
+test("report library searches pinned reports and opening an unpinned report does not pin it", async ({ page }) => {
+  await useReferenceContext(page);
+  let pinWrites = 0;
+  page.on("request", request => { if (request.url().endsWith("/reports/tabs") && request.method() === "PUT") pinWrites++; });
+  await page.goto("/reports");
+  await page.getByText("Browse reports", { exact: true }).click();
+  const library = page.locator(".report-browser-popover");
+  await library.getByRole("searchbox").fill("Class");
+  await expect(library).toContainText("Class attendance");
+  await expect(library).toContainText("Pinned");
+  await library.getByRole("searchbox").fill("Attendance dates");
+  await library.getByRole("button", { name: "Attendance dates personal", exact: true }).click();
+  await expect(page).toHaveURL(/\/reports\/view\/dates-report$/);
+  await expect(library).toBeHidden();
+  await expect(page.getByRole("button", { name: "Close Attendance dates", exact: true })).toBeVisible();
+  expect(pinWrites).toBe(0);
+  await page.getByText("Report actions", { exact: true }).click();
+  await page.getByRole("button", { name: "Pin report", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Unpin Attendance dates", exact: true })).toBeVisible();
+  expect(pinWrites).toBe(1);
+});
+
+test("changed report filters hide previous rows during refresh and failure, and retry the same view", async ({ page }) => {
+  await useReferenceContext(page);
+  await page.goto("/reports/view/class-report");
+  const table = page.getByRole("table", { name: /Report results/ });
+  await expect(table).toContainText("Avery Stone");
+  let releaseQuery!: () => void;
+  const queryGate = new Promise<void>(resolve => { releaseQuery = resolve; });
+  await page.route("**/reports/query", async route => { await queryGate; await route.fulfill({ status: 503, json: { error: "Report service unavailable" } }); }, { times: 1 });
+  await page.getByRole("searchbox", { name: "Search report results" }).fill("Morgan");
+  await expect(page.locator(".report-pagination")).toContainText("Refreshing…");
+  await expect(table.locator("tbody tr")).toHaveCount(0);
+  await openReportExport(page);
+  await expect(page.getByRole("button", { name: "Download report CSV", exact: true })).toBeDisabled();
+  releaseQuery();
+  await expect(page.getByRole("alert")).toContainText("Previous results are hidden");
+  await expect(page.locator(".report-pagination")).toContainText("Rows unavailable");
+  await expect(table.locator("tbody tr")).toHaveCount(0);
+  await page.getByRole("button", { name: "Retry report", exact: true }).click();
+  await expect(table).toContainText("Morgan Diaz");
+  await expect(table).not.toContainText("Avery Stone");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("Last 10 chart shows the newest meetings chronologically with focusable exact values", async ({ page }) => {
+  await useReferenceContext(page);
+  const data = referenceAttendanceReport();
+  const trend = Array.from({ length: 15 }, (_, index) => ({ meetingId: "trend-" + (15 - index), title: "Synthetic meeting " + (15 - index), startsAt: "2026-09-" + String(15 - index).padStart(2, "0") + "T15:00:00Z", rate: 50 + index }));
+  await page.route("**/reports/leaderboard*", route => route.fulfill({ json: { ...data, pagination: { page: 1, pageSize: 25, totalRows: 2, totalPages: 1, rangeStart: 1, rangeEnd: 2 }, insights: { policyAlerts: [], trend } } }));
+  await page.goto("/reports");
+  const chart = page.getByRole("group", { name: "Team regular attendance trend", exact: true });
+  await expect(chart.locator("time")).toHaveCount(10);
+  await expect(chart.locator("time").first()).toHaveAttribute("datetime", "2026-09-06T15:00:00Z");
+  await expect(chart.locator("time").last()).toHaveAttribute("datetime", "2026-09-15T15:00:00Z");
+  await chart.getByRole("button").first().focus();
+  await expect(page.locator(".trend-detail")).toContainText("Synthetic meeting 6: 59%");
+  await expect(page.locator(".trend-axis")).toContainText("100%");
+});
+
+
+test("member lifecycle actions stay inside Edit and preserve confirmation and error handling", async ({ page }) => {
+  await useReferenceContext(page);
+  let active = true, deleted = false, deletionAttempts = 0;
+  await page.route("**/admin/members", route => route.fulfill({ json: { members: deleted ? [] : [{ ...roster[0], active: active ? 1 : 0 }], discordConfigured: true } }));
+  await page.route("**/admin/members/member-1", route => {
+    const body = route.request().postDataJSON();
+    if (route.request().method() === "PATCH") { expect(body).toEqual({ active: false }); active = false; return route.fulfill({ json: {} }); }
+    expect(body).toEqual({ confirmation: "DELETE MEMBER A-101" });
+    deletionAttempts++;
+    if (deletionAttempts === 1) return route.fulfill({ status: 409, json: { error: "Member has attendance history" } });
+    deleted = true; return route.fulfill({ json: {} });
+  });
+  await page.goto("/roster");
+  await expect(page.getByRole("button", { name: "Deactivate member", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Edit Avery Stone", exact: true }).click();
+  const editor = page.getByRole("dialog", { name: "Edit roster member" });
+  await editor.getByRole("button", { name: "Deactivate member", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit Avery Stone", exact: true })).toHaveCount(0);
+  await page.getByRole("combobox", { name: "Show", exact: true }).selectOption("all");
+  await page.getByRole("button", { name: "Edit Avery Stone", exact: true }).click();
+  await expect(editor.getByRole("button", { name: "Activate member", exact: true })).toBeVisible();
+  page.once("dialog", dialog => dialog.dismiss());
+  await editor.getByRole("button", { name: "Delete member", exact: true }).click();
+  expect(deletionAttempts).toBe(0);
+  page.once("dialog", dialog => { expect(dialog.message()).toContain("no attendance history"); return dialog.accept(); });
+  await editor.getByRole("button", { name: "Delete member", exact: true }).click();
+  await expect(editor.getByRole("alert")).toHaveText("Member has attendance history");
+  await expect(editor.getByRole("alert")).toBeFocused();
+  page.once("dialog", dialog => dialog.accept());
+  await editor.getByRole("button", { name: "Delete member", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit Avery Stone", exact: true })).toHaveCount(0);
+  expect(deletionAttempts).toBe(2);
+});
+
+test("compact custom reports put pagination below results and keep wide columns in a contained scroller", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await useReferenceContext(page);
+  await page.goto("/reports/new");
+  const table = page.getByRole("table", { name: /Report results/ });
+  await expect(table).toContainText("Avery Stone");
+  const scroller = page.getByRole("region", { name: "Scrollable report results" });
+  const pagination = page.locator(".report-pagination");
+  expect((await pagination.boundingBox())!.y).toBeGreaterThanOrEqual((await scroller.boundingBox())!.y + (await scroller.boundingBox())!.height);
+  await expect(table.locator('tbody td[data-value-kind="number"]').first()).toHaveCSS("text-align", "right");
+  await page.getByRole("button", { name: "Add column", exact: true }).click();
+  for (const name of ["Member ID", "Email", "Absent dates"]) await page.getByRole("checkbox", { name, exact: true }).check();
+  await page.keyboard.press("Escape");
+  await expect(table.locator("thead th")).toHaveCount(6);
+  expect(await scroller.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});

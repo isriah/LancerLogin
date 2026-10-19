@@ -1,4 +1,4 @@
-import { parseReleaseVersion, compareReleaseVersions, releaseAllowed, type UpdateChannel } from "../../../packages/shared/src/release-policy.mjs";
+import { parseReleaseVersion, compareReleaseVersions, kioskReleaseTransition, releaseAllowed, type UpdateChannel } from "../../../packages/shared/src/release-policy.mjs";
 export type Release = { tag_name?: string; html_url?: string; draft?: boolean; prerelease?: boolean; body?: string; channel?: UpdateChannel };
 
 // Compare only complete stable versions; partial or malformed tags are unknown.
@@ -9,6 +9,11 @@ export function hasComparableStableVersions(release: Release | undefined, instal
 
 export function isNewerRelease(candidate: string, installed: string) {
   return compareReleaseVersions(candidate, installed) === 1;
+}
+
+export function kioskUpdateTransition(release: Release | undefined, installed: string) {
+  if (!release || !hasComparableStableVersions(release, "0.0.0")) return "unavailable";
+  return kioskReleaseTransition(release.tag_name, installed);
 }
 
 export const latestReleaseUrl = `${(import.meta.env?.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/api"}/admin/releases/latest`;

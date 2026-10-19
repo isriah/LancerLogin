@@ -48,11 +48,12 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     const state = fresh(); state.progress = { pageId: "dashboard", version: 1, status: "completed", stepId: "recurrence" };
     await account(page, state, "operator", true);
     await page.goto("/dashboard");
+    await page.getByText("Page help (debug)", { exact: true }).click();
     const reset = page.getByRole("button", { name: "Reset page walkthrough" });
     await expect(reset).toBeVisible();
     const layout = await reset.evaluate((element) => { const style = getComputedStyle(element); const bounds = element.getBoundingClientRect(); return { position: style.position, bottom: innerHeight - bounds.bottom, left: bounds.left, right: bounds.right, height: bounds.height }; });
-    expect(layout.position).toBe("fixed"); expect(layout.bottom).toBeGreaterThanOrEqual(0); expect(layout.left).toBeGreaterThanOrEqual(0); expect(layout.right).toBeLessThanOrEqual(viewport.width); expect(layout.height).toBeGreaterThanOrEqual(44);
-    await reset.focus(); expect(await reset.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
+    expect(layout.position).not.toBe("fixed"); expect(layout.left).toBeGreaterThanOrEqual(0); expect(layout.right).toBeLessThanOrEqual(viewport.width); expect(layout.height).toBeGreaterThanOrEqual(44);
+    await page.getByText("Page help (debug)", { exact: true }).focus(); await page.keyboard.press("Tab"); await expect(reset).toBeFocused(); expect(await reset.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
     await reset.hover();
     const colors = await reset.evaluate((element) => { const style = getComputedStyle(element); const probe = document.createElement("button"); probe.style.cssText = "background:var(--ui-surface);color:var(--ui-text);border:1px solid var(--primary);border-radius:var(--radius-control)"; element.parentElement!.append(probe); const expected = getComputedStyle(probe); const result = { actual: [style.backgroundColor, style.color, style.borderTopColor, style.borderTopLeftRadius], expected: [expected.backgroundColor, expected.color, expected.borderTopColor, expected.borderTopLeftRadius] }; probe.remove(); return result; });
     expect(colors.actual).toEqual(colors.expected);
@@ -63,7 +64,8 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await page.reload(); await expect(panel(page)).toContainText("Get ready for your next meeting");
     await panel(page).getByRole("button", { name: "Not now" }).click();
     await page.goto("/roster");
-    await expect(page.getByRole("button", { name: "Reset page walkthrough" })).toBeVisible();
+    await expect(page.getByText("Page help (debug)", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reset page walkthrough" })).toBeHidden();
   });
 }
 
@@ -75,9 +77,10 @@ test("safe practice restores table state and completes without saving or deletin
   await page.getByRole("radio", { name: "Table", exact: true }).check();
   await page.getByRole("searchbox", { name: "Search Meetings" }).fill("Build");
   const selected = page.getByRole("checkbox", { name: "Select Build session", exact: true }); await selected.check();
+  await page.getByText("Page help (debug)", { exact: true }).click();
   await page.getByRole("button", { name: "Reset page walkthrough" }).click(); await panel(page).getByRole("button", { name: "Start walkthrough" }).click();
   await next(page);
-  await page.getByRole("button", { name: "Show next five weeks" }).click(); await page.getByRole("button", { name: "Today", exact: true }).click();
+  await page.getByRole("button", { name: "Next month of meetings" }).click(); await page.getByRole("button", { name: "Today", exact: true }).click();
   await next(page); await next(page);
   await page.getByRole("radio", { name: "Table", exact: true }).check(); await next(page);
   await page.getByRole("searchbox", { name: "Search Meetings" }).fill("no-match");
@@ -202,9 +205,13 @@ test("setup and a pending Undo take precedence over the invitation", async ({ pa
   await page.goto("/dashboard"); await expect(page.getByRole("heading", { name: "Set up Attendance", exact: true })).toBeVisible(); await expect(panel(page)).toHaveCount(0);
   await page.unroute("**/platform/modules"); await page.unroute("**/admin/modules/attendance/setup");
   await page.clock.install();
-  await page.addInitScript(() => sessionStorage.setItem("lancerlogin-pending-meeting-deletion", JSON.stringify({ meetingId: "synthetic", title: "Sample meeting", scope: "occurrence", createdAt: Date.now() })));
-  await page.goto("/dashboard"); await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeVisible(); await expect(panel(page)).toHaveCount(0);
-  await page.clock.fastForward(31_000); await expect(panel(page)).toBeVisible();
+  await page.route(/\/meetings\/active-meeting$/, route => route.request().method() === "DELETE" ? route.fulfill({ json: { deleted: 1, deletion: { meetingIds: ["active-meeting"], deletedAt: "2026-10-18T12:00:00.000Z" } } }) : route.continue());
+  await page.route("**/meetings/active-meeting/restore", route => route.fulfill({ json: { restored: 1 } }));
+  await page.goto("/meetings/active-meeting"); await page.locator(".meeting-more-actions > summary").click(); await page.getByRole("button", { name: "Delete meeting", exact: true }).click();
+  await page.getByRole("dialog", { name: "Delete meeting" }).getByRole("button", { name: "Delete this meeting", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeVisible(); await expect(panel(page)).toHaveCount(0);
+  await page.clock.fastForward(31_000); await expect(panel(page)).toHaveCount(0);
+  await page.getByRole("button", { name: "Undo", exact: true }).click(); await expect(panel(page)).toBeVisible();
   await panel(page).getByRole("button", { name: "Not now" }).click();
   await page.clock.fastForward(61_000); await expect(panel(page)).toHaveCount(0);
 });
@@ -217,6 +224,7 @@ test("an available update is hidden during the tour and restored afterward", asy
   await page.goto("/dashboard"); await expect(panel(page)).toBeVisible();
   await panel(page).getByRole("button", { name: "Not now" }).click();
   await expect(page.getByRole("status", { name: "Update available" })).toBeVisible();
+  await page.getByText("Page help (debug)", { exact: true }).click();
   await page.getByRole("button", { name: "Reset page walkthrough" }).click();
   await expect(page.getByRole("status", { name: "Update available" })).toHaveCount(0);
   await panel(page).getByRole("button", { name: "Start walkthrough" }).click();

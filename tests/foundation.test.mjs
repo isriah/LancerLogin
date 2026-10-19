@@ -15,13 +15,13 @@ test("foundation documents state standalone constraints", async () => {
   const privacy = await readFile("docs/PRIVACY.md", "utf8");
   assert.match(privacy, /reporting/i);
   assert.match(privacy, /raw badge and QR values, local digests, and the transform secret are not sent/i);
-  assert.match(privacy, /Sync is off by default/);
-  assert.match(privacy, /approve peer device identities/);
-  assert.match(privacy, /without receiving the recipient's private decryption key/);
-  assert.match(privacy, /Existing unidentified sensor slots and imported legacy mappings are not automatically exported/);
-  assert.match(privacy, /None of these actions erase templates or mappings already copied/);
+  assert.match(privacy, /Cloud storage is separately Admin-controlled and off by default/);
+  assert.match(privacy, /Peer enablement, approval, registration and transfer endpoints are retired/);
+  assert.match(privacy, /server manages a separate encryption secret and can decrypt/);
+  assert.match(privacy, /unknown slots are untouched/);
+  assert.match(privacy, /does not enable cloud storage automatically or delete reader templates/);
   const kiosk = await readFile("docs/KIOSK.md", "utf8");
-  assert.match(kiosk, /Fingerprint remains the default/);
+  assert.match(kiosk, /new pairings start with fingerprint/);
   assert.match(kiosk, /keyboard-wedge/);
   assert.match(kiosk, /This software acceptance does not claim live RFID, NFC, QR camera, R503, or Pi validation/);
   assert.match(kiosk, /owner-only active-roster cache/);
@@ -105,7 +105,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /const backupSchemaVersion = 39;/);
+  assert.match(source, /const backupSchemaVersion = 40;/);
   assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -12\)/);
   for (const [version, omitted] of [[8, 10], [9, 8], [10, 6], [15, 3]]) assert.match(source, new RegExp(`schemaVersion < ${version} && table === "organization_settings" \\? tableColumns\\.organization_settings\\.slice\\(0, -${omitted}\\)`));
   assert.match(source, /schemaVersion < 31 && table === "organization_settings" \? tableColumns\.organization_settings\.slice\(0, -1\)/);

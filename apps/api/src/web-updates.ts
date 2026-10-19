@@ -139,7 +139,7 @@ export async function startWebUpdate(env: WebUpdateEnv, input: Record<string, un
   return updateView(await requestRow(env, row.id), env);
 }
 export async function webUpdateMaintenance(env: WebUpdateEnv): Promise<boolean> {
-  if (!env.UPDATE_REPOSITORY || !env.DB) return false;
+  if (!env.DB) return false;
   return Boolean(await db(env).prepare("SELECT id FROM web_update_requests WHERE installation_id = 'primary' AND maintenance = 1 LIMIT 1").first());
 }
 export async function webUpdateStatus(env: WebUpdateEnv) {

@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "./dashboard-api";
 import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough";
@@ -92,8 +93,10 @@ export function usePageWalkthrough(pageId: WalkthroughPage, ready: boolean) {
 }
 
 export function WalkthroughDebugReset({ debugMode, disabled, onReset }: { debugMode: boolean; disabled: boolean; onReset: () => void }) {
-  if (!debugMode) return null;
-  return <button className="ui-button walkthrough-debug-reset" type="button" disabled={disabled} onClick={onReset}>Reset page walkthrough</button>;
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => { setTarget(document.getElementById("page-help-tools")); }, []);
+  if (!debugMode || !target) return null;
+  return createPortal(<details className="walkthrough-debug-tools"><summary>Page help (debug)</summary><button className="ui-button walkthrough-debug-reset" type="button" disabled={disabled} onClick={onReset}>Reset page walkthrough</button></details>, target);
 }
 
 function useReadySelector(selector: string) {

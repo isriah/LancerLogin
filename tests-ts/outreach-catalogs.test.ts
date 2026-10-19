@@ -720,7 +720,7 @@ test("portable publication snapshots validate before restore and adapt schema 35
     const session = await createSessionCodec("A".repeat(43)).issue({ userId: "admin", role: "admin" }); const cookie = `lancerlogin_session=${session}`;
     const result = await worker.fetch(new Request("https://synthetic.test/admin/data/backup?scope=installation", { headers: { cookie } }), env); assert.equal(result.status, 200, await result.clone().text());
     const backup = await result.json() as { schemaVersion: number; tables: Record<string, Array<Record<string, unknown>>> };
-    assert.equal(backup.schemaVersion, 39); const snapshot = JSON.parse(String(backup.tables.hours_publication_operations![0]!.event_snapshot_json)); assert.equal(snapshot.allDay, true);
+    assert.equal(backup.schemaVersion, 40); const snapshot = JSON.parse(String(backup.tables.hours_publication_operations![0]!.event_snapshot_json)); assert.equal(snapshot.allDay, true);
     const restore = (value: unknown) => worker.fetch(new Request("https://synthetic.test/admin/data/restore", { method: "POST", headers: { cookie, origin: "https://synthetic.test", "content-type": "application/json" }, body: JSON.stringify({ scope: "installation", confirmation: "RESTORE INSTALLATION", backup: value }) }), env);
     const corrupted = structuredClone(backup); corrupted.tables.hours_publication_operations![0]!.event_snapshot_json = JSON.stringify({ ...snapshot, activityId: "unrelated" });
     const rejected = await restore(corrupted); assert.equal(rejected.status, 400, await rejected.clone().text()); assert.match(await rejected.text(), /publication snapshots/); assert.equal(database.sqlite.prepare("SELECT status FROM hours_publication_operations WHERE activity_id=?").get(id)?.status, "pending");

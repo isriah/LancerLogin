@@ -26,7 +26,7 @@ A roster export alone cannot identify fingerprints in reader slots. Keep the ori
 1. Review the compatible official release and its notes. Update the existing private controller to its reviewed channel-aware version while retaining exact resource identities, credentials and production approval rules.
 2. Download an entire-installation backup through **Settings → Updates**, save it securely outside the installation, and confirm that the file was saved.
 3. Preserve the existing D1 database name and UUID, `SESSION_KEY`, `INTEGRATION_KEY`, provider credentials, dashboard origin and deployment configuration in secure storage. Never put their values in source control, logs or support tickets.
-4. Preserve each kiosk's protected local state through an authorized secure backup procedure. Include pairing, mappings, local credential secrets, PIN, roster cache, pending scans and retained outcomes. Fingerprints remain in the R503 unless optional peer sync or cloud storage is explicitly enabled. Preserve the separate 32-byte `FINGERPRINT_VAULT_KEY` independently if cloud storage has been configured; the integration key cannot decrypt that vault.
+4. Preserve each kiosk's protected local state through an authorized secure backup procedure. Include pairing, mappings, local credential secrets, PIN, roster cache, pending scans and retained outcomes. Fingerprints remain in the R503 unless optional cloud storage is explicitly enabled. Preserve the separate 32-byte `FINGERPRINT_VAULT_KEY` independently if cloud storage has been configured; the integration key cannot decrypt that vault.
 5. Note roster counts, a known member ID, recent attendance, a saved report, kiosk names and pending-scan counts for comparison. Use a quiet period, but do not discard queued scans to make the counts zero.
 
 ## Update and verify the web installation
@@ -43,7 +43,7 @@ A roster export alone cannot identify fingerprints in reader slots. Keep the ori
 2. Wait for it to return online. Confirm its installed version and reader/input health.
 3. Allow pending scans to replay. Check their original timestamps and falling pending counts. Review rejected scans rather than blindly resubmitting or restoring an old queue.
 4. For the fingerprint upgrade path, re-enroll members through PIN-protected **Authentication maintenance** while the kiosk is online. To start over, back up protected local state, use **Kiosks → Fingerprint re-enrollment → Reset all fingerprint mappings**, and wait for every active kiosk to acknowledge before enrolling. This explicit reset disables sharing and clears fingerprint associations, not reader templates, queues, pairing or badge/QR mappings. Replace only known occupied slots deliberately; never guess an unknown slot.
-5. During an appropriate test meeting, scan a freshly enrolled member. Confirm the correct member and attendance outcome in the dashboard, then pair additional kiosks and test them independently. Enable peer fingerprint sync only with organizational permission and mutually approved device identities. Peer sync shares eligible new enrollments; it is not a bulk migration of existing reader slots.
+5. During an appropriate test meeting, scan a freshly enrolled member. Confirm the correct member and attendance outcome in the dashboard, then pair additional kiosks and test them independently. Enable cloud fingerprint storage only with organizational permission. Historical unverified reader slots are not automatically shared.
 
 ### Optional durable cloud provisioning
 

@@ -11,6 +11,7 @@ import { activeRosterIdentity, listActiveRosterIdentities } from "./core-roster-
 import type { MeetingReferenceAccess } from "./attendance-meeting-reference.ts";
 import { carpoolMeetingId, readCarpoolMeetingLinks, withCarpoolMeetingLink } from "./carpool-meeting-links.ts";
 import { lookupCarpoolLocation } from "./carpool-location-lookup.ts";
+import { carpoolLocationResolution, claimCarpoolLocationResolution, finishCarpoolLocationResolution, type LocationDetail } from "./carpool-location-resolution.ts";
 import { carpoolReadiness, carpoolDirections, type CarpoolTripScope, type CarpoolStatePerson, type CarpoolStateAssignment, type CarpoolStateIssue } from "../../../packages/shared/src/carpool-state.ts";
 
 type Row = Record<string, unknown>;
@@ -347,7 +348,7 @@ async function restorePlan(db: D1Database, actor: string, value: unknown) {
 function median(values: number[]) { const sorted = [...values].sort((left, right) => left - right); const middle = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2; }
 function locationBias(points: CarpoolGeocodeBias[]): CarpoolGeocodeBias | undefined { return points.length ? { latitude: median(points.map((point) => point.latitude)), longitude: median(points.map((point) => point.longitude)) } : undefined; }
 
-async function resolveLocations(db: D1Database, planId: string, provider: CarpoolGeocodeTransport | undefined, refreshAmbiguous = false, input?: unknown) {
+async function resolveLocations(db: D1Database, planId: string, provider: CarpoolGeocodeTransport | undefined, refreshAmbiguous = false, input?: unknown, leaseToken?: string) {
   if (!provider) throw new HttpError(503, "Automatic location lookup is not configured. Enter coordinates manually.");
   const plan = await requirePlan(db, planId); reviewedPlanRevision(input, plan); const rows = (await db.prepare("SELECT * FROM carpool_people WHERE installation_id=? AND plan_id=?").bind(installationId, planId).all<Row>()).results ?? [];
   const updates: ReturnType<D1Database["prepare"]>[] = [];
@@ -357,16 +358,17 @@ async function resolveLocations(db: D1Database, planId: string, provider: Carpoo
   for (const row of rows) for (const selectedDirection of ["outbound", "return"] as const) {
     if (!carpoolDirections((plan.trip_scope ?? "both") as CarpoolTripScope).includes(selectedDirection)) continue;
     if (!["offer", "needs-ride"].includes(String(row[`${selectedDirection}_status`]))) continue;
-    if (selectedDirection === "return" && row.return_same_as_outbound === 1 && ["offer", "needs-ride"].includes(String(row.outbound_status))) continue;
+    if (selectedDirection === "return" && carpoolDirections((plan.trip_scope ?? "both") as CarpoolTripScope).includes("outbound") && row.return_same_as_outbound === 1 && ["offer", "needs-ride"].includes(String(row.outbound_status))) continue;
     const address = String(row[`${selectedDirection}_address`] ?? "").trim(); if (!address) continue;
     const latitude = row[`${selectedDirection}_lat`]; const longitude = row[`${selectedDirection}_lon`]; const ambiguous = carpoolAddressNeedsLocality(address);
     if (!ambiguous && typeof latitude === "number" && typeof longitude === "number") referencePoints.push({ latitude, longitude });
-    const refresh = refreshAmbiguous && ambiguous && latitude !== null;
+    const refresh = refreshAmbiguous && ambiguous && latitude !== null && row[`${selectedDirection}_location_source`] !== "manual";
+    if (leaseToken && row[`${selectedDirection}_location_source`] === "no-match") continue;
     if (latitude === null || refresh) candidates.push({ row, direction: selectedDirection, address, refresh });
   }
   const resolveCandidate = async (candidate: (typeof candidates)[number], bias?: CarpoolGeocodeBias) => {
     const { row, direction: selectedDirection, address } = candidate; const resolved = await lookupCarpoolLocation(db, provider, address, bias);
-    const affected = row.return_same_as_outbound === 1 ? ["outbound", "return"] as const : [selectedDirection];
+    const affected = row.return_same_as_outbound === 1 ? carpoolDirections((plan.trip_scope ?? "both") as CarpoolTripScope) : [selectedDirection];
     for (const trip of affected) if (row[`${trip}_lat`] !== resolved.latitude || row[`${trip}_lon`] !== resolved.longitude) { const ids = invalidatedPeople.get(trip) ?? new Set<string>(); ids.add(String(row.id)); invalidatedPeople.set(trip, ids); }
     const source: LocationSource = resolved.status === "success" ? "lookup" : "no-match";
     const changed = affected.some(trip => row[`${trip}_lat`] !== resolved.latitude || row[`${trip}_lon`] !== resolved.longitude || row[`${trip}_location_source`] !== source || row[`${trip}_location_label`] !== resolved.label);
@@ -377,13 +379,30 @@ async function resolveLocations(db: D1Database, planId: string, provider: Carpoo
     }
     return resolved.latitude === null || resolved.longitude === null ? undefined : { address, latitude: resolved.latitude, longitude: resolved.longitude, label: resolved.label ?? undefined };
   };
-  for (const candidate of candidates.filter((item) => !carpoolAddressNeedsLocality(item.address))) { const coordinates = await resolveCandidate(candidate); if (coordinates) referencePoints.push(coordinates); }
+  const batch = leaseToken ? [...candidates.filter(item => !carpoolAddressNeedsLocality(item.address)), ...candidates.filter(item => carpoolAddressNeedsLocality(item.address))].slice(0, 8) : candidates;
+  for (const candidate of batch.filter((item) => !carpoolAddressNeedsLocality(item.address))) { const coordinates = await resolveCandidate(candidate); if (coordinates) referencePoints.push(coordinates); }
   if (!referencePoints.length) for (const row of rows) for (const selectedDirection of ["outbound", "return"] as const) { const latitude = row[`${selectedDirection}_lat`]; const longitude = row[`${selectedDirection}_lon`]; if (typeof latitude === "number" && typeof longitude === "number") referencePoints.push({ latitude, longitude }); }
   const bias = locationBias(referencePoints);
-  for (const candidate of candidates.filter((item) => carpoolAddressNeedsLocality(item.address))) await resolveCandidate(candidate, bias);
+  for (const candidate of batch.filter((item) => carpoolAddressNeedsLocality(item.address))) await resolveCandidate(candidate, bias);
   const invalidations = [...invalidatedPeople].flatMap(([trip, ids]) => { const values = [...ids]; const placeholders = values.map(() => "?").join(","); return [db.prepare(`DELETE FROM carpool_assignments WHERE installation_id=? AND plan_id=? AND direction=? AND (rider_id IN (${placeholders}) OR vehicle_person_id IN (${placeholders}))`).bind(installationId, planId, trip, ...values, ...values), db.prepare(`DELETE FROM carpool_unresolved WHERE installation_id=? AND plan_id=? AND direction=? AND rider_id IN (${placeholders})`).bind(installationId, planId, trip, ...values)]; });
-  if (updates.length) await guardedMutationBatch(db, [db.prepare("UPDATE carpool_plans SET revision=revision+1,updated_at=? WHERE installation_id=? AND id=? AND revision=?").bind(new Date().toISOString(), installationId, planId, plan.revision)], [...invalidations, ...updates]);
+  if (updates.length) await guardedMutationBatch(db, [...(leaseToken ? [db.prepare("UPDATE carpool_location_resolution SET error_code=NULL WHERE installation_id=? AND plan_id=? AND lease_token=? AND lease_expires_at>?").bind(installationId, planId, leaseToken, new Date().toISOString())] : []), db.prepare("UPDATE carpool_plans SET revision=revision+1,updated_at=? WHERE installation_id=? AND id=? AND revision=?").bind(new Date().toISOString(), installationId, planId, plan.revision)], [...invalidations, ...updates]);
   return planDetail(db, planId);
+}
+
+async function resolveLocationsAutomatically(db: D1Database, planId: string, provider: CarpoolGeocodeTransport | undefined, input: unknown) {
+  const initial = await planDetail(db, planId); reviewedPlanRevision(input, initial.plan);
+  if (!provider) return { ...initial, locationLookup: await carpoolLocationResolution(db, initial as unknown as LocationDetail, false) };
+  const token = await claimCarpoolLocationResolution(db, initial as unknown as LocationDetail, object(input) && input.retry === true);
+  if (!token) return { ...initial, locationLookup: await carpoolLocationResolution(db, initial as unknown as LocationDetail, true) };
+  let saved = initial;
+  try {
+    saved = await resolveLocations(db, planId, provider, false, input, token);
+    await finishCarpoolLocationResolution(db, saved as unknown as LocationDetail, token);
+  } catch (error) {
+    await finishCarpoolLocationResolution(db, initial as unknown as LocationDetail, token, error instanceof HttpError && error.status === 409 ? "conflict" : "provider");
+    if (error instanceof HttpError && error.status === 409) throw error;
+  }
+  return { ...saved, locationLookup: await carpoolLocationResolution(db, saved as unknown as LocationDetail, true) };
 }
 
 export async function carpoolRoute(db: D1Database, actor: string, request: Request, input?: unknown, geocoder?: CarpoolGeocodeTransport, meetingAccess?: MeetingReferenceAccess): Promise<RouteResult> {
@@ -403,7 +422,7 @@ export async function carpoolRoute(db: D1Database, actor: string, request: Reque
     });
     const selected = url.searchParams.get("planId"); const detail = selected ? await planDetail(db, selected) : null;
     const [meetingChoices, relatedMeeting] = await Promise.all([meetingAccess?.list() ?? [], detail?.plan.meetingId && meetingAccess ? meetingAccess.find(String(detail.plan.meetingId)) : null]);
-    return { status: 200, body: { plans: (plans.results ?? []).map(row => serializePlan(row, false)), members: members.results ?? [], importProfiles, defaults, geocodingConfigured: Boolean(geocoder), meetingReferencesAvailable: Boolean(meetingAccess), meetingChoices, relatedMeeting, detail } };
+    return { status: 200, body: { plans: (plans.results ?? []).map(row => serializePlan(row, false)), members: members.results ?? [], importProfiles, defaults, geocodingConfigured: Boolean(geocoder), locationLookup: detail ? await carpoolLocationResolution(db, detail as unknown as LocationDetail, Boolean(geocoder)) : null, meetingReferencesAvailable: Boolean(meetingAccess), meetingChoices, relatedMeeting, detail } };
   }
   if (url.pathname === "/admin/carpool/plans" && request.method === "POST") return { status: 201, body: await createCarpoolPlan(db, actor, input, meetingAccess) };
   if (url.pathname === "/admin/carpool/restore" && request.method === "POST") return { status: 201, body: await restorePlan(db, actor, input) };
@@ -493,6 +512,6 @@ export async function carpoolRoute(db: D1Database, actor: string, request: Reque
     const located = await lookupCarpoolLocation(db, geocoder, address, carpoolAddressNeedsLocality(address) ? locationBias(points) : undefined);
     return { status: 200, body: located };
   }
-  if (planId && parts[4] === "locations" && parts[5] === "resolve" && request.method === "POST") return { status: 200, body: await resolveLocations(db, planId, geocoder, object(input) && input.refreshAmbiguous === true, input) };
+  if (planId && parts[4] === "locations" && parts[5] === "resolve" && request.method === "POST") return { status: 200, body: object(input) && input.automatic === true ? await resolveLocationsAutomatically(db, planId, geocoder, input) : await resolveLocations(db, planId, geocoder, object(input) && input.refreshAmbiguous === true, input) };
   throw new HttpError(404, "Carpool route not found");
 }

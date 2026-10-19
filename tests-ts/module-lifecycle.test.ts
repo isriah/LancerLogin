@@ -7,6 +7,7 @@ import { attendanceSetupRoute } from "../apps/api/src/attendance-module-setup.ts
 import { runModuleCleanup } from "../apps/api/src/module-cleanup.ts";
 import { captureModuleWorkspaceDatabase } from "../apps/api/src/module-database-scope.ts";
 import { configureModulePlatform, readModulePlatformSnapshot, readModuleSetup, updateModuleSetup } from "../apps/api/src/module-platform.ts";
+import { carpoolRoute, createCarpoolPlan } from "../apps/api/src/carpool-api.ts";
 
 class Statement implements D1Statement {
   readonly database: DatabaseSync;
@@ -70,6 +71,22 @@ class Database implements D1Database {
 function request(path: string, method: string, body?: unknown) {
   return new Request(`https://synthetic.test${path}`, { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
 }
+
+test("Carpool lookup runs with unrelated modules disabled and cleanup removes its execution authority", async () => {
+  const database = new Database(true);
+  try {
+    database.sqlite.exec("UPDATE platform_modules SET phase='disabled'; UPDATE platform_modules SET phase='enabled',setup_complete=1 WHERE module_id='carpool'");
+    const scoped = captureModuleWorkspaceDatabase(database, "carpool", 1, "admin", "carpool.manage");
+    const plan = await createCarpoolPlan(scoped, "admin", { title: "Synthetic independent lookup" }); const id = String(plan.plan.id);
+    await carpoolRoute(scoped, "admin", request(`/admin/carpool/plans/${id}/people`, "POST"), { displayName: "Synthetic rider", outboundStatus: "needs-ride", outboundAddress: "1 Synthetic St, Example, PA 19000", outboundLatitude: null, outboundLongitude: null, outboundSeats: null, returnStatus: "needs-ride", returnAddress: "1 Synthetic St, Example, PA 19000", returnLatitude: null, returnLongitude: null, returnSeats: null, returnSameAsOutbound: true, notes: "", contact: "", memberId: null });
+    const result = (await carpoolRoute(scoped, "admin", request(`/admin/carpool/plans/${id}/locations/resolve`, "POST"), { automatic: true }, { id: "synthetic", async resolve() { return { latitude: 40, longitude: -74 }; } })).body as any;
+    assert.equal(result.locationLookup.state, "complete"); assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM carpool_location_resolution").get()?.n, 1);
+    database.sqlite.exec("UPDATE platform_modules SET phase='retained',disabled_at='2000-01-01T00:00:00Z',delete_after='2000-01-08T00:00:00Z' WHERE module_id='carpool'");
+    let deleted = false;
+    for (let index = 0; index < 15; index++) { const result = await runModuleCleanup(database, new Date(), 20); if (result.status === "deleted") { deleted = true; break; } assert.equal(result.status, "progress"); }
+    assert.equal(deleted, true); assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM carpool_location_resolution").get()?.n, 0); assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM members").get()?.n, 1); assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM hours_categories").get()?.n, 3);
+  } finally { database.close(); }
+});
 
 test("Attendance setup validates rules, a same-day meeting, browser input, and optional skips", async () => {
   const database = new Database();

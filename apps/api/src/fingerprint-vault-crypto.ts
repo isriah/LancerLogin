@@ -37,6 +37,11 @@ export async function fingerprintVaultDigest(secret: string, template: Uint8Arra
 export async function fingerprintVaultId(binding: Omit<FingerprintVaultBinding, "fingerprintId">): Promise<string> {
   return hex(await crypto.subtle.digest("SHA-256", encode(JSON.stringify(["LancerLogin fingerprint vault identity v1", "primary", fingerprintVaultFormat, binding.vaultId, binding.keyId, binding.memberId, binding.templateDigest]))));
 }
+// Content digests authenticate bytes; source enrollment identity survives reader
+// evolution. Keep the older identity function for historical record decoding.
+export async function fingerprintVaultEnrollmentId(binding: Omit<FingerprintVaultBinding, "fingerprintId">): Promise<string> {
+  return hex(await crypto.subtle.digest("SHA-256", encode(JSON.stringify(["LancerLogin fingerprint enrollment v2", "primary", binding.vaultId, binding.keyId, binding.memberId, binding.sourceKioskId, binding.sourcePairingId, binding.enrollmentId]))));
+}
 function aad(binding: FingerprintVaultBinding) {
   return encode(JSON.stringify(["LancerLogin fingerprint vault v1", "primary", fingerprintVaultFormat, binding.vaultId, binding.keyId, binding.fingerprintId, binding.memberId, binding.templateDigest, binding.sourceKioskId, binding.sourcePairingId, binding.enrollmentId, binding.createdAt]));
 }

@@ -33,7 +33,7 @@ async function fixture(page: Page, state: { failPage?: boolean; corrections?: Re
 for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, height: 844, theme: "dark" }]) test(`Outreach detail presents complete grouped hours with themed controls at ${view.width}`, async ({ page }) => {
   await page.setViewportSize(view); await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), view.theme);
   const requests: string[] = []; await fixture(page, { requests }); await page.goto("/hours");
-  await page.getByRole("combobox", { name: "Activity", exact: true }).selectOption(activity.id);
+  await page.getByRole("radio", { name: "Table", exact: true }).check(); await page.getByRole("combobox", { name: "Activity", exact: true }).selectOption(activity.id);
   await expect(page.getByRole("heading", { level: 1, name: activity.title })).toBeVisible(); await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
   await expect(page).toHaveURL(new RegExp(`/hours/activities/${activity.id}$`));
   await expect(page.getByRole("button", { name: "Create activity" })).toHaveCount(0);
@@ -68,7 +68,7 @@ for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, 
 });
 
 test("failed participation paging hides incomplete totals and can be refreshed", async ({ page }) => {
-  const state = { failPage: true }; await fixture(page, state); await page.goto("/hours"); await page.getByRole("combobox", { name: "Activity", exact: true }).selectOption(activity.id);
+  const state = { failPage: true }; await fixture(page, state); await page.goto("/hours"); await page.getByRole("radio", { name: "Table", exact: true }).check(); await page.getByRole("combobox", { name: "Activity", exact: true }).selectOption(activity.id);
   await expect(page.getByRole("alert")).toContainText("Totals are unavailable until every page loads"); await expect(page.getByRole("table", { name: "Activity participation" })).toHaveCount(0);
   state.failPage = false; await page.reload(); await expect(page.getByText("2.50 hours total", { exact: true })).toBeVisible();
 });

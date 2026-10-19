@@ -35,3 +35,19 @@ export function newestOfficialRelease(values, channel = "stable") {
   return values.map((value) => completeOfficialRelease(value, channel)).filter(Boolean)
     .sort((a, b) => compareReleaseVersions(b.tag, a.tag))[0];
 }
+
+// Development identities are installed-state metadata only, never release targets.
+export function kioskReleaseTransition(candidate, installed) {
+  const target = parseReleaseVersion(candidate);
+  if (!target) return "unavailable";
+  if (parseReleaseVersion(installed)) return compareReleaseVersions(candidate, installed) === 1 ? "upgrade" : "current";
+  if (typeof installed !== "string" || installed.length > 128) return "unavailable";
+  const development = /^(\d+\.\d+\.\d+)-dev\.[a-z0-9]+(?:-[a-z0-9]+)*\.[a-f0-9]{7,40}$/.exec(installed);
+  const base = development && parseReleaseVersion(development[1]);
+  if (!base) return "unavailable";
+  for (let i = 0; i < 3; i++) {
+    if (target.parts[i] < base.parts[i]) return "unavailable";
+    if (target.parts[i] > base.parts[i]) return "replace-development";
+  }
+  return "replace-development";
+}

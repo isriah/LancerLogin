@@ -44,6 +44,7 @@ test("member history applies meeting status actions and refreshes outcomes and p
   const state = await memberFixture(page);
   await page.goto("/roster/A-101");
   const row = historyRow(page);
+  await row.locator("summary").click();
   await expect(row.getByRole("button", { name: "Absent", exact: true })).toBeDisabled();
   await expect(page.locator(".member-profile-details")).toContainText("50%");
   const initialReads = state.reads;
@@ -96,6 +97,7 @@ test("Operators can correct member history but cannot clear attendance or edit t
   await expect(page.getByRole("group", { name: "Member actions", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clear", exact: true })).toHaveCount(0);
   const row = historyRow(page, "Another completed meeting");
+  await row.locator("summary").click();
   page.once("dialog", dialog => dialog.accept("Approved absence"));
   await row.getByRole("button", { name: "Excuse", exact: true }).click();
   await expect(row.getByRole("status")).toHaveText("Marked excused.");
@@ -114,6 +116,7 @@ test("member attendance shows pending and failed saves without changing the disp
   });
   await page.goto("/roster/A-101");
   const row = historyRow(page);
+  await row.locator("summary").click();
   page.once("dialog", dialog => dialog.accept(""));
   await row.getByRole("button", { name: "Present", exact: true }).click();
   await expect(row.getByRole("status")).toHaveText("Saving attendance…");
@@ -138,20 +141,20 @@ for (const theme of ["light", "dark"] as const) {
       await page.goto("/roster/A-101");
       await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
       const profile = page.getByRole("group", { name: "Member actions", exact: true });
-      const edit = profile.getByRole("button", { name: "Edit", exact: true });
-      const deactivate = profile.getByRole("button", { name: "Deactivate", exact: true });
-      const remove = profile.getByRole("button", { name: "Delete", exact: true });
-      const bounds = await Promise.all([edit, deactivate, remove].map(button => button.boundingBox()));
-      expect(bounds[0]!.y).toBe(bounds[1]!.y);
-      expect(bounds[1]!.y).toBe(bounds[2]!.y);
-      expect(bounds[0]!.x + bounds[0]!.width).toBeLessThan(bounds[1]!.x);
-      expect(bounds[1]!.x + bounds[1]!.width).toBeLessThan(bounds[2]!.x);
-      await edit.focus();
-      await page.keyboard.press("Tab");
-      await expect(deactivate).toBeFocused();
-      await page.keyboard.press("Tab");
-      await expect(remove).toBeFocused();
-      for (const button of await page.locator(".member-profile-card .roster-row-actions button, .member-attendance-actions button").all()) {
+      const edit = profile.getByRole("button", { name: "Edit Avery Stone", exact: true });
+      await expect(profile.getByRole("button")).toHaveCount(1);
+      const editBounds = (await edit.boundingBox())!;
+      expect(editBounds.width).toBeGreaterThanOrEqual(44);
+      expect(editBounds.height).toBeGreaterThanOrEqual(44);
+      expect((await edit.locator("svg").boundingBox())!.width).toBeGreaterThanOrEqual(20);
+      const back = page.getByRole("link", { name: "← Roster", exact: true });
+      expect((await back.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      const correction = historyRow(page).locator("summary");
+      await expect(historyRow(page).getByRole("button", { name: "Present", exact: true })).toBeHidden();
+      await correction.focus();
+      await page.keyboard.press("Enter");
+      await expect(historyRow(page).getByRole("button", { name: "Present", exact: true })).toBeVisible();
+      for (const button of await page.locator(".member-profile-card .member-pencil-button, .member-history-correction[open] .member-attendance-actions button").all()) {
         const styles = await button.evaluate(element => {
           const style = getComputedStyle(element);
           const tokenColor = (name: string) => {
@@ -202,7 +205,10 @@ for (const theme of ["light", "dark"] as const) {
       }
       await page.screenshot({ path: testInfo.outputPath("member-controls.png"), fullPage: true });
       await edit.click();
-      await expect(page.getByRole("dialog", { name: "Edit roster member" })).toBeVisible();
+      const editor = page.getByRole("dialog", { name: "Edit roster member" });
+      await expect(editor).toBeVisible();
+      await expect(editor.getByRole("button", { name: "Deactivate member", exact: true })).toBeVisible();
+      await expect(editor.getByRole("button", { name: "Delete member", exact: true })).toBeVisible();
     });
   }
 }

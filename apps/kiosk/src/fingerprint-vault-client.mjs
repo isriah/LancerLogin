@@ -34,12 +34,15 @@ export function createFingerprintRequester(config, prefix, { fetchImpl = fetch, 
 
 export function createFingerprintVaultClient(config, options = {}) {
   const request = createFingerprintRequester(config, "/kiosk/fingerprint-vault", options);
+  const catalogRequest = createFingerprintRequester(config, "/kiosk/fingerprint-vault", { maximumResponseBytes: 16 * 1024 * 1024, ...options });
   const identifier = value => {
     if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw new Error("Invalid fingerprint vault identifier");
     return value;
   };
   return {
     configuration: () => request(""),
+    catalog: revision => catalogRequest(`/catalog?revision=${revision}`),
+    batch: (vaultId, catalogRevision, fingerprintIds) => request("/batch", "POST", { vaultId, catalogRevision, fingerprintIds: fingerprintIds.map(identifier) }),
     store: enrollment => request("/templates", "POST", enrollment),
     list: after => request(`/templates${after === undefined ? "" : `?after=${identifier(after)}`}`),
     template: fingerprintId => request(`/templates/${identifier(fingerprintId)}`),

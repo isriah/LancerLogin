@@ -4,6 +4,8 @@ LancerLogin uses focused checks during implementation and one complete gate when
 
 Read the guide for the surface you are changing and use its stated acceptance criteria. Keep implementation, verification, and review focused on that surface.
 
+Use Node.js 24.21.0, matching the verification workflow, and install dependencies with `npm ci --no-audit`. This runtime includes the [Windows shutdown fix](https://github.com/nodejs/node/pull/61999) needed for reliable Wrangler CLI checks. Older Node 24 builds can crash after the CLI correctly rejects invalid configuration; keep the test's exit-code and error assertions intact.
+
 ## During implementation
 
 Run the smallest command that covers the files being changed:

@@ -13,11 +13,13 @@ import { buildReportRows, combinedMemberDataset, defaultReportDefinition, filter
 import { createModuleReportDispatcher, outreachReportHandlers, projectCoreMembers, type ReportProjectionContext } from "./module-reporting.ts";
 
 import { databaseIdentity, measureD1, usageCategory, type D1Database, type D1Statement } from "./d1-usage.ts";
-import { acceptContestBatch } from "./contest-review.ts";
+import { acceptContestBatch, rejectContestBatch, resolveContestBatch, submitContest } from "./contest-review.ts";
 import { ReportDataCache } from "./report-data-cache.ts";
 import { HttpError } from "./http-error.ts";
 import { fingerprintVaultRoute } from "./fingerprint-vault.ts";
 import { kioskPoll } from "./kiosk-poll.ts";
+import { syncKioskScanReviews, listKioskScanReviews, markKioskScanReviewed } from "./kiosk-scan-reviews.ts";
+import { readKioskEnrollment, startKioskEnrollment, selectEnrollmentMember, cancelKioskEnrollment, progressKioskEnrollment } from "./kiosk-enrollment.ts";
 import { fingerprintResetRoute } from "./fingerprint-reset.ts";
 import { bundledModuleRegistry } from "../../../packages/shared/src/module-platform.ts";
 import { configureModulePlatform, readModuleAssignments, readModulePlatformSnapshot, readModuleSetup, requireModuleService, requireModuleSetup, requireModuleWorkspace, setModuleAssignments, updateModuleSetup } from "./module-platform.ts";
@@ -50,7 +52,7 @@ type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "confirm-attendance";
 type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
 type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number; discordContestWindowHours?: number; attendanceReportingStartsOn?: string | null; anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number };
-type DiscordChannelManagerInput = { enabled?: boolean; contestWindowHours?: number };
+type DiscordChannelManagerInput = { enabled?: boolean; contestWindowHours?: number; blockRecontestsAfterRejection?: boolean };
 type DiscordAnomalyReportsInput = { enabled?: boolean; channelId?: string | null };
 type GoogleCalendarSecret = { clientId: string; clientSecret: string; refreshToken?: string; calendarId?: string; calendarLabel?: string };
 type MemberInput = { memberId?: string; firstName?: string; lastName?: string; email?: string | null; discordUserId?: string | null };
@@ -799,6 +801,35 @@ async function kioskAuthenticationConfiguration(request: Request, env: Env, kios
   if (result.meta?.changes === 0) throw new HttpError(409, "Kiosk was retired before its method could be saved");
   await writeAudit(db, principal, "kiosk.authentication_method_updated", "kiosk", kioskId, { previousMethod: kiosk.authenticationMethod, authenticationMethod: input.authenticationMethod });
   return response({ kioskId, authenticationMethod: input.authenticationMethod });
+}
+async function dashboardKioskEnrollment(request: Request, env: Env, kioskId: string, sessionId?: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]), db = requireDatabase(env);
+  if (request.method === "GET" && !sessionId) return response({ session: await readKioskEnrollment(db, kioskId, true) });
+  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Enrollment requires the dashboard origin");
+  if (request.method === "POST" && !sessionId) {
+    const session = await startKioskEnrollment(db, kioskId, principal.userId);
+    await writeAudit(db, principal, "kiosk.enrollment_started", "kiosk", kioskId, { sessionId: session.id });
+    return response({ session }, 201);
+  }
+  if (request.method === "PATCH" && sessionId) {
+    const input = await parseJson<{ memberId?: string }>(request);
+    if (!isObject(input) || Object.keys(input).some(key => key !== "memberId")) throw new HttpError(400, "Select one roster member");
+    const session = await selectEnrollmentMember(db, kioskId, sessionId, input.memberId);
+    await writeAudit(db, principal, "kiosk.enrollment_member_selected", "kiosk", kioskId, { sessionId, rosterId: input.memberId });
+    return response({ session });
+  }
+  if (request.method === "DELETE" && sessionId) {
+    await cancelKioskEnrollment(db, kioskId, sessionId);
+    await writeAudit(db, principal, "kiosk.enrollment_cancelled", "kiosk", kioskId, { sessionId });
+    return response({ cancelled: true });
+  }
+  throw new HttpError(405, "Unsupported enrollment operation");
+}
+async function kioskEnrollmentProgress(request: Request, env: Env, sessionId: string): Promise<Response> {
+  const kiosk = await kioskFor(request, env), input = await parseJson<{ status?: string; message?: string }>(request);
+  if (!isObject(input) || Object.keys(input).some(key => !["status", "message"].includes(key))) throw new HttpError(400, "Unsupported enrollment progress");
+  // Device-supplied prose is deliberately not persisted or reflected.
+  return response({ session: await progressKioskEnrollment(requireDatabase(env), kiosk.id, sessionId, input.status) });
 }
 async function queueKioskCommand(request: Request, env: Env, kioskId: string): Promise<Response> {
   if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Kiosk commands require the dashboard origin");
@@ -1577,16 +1608,17 @@ async function integrationsStatus(request: Request, env: Env): Promise<Response>
 async function discordChannelManagerSettings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") {
-    const settings = await db.prepare("SELECT discord_channel_manager_enabled AS enabled, discord_contest_window_hours AS contestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number; contestWindowHours?: number }>();
-    return response({ enabled: Boolean(settings?.enabled), contestWindowHours: settings?.contestWindowHours ?? 24 });
+    const settings = await db.prepare("SELECT discord_channel_manager_enabled AS enabled, discord_contest_window_hours AS contestWindowHours, discord_block_recontests_after_rejection AS blockRecontestsAfterRejection FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number; contestWindowHours?: number; blockRecontestsAfterRejection?: number }>();
+    return response({ enabled: Boolean(settings?.enabled), contestWindowHours: settings?.contestWindowHours ?? 24, blockRecontestsAfterRejection: Boolean(settings?.blockRecontestsAfterRejection) });
   }
   const input = await parseJson<DiscordChannelManagerInput>(request); const errors: string[] = [];
   if (typeof input.enabled !== "boolean") errors.push("Channel manager enabled must be true or false");
+  if (input.blockRecontestsAfterRejection !== undefined && typeof input.blockRecontestsAfterRejection !== "boolean") errors.push("Block re-contests after rejection must be a boolean");
   if (!Number.isInteger(input.contestWindowHours) || input.contestWindowHours! < 1 || input.contestWindowHours! > 168) errors.push("Discord contest window must be from 1 to 168 hours");
   if (errors.length) throw new HttpError(400, "Invalid Discord channel manager settings", errors);
-  await db.prepare("UPDATE organization_settings SET discord_channel_manager_enabled = ?, discord_contest_window_hours = ? WHERE installation_id = 'primary'").bind(input.enabled ? 1 : 0, input.contestWindowHours).run();
-  await writeAudit(db, principal, "discord.channel_manager_updated", "integration", "discord", { enabled: input.enabled, contestWindowHours: input.contestWindowHours });
-  return response({ enabled: input.enabled, contestWindowHours: input.contestWindowHours });
+  await db.prepare("UPDATE organization_settings SET discord_channel_manager_enabled = ?, discord_contest_window_hours = ?, discord_block_recontests_after_rejection = COALESCE(?, discord_block_recontests_after_rejection) WHERE installation_id = 'primary'").bind(input.enabled ? 1 : 0, input.contestWindowHours, input.blockRecontestsAfterRejection === undefined ? null : input.blockRecontestsAfterRejection ? 1 : 0).run();
+  await writeAudit(db, principal, "discord.channel_manager_updated", "integration", "discord", { enabled: input.enabled, contestWindowHours: input.contestWindowHours, ...(input.blockRecontestsAfterRejection !== undefined ? { blockRecontestsAfterRejection: input.blockRecontestsAfterRejection } : {}) });
+  return response({ enabled: input.enabled, contestWindowHours: input.contestWindowHours, ...(input.blockRecontestsAfterRejection !== undefined ? { blockRecontestsAfterRejection: input.blockRecontestsAfterRejection } : {}) });
 }
 async function discordAnomalyReportSettings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -2481,11 +2513,12 @@ async function discordMissing(request: Request, env: Env): Promise<Response> {
 }
 async function discordContests(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); await requireIntegrationConfigured(env, "discord"); const meetingId = new URL(request.url).searchParams.get("meetingId"); const where = meetingId ? "AND c.meeting_id = ?" : "";
-  const statement = requireDatabase(env).prepare(`SELECT c.meeting_id AS meetingId, mt.title AS meetingTitle, mt.starts_at AS meetingStartsAt, c.member_id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, c.status, c.created_at AS createdAt, c.resolved_at AS resolvedAt, c.review_note AS reviewNote, (SELECT COUNT(*) FROM discord_attendance_contests history WHERE history.installation_id = c.installation_id AND history.member_id = c.member_id) AS lifetimeContestCount, EXISTS (SELECT 1 FROM attendance_events check_in WHERE check_in.installation_id = c.installation_id AND check_in.meeting_id = c.meeting_id AND check_in.member_id = c.member_id AND check_in.action = 'check_in') AS hasRawCheckIn, EXISTS (SELECT 1 FROM attendance_events check_out WHERE check_out.installation_id = c.installation_id AND check_out.meeting_id = c.meeting_id AND check_out.member_id = c.member_id AND check_out.action = 'check_out') AS hasRawCheckOut FROM discord_attendance_contests c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id JOIN meetings mt ON mt.id = c.meeting_id AND mt.installation_id = c.installation_id WHERE c.installation_id = 'primary' ${where} ORDER BY CASE WHEN c.status = 'open' THEN 0 ELSE 1 END, c.created_at DESC`);
-  type ContestRow = Record<string, unknown> & { lifetimeContestCount?: number; hasRawCheckIn?: number; hasRawCheckOut?: number };
+  const statement = requireDatabase(env).prepare(`SELECT c.meeting_id AS meetingId, mt.title AS meetingTitle, mt.starts_at AS meetingStartsAt, c.member_id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, c.status, c.created_at AS createdAt, c.resolved_at AS resolvedAt, c.review_note AS reviewNote, c.prior_reviews_json AS priorReviewsJson, (SELECT SUM(1 + json_array_length(history.prior_reviews_json)) FROM discord_attendance_contests history WHERE history.installation_id = c.installation_id AND history.member_id = c.member_id) AS lifetimeContestCount, EXISTS (SELECT 1 FROM attendance_events check_in WHERE check_in.installation_id = c.installation_id AND check_in.meeting_id = c.meeting_id AND check_in.member_id = c.member_id AND check_in.action = 'check_in') AS hasRawCheckIn, EXISTS (SELECT 1 FROM attendance_events check_out WHERE check_out.installation_id = c.installation_id AND check_out.meeting_id = c.meeting_id AND check_out.member_id = c.member_id AND check_out.action = 'check_out') AS hasRawCheckOut FROM discord_attendance_contests c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id JOIN meetings mt ON mt.id = c.meeting_id AND mt.installation_id = c.installation_id WHERE c.installation_id = 'primary' ${where} ORDER BY CASE WHEN c.status = 'open' THEN 0 ELSE 1 END, c.created_at DESC`);
+  type ContestRow = Record<string, unknown> & { lifetimeContestCount?: number; hasRawCheckIn?: number; hasRawCheckOut?: number; priorReviewsJson?: string };
   const result = meetingId ? await statement.bind(meetingId).all<ContestRow>() : await statement.all<ContestRow>();
-  const contests = (result.results ?? []).map(({ hasRawCheckIn, hasRawCheckOut, ...contest }) => ({
+  const contests = (result.results ?? []).map(({ hasRawCheckIn, hasRawCheckOut, priorReviewsJson, ...contest }) => ({
     ...contest,
+    priorReviews: JSON.parse(priorReviewsJson ?? "[]"),
     lifetimeContestCount: Number(contest.lifetimeContestCount ?? 0),
     hasPartialScan: Boolean(hasRawCheckIn) && !Boolean(hasRawCheckOut),
     rawScanStatus: hasRawCheckIn ? (hasRawCheckOut ? "complete" : "partial") : "none",
@@ -2493,16 +2526,13 @@ async function discordContests(request: Request, env: Env): Promise<Response> {
   return response({ contests });
 }
 async function resolveDiscordContest(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); await requireIntegrationConfigured(env, "discord"); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; memberId?: string; resolution?: "approved" | "rejected" | "reviewed"; reviewNote?: string }>(request);
+  const principal = await requireRole(request, env, ["admin", "operator"]); await requireIntegrationConfigured(env, "discord"); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; memberId?: string; resolution?: "approved" | "rejected" | "reviewed"; reviewNote?: string; createdAt?: string }>(request);
   if (!input.meetingId || !input.memberId || !input.resolution || !["approved", "rejected", "reviewed"].includes(input.resolution)) throw new HttpError(400, "Meeting, member, and a valid resolution are required");
   if (typeof input.reviewNote !== "string" || !input.reviewNote.trim()) throw new HttpError(400, "A review reason is required before resolving this contest");
   if (input.reviewNote.length > 500) throw new HttpError(400, "Review reasons must be 500 characters or fewer");
-  const now = new Date().toISOString(); const statements: D1Statement[] = [];
-  if (input.resolution === "approved") statements.push(db.prepare("INSERT INTO attendance_corrections (id, installation_id, member_id, meeting_id, disposition, reason, created_by, created_at) SELECT ?, 'primary', ?, ?, 'present', ?, ?, ? WHERE EXISTS (SELECT 1 FROM discord_attendance_contests WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ? AND status = 'open')").bind(crypto.randomUUID(), input.memberId, input.meetingId, `Discord contest approved: ${input.reviewNote.trim()}`, principal.userId, now, input.meetingId, input.memberId));
-  statements.push(db.prepare("UPDATE discord_attendance_contests SET status = ?, resolved_by = ?, resolved_at = ?, review_note = ? WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ? AND status = 'open'").bind(input.resolution, principal.userId, now, input.reviewNote.trim(), input.meetingId, input.memberId));
-  const results = await db.batch(statements); const result = results.at(-1)!;
-  if ((result.meta?.changes ?? 1) < 1) throw new HttpError(404, "Open contest not found");
-  await writeAudit(db, principal, "discord.contest_resolved", "member", input.memberId, { meetingId: input.meetingId, resolution: input.resolution, reviewNote: input.reviewNote.trim() }); return response({ resolved: true, attendanceChanged: input.resolution === "approved" });
+  const result = await resolveContestBatch(db, principal.userId, { contests: [{ meetingId: input.meetingId, memberId: input.memberId, createdAt: input.createdAt }], reviewNote: input.reviewNote }, input.resolution);
+  if (!result.results[0]?.resolved) throw new HttpError(404, "Open contest not found. Refresh before retrying.");
+  return response({ resolved: true, attendanceChanged: input.resolution === "approved" });
 }
 function hexBytes(value: string): Uint8Array { if (!/^[0-9a-f]+$/i.test(value) || value.length % 2) throw new Error("Invalid hexadecimal value"); return Uint8Array.from(value.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16)); }
 const byteBuffer = (value: Uint8Array): ArrayBuffer => Uint8Array.from(value).buffer;
@@ -2841,9 +2871,9 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
     const recipient = await attendanceDb.prepare("SELECT r.member_id AS memberId, r.delivered_at AS deliveredAt FROM discord_attendance_recipients r JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE r.installation_id = 'primary' AND r.meeting_id = ? AND r.message_id = ? AND r.discord_user_id = ? AND m.discord_user_id = ? AND m.active = 1").bind(meetingId, messageId, discordUserId, discordUserId).first<{ memberId: string; deliveredAt: string }>();
     if (!recipient) return discordEphemeral("This notice does not match your current linked roster account. Use a notice sent after your Discord link was saved, or ask an Operator for help.");
     const contestWindow = await attendanceDb.prepare("SELECT discord_contest_window_hours AS discordContestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ discordContestWindowHours?: number }>();
-    if (Date.now() > Date.parse(recipient.deliveredAt) + (contestWindow?.discordContestWindowHours ?? 24) * 3_600_000) return discordEphemeral("This absence notice has expired. Ask an Operator to review your attendance.");
+    if (!Number.isFinite(Date.parse(recipient.deliveredAt)) || Date.now() > Date.parse(recipient.deliveredAt) + (contestWindow?.discordContestWindowHours ?? 24) * 3_600_000) return discordEphemeral("This absence notice has expired. Ask an Operator to review your attendance.");
     if (!(await linkedAbsentMembers(attendanceDb, meetingId)).some((member) => member.id === recipient.memberId)) return discordEphemeral("Attendance no longer shows you as absent, so no contest was created.");
-    const now = new Date().toISOString(); await attendanceDb.prepare("INSERT OR IGNORE INTO discord_attendance_contests (installation_id, meeting_id, member_id, message_id, status, created_at, submitted_by_discord_user_id) VALUES ('primary', ?, ?, ?, 'open', ?, ?)").bind(meetingId, recipient.memberId, messageId, now, discordUserId).run();
+    await submitContest(attendanceDb, { meetingId, memberId: recipient.memberId, messageId, discordUserId, now: new Date().toISOString() });
     const contest = await attendanceDb.prepare("SELECT status FROM discord_attendance_contests WHERE installation_id = 'primary' AND meeting_id = ? AND member_id = ?").bind(meetingId, recipient.memberId).first<{ status: string }>();
     return contest?.status === "open" ? discordEphemeral("Your attendance contest was recorded for review. Your attendance has not been changed.") : discordEphemeral(`Your attendance contest was already reviewed with status ${contest?.status ?? "unknown"}.`);
   } catch (error) { return discordEphemeral(error instanceof HttpError ? error.message : "Attendance is unavailable. Ask an Admin to review the module."); }
@@ -3144,7 +3174,7 @@ const tableColumns = {
   hours_correction_resolutions: ["installation_id", "request_id", "action", "note", "actor_user_id", "entry_id", "entry_revision", "created_at"],
   hours_activity_publications: ["installation_id", "activity_id", "time_zone", "start_local", "end_local", "start_occurrence", "end_occurrence", "start_ms", "end_ms", "google_calendar", "discord", "status", "revision", "actor_user_id", "reviewed_by_user_id", "reviewed_at", "created_at", "updated_at"],
   hours_publication_operations: ["installation_id", "activity_id", "publication_revision", "provider", "status", "attempts", "next_attempt_at", "external_id", "last_error", "lease_token", "lease_expires_at", "created_at", "updated_at", "action", "event_snapshot_json"],
-  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method"],
+  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method", "discord_block_recontests_after_rejection"],
   user_walkthroughs: ["installation_id", "user_id", "page_id", "content_version", "status", "step_id", "updated_at"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id", "debug_mode"],
   user_preferences: ["installation_id", "user_id", "developer_scheduler_enabled", "revision", "updated_at"],
@@ -3176,7 +3206,7 @@ const tableColumns = {
   integration_state: ["installation_id", "provider", "state_key", "external_id", "content_hash", "updated_at"],
   discord_attendance_notifications: ["installation_id", "meeting_id", "status", "message_id", "attempts", "last_error", "processed_at", "updated_at", "channel_id", "expires_at", "deleted_at", "thread_created_at", "delivery_id"],
   discord_attendance_recipients: ["installation_id", "meeting_id", "member_id", "discord_user_id", "message_id", "delivered_at", "delivery_id"],
-  discord_attendance_contests: ["installation_id", "meeting_id", "member_id", "message_id", "status", "resolved_by", "resolved_at", "created_at", "submitted_by_discord_user_id", "review_note"],
+  discord_attendance_contests: ["installation_id", "meeting_id", "member_id", "message_id", "status", "resolved_by", "resolved_at", "created_at", "submitted_by_discord_user_id", "review_note", "prior_reviews_json"],
   discord_anomaly_reports: ["installation_id", "meeting_id", "channel_id", "status", "nonce", "message_id", "attempts", "last_error", "processed_at", "updated_at"],
   audit_log: ["id", "installation_id", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "created_at"],
   telemetry_diagnostics: ["installation_id", "error_category", "last_seen_at"],
@@ -3197,7 +3227,7 @@ const rosterTables: BackupTable[] = ["members", "member_labels", "member_label_c
 const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const safeBackupValue = (value: unknown) => value === null || ["string", "number", "boolean"].includes(typeof value);
-const backupSchemaVersion = 40;
+const backupSchemaVersion = 41;
 const backupEnvelopeFormat = "lancerlogin-community-modular";
 const backupEnvelopeVersion = 1;
 
@@ -3209,7 +3239,7 @@ function backupOwnership(scope: BackupScope, schemaVersion = backupSchemaVersion
     contractVersion: module.contractVersion,
     backupVersion: module.backup.version,
     tables: scoped.filter((table) => bundledModuleRegistry.tableOwner(table)?.id === module.id),
-    sharedFields: module.persistence.sharedFields.filter((field) => scoped.includes(field.table as BackupTable)),
+    sharedFields: module.persistence.sharedFields.filter((field) => scoped.includes(field.table as BackupTable)).map(field => ({ ...field, columns: field.columns.filter(column => schemaVersion >= 41 || column !== "discord_block_recontests_after_rejection") })),
     transientAuthority: module.persistence.transientAuthority.filter((field) => scoped.includes(field.table as BackupTable)),
   }));
   return { core: { version: 1, tables: core }, modules };
@@ -3233,9 +3263,9 @@ async function backupData(request: Request, env: Env): Promise<Response> {
 
 type NormalizedBackup = { product: "LancerLogin"; schemaVersion: number; scope: BackupScope; exportedAt: string; attendanceRecentDays: number; attendancePolicyActivatedOn: string | null; tables: Record<BackupTable, Record<string, unknown>[]>; recovery: { revokedKiosks: number; invalidatedPairingCodes: number; pausedProviderOperations: number } };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
-  organization_settings: tableColumns.organization_settings.slice(0, -12),
+  organization_settings: tableColumns.organization_settings.slice(0, -13),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
-  discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -2),
+  discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -3),
 };
 const legacyInstallationTables = installationTables.filter((table) => !["member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_audience_labels", "meeting_weight_categories", "meeting_templates", "discord_attendance_notifications", "discord_attendance_recipients", "discord_anomaly_reports", "google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations", "discord_calendar_event_mappings", "discord_calendar_operations"].includes(table));
 const legacyMeetingTables = meetingTables.filter((table) => !["meeting_audience_labels", "meeting_weight_categories", "meeting_templates", "discord_attendance_notifications", "discord_attendance_recipients", "discord_anomaly_reports"].includes(table));
@@ -3327,7 +3357,7 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = table === "carpool_plans" && schemaVersion < 39 ? tableColumns.carpool_plans.filter(column => !["time_zone", "outbound_departure_at", "return_departure_at"].includes(column) && (schemaVersion >= 38 || !["group_settings_json", "last_rebuild_json"].includes(column)) && (schemaVersion >= 37 || column !== "trip_scope") && (schemaVersion >= 33 || column !== "meeting_id")) : table === "carpool_people" && schemaVersion < 37 ? tableColumns.carpool_people.filter(column => !column.endsWith("_location_source") && !column.endsWith("_location_label")) : schemaVersion < 36 && table === "hours_publication_operations" ? tableColumns.hours_publication_operations.slice(0, schemaVersion < 29 ? -2 : -1) : schemaVersion < 33 && table === "hours_correction_requests" ? tableColumns.hours_correction_requests.slice(0, -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 40 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -3 : schemaVersion < 31 ? -2 : -1) : schemaVersion < 29 && table === "hours_activities" ? tableColumns.hours_activities.slice(0, -4) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -10) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -8) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -6) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
+    const columns = table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : table === "carpool_plans" && schemaVersion < 39 ? tableColumns.carpool_plans.filter(column => !["time_zone", "outbound_departure_at", "return_departure_at"].includes(column) && (schemaVersion >= 38 || !["group_settings_json", "last_rebuild_json"].includes(column)) && (schemaVersion >= 37 || column !== "trip_scope") && (schemaVersion >= 33 || column !== "meeting_id")) : table === "carpool_people" && schemaVersion < 37 ? tableColumns.carpool_people.filter(column => !column.endsWith("_location_source") && !column.endsWith("_location_label")) : schemaVersion < 36 && table === "hours_publication_operations" ? tableColumns.hours_publication_operations.slice(0, schemaVersion < 29 ? -2 : -1) : schemaVersion < 33 && table === "hours_correction_requests" ? tableColumns.hours_correction_requests.slice(0, -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 40 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -3 : schemaVersion < 31 ? -2 : -1) : schemaVersion < 29 && table === "hours_activities" ? tableColumns.hours_activities.slice(0, -4) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -11) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column])) || (sourceSchemaVersion >= 31 || community22) && Object.keys(row).some((column) => !(columns as readonly string[]).includes(column))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
@@ -3353,7 +3383,7 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
     + tables.discord_attendance_notifications.filter((row) => row.status === "pending").length
     + tables.discord_anomaly_reports.filter((row) => row.status === "pending").length
     + tables.hours_publication_operations.filter((row) => ["pending", "processing"].includes(String(row.status))).length;
-  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, discord_anomaly_reports_enabled: 0, discord_anomaly_report_channel_id: null, discord_anomaly_reports_enabled_at: null, attendance_recent_days: 30, attendance_policy_activated_on: null, ...row, ...(schemaVersion < 31 ? { kiosk_authentication_method: "fingerprint" } : {}) }));
+  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_block_recontests_after_rejection: 0, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, discord_anomaly_reports_enabled: 0, discord_anomaly_report_channel_id: null, discord_anomaly_reports_enabled_at: null, attendance_recent_days: 30, attendance_policy_activated_on: null, ...row, ...(schemaVersion < 31 ? { kiosk_authentication_method: "fingerprint" } : {}) }));
   if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, thread_created_at: null, delivery_id: null, ...row }));
   if (tables.discord_attendance_recipients) tables.discord_attendance_recipients = tables.discord_attendance_recipients.map((row) => ({ delivery_id: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
@@ -3431,7 +3461,18 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
     }
     for (const row of latest.values()) tables.attendance_events.push({ ...row, id: `legacy-restore-checkout:${row.member_id}:${row.meeting_id}`, source: "manual", kiosk_event_id: null, action: "check_out" });
   }
-  if (tables.discord_attendance_contests) tables.discord_attendance_contests = tables.discord_attendance_contests.map((row) => ({ submitted_by_discord_user_id: null, review_note: null, ...row }));
+  if (tables.discord_attendance_contests) tables.discord_attendance_contests = tables.discord_attendance_contests.map((row) => ({ submitted_by_discord_user_id: null, review_note: null, prior_reviews_json: "[]", ...row }));
+  if (tables.organization_settings.some(row => row.discord_block_recontests_after_rejection !== 0 && row.discord_block_recontests_after_rejection !== 1)) throw new HttpError(400, "Backup contest rejection setting is invalid");
+  for (const row of tables.discord_attendance_contests) {
+    try {
+      const history = JSON.parse(String(row.prior_reviews_json));
+      if (!Array.isArray(history) || history.some(review => !isObject(review) || review.status !== "rejected"
+        || typeof review.createdAt !== "string" || !validTimestamp(review.createdAt)
+        || typeof review.messageId !== "string" || !review.messageId
+        || ![review.resolvedBy, review.submittedByDiscordUserId, review.reviewNote].every(value => value === null || typeof value === "string")
+        || review.resolvedAt !== null && (typeof review.resolvedAt !== "string" || !validTimestamp(review.resolvedAt)))) throw new Error();
+    } catch { throw new HttpError(400, "Backup contest review history is invalid"); }
+  }
   if (schemaVersion < 15) {
     tables.label_attendance_rules = tables.label_weekly_targets.map((row) => ({ id: "legacy:" + row.id, installation_id: row.installation_id, label_id: row.label_id, starts_on: row.starts_on, ends_on: row.ends_on, rule_type: "weekly_count", threshold_percent: null, meetings_per_week: row.meetings_per_week, created_by: row.created_by, created_at: row.created_at, updated_at: row.created_at }));
     if (tables.member_labels.some((row) => row.formula_enabled === 1) || tables.label_attendance_rules.length) tables.organization_settings = tables.organization_settings.map((row) => ({ ...row, attendance_policy_activated_on: new Date().toISOString().slice(0, 10) }));
@@ -3693,6 +3734,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
       throw new HttpError(410, "Peer fingerprint sharing has been retired. Use cloud fingerprint storage.");
     }
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
+    else if (/^\/admin\/kiosks\/[^/]+\/enrollment(?:\/[^/]+)?$/.test(url.pathname)) result = await dashboardKioskEnrollment(request, env, decodeURIComponent(url.pathname.split("/")[3]), url.pathname.split("/")[5] ? decodeURIComponent(url.pathname.split("/")[5]) : undefined);
     else if (url.pathname === "/admin/kiosks/authentication-method" && request.method === "PATCH") result = await kioskAuthenticationConfiguration(request, env);
     else if (/^\/admin\/kiosks\/[^/]+\/authentication-method$/.test(url.pathname) && request.method === "PATCH") result = await kioskAuthenticationConfiguration(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageKiosk(request, env, decodeURIComponent(url.pathname.split("/")[3]));
@@ -3753,11 +3795,11 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/discord/link" && request.method === "POST") result = await linkDiscordMember(request, env);
     else if (url.pathname === "/discord/missing" && request.method === "POST") result = await discordMissing(request, env);
     else if (url.pathname === "/discord/contests" && request.method === "GET") result = await discordContests(request, env);
-    else if (url.pathname === "/discord/contests/accept" && request.method === "POST") {
+    else if (["/discord/contests/accept", "/discord/contests/reject"].includes(url.pathname) && request.method === "POST") {
       const principal = await requireRole(request, env, ["admin", "operator"]);
-      if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Contest acceptance requires the dashboard origin");
+      if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Contest review requires the dashboard origin");
       await requireIntegrationConfigured(env, "discord");
-      result = response(await acceptContestBatch(requireDatabase(env), principal.userId, await parseJson(request)));
+      result = response(await (url.pathname.endsWith("/reject") ? rejectContestBatch : acceptContestBatch)(requireDatabase(env), principal.userId, await parseJson(request)));
     }
     else if (url.pathname === "/discord/contests/resolve" && request.method === "POST") result = await resolveDiscordContest(request, env);
     else if (url.pathname === "/discord/calendar" && request.method === "POST") result = await discordCalendar(request, env);
@@ -3794,6 +3836,21 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
       const authorization = request.headers.get("authorization");
       if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
       result = await kioskPoll(request, { db: requireDatabase(env), credentialHash: await sha256(authorization.slice(7)), secret: env.FINGERPRINT_VAULT_KEY, respond: response });
+    }
+    else if (url.pathname === "/kiosk/enrollment" && request.method === "GET") result = response({ enrollment: await readKioskEnrollment(requireDatabase(env), (await kioskFor(request, env)).id) });
+    else if (/^\/kiosk\/enrollment\/[^/]+\/progress$/.test(url.pathname) && request.method === "POST") result = await kioskEnrollmentProgress(request, env, decodeURIComponent(url.pathname.split("/")[3]));
+    else if (url.pathname === "/kiosk/scan-reviews" && request.method === "POST") {
+      const kiosk = await kioskFor(request, env);
+      result = response(await syncKioskScanReviews(requireDatabase(env), { ...kiosk, tokenHash: await sha256(request.headers.get("authorization")!.slice(7)) }, await parseJson(request, 100_000)));
+    }
+    else if (url.pathname === "/admin/kiosks/scan-reviews" && request.method === "GET") {
+      await requireRole(request, env, ["admin"]);
+      result = response(await listKioskScanReviews(requireDatabase(env), url.searchParams.get("status") ?? "open", Number(url.searchParams.get("offset") ?? 0)));
+    }
+    else if (/^\/admin\/kiosks\/[^/]+\/scan-reviews\/[^/]+\/review$/.test(url.pathname) && request.method === "POST") {
+      const principal = await requireRole(request, env, ["admin"]);
+      if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Scan review requires the dashboard origin");
+      result = response(await markKioskScanReviewed(requireDatabase(env), principal.userId, decodeURIComponent(url.pathname.split("/")[3]), decodeURIComponent(url.pathname.split("/")[5]), await parseJson(request)));
     }
     else if (url.pathname === "/kiosk/heartbeat" && request.method === "POST") result = await kioskHeartbeat(request, env, context);
     else if (url.pathname === "/kiosk/config" && request.method === "GET") result = await kioskConfiguration(request, env);

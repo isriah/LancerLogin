@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { combinedMemberDataset, reportFieldSourceDataset } from "../apps/api/src/report-builder.ts";
+import { filterAndSortReportRows, combinedMemberDataset, reportFieldSourceDataset } from "../apps/api/src/report-builder.ts";
 import { reportColumnLabel } from "../apps/dashboard/src/saved-reports.ts";
 import { attendanceModule, coreReportDatasets, outreachModule, type ReportDatasetDefinition } from "../packages/shared/src/module-platform.ts";
 import { outreachSnapshot } from "./module-fixtures";
@@ -41,7 +41,7 @@ type Definition = {
   labelMatch: "any" | "all";
   membership: "current" | "historical";
   columns: { key: string; labelId?: string; unit?: "minutes" | "hours" }[];
-  columnFilters: { column: { key: string; labelId?: string; unit?: "minutes" | "hours" }; operator: "contains" | "minimum"; value: string }[];
+  columnFilters: { column: { key: string; labelId?: string; unit?: "minutes" | "hours" }; operator: "contains" | "minimum" | "equals" | "maximum" | "between" | "empty" | "not_empty"; value: string; upperValue?: string }[];
   sort: { column: { key: string; labelId?: string; unit?: "minutes" | "hours" }; direction: "asc" | "desc" };
 };
 
@@ -105,12 +105,7 @@ function reportResult(definition: Definition, pageSize: number | "all" = 25, sou
       return [column.key, field.available ? { text: column.unit === "hours" && typeof displayed === "number" ? displayed.toFixed(2) : String(displayed), sortValue: displayed === "N/A" ? null : displayed } : { text: "Unavailable", sortValue: null, unavailable: true, explanation: field.explanation }];
     })),
   }));
-  for (const filter of definition.columnFilters) rows = rows.filter((row) => {
-    const value = row.cells[filter.column.key];
-    return filter.operator === "minimum"
-      ? typeof value?.sortValue === "number" && value.sortValue >= Number(filter.value)
-      : value?.text.toLocaleLowerCase().includes(filter.value.toLocaleLowerCase());
-  });
+  rows = filterAndSortReportRows(definition, rows);
   const sortKey = definition.sort.column.key;
   rows.sort((left, right) => {
     const a = left.cells[sortKey]?.sortValue;
@@ -319,4 +314,69 @@ test("legacy member reports keep their definition until a column edit and offer 
   expect(seen.at(-1)?.columns).toEqual([...definition.columns, { key: "outreach.member.minutes", unit: "hours" }]);
   await expect(page.getByRole("table", { name: /Report results/ })).toContainText("2.75");
   await expect(page.getByRole("button", { name: "Save view", exact: true })).toBeEnabled();
+});
+
+
+test("saved report column filters support ranges, empty values and unit conversion", async ({ page }) => {
+  const seen: Definition[] = [];
+  await routeOutreachReports(page, seen);
+  const definition = definitionFor("outreach.activities");
+  await page.route("**/reports/views", (route) => route.fulfill({ json: { reports: [{ id: "filters", ownerUserId: "admin-1", scope: "shared", name: "Filtered activities", definition, revision: 1, createdAt: "2026-09-20T00:00:00Z", updatedAt: "2026-09-28T00:00:00Z", pinnedPosition: 0, warnings: [], errors: [] }] } }));
+  await page.goto("/reports/view/filters");
+  const table = page.getByRole("table", { name: /Report results/ });
+  await expect(table).toContainText("Community open house");
+  await page.getByRole("button", { name: "Minutes column options" }).click();
+  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("between");
+  await page.getByLabel("From (minutes)", { exact: true }).fill("45");
+  await expect(page.getByRole("button", { name: "Apply range" })).toBeDisabled();
+  await page.getByLabel("To (minutes)", { exact: true }).fill("120");
+  await page.getByRole("button", { name: "Apply range" }).click();
+  await expect.poll(() => seen.at(-1)?.columnFilters).toEqual([{ column: { key: "outreach.activity.minutes", unit: "minutes" }, operator: "between", value: "45", upperValue: "120" }]);
+  await page.getByRole("combobox", { name: "Units", exact: true }).selectOption("hours");
+  await expect(page.getByLabel("From (hours)", { exact: true })).toHaveValue("0.75");
+  await expect(page.getByLabel("To (hours)", { exact: true })).toHaveValue("2");
+  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("maximum");
+  await expect.poll(() => seen.at(-1)?.columnFilters[0]?.operator).toBe("maximum");
+  await expect(table).not.toContainText("Community open house");
+  await page.getByRole("button", { name: "Clear filter", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Activity column options", exact: true }).click();
+  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("equals");
+  await page.getByLabel("Equals", { exact: true }).fill("community open house");
+  await expect(table).not.toContainText("Team 901 design review");
+  await page.getByRole("button", { name: "Clear filter", exact: true }).click();
+  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("empty");
+  await expect(page.getByLabel("Equals", { exact: true })).toHaveCount(0);
+  await expect.poll(() => seen.at(-1)?.columnFilters[0]).toMatchObject({ operator: "empty", value: "" });
+  await expect(table).not.toContainText("Community open house");
+  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("not_empty");
+  await expect(table).toContainText("Community open house");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Activity column options", exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Service date column options", exact: true }).click();
+  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("between");
+  await page.getByLabel("From", { exact: true }).fill("2026-09-19");
+  await page.getByLabel("To", { exact: true }).fill("2026-09-20");
+  await page.getByRole("button", { name: "Apply range" }).click();
+  await expect(table).toContainText("Community open house");
+  await expect(table).not.toContainText("Team 901 design review");
+  for (const theme of ["light", "dark"]) for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.locator(".app").evaluate((element, theme) => { element.setAttribute("data-theme", theme); (element as HTMLElement).style.setProperty("--primary", "#176b55"); (element as HTMLElement).style.setProperty("--secondary", "#a16f32"); }, theme);
+    const apply = page.getByRole("button", { name: "Apply range" });
+    await apply.scrollIntoViewIfNeeded();
+    await page.mouse.move(0, 0);
+    await apply.focus();
+    await expect(apply).toBeFocused();
+    const style = await apply.evaluate((element) => {
+      const actual = getComputedStyle(element); const probe = document.createElement("span"); element.append(probe);
+      probe.style.cssText = "background:var(--ui-surface-subtle);color:var(--ui-text);border:1px solid var(--ui-border);border-radius:var(--radius-control)";
+      const expected = getComputedStyle(probe);
+      const result = { background: actual.backgroundColor, text: actual.color, border: actual.borderTopColor, radius: actual.borderRadius, height: element.getBoundingClientRect().height, expectedBackground: expected.backgroundColor, expectedText: expected.color, expectedBorder: expected.borderTopColor, expectedRadius: expected.borderRadius };
+      probe.remove(); return result;
+    });
+    expect(style.background).toBe(style.expectedBackground); expect(style.text).toBe(style.expectedText); expect(style.border).toBe(style.expectedBorder); expect(style.radius).toBe(style.expectedRadius); expect(style.height).toBeGreaterThanOrEqual(44);
+    const width = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
+    expect(width.scrollWidth).toBeLessThanOrEqual(width.clientWidth);
+  }
 });

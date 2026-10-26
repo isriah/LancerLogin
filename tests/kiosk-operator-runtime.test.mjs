@@ -10,6 +10,23 @@ import { createR503 } from "../apps/kiosk/src/r503.mjs";
 const pageA = "synthetic-page-aaaaaaaa", pageB = "synthetic-page-bbbbbbbb";
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
+test("network clock corrections do not expire active presence or extend abandoned leases", t => {
+  let elapsed = 0;
+  t.mock.method(performance, "now", () => elapsed);
+  t.mock.method(Date, "now", () => Date.UTC(2026, 0, 1));
+  const presence = createOperatorPresence();
+  let page = presence.update({ action: "enter", pageId: pageA, mode: "attendance" });
+  for (const wallTime of [Date.UTC(2026, 9, 24), Date.UTC(2020, 0, 1)]) {
+    Date.now.mock.mockImplementation(() => wallTime);
+    elapsed += 5000;
+    page = presence.update({ action: "renew", pageId: pageA, generation: page.generation, mode: "attendance" });
+    assert.equal(page.captureSuspended, false);
+  }
+  elapsed += 15_000;
+  assert.equal(presence.status().reason, "presence_lost");
+  assert.throws(() => presence.update({ action: "renew", pageId: pageA, generation: page.generation, mode: "attendance" }), /expired/);
+});
+
 test("operator pages dominate attendance and transitions release only their owner", () => {
   const presence = createOperatorPresence();
   assert.equal(presence.status().captureSuspended, true);

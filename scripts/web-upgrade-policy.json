@@ -370,6 +370,21 @@
       "name": "0074_carpool_location_resolution.sql",
       "sha256": "2a050358470c8801eed7db495c9d356ad1abf27a0985a214c8a8ab3c079b6ac5",
       "forwardCompatible": true
+    },
+    {
+      "name": "0075_kiosk_enrollment_sessions.sql",
+      "sha256": "c06922a73427838fc2f26dc943f9c9b06ba9137680c4f299f27dee22b5cce0eb",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0076_contest_resubmissions.sql",
+      "sha256": "c164f807892977f38830ffdc36b6a410ee2e90221a97c6572ee57ace0cd737d0",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0077_kiosk_scan_reviews.sql",
+      "sha256": "4ec4889bba8c9439290910f4ee04972a025de6aec28c66ed73463d28d897e789",
+      "forwardCompatible": true
     }
   ]
 }

@@ -16,6 +16,34 @@ const reply = () => ({ protocol: 1, command: null, configuration: { kiosk: { id:
 } });
 const manifest = () => ({ vaultId: id, fingerprints: [{ fingerprintId, memberId: "synthetic", rosterId: "identity" }] });
 
+test("enrollment opt-in returns a session without changing legacy command behavior", async () => {
+  const urls = [], enrollment = { id: "synthetic-session" };
+  const client = createKioskPollClient(config, { enrollment: true, fetchImpl: async url => { urls.push(new URL(url)); return Response.json({ ...reply(), enrollment }); } });
+  assert.deepEqual((await client.poll()).enrollment, enrollment);
+  assert.equal(urls[0].searchParams.get("enrollment"), "1");
+});
+
+test("old servers reject enrollment opt-in once then keep existing polling working", async () => {
+  const urls = [];
+  const client = createKioskPollClient(config, { enrollment: true, fetchImpl: async url => {
+    const parsed = new URL(url); urls.push(parsed);
+    return parsed.searchParams.has("enrollment") ? Response.json({ error: "Unsupported" }, { status: 400 }) : Response.json(reply());
+  } });
+  assert.equal((await client.poll()).enrollmentUnsupported, true);
+  assert.equal((await client.poll()).command, null);
+  assert.deepEqual(urls.map(url => url.searchParams.has("enrollment")), [true, false, false]);
+});
+
+test("enrollment fallback discovers sessions after an API upgrade without restarting polling", async () => {
+  let remote = null; const seen = [], commands = [];
+  const scheduler = createKioskPollScheduler({ client: { poll: async () => ({ command: null, enrollmentUnsupported: true, configuration: () => ({}) }) },
+    commands: value => commands.push(value), configuration: () => {}, fingerprints: () => {}, enrollment: value => seen.push(value),
+    legacy: { enrollment: async () => seen.push(remote) } });
+  await scheduler.tick(); await settle(); remote = { id: "synthetic-upgraded-session" };
+  await scheduler.tick(); await settle();
+  assert.deepEqual(seen, [null, remote]); assert.deepEqual(commands, [null, null]); assert.equal(scheduler.legacy(), false);
+});
+
 test("poll revision revalidation preserves the original roster deadline and replays bounded manifest pages", async () => {
   let time = 1000, body = reply(), reads = 0;
   const urls = [], client = createKioskPollClient(config, { now: () => time, fetchImpl: async url => { urls.push(new URL(url)); return Response.json(body); } });

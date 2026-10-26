@@ -2,6 +2,7 @@
 // Input adapters choose transitions; renderers only consume this display-safe state.
 export const kioskStates = Object.freeze({
   ready: { message: "Place finger on reader", detail: "Attendance kiosk ready", tone: "ready" },
+  clock_required: { message: "Confirm date and time", detail: "Open maintenance and enter the local PIN to confirm the clock", tone: "notice" },
   processing: { message: "Checking scan", detail: "Hold still", tone: "processing" },
   welcome: { message: "Welcome", detail: "Arrival recorded", tone: "success", durationMs: 2400 },
   goodbye: { message: "Goodbye", detail: "Departure recorded", tone: "success", durationMs: 2600 },

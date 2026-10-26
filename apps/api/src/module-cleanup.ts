@@ -41,10 +41,10 @@ const attendanceSteps: readonly CleanupStep[] = [
   { kind: "delete", table: "setup_progress", where: "step IN ('pair-kiosk','fingerprint-test','confirm-attendance')" },
   { kind: "assignments" },
   { kind: "reset", table: "members", pending: "attendance_required_from IS NOT NULL", set: "attendance_required_from=NULL", bindings: [] },
-  { kind: "reset", table: "organization_settings", pending: `late_scan_minutes<>30 OR discord_contest_window_hours<>24 OR discord_channel_manager_enabled<>0
+  { kind: "reset", table: "organization_settings", pending: `late_scan_minutes<>30 OR discord_block_recontests_after_rejection<>0 OR discord_contest_window_hours<>24 OR discord_channel_manager_enabled<>0
       OR attendance_reporting_starts_on IS NOT NULL OR anomaly_late_threshold_minutes<>10 OR anomaly_early_threshold_minutes<>10
       OR discord_anomaly_reports_enabled<>0 OR discord_anomaly_report_channel_id IS NOT NULL OR discord_anomaly_reports_enabled_at IS NOT NULL
-      OR attendance_recent_days<>30 OR attendance_policy_activated_on IS NOT NULL OR kiosk_authentication_method<>'fingerprint'`, set: `late_scan_minutes=30,discord_contest_window_hours=24,
+      OR attendance_recent_days<>30 OR attendance_policy_activated_on IS NOT NULL OR kiosk_authentication_method<>'fingerprint'`, set: `late_scan_minutes=30,discord_block_recontests_after_rejection=0,discord_contest_window_hours=24,
       discord_channel_manager_enabled=0,attendance_reporting_starts_on=NULL,anomaly_late_threshold_minutes=10,anomaly_early_threshold_minutes=10,
       discord_anomaly_reports_enabled=0,discord_anomaly_report_channel_id=NULL,discord_anomaly_reports_enabled_at=NULL,
       attendance_recent_days=30,attendance_policy_activated_on=NULL,kiosk_authentication_method='fingerprint'`, bindings: [] },
@@ -63,8 +63,10 @@ const attendanceSteps: readonly CleanupStep[] = [
   { kind: "delete", table: "kiosk_fingerprint_reset_commands" },
   { kind: "delete", table: "kiosk_fingerprint_reset_batches" },
   { kind: "delete", table: "kiosk_fingerprint_retired_review_grants" },
+  { kind: "delete", table: "kiosk_enrollment_sessions" },
   { kind: "delete", table: "kiosk_fingerprint_vault_enrollments" },
   { kind: "delete", table: "kiosk_fingerprint_vault_retirements" },
+  { kind: "delete", table: "kiosk_scan_reviews" },
 ];
 
 const outreachSteps: readonly CleanupStep[] = [

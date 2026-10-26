@@ -6,7 +6,11 @@ Read the guide for the surface you are changing and use its stated acceptance cr
 
 Use Node.js 24.21.0, matching the verification workflow, and install dependencies with `npm ci --no-audit`. This runtime includes the [Windows shutdown fix](https://github.com/nodejs/node/pull/61999) needed for reliable Wrangler CLI checks. Older Node 24 builds can crash after the CLI correctly rejects invalid configuration; keep the test's exit-code and error assertions intact.
 
+The lockfile uses Vite 7.3.7 and overrides Miniflare's Undici dependency to 7.30.1 for the October 2026 security fixes ([Vite advisory](https://github.com/advisories/GHSA-rq7h-c2jc-7f22), [Undici advisory](https://github.com/advisories/GHSA-4qv8-2p9j-2685)). Keep the override until the pinned Miniflare dependency itself selects a patched version, then remove it with a strict audit and affected local-runtime tests. Do not broadly refresh Wrangler or unrelated dependencies to clear an audit finding.
+
 ## During implementation
+
+For a new bundled module, follow [module authoring](MODULE-AUTHORING.md) for registration, authorization, setup, jobs, persistence, backup and lifecycle requirements.
 
 Run the smallest command that covers the files being changed:
 

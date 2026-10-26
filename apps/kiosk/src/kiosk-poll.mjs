@@ -20,9 +20,10 @@ async function readBounded(response, maximum = 16 * 1024 * 1024) {
 
 // Cache metadata only. Every reuse requires a successful current-authority poll;
 // downloads, uploads and acknowledgements still use their protected endpoints.
-export function createKioskPollClient(config, { fetchImpl = fetch, now = Date.now, maximumManifestPages = 128 } = {}) {
+export function createKioskPollClient(config, { fetchImpl = fetch, now = Date.now, maximumManifestPages = 128, enrollment = false } = {}) {
   const base = normalizeApiUrl(config.apiUrl);
   let roster, rosterRevision, vaultBinding, manifestPages = new Map(), running, generation = 0;
+  let enrollmentSupported = enrollment;
   function invalidate() { generation++; roster = undefined; rosterRevision = undefined; vaultBinding = undefined; manifestPages.clear(); }
   async function poll({ fingerprints = false, configuration = false, peerAfter } = {}) {
     const query = new URLSearchParams({ v: "1" });
@@ -32,14 +33,24 @@ export function createKioskPollClient(config, { fetchImpl = fetch, now = Date.no
       if (peerAfter !== undefined) { if (!identifier(peerAfter)) throw unavailable(); query.set("peerAfter", peerAfter); }
     }
     if (configuration) query.set("config", "1");
+    if (enrollmentSupported) query.set("enrollment", "1");
     const requestedAt = now(), requestGeneration = generation;
     try {
-      const response = await fetchImpl(`${base}/kiosk/poll?${query}`, { redirect: "error", signal: AbortSignal.timeout(8000), headers: { authorization: `Bearer ${config.kioskToken}` } });
+      const options = { redirect: "error", signal: AbortSignal.timeout(8000), headers: { authorization: `Bearer ${config.kioskToken}` } };
+      let response = await fetchImpl(`${base}/kiosk/poll?${query}`, options);
+      if (response.status === 400 && enrollmentSupported) {
+        await response.body?.cancel(); enrollmentSupported = false; query.delete("enrollment");
+        response = await fetchImpl(`${base}/kiosk/poll?${query}`, options);
+      }
       if ([404, 405].includes(response.status)) { await response.body?.cancel(); invalidate(); return { unsupported: true }; }
       if (!response.ok) { await response.body?.cancel(); const error = unavailable(); error.status = response.status; error.reasonCode = [401, 403].includes(response.status) ? "authentication_failed" : "network_unavailable"; throw error; }
       const result = await readBounded(response);
       if (result?.protocol !== 1 || !Object.hasOwn(result, "command") || result.command !== null && (!identifier(result.command?.id) || !["reload_display", "reset_network_pin", "restart_service", "reboot", "install_latest"].includes(result.command.type))) throw unavailable();
       const output = { command: result.command };
+      if (enrollment) {
+        if (enrollmentSupported && Object.hasOwn(result, "enrollment")) output.enrollment = structuredClone(result.enrollment);
+        else { enrollmentSupported = false; output.enrollmentUnsupported = true; }
+      }
       if (configuration) output.configuration = () => {
         if (!result.configuration?.settings || typeof result.configuration.settings !== "object" || !identifier(result.configuration.kiosk?.id) || typeof result.configuration.kiosk.name !== "string") throw unavailable();
         return structuredClone(result.configuration);
@@ -111,8 +122,10 @@ export function createKioskPollClient(config, { fetchImpl = fetch, now = Date.no
 
 // A slow fingerprint transfer never holds the five-second command transport.
 // Failed requests do not advance due times or silently select legacy routes.
-export function createKioskPollScheduler({ client, commands, configuration, fingerprints, legacy, fingerprintBusy = () => false, peerAfter = () => undefined, onError = () => {}, now = Date.now }) {
+export function createKioskPollScheduler({ client, commands, configuration, fingerprints, enrollment, legacy, fingerprintBusy = () => false, peerAfter = () => undefined, onError = () => {}, now = Date.now }) {
   let running, commandRunning, configurationRunning, fingerprintRunning;
+  let enrollmentRunning;
+  function applyEnrollment(operation) { if (operation && !enrollmentRunning) enrollmentRunning = Promise.resolve().then(operation).catch(error => onError(error, "enrollment")).finally(() => { enrollmentRunning = undefined; }); }
   let legacyMode = false, nextFingerprint = 0, nextConfiguration = 0, configurationRetry = true;
   // Retain periodic phase across small timer jitter and off-grid manual syncs.
   // An early manual refresh never postpones the next scheduled authority check.
@@ -138,11 +151,14 @@ export function createKioskPollScheduler({ client, commands, configuration, fing
       if (result.unsupported) {
         legacyMode = true;
         applyCommands(legacy.commands);
+        applyEnrollment(legacy.enrollment);
         if (configurationDue) applyConfiguration(legacy.configuration, started);
         if (fingerprintDue) applyFingerprints(legacy.fingerprints, started);
         return;
       }
       applyCommands(() => commands(result.command));
+      if (enrollment && Object.hasOwn(result, "enrollment")) applyEnrollment(() => enrollment(result.enrollment));
+      else if (result.enrollmentUnsupported) applyEnrollment(legacy.enrollment);
       if (configurationDue) applyConfiguration(() => configuration(result.configuration()), started);
       if (fingerprintDue) applyFingerprints(() => fingerprints(result.fingerprints), started);
     } catch (error) { onError(error, "transport"); }

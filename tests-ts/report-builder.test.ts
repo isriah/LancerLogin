@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { evaluateAttendance, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember } from "../apps/api/src/attendance-policy.ts";
-import { buildReportRows, combinedMemberDataset, defaultReportDefinition, formatReportCellForColumn, reportColumnLabel, reportFieldSourceDataset, reportFilterSourceDataset, resolveReportPeriod, validateReportDefinition, type ReportDefinition } from "../apps/api/src/report-builder.ts";
+import { filterAndSortReportRows, buildReportRows, combinedMemberDataset, defaultReportDefinition, formatReportCellForColumn, reportColumnLabel, reportFieldSourceDataset, reportFilterSourceDataset, resolveReportPeriod, validateReportDefinition, type ReportDefinition } from "../apps/api/src/report-builder.ts";
 
 const labels: PolicyLabel[] = [{ id: "class", name: "Class", active: 1, formulaEnabled: 0 }, { id: "team", name: "Team", active: 1, formulaEnabled: 0 }];
 const members: PolicyMember[] = [
@@ -213,4 +213,50 @@ test("walkthrough example works with an empty label catalog and a reusable month
   assert.equal(definition.version, 2);
   assert.equal(definition.dataset, "attendance.members");
   assert.ok(definition.columns.some((column) => column.key === "attendance.policy.report-summary"));
+});
+
+
+test("expanded column filters validate types, dates, ranges and preserve old definitions", () => {
+  const definition = defaultReportDefinition(false, "outreach.activities");
+  const number = { key: "outreach.activity.minutes", unit: "minutes" as const };
+  const date = { key: "outreach.activity.date" };
+  const text = { key: "outreach.activity.title" };
+  for (const filter of [
+    { column: number, operator: "equals", value: "0" },
+    { column: number, operator: "maximum", value: "12.5" },
+    { column: number, operator: "between", value: "0", upperValue: "12.5" },
+    { column: date, operator: "between", value: "2026-10-01", upperValue: "2026-10-25" },
+    { column: text, operator: "equals", value: "Example" },
+    { column: text, operator: "empty", value: "" },
+    { column: number, operator: "not_empty", value: "" },
+  ]) assert.deepEqual(validateReportDefinition({ ...definition, columnFilters: [filter] }, []).errors, [], JSON.stringify(filter));
+  for (const filter of [
+    { column: number, operator: "equals", value: "Infinity" },
+    { column: number, operator: "between", value: "2", upperValue: "1" },
+    { column: number, operator: "between", value: "2" },
+    { column: date, operator: "equals", value: "2026-02-30" },
+    { column: text, operator: "maximum", value: "x" },
+    { column: text, operator: "equals", value: "" },
+  ]) assert.match(validateReportDefinition({ ...definition, columnFilters: [filter] }, []).errors.join(" "), /column filters are invalid/i);
+});
+
+test("expanded filters use inclusive numeric and date bounds, display text and explicit emptiness", () => {
+  const definition = defaultReportDefinition(false, "outreach.activities");
+  const title = "outreach.activity.title", minutes = "outreach.activity.minutes", date = "outreach.activity.date";
+  const rows = [
+    { id: "a", label: "A", cells: { [title]: { text: "Avery Member", sortValue: "Member\u0000Avery" }, [minutes]: { text: "0", sortValue: 0 }, [date]: { text: "2026-10-01", sortValue: "2026-10-01" } } },
+    { id: "b", label: "B", cells: { [title]: { text: "Other", sortValue: null }, [minutes]: { text: "10", sortValue: 10 }, [date]: { text: "2026-10-25", sortValue: "2026-10-25" } } },
+    { id: "c", label: "C", cells: { [title]: { text: "", sortValue: null }, [minutes]: { text: "N/A", sortValue: null }, [date]: { text: "", sortValue: null } } },
+    { id: "d", label: "D", cells: { [title]: { text: "Unavailable", sortValue: null, unavailable: true }, [minutes]: { text: "Unavailable", sortValue: null, unavailable: true }, [date]: { text: "Unavailable", sortValue: null, unavailable: true } } },
+  ];
+  const match = (key: string, operator: NonNullable<ReportDefinition["columnFilters"]>[number]["operator"], value = "", upperValue?: string) => filterAndSortReportRows({ ...definition, columnFilters: [{ column: { key }, operator, value, upperValue }] }, rows).map((row) => row.id).sort();
+  assert.deepEqual(match(title, "equals", "AVERY MEMBER"), ["a"]);
+  assert.deepEqual(match(title, "not_empty"), ["a", "b"]);
+  assert.deepEqual(match(minutes, "equals", "0"), ["a"]);
+  assert.deepEqual(match(minutes, "maximum", "0"), ["a"]);
+  assert.deepEqual(match(minutes, "between", "0", "10"), ["a", "b"]);
+  assert.deepEqual(match(minutes, "empty"), ["c"]);
+  assert.deepEqual(match(minutes, "not_empty"), ["a", "b"]);
+  assert.deepEqual(match(date, "between", "2026-10-01", "2026-10-25"), ["a", "b"]);
+  assert.deepEqual(match(date, "maximum", "2026-10-01"), ["a"]);
 });

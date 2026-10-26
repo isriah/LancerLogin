@@ -1,8 +1,9 @@
 import { setDashboardTheme } from "./dashboard-theme";
+import { openActiveMeetingCalendar } from "./meeting-calendar-fixture";
 import { expect, test } from "@playwright/test";
 
 test("canonical meeting routes, legacy redirects, switching, and browser history stay synchronized", async ({ page }) => {
-  await page.goto("/dashboard");
+  await openActiveMeetingCalendar(page);
   await page.getByRole("button", { name: "Open meeting Build session", exact: true }).click();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
@@ -150,7 +151,11 @@ test("meeting-local calendar and Discord actions retain their scoped outcomes", 
   await page.route("**/discord/contests/resolve", async (route) => { resolutionBodies.push(route.request().postDataJSON()); await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ resolved: true, attendanceChanged: true }) }); });
   await page.route(/\/discord\/contests(?:\?.*)?$/, async (route) => { contestLoads += 1; await route.continue(); });
 
+  const initialContests = page.waitForResponse(/\/discord\/contests\?meetingId=active-meeting$/);
   await page.goto("/meetings/active-meeting");
+  const fixtureContests = (await (await initialContests).json()).contests as { memberId: string; createdAt: string }[];
+  const createdAt = fixtureContests.find(contest => contest.memberId === "member-3")!.createdAt;
+  expect(Number.isFinite(Date.parse(createdAt))).toBe(true);
   await page.locator(".meeting-more-actions > summary").click();
   await expect(page.getByRole("group", { name: "Meeting actions" })).toBeVisible();
   await page.getByRole("button", { name: "Sync configured calendars" }).click();
@@ -170,7 +175,7 @@ test("meeting-local calendar and Discord actions retain their scoped outcomes", 
   await contest.getByRole("button", { name: "Approve and mark present" }).click();
   await expect(page.locator(".meeting-contests")).toHaveCount(0);
   await expect.poll(() => contestLoads).toBeGreaterThan(loadsBeforeResolution);
-  expect(resolutionBodies).toEqual([{ meetingId: "active-meeting", memberId: "member-3", resolution: "approved", reviewNote: "Kiosk error confirmed with the member." }]);
+  expect(resolutionBodies).toEqual([{ meetingId: "active-meeting", memberId: "member-3", createdAt, resolution: "approved", reviewNote: "Kiosk error confirmed with the member." }]);
 });
 
 test("meeting contest review distinguishes partial, missing, and complete raw scans responsively", async ({ page }) => {

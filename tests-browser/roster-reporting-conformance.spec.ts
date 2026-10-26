@@ -1227,3 +1227,41 @@ test("compact custom reports put pagination below results and keep wide columns 
   expect(await scroller.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+
+for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
+  test(`long roster identities and compact leaderboard cells remain separate at ${width} in ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
+    await useReferenceContext(page);
+    const member = { ...roster[0], firstName: "Alexandria-Catherine", lastName: "Ellingsworth", memberId: "SYNTHETIC-OFFLINE-ACCEPTANCE-" + "9".repeat(51), email: "alexandria-catherine.ellingsworth@example.org" };
+    await page.route("**/admin/members", route => route.fulfill({ json: { members: [member], discordConfigured: true } }));
+    await page.goto("/roster");
+    const row = page.getByRole("row").filter({ hasText: member.memberId });
+    const identity = row.locator(".roster-identity"), externalId = row.locator(".roster-member-id");
+    const [nameBounds, idBounds, editBounds] = await Promise.all([identity.boundingBox(), externalId.boundingBox(), row.getByRole("button", { name: "Edit Alexandria-Catherine Ellingsworth", exact: true }).boundingBox()]);
+    expect(nameBounds!.width).toBeGreaterThanOrEqual(100);
+    expect(nameBounds!.x + nameBounds!.width).toBeLessThanOrEqual(idBounds!.x);
+    await expect(externalId).toHaveText(member.memberId);
+    for (const text of [identity.locator("strong"), identity.locator("small").first(), externalId]) {
+      expect(await text.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    }
+    expect(editBounds!.width).toBeGreaterThanOrEqual(44);
+    expect(editBounds!.height).toBeGreaterThanOrEqual(44);
+    await expectResponsiveFit(page);
+    await page.screenshot({ path: test.info().outputPath("roster-long-identity.png"), fullPage: true });
+    await page.goto("/reports");
+    const leaderboard = page.getByRole("table", { name: "Attendance leaderboard", exact: true });
+    const memberRow = leaderboard.getByRole("row").filter({ has: page.getByRole("link", { name: "Avery Stone", exact: true }) });
+    const cells = memberRow.getByRole("cell");
+    await expect(cells).toHaveCount(2);
+    await expect(cells.nth(1)).toHaveText("100%");
+    const [name, percentage] = await Promise.all([cells.nth(0).boundingBox(), cells.nth(1).boundingBox()]);
+    expect(name!.x + name!.width).toBeLessThanOrEqual(percentage!.x);
+    expect(Math.abs(name!.y + name!.height / 2 - percentage!.y - percentage!.height / 2)).toBeLessThanOrEqual(1);
+    expect(await cells.nth(1).evaluate(element => getComputedStyle(element, "::before").content)).toMatch(/^(none|normal|"")$/);
+    await expect(leaderboard).not.toContainText("A-101");
+    await expect(leaderboard.getByRole("link", { name: "Avery Stone", exact: true })).toHaveAttribute("href", "/roster/A-101");
+    await expectResponsiveFit(page);
+    await page.screenshot({ path: test.info().outputPath("leaderboard-compact.png"), fullPage: true });
+  });
+}

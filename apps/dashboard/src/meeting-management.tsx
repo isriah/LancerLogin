@@ -3,26 +3,17 @@ import { FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "./dashboard-api";
 import { useModalFocus } from "./modal-focus";
 import type { MemberLabel } from "./member-labels";
+import { formForMeeting, initialMeetingForm, meetingDurationMinutes, meetingTimestamps, moveMeetingStart, dateAfterDays, type MeetingForm } from "./meeting-form";
+export { addMinutes, dateAfterDays, formForMeeting, initialMeetingForm, localInput, meetingTimestamps, splitLocal, type MeetingForm } from "./meeting-form";
 
 export type Frequency = "daily" | "weekly" | "biweekly" | "monthly";
 export type MeetingWeightCategory = { id: string; name: string; weight: number; minimumDurationMinutes?: number | null; position: number; active: boolean | number };
 export type Meeting = { id: string; title: string; startsAt: string; endsAt: string; attendanceClosesAt: string; required: boolean | number; notes?: string | null; isTest?: boolean | number; seriesId?: string | null; recurrenceFrequency?: Frequency | null; recurrenceUntil?: string | null; recurrenceSequence?: number | null; weightCategoryId?: string | null; weightCategoryName?: string | null; attendanceWeight?: number; audienceMode?: "all" | "labels"; audienceLabelIds?: string[] };
-export type MeetingForm = { title: string; date: string; startTime: string; endTime: string; required: boolean; notes: string; weightCategoryId?: string | null; audienceMode: "all" | "labels"; audienceLabelIds: string[] };
 export type CalendarSync = { synced: number; queued: number; failed: number };
 export type DiscordCalendarSync = CalendarSync & { skipped: number };
 export type CalendarDelivery = { google_calendar: CalendarSync; discord: DiscordCalendarSync };
 export type MeetingDeletion = { meetingIds: string[]; deletedAt: string };
 export type PendingMeetingDeletion = { deletion: MeetingDeletion; message: string; scope: "occurrence" | "future" | "selection"; calendarSync?: CalendarSync; calendarDelivery?: CalendarDelivery };
-export const localInput = (value: string) => { const date = new Date(value); return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16); };
-export const splitLocal = (value: string) => { const local = localInput(value); return { date: local.slice(0, 10), time: local.slice(11, 16) }; };
-export const addMinutes = (date: string, time: string, minutes: number) => {
-  const next = new Date(`${date}T${time || "00:00"}`);
-  next.setMinutes(next.getMinutes() + minutes);
-  const local = localInput(next.toISOString());
-  return local.slice(0, 10) === date ? local.slice(11, 16) : "23:59";
-};
-export const meetingTimestamps = (value: MeetingForm) => ({ startsAt: new Date(`${value.date}T${value.startTime}`).toISOString(), endsAt: new Date(`${value.date}T${value.endTime}`).toISOString() });
-export const initialMeetingForm = (): MeetingForm => { const start = splitLocal(new Date(Date.now() + 3_600_000).toISOString()); return { title: "", date: start.date, startTime: start.time, endTime: addMinutes(start.date, start.time, 150), required: true, notes: "", weightCategoryId: undefined, audienceMode: "all", audienceLabelIds: [] }; };
 export const frequencyLabel = (value?: Frequency | null) => value === "biweekly" ? "Every two weeks" : value ? `${value[0].toUpperCase()}${value.slice(1)}` : "One time";
 export const calendarSyncMessage = (sync?: CalendarSync) => !sync ? "" : sync.failed ? " Google Calendar could not be reached; LancerLogin will retry automatically." : sync.queued ? " Google Calendar delivery is waiting and will retry automatically." : sync.synced ? " Google Calendar was updated." : "";
 export const calendarDeliveryMessage = (delivery?: CalendarDelivery, fallback?: CalendarSync) => {
@@ -33,28 +24,20 @@ export const calendarDeliveryMessage = (delivery?: CalendarDelivery, fallback?: 
   if (discord.failed) parts.push("Discord needs another attempt"); else if (discord.queued) parts.push("Discord is queued"); else if (discord.synced) parts.push("Discord updated");
   return parts.length ? ` Calendar delivery: ${parts.join("; ")}.` : "";
 };
-export const dateAfterDays = (date: string, days: number) => { const next = new Date(`${date}T12:00:00`); next.setDate(next.getDate() + days); return localInput(next.toISOString()).slice(0, 10); };
-
-export function formForMeeting(meeting: Meeting, duplicate = false): MeetingForm {
-  const start = splitLocal(meeting.startsAt); const end = splitLocal(meeting.endsAt);
-  if (!duplicate) return { title: meeting.title, date: start.date, startTime: start.time, endTime: end.time, required: Boolean(meeting.required), notes: meeting.notes ?? "", weightCategoryId: meeting.weightCategoryId ?? null, audienceMode: meeting.audienceMode ?? "all", audienceLabelIds: meeting.audienceLabelIds ?? [] };
-  const base = initialMeetingForm();
-  return { title: meeting.title, date: base.date, startTime: start.time, endTime: addMinutes(base.date, start.time, (Date.parse(meeting.endsAt) - Date.parse(meeting.startsAt)) / 60_000), required: Boolean(meeting.required), notes: meeting.notes ?? "", weightCategoryId: undefined, audienceMode: meeting.audienceMode ?? "all", audienceLabelIds: meeting.audienceLabelIds ?? [] };
-}
-
 const weightLabel = (category: Pick<MeetingWeightCategory, "name" | "weight">) => `${category.name} (${category.weight}×)`;
-const meetingDurationMinutes = (value: MeetingForm) => Math.round((Date.parse(`${value.date}T${value.endTime}`) - Date.parse(`${value.date}T${value.startTime}`)) / 60_000);
 export function MeetingFields({ value, onChange, categories = [], currentMeeting, initialFocus = false }: { value: MeetingForm; onChange: (value: MeetingForm) => void; categories?: MeetingWeightCategory[]; currentMeeting?: Meeting; initialFocus?: boolean }) {
   const [labels, setLabels] = useState<MemberLabel[]>([]);
   useEffect(() => { void api<{ labels: MemberLabel[] }>("/labels").then((result) => setLabels(result.labels)).catch(() => undefined); }, []);
-  const changeStart = (startTime: string) => onChange({ ...value, startTime, endTime: addMinutes(value.date, startTime, 150) });
-  const changeDate = (date: string) => onChange({ ...value, date, endTime: addMinutes(date, value.startTime, 150) });
-  const automatic = categories.find((category) => category.minimumDurationMinutes != null && meetingDurationMinutes(value) >= category.minimumDurationMinutes);
+  const duration = meetingDurationMinutes(value); const lastDuration = useRef(duration);
+  if (Number.isFinite(duration) && duration > 0) lastDuration.current = duration;
+  const changeStart = (startTime: string) => onChange(moveMeetingStart(value, { startTime }, lastDuration.current));
+  const changeDate = (date: string) => onChange(moveMeetingStart(value, { date }, lastDuration.current));
+  const automatic = categories.find((category) => category.minimumDurationMinutes != null && Math.round(duration) >= category.minimumDurationMinutes);
   const selected = value.weightCategoryId === undefined ? "automatic" : value.weightCategoryId === null ? "default" : value.weightCategoryId;
   const retiredCurrent = currentMeeting?.weightCategoryId && !categories.some((category) => category.id === currentMeeting.weightCategoryId) ? currentMeeting : undefined;
   return <>
     <div className="walkthrough-field-group" data-walkthrough="meeting-essentials"><label>Title<input data-modal-initial-focus={initialFocus ? "true" : undefined} required maxLength={120} value={value.title} onChange={(event) => onChange({ ...value, title: event.target.value })} /></label>
-    <div className="meeting-date-time-grid"><label>Date<input required type="date" value={value.date} onChange={(event) => changeDate(event.target.value)} /></label><div className="meeting-time-grid"><label>Start time<input required type="time" value={value.startTime} onChange={(event) => changeStart(event.target.value)} /></label><label>End time<input required type="time" value={value.endTime} onChange={(event) => onChange({ ...value, endTime: event.target.value })} /></label></div></div>
+    <div className="meeting-date-time-grid"><div className="meeting-time-grid"><label>Date<input required type="date" value={value.date} onChange={(event) => changeDate(event.target.value)} /></label><label>End date<input required type="date" min={value.date} value={value.endDate} onChange={(event) => onChange({ ...value, endDate: event.target.value })} /></label></div><div className="meeting-time-grid"><label>Start time<input required type="time" value={value.startTime} onChange={(event) => changeStart(event.target.value)} /></label><label>End time<input required type="time" value={value.endTime} onChange={(event) => onChange({ ...value, endTime: event.target.value })} /></label></div></div>
     <label><span className="meeting-notes-label">Notes <span>(optional)</span></span><textarea className="ui-control" rows={4} maxLength={2000} value={value.notes} onChange={(event) => onChange({ ...value, notes: event.target.value })} /></label>
     </div><div className="walkthrough-field-group" data-walkthrough="meeting-attendance"><label>Attendance weight<select className="ui-control ui-native-select" value={selected} aria-describedby="meeting-weight-help" onChange={(event) => onChange({ ...value, weightCategoryId: event.target.value === "automatic" ? undefined : event.target.value === "default" ? null : event.target.value })}><option value="automatic">Automatic ({automatic ? weightLabel(automatic) : "default 1×"})</option><option value="default">Default (1×)</option>{categories.map((category) => <option key={category.id} value={category.id}>{weightLabel(category)}{category.minimumDurationMinutes ? ` · ${category.minimumDurationMinutes}+ min` : ""}</option>)}{retiredCurrent && <option value={retiredCurrent.weightCategoryId!}>{retiredCurrent.weightCategoryName ?? "Retired category"} ({retiredCurrent.attendanceWeight ?? 1}×, retired)</option>}</select><span id="meeting-weight-help" className="field-help">Automatic uses the first matching active rule. You can choose any active category or the default weight.</span></label>
     <div className="inline-options"><label><input type="checkbox" checked={value.required} onChange={(event) => onChange({ ...value, required: event.target.checked })} /> Attendance required</label></div>

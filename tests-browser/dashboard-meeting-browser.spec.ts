@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
+import { openActiveMeetingCalendar } from "./meeting-calendar-fixture";
 
 test("Dashboard owns meeting navigation and remembers the selected browser", async ({ page }) => {
   await page.goto("/dashboard");
@@ -23,7 +24,7 @@ test("Dashboard owns meeting navigation and remembers the selected browser", asy
 });
 
 test("calendar range controls and all meeting choices open canonical detail routes", async ({ page }) => {
-  await page.goto("/dashboard");
+  const selectActiveDay = await openActiveMeetingCalendar(page);
   await expect(page.locator(".calendar-heading p")).toHaveCount(0);
   const firstDay = page.locator(".compact-calendar-day").first();
   const initialDay = await firstDay.getAttribute("aria-label");
@@ -41,6 +42,8 @@ test("calendar range controls and all meeting choices open canonical detail rout
   await page.goBack();
   await expect(page).toHaveURL(/\/dashboard$/);
   await page.getByRole("radio", { name: "Calendar" }).check();
+  // Month navigation selects its first day. Explicitly return to the active meeting's day.
+  await selectActiveDay();
   await page.getByRole("button", { name: "Open meeting Build session", exact: true }).click();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await page.goBack();
@@ -295,34 +298,46 @@ test("meeting creation shows the first automatic weight rule and permits a manua
   expect(submitted[1]).toMatchObject({ title: "Manual weight", weightCategoryId: "extended" });
 });
 
-test("successful creation refreshes the selected calendar or table and the meeting selector", async ({ page }) => {
-  const start = new Date(Date.now() + 24 * 60 * 60_000); start.setHours(18, 0, 0, 0);
-  let meetings = [{ id: "starting-meeting", title: "Starting point", startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 60 * 60_000).toISOString(), attendanceClosesAt: new Date(start.getTime() + 90 * 60_000).toISOString(), required: 1 }];
-  await page.route("**/meetings", async (route) => {
-    if (route.request().method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ meetings }) });
-    const body = route.request().postDataJSON() as { title: string; startsAt: string; endsAt: string; required: boolean; notes?: string };
-    const created = { id: `created-${meetings.length}`, ...body, attendanceClosesAt: new Date(Date.parse(body.endsAt) + 30 * 60_000).toISOString() };
-    meetings = [...meetings, created];
-    return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ meeting: created, meetings: [created] }) });
+test.describe("meeting creation refresh", () => {
+  test.use({ timezoneId: "UTC" });
+  for (const now of ["2026-10-25T12:00:00.000Z", "2026-10-31T23:30:00.000Z"]) test(`successful creation refreshes the selected calendar or table and the meeting selector at ${now}`, async ({ page }) => {
+    await page.clock.setFixedTime(new Date(now));
+    // The form defaults to one hour from now, which can be the next day/month.
+    // Select that date deliberately; creating a meeting preserves calendar selection.
+    const start = new Date(Date.parse(now) + 60 * 60_000);
+    let meetings = [{ id: "starting-meeting", title: "Starting point", startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 60 * 60_000).toISOString(), attendanceClosesAt: new Date(start.getTime() + 90 * 60_000).toISOString(), required: 1 }];
+    await page.route("**/meetings", async (route) => {
+      if (route.request().method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ meetings }) });
+      const body = route.request().postDataJSON() as { title: string; startsAt: string; endsAt: string; required: boolean; notes?: string };
+      const created = { id: `created-${meetings.length}`, ...body, attendanceClosesAt: new Date(Date.parse(body.endsAt) + 30 * 60_000).toISOString() };
+      meetings = [...meetings, created];
+      return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ meeting: created, meetings: [created] }) });
+    });
+
+    await page.goto("/dashboard");
+    if (start.getUTCMonth() !== new Date(now).getUTCMonth()) await page.getByRole("button", { name: "Next month of meetings" }).click();
+    const selectedDay = page.getByRole("button", { name: `${start.toLocaleDateString("en-US", { timeZone: "UTC", dateStyle: "long" })}, 1 meeting`, exact: true });
+    await selectedDay.click();
+    await expect(selectedDay).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Add meeting" }).click();
+    let dialog = page.getByRole("dialog", { name: "Create meeting" });
+    await expect(dialog.getByLabel("Date", { exact: true })).toHaveValue(start.toISOString().slice(0, 10));
+    await dialog.getByLabel("Title", { exact: true }).fill("Calendar planning");
+    await dialog.getByRole("button", { name: "Create meeting", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Meeting", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Open meeting Calendar planning", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: `${start.toLocaleDateString("en-US", { timeZone: "UTC", dateStyle: "long" })}, 2 meetings`, exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("radio", { name: "Calendar" })).toBeChecked();
+
+    await page.getByRole("radio", { name: "Table" }).check();
+    await expect(page.locator(".meeting-browser-row").filter({ hasText: "Calendar planning" })).toBeVisible();
+    await page.getByRole("button", { name: "Add meeting" }).click();
+    dialog = page.getByRole("dialog", { name: "Create meeting" });
+    await dialog.getByLabel("Title", { exact: true }).fill("Table planning");
+    await dialog.getByRole("button", { name: "Create meeting", exact: true }).click();
+    await expect(page.locator(".meeting-browser-row").filter({ hasText: "Table planning" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Meeting" }).getByRole("option", { name: /Table planning/ })).toHaveCount(1);
+    await expect(page.getByRole("radio", { name: "Table" })).toBeChecked();
+    await expect(page).toHaveURL(/\/dashboard$/);
   });
-
-  await page.goto("/dashboard");
-  await page.getByRole("button", { name: "Add meeting" }).click();
-  let dialog = page.getByRole("dialog", { name: "Create meeting" });
-  await dialog.getByLabel("Title", { exact: true }).fill("Calendar planning");
-  await dialog.getByRole("button", { name: "Create meeting", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Meeting", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Open meeting Calendar planning", exact: true })).toBeVisible();
-  await expect(page.getByRole("radio", { name: "Calendar" })).toBeChecked();
-
-  await page.getByRole("radio", { name: "Table" }).check();
-  await expect(page.locator(".meeting-browser-row").filter({ hasText: "Calendar planning" })).toBeVisible();
-  await page.getByRole("button", { name: "Add meeting" }).click();
-  dialog = page.getByRole("dialog", { name: "Create meeting" });
-  await dialog.getByLabel("Title", { exact: true }).fill("Table planning");
-  await dialog.getByRole("button", { name: "Create meeting", exact: true }).click();
-  await expect(page.locator(".meeting-browser-row").filter({ hasText: "Table planning" })).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "Meeting" }).getByRole("option", { name: /Table planning/ })).toHaveCount(1);
-  await expect(page.getByRole("radio", { name: "Table" })).toBeChecked();
-  await expect(page).toHaveURL(/\/dashboard$/);
 });

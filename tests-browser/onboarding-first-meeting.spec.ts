@@ -2,6 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences as refs } from "../apps/dashboard/src/design-conformance";
 import { attendanceSetupState, attendanceSnapshot, type AttendanceSetupState } from "./module-fixtures";
 
+test.use({ timezoneId: "UTC" });
+
 type SetupFixture = {
   meetings: Array<{ id: string; title: string; startsAt: string; endsAt: string }>;
   requests: Array<{ path: string; body: Record<string, unknown> }>;
@@ -39,7 +41,7 @@ async function attendanceSetup(page: Page, existingMeeting = false): Promise<Set
     await route.fulfill({ json: state });
   });
   await page.route("**/module-setup/attendance/meeting", async (route) => {
-    if (route.request().method() === "GET") return route.fulfill({ json: { meetings } });
+    if (route.request().method() === "GET") return route.fulfill({ json: { meetings, timeZone: "UTC" } });
     const body = route.request().postDataJSON() as Record<string, unknown>;
     requests.push({ path: "meeting", body });
     if (rejectMeeting) {
@@ -99,6 +101,7 @@ for (const viewport of refs.viewports) {
     test(`empty Attendance setup creates a same-day meeting and verifies browser input at ${viewport.width} in ${theme}`, async ({
       page,
     }) => {
+      await page.clock.setFixedTime(new Date(viewport.width === 390 ? "2026-10-25T00:02:00.000Z" : "2026-10-25T23:59:59.900Z"));
       await page.setViewportSize(viewport);
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
       await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
@@ -116,7 +119,9 @@ for (const viewport of refs.viewports) {
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard", exact: true })).toBeVisible();
       const meeting = fixture.requests.find((item) => item.path === "meeting")!.body;
       expect(String(meeting.startsAt).slice(0, 10)).toBe(String(meeting.endsAt).slice(0, 10));
-      expect(Date.parse(String(meeting.startsAt))).toBeLessThanOrEqual(Date.now());
+      const now = await page.evaluate(() => Date.now());
+      expect(Date.parse(String(meeting.startsAt))).toBeLessThanOrEqual(now);
+      expect(Date.parse(String(meeting.endsAt))).toBeGreaterThanOrEqual(now);
       expect(fixture.requests.filter((item) => item.path.startsWith("input:")).map((item) => item.path)).toEqual([
         "input:start",
         "input:scan",
@@ -159,4 +164,33 @@ test("harmless module refresh preserves a draft and revocation removes it immedi
   await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await expect(page.getByLabel("Meeting title")).toHaveCount(0);
+});
+
+
+test.describe("organization day differs from browser day", () => {
+  test.use({ timezoneId: "Asia/Tokyo" });
+  test("first meeting defaults honor the organization date while displaying browser-local inputs", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-10-25T23:59:59.900Z"));
+    const fixture = await attendanceSetup(page);
+    await page.getByRole("button", { name: "Save and continue" }).click();
+    await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();
+    const meeting = fixture.requests.find(item => item.path === "meeting")!.body;
+    expect(meeting.startsAt).toBe("2026-10-25T23:54:00.000Z");
+    expect(meeting.endsAt).toBe("2026-10-25T23:59:59.999Z");
+  });
+});
+
+
+test.describe("browser clock repeats an hour", () => {
+  test.use({ timezoneId: "America/New_York" });
+  test("unchanged setup defaults retain their instants across the repeated hour", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-11-01T06:02:00.000Z"));
+    const fixture = await attendanceSetup(page);
+    await page.getByLabel("Meeting title").fill("Repeated-hour rehearsal");
+    await page.getByRole("button", { name: "Save and continue" }).click();
+    await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();
+    const meeting = fixture.requests.find(item => item.path === "meeting")!.body;
+    expect(meeting.startsAt).toBe("2026-11-01T05:57:00.000Z");
+    expect(meeting.endsAt).toBe("2026-11-01T06:57:00.000Z");
+  });
 });

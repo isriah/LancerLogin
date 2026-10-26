@@ -1,7 +1,9 @@
 const modes = new Set(["attendance", "maintenance", "network", "sync", "review", "desktop"]);
 
 // Presence is local UI state, never PIN authorization or cloud connectivity.
-export function createOperatorPresence({ now = () => Date.now(), leaseMs = 15_000, onSuspend = () => undefined } = {}) {
+// Network time can jump after an offline boot. Leases measure elapsed time so
+// clock recovery cannot expire an actively renewing attendance screen.
+export function createOperatorPresence({ now = () => performance.now(), leaseMs = 15_000, onSuspend = () => undefined } = {}) {
   const pages = new Map();
   let generation = 0, lost = true;
   function expire() {

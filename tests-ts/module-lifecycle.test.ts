@@ -97,6 +97,8 @@ test("Attendance setup validates rules, a same-day meeting, browser input, and o
     state = await updateModuleSetup(database, "admin", "attendance", { generation: 1, stepId: "rules", outcome: "completed" });
     await assert.rejects(updateModuleSetup(database, "admin", "attendance", { generation: 1, stepId: "meeting", outcome: "completed" }), /Complete the current setup step/);
 
+    const meetingDefaults = await attendanceSetupRoute(request("/module-setup/attendance/meeting", "GET"), database, "admin");
+    assert.equal((await meetingDefaults.json() as { timeZone: string }).timeZone, "UTC");
     const now = new Date();
     const dayStart = new Date(now); dayStart.setUTCHours(0, 0, 0, 0);
     const dayEnd = new Date(now); dayEnd.setUTCHours(23, 59, 59, 999);

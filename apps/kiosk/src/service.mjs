@@ -3,9 +3,13 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInstallationActivities, createUnpairingStore } from "./unpairing-store.mjs";
-import { completeKioskCommand, fetchKioskCommand, fetchKioskConfiguration, fetchKioskRoster, pairInstallation, sendAttendance, sendHeartbeat } from "./cloud-client.mjs";
+import { completeKioskCommand, fetchKioskCommand, fetchKioskConfiguration, fetchKioskEnrollment, fetchKioskRoster, pairInstallation, sendAttendance, sendHeartbeat, sendKioskEnrollmentProgress, sendScanReviews } from "./cloud-client.mjs";
+import { createDashboardEnrollment } from "./dashboard-enrollment.mjs";
+import { dashboardEnrollmentApp } from "./dashboard-enrollment-ui.mjs";
 import { createKioskPollClient, createKioskPollScheduler } from "./kiosk-poll.mjs";
 import { createFileQueue } from "./file-queue.mjs";
+import { createAttendanceClock } from "./attendance-clock.mjs";
+import { createScanReviewSync } from "./scan-review-sync.mjs";
 import { createMappingStore } from "./mapping-store.mjs";
 import { enrollFingerprint } from "./fingerprint-enrollment.mjs";
 import { EnrollmentError, verifyEnrollmentMember } from "./verified-enrollment.mjs";
@@ -36,7 +40,7 @@ import { createIdentityScanner } from "./scanner.mjs";
 import { createNetworkManager } from "./network-manager.mjs";
 import { createNetworkPinStore } from "./network-pin.mjs";
 import { networkApp, networkStyles } from "./network-ui.mjs";
-import { maintenanceApp, maintenanceHtml, maintenanceLayoutStyles, maintenanceStyles } from "./maintenance-ui.mjs";
+import { dashboardEnrollmentStyles, maintenanceApp, maintenanceHtml, maintenanceLayoutStyles, maintenanceStyles } from "./maintenance-ui.mjs";
 import { recoveryApp } from "./recovery-ui.mjs";
 import { attendanceReviewApp, attendanceReviewHtml, attendanceReviewStyles } from "./attendance-review.mjs";
 import { kioskScrollbarStyles, maintenanceScrollbarStyles } from "./scrollbar-styles.mjs";
@@ -56,6 +60,7 @@ const authenticationPath = process.env.LANCERLOGIN_AUTHENTICATION ?? "/var/lib/l
 const credentialPath = process.env.LANCERLOGIN_CREDENTIAL_MAPPINGS ?? "/var/lib/lancerlogin/credential-mappings.json";
 const rosterPath = process.env.LANCERLOGIN_ROSTER_CACHE ?? "/var/lib/lancerlogin/roster-cache.json";
 const queue = createFileQueue(process.env.LANCERLOGIN_QUEUE ?? "/var/lib/lancerlogin/attendance-queue.json");
+const attendanceClock = createAttendanceClock(`${process.env.LANCERLOGIN_QUEUE ?? "/var/lib/lancerlogin/attendance-queue.json"}.clock.json`);
 const mappings = createMappingStore(process.env.LANCERLOGIN_MAPPINGS ?? "/var/lib/lancerlogin/slot-mappings.json");
 const credentials = createCredentialStore(credentialPath); const rosterCache = createRosterCache(rosterPath); const identityInput = createIdentityInput();
 const network = createNetworkManager(); const networkPin = createNetworkPinStore(networkPinPath);
@@ -94,6 +99,7 @@ function unavailableDisplay() { return authenticationMethod === "fingerprint" ? 
 function currentDisplay() {
   if (display.id.startsWith("enroll_")) return display;
   if (operatorPresence.status().captureSuspended) return kioskState("operator_paused");
+  if (state.paired && !attendanceClock.isVerified()) return kioskState("clock_required", { message: "Confirm date and time", detail: "Open maintenance and enter the local PIN to set the current date and time." });
   if (fingerRemovalRequired && authenticationMethod === "fingerprint") return kioskState("finger_removal");
   return display;
 }
@@ -116,8 +122,11 @@ function flushAttendance(config) {
       const result = await sendAttendance(config, event, { fetchImpl: boundedCloudFetch });
       acknowledgements.push({ eventId: event.eventId, ...result });
       return result;
-    });
-    if ((await queue.pending()).length) throw new Error("Cloud attendance sync is unavailable");
+    }, { prepare: async event => {
+      const prepared = await attendanceClock.prepare(event);
+      if (prepared.rejected) acknowledgements.push({ eventId: event.eventId, ...prepared });
+      return prepared;
+    } });
     return { delivered, acknowledgements };
   })().finally(() => { attendanceFlush = undefined; });
   return attendanceFlush;
@@ -214,6 +223,7 @@ async function assertFingerprintMutationAllowed() {
 async function testSensor() { readerObserved = true; if (!sensor) { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } try { const status = await useSensor(() => sensor.status()); state.readerOnline = status.connected; return { readerOnline: status.connected, templateCount: status.templateCount }; } catch { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } }
 async function testAuthenticator() { if (authenticationMethod === "fingerprint") return testSensor(); state.readerOnline = true; return { readerOnline: true, authenticationMethod }; }
 let heartbeatRunning;
+const scanReviewSync = createScanReviewSync({ queue, send: (config, records) => sendScanReviews(config, records, { fetchImpl: boundedCloudFetch }) });
 function heartbeat() {
   if (!heartbeatRunning) heartbeatRunning = installationActivities.run(heartbeatNow).catch(() => undefined).finally(() => { heartbeatRunning = undefined; });
   return heartbeatRunning;
@@ -232,12 +242,19 @@ async function applyRemoteConfiguration(config, remote) {
 }
 async function heartbeatNow() {
   const config = await loadPairing(); if (!config) return;
+  await attendanceClock.refresh().catch(() => undefined);
   let networkDiagnostics = { type: "offline", signal: null };
   try { networkDiagnostics = await network.diagnostics(); state.networkType = networkDiagnostics.type; } catch { state.networkType = undefined; }
   try {
-    await flushAttendance(config); state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined;
+    const sync = await flushAttendance(config);
+    // Older APIs and a review-only outage must not prevent attendance delivery.
+    let reviewSyncFailed = false;
+    await scanReviewSync.tick(config).catch(() => { reviewSyncFailed = true; });
+    if (sync.acknowledgements.some(item => item.accepted || item.duplicate)) state.lastSyncAt = new Date().toISOString();
     await testAuthenticator();
-    await sendHeartbeat(config, { fetchImpl: boundedCloudFetch, readerOnline: state.readerOnline, authenticationMethod, releaseVersion, updatePolicyVersion: await kioskUpdatePolicyVersion(), uptimeSeconds: Math.floor((Date.now() - serviceStartedAt) / 1_000), networkType: networkDiagnostics.type, networkSignal: networkDiagnostics.signal, lastWifiScanAt: state.lastWifiScanAt ?? null, pendingEvents: (await queue.pending()).length, lastSyncAt: state.lastSyncAt, errorCategory: null }); state.cloudOnline = true;
+    const attendance = await queue.diagnostics();
+    state.errorCategory = reviewSyncFailed || scanReviewSync.hasFailures() ? "cloud_sync" : !attendanceClock.isVerified() || attendance.needsReview || attendance.clockPending ? "offline_queue" : attendance.pending ? "cloud_sync" : undefined;
+    await sendHeartbeat(config, { fetchImpl: boundedCloudFetch, readerOnline: state.readerOnline, authenticationMethod, releaseVersion, updatePolicyVersion: await kioskUpdatePolicyVersion(), uptimeSeconds: Math.floor(process.uptime()), networkType: networkDiagnostics.type, networkSignal: networkDiagnostics.signal, lastWifiScanAt: state.lastWifiScanAt ?? null, pendingEvents: attendance.pending, lastSyncAt: state.lastSyncAt, errorCategory: state.errorCategory ?? null }); state.cloudOnline = true;
   } catch { state.cloudOnline = false; state.errorCategory = "cloud_sync"; }
 }
 let cloudPolling;
@@ -246,14 +263,15 @@ async function pollCloud(options) {
     const config = await loadPairing(); if (!config) return;
     if (!cloudPolling || ["apiUrl", "kioskId", "pairingId", "kioskToken"].some(key => cloudPolling.config[key] !== config[key])) {
       cloudPolling?.client.invalidate();
-      const client = createKioskPollClient(config);
+      const client = createKioskPollClient(config, { enrollment: true });
       const scheduler = createKioskPollScheduler({ client,
         commands: command => installationActivities.run(() => pollCommandsNow(command, config)),
+        enrollment: session => installationActivities.run(() => dashboardEnrollment.update(session, config)),
         configuration: remote => installationActivities.run(() => applyRemoteConfiguration(config, remote)),
         fingerprints: metadata => installationActivities.run(() => pollFingerprintSyncNow(metadata)),
         fingerprintBusy: () => Boolean(fingerprintPolling),
-        legacy: { commands: () => installationActivities.run(() => pollCommandsNow(undefined, config)), configuration: () => installationActivities.run(async () => applyRemoteConfiguration(config, await fetchKioskConfiguration(config, { fetchImpl: boundedCloudFetch }))), fingerprints: () => installationActivities.run(() => pollFingerprintSyncNow()) },
-        onError: (error, section) => { if (section === "transport" || section === "fingerprints") { fingerprintSync?.invalidateAuthority(); fingerprintVault?.invalidateAuthority(); recordFingerprintFailure("reset", error, "network_unavailable"); } },
+        legacy: { commands: () => installationActivities.run(() => pollCommandsNow(undefined, config)), enrollment: () => installationActivities.run(async () => dashboardEnrollment.update(await fetchKioskEnrollment(config, { fetchImpl: boundedCloudFetch }), config)), configuration: () => installationActivities.run(async () => applyRemoteConfiguration(config, await fetchKioskConfiguration(config, { fetchImpl: boundedCloudFetch }))), fingerprints: () => installationActivities.run(() => pollFingerprintSyncNow()) },
+        onError: (error, section) => { if (section === "transport" || section === "enrollment") void dashboardEnrollment.unavailable(); if (section === "transport" || section === "fingerprints") { fingerprintSync?.invalidateAuthority(); fingerprintVault?.invalidateAuthority(); recordFingerprintFailure("reset", error, "network_unavailable"); } },
       });
       cloudPolling = { config: { ...config }, client, scheduler };
     }
@@ -261,6 +279,7 @@ async function pollCloud(options) {
   }).catch(() => undefined);
 }
 async function runKioskCommand(command, config) {
+  if (dashboardEnrollment.active() && command.type !== "reload_display") throw new Error("Cancel dashboard enrollment before device maintenance.");
   if (command.type === "reload_display") { displayReloadToken += 1; return { message: "Display reload requested" }; }
   if (command.type === "reset_network_pin") { await networkPin.reset(); return { message: "Local settings PIN reset" }; }
   if (command.type === "restart_service") return { message: "Service restart requested", afterComplete: () => setTimeout(() => process.exit(1), 250).unref() };
@@ -293,13 +312,45 @@ async function captureIdentity() {
   if (!memberId) return { status: "unknown", detail: "This fingerprint is not linked to an active roster member" };
   return { status: "identified", memberId, identityKey: `fingerprint:${observation.slot}` };
 }
-const scanner = createIdentityScanner({ captureIdentity, captureAllowed: () => !operatorPresence.status().captureSuspended && !fingerRemovalRequired, setFeedback, queue, loadPairing, flushAttendance, onDisplay: showDisplay, onInput: (online) => { readerObserved = true; state.readerOnline = online; }, onCloud: (online) => { state.cloudOnline = online; if (online) { state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; } else state.errorCategory = "cloud_sync"; } });
+const scanner = createIdentityScanner({ captureIdentity, captureTime: () => attendanceClock.capture(), now: () => performance.now(), captureAllowed: () => attendanceClock.isVerified() && !operatorPresence.status().captureSuspended && !fingerRemovalRequired, setFeedback, queue, loadPairing, flushAttendance, onDisplay: showDisplay, onInput: (online) => { readerObserved = true; state.readerOnline = online; }, onCloud: (online) => { state.cloudOnline = online; if (online) { state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; } else state.errorCategory = "cloud_sync"; } });
 const operatorPresence = createOperatorPresence({ onSuspend: () => { attendanceInputGeneration++; identityInput.clear(); requireFingerRemoval(); void scanner.suspend("operator"); } });
+const dashboardEnrollment = createDashboardEnrollment({
+  loadPairing,
+  fetchSession: config => fetchKioskEnrollment(config, { fetchImpl: boundedCloudFetch }),
+  sendProgress: (config, id, progress) => sendKioskEnrollmentProgress(config, id, progress, { fetchImpl: boundedCloudFetch }),
+  onActive: async () => {
+    if (!sensor || authenticationMethod !== "fingerprint" || enrollmentInProgress || unpairingBusy || pairingRecovery) throw new Error("Fingerprint enrollment is unavailable while this kiosk is busy.");
+    requireFingerRemoval(); await scanner.suspend("dashboard_enrollment"); await refreshCapturePermission();
+  },
+  onIdle: async () => { requireFingerRemoval(); scanner.release("dashboard_enrollment"); await refreshCapturePermission(); },
+  enroll: async ({ member, checkActive, beforeStore, onProgress }) => {
+    if (enrollmentInProgress || !sensor || authenticationMethod !== "fingerprint" || unpairingBusy || pairingRecovery) throw new Error("Fingerprint enrollment is unavailable while this kiosk is busy.");
+    enrollmentInProgress = true; requireFingerRemoval(); await scanner.suspend("enrollment");
+    try {
+      const config = await loadPairing();
+      const verify = async () => {
+        checkActive();
+        if (!config || authenticationMethod !== "fingerprint" || (await loadPairing())?.pairingId !== config.pairingId) throw new Error("Kiosk authentication or pairing changed.");
+        if (await verifyEnrollmentMember(member.memberId, () => fetchKioskRoster(config, { fetchImpl: boundedCloudFetch })) !== member.rosterId) throw new Error("Member identity changed. Start a new enrollment.");
+        await assertFingerprintMutationAllowed(); checkActive();
+      };
+      await verify();
+      const result = await enrollFingerprint({ sensor, mappings, withSensor: useSensor, autoSlot: true, memberId: member.memberId, rosterId: member.rosterId, finger: "unspecified", checkActive,
+        beforeStore: async () => { await beforeStore(); await verify(); },
+        isEnrollmentAllowed: async () => { await verify(); return true; },
+        onProgress: async id => { checkActive(); if (id !== "enroll_success") await onProgress(id === "enroll_scan_accepted" ? "enroll_remove" : id); await showDisplay(id); },
+      });
+      state.readerOnline = true; requireFingerRemoval(); await showDisplay("enroll_success", { detail: "Lift your finger. Enrollment is saved." });
+      void pollFingerprintSync(); return result;
+    } catch (error) { await showDisplay("enroll_failure", { detail: "Enrollment stopped. Review its status before retrying." }); throw error; }
+    finally { enrollmentInProgress = false; scanner.release("enrollment"); await refreshCapturePermission(); }
+  },
+});
 void scanner.suspend("operator");
 void scanner.suspend("finger_removal");
 let captureWasAllowed = false;
 function requireFingerRemoval() { fingerRemovalRequired = true; removalGeneration++; void scanner.suspend("finger_removal"); }
-function attendanceAllowed() { return !operatorPresence.status().captureSuspended && !enrollmentInProgress && !unpairingBusy && !pairingRecovery; }
+function attendanceAllowed() { return !operatorPresence.status().captureSuspended && !enrollmentInProgress && !dashboardEnrollment.active() && !unpairingBusy && !pairingRecovery; }
 async function refreshCapturePermission() {
   // Unpairing owns graceful drainage; do not cancel its accepted in-flight scan.
   if (unpairingBusy) return;
@@ -344,12 +395,32 @@ async function handleRequest(request, response) {
   if (pathname === "/network.js" && request.method === "GET") { response.setHeader("content-type", "text/javascript; charset=utf-8"); response.end(networkApp); return; }
   if (pathname === "/recovery.js" && request.method === "GET") { response.setHeader("content-type", "text/javascript; charset=utf-8"); response.end(recoveryApp); return; }
   if (pathname === "/maintenance" && request.method === "GET") { response.setHeader("content-type", "text/html; charset=utf-8"); response.setHeader("content-security-policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"); response.end(maintenanceHtml); return; }
-  if (pathname === "/maintenance.css" && request.method === "GET") { response.setHeader("content-type", "text/css; charset=utf-8"); response.end(maintenanceStyles + maintenanceLayoutStyles + maintenanceScrollbarStyles); return; }
+  if (pathname === "/maintenance.css" && request.method === "GET") { response.setHeader("content-type", "text/css; charset=utf-8"); response.end(maintenanceStyles + maintenanceLayoutStyles + maintenanceScrollbarStyles + dashboardEnrollmentStyles); return; }
   if (pathname === "/maintenance.js" && request.method === "GET") { response.setHeader("content-type", "text/javascript; charset=utf-8"); response.end(maintenanceApp); return; }
+  if (pathname === "/dashboard-enrollment.js" && request.method === "GET") { response.setHeader("content-type", "text/javascript; charset=utf-8"); response.end(dashboardEnrollmentApp); return; }
   if (pathname === "/attendance-review" && request.method === "GET") { response.setHeader("content-type", "text/html; charset=utf-8"); response.setHeader("content-security-policy", "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'"); response.end(attendanceReviewHtml); return; }
   if (pathname === "/attendance-review.css" && request.method === "GET") { response.setHeader("content-type", "text/css; charset=utf-8"); response.end(attendanceReviewStyles + maintenanceScrollbarStyles); return; }
   if (pathname === "/attendance-review.js" && request.method === "GET") { response.setHeader("content-type", "text/javascript; charset=utf-8"); response.end(attendanceReviewApp); return; }
   response.setHeader("content-type", "application/json; charset=utf-8");
+  const enrollmentRoute = /^\/maintenance\/enrollment\/([A-Za-z0-9._:-]{1,128})(?:\/(confirm|cancel))?$/.exec(pathname);
+  if (enrollmentRoute) {
+    try {
+      const id = enrollmentRoute[1], operation = enrollmentRoute[2];
+      await dashboardEnrollment.expire();
+      if (!operation && request.method === "GET") {
+        const session = dashboardEnrollment.snapshot();
+        if (!session || session.id !== id) throw new Error("Dashboard enrollment session is unavailable.");
+        response.end(JSON.stringify({ session })); return;
+      }
+      if (request.method !== "POST" || !operation || request.headers["content-type"]?.split(";")[0] !== "application/json") throw new Error("Invalid dashboard enrollment action.");
+      const input = await body(request, 1024);
+      if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length) throw new Error("Dashboard enrollment actions accept no arguments.");
+      if (operation === "cancel") { await dashboardEnrollment.cancel(id); response.end(JSON.stringify({ session: dashboardEnrollment.snapshot() })); return; }
+      const result = await dashboardEnrollment.confirm(id);
+      response.statusCode = 201; response.end(JSON.stringify({ session: dashboardEnrollment.snapshot(), ...result, fingerRemovalRequired: true }));
+    } catch (error) { response.statusCode = 409; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Dashboard enrollment did not complete." })); }
+    return;
+  }
   if (pathname.startsWith("/desktop/launcher/") && request.method === "POST") {
     // The desktop launcher is a local process, never a browser control surface.
     if (request.headers.origin !== undefined) { response.statusCode = 403; response.end(JSON.stringify({ error: "Launcher registration is local-process only" })); return; }
@@ -384,8 +455,8 @@ async function handleRequest(request, response) {
     } catch { response.statusCode = 409; response.end(JSON.stringify({ error: "Kiosk page session unavailable. Close unused pages, then retry attendance." })); }
     return;
   }
-  if (pathname === "/health" && request.method === "GET") { await loadPairing(); const attendance = changing ? undefined : await queue.diagnostics(); response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", ...state, ...(changing ? { paired: false, kioskName: undefined, cloudOnline: false } : {}), setupReady: !changing, authenticationMethod, pendingEvents: attendance?.pending, attendance, fingerprintSync: changing ? undefined : await fingerprintDiagnostics() })); return; }
-  if (pathname === "/display-state" && request.method === "GET") { const attendance = changing ? undefined : await queue.diagnostics(); response.end(JSON.stringify({ display: changing ? kioskState("unpaired", { message: "Finish unpairing", detail: "Open local maintenance to complete the installation switch." }) : currentDisplay(), branding, kioskName: changing ? undefined : state.kioskName, readerOnline: state.readerOnline, authenticationMethod, cloudOnline: changing ? false : state.cloudOnline, networkType: state.networkType, pendingEvents: attendance?.pending, attendance, uptimeSeconds: Math.floor((Date.now() - serviceStartedAt) / 1000), releaseVersion, displayReloadToken })); return; }
+  if (pathname === "/health" && request.method === "GET") { await loadPairing(); const attendance = changing ? undefined : await queue.diagnostics(); response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", ...state, ...(changing ? { paired: false, kioskName: undefined, cloudOnline: false } : {}), setupReady: !changing, authenticationMethod, pendingEvents: attendance?.pending, attendance, clock: await attendanceClock.status(), fingerprintSync: changing ? undefined : await fingerprintDiagnostics() })); return; }
+  if (pathname === "/display-state" && request.method === "GET") { const attendance = changing ? undefined : await queue.diagnostics(); const clock = await attendanceClock.status(); response.end(JSON.stringify({ display: changing ? kioskState("unpaired", { message: "Finish unpairing", detail: "Open local maintenance to complete the installation switch." }) : currentDisplay(), branding, kioskName: changing ? undefined : state.kioskName, readerOnline: state.readerOnline, authenticationMethod, cloudOnline: changing ? false : state.cloudOnline, networkType: state.networkType, pendingEvents: attendance?.pending, attendance, clock, uptimeSeconds: Math.floor(process.uptime()), releaseVersion, displayReloadToken, enrollment: dashboardEnrollment.active() ? { id: dashboardEnrollment.snapshot().id } : null })); return; }
   if (pathname === "/maintenance/pairing" && request.method === "GET") {
     try { await requireNetworkSession(); } catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock local settings before unpairing" })); return; }
     const config = await loadPairing();
@@ -397,11 +468,11 @@ async function handleRequest(request, response) {
     let input;
     try { input = await body(request); } catch { response.statusCode = 400; response.end(JSON.stringify({ error: "Confirm unpairing before continuing" })); return; }
     if (input.confirmation !== "UNPAIR") { response.statusCode = 400; response.end(JSON.stringify({ error: "Confirm unpairing before continuing" })); return; }
-    if (unpairingBusy || enrollmentInProgress || commandActionPending) { response.statusCode = 409; response.end(JSON.stringify({ error: "Kiosk is busy. Finish the current operation, then try unpairing again." })); return; }
+    if (unpairingBusy || enrollmentInProgress || dashboardEnrollment.active() || commandActionPending) { response.statusCode = 409; response.end(JSON.stringify({ error: "Kiosk is busy. Finish the current operation, then try unpairing again." })); return; }
     if (!pairingRecovery && !await loadPairing()) { response.statusCode = 409; response.end(JSON.stringify({ error: "This kiosk is already unpaired" })); return; }
     // Loading pairing state yields. Recheck immediately before taking ownership
     // so two confirmed requests cannot start overlapping archive transactions.
-    if (unpairingBusy || enrollmentInProgress || commandActionPending) { response.statusCode = 409; response.end(JSON.stringify({ error: "Kiosk is busy. Try unpairing again after the current operation finishes." })); return; }
+    if (unpairingBusy || enrollmentInProgress || dashboardEnrollment.active() || commandActionPending) { response.statusCode = 409; response.end(JSON.stringify({ error: "Kiosk is busy. Try unpairing again after the current operation finishes." })); return; }
     unpairingBusy = true; installationActivities.pause(); scanner.pause();
     let timer;
     try {
@@ -427,6 +498,17 @@ async function handleRequest(request, response) {
     try { await requireNetworkSession(); } catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock local settings before reviewing scans" })); return; }
     try { response.end(JSON.stringify({ rejections: await queue.rejections() })); }
     catch { response.statusCode = 500; response.end(JSON.stringify({ error: "Saved scan outcomes are unavailable" })); }
+    return;
+  }
+  if (pathname === "/maintenance/clock" && request.method === "POST") {
+    try { await requireNetworkSession(); } catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock local settings before confirming the clock" })); return; }
+    try {
+      const input = await body(request, 1024);
+      if (!input || typeof input.currentTime !== "string" || Object.keys(input).some(key => key !== "currentTime")) throw Error("Enter the current date and time.");
+      await attendanceClock.confirm(input.currentTime);
+      response.end(JSON.stringify({ clock: await attendanceClock.status() }));
+      void loadPairing().then(config => config && flushAttendance(config)).catch(() => undefined);
+    } catch(error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "The clock could not be confirmed" })); }
     return;
   }
   if (pathname.startsWith("/attendance/rejections/") && pathname.endsWith("/review") && request.method === "POST") {
@@ -460,7 +542,9 @@ async function handleRequest(request, response) {
       const event = await body(request); const config = await loadPairing();
       if (!config) throw new Error("Pair this kiosk before recording attendance");
       if (!attendanceAllowed() || inputGeneration !== attendanceInputGeneration) throw new Error("Attendance mode changed. Return to attendance and scan again.");
-      const commit = queue.enqueue({ eventId: event.eventId || crypto.randomUUID(), memberId: event.memberId, meetingId: event.meetingId, occurredAt: event.occurredAt || new Date().toISOString(), ...(config?.pairingId ? { pairingId: config.pairingId } : {}) });
+      const timing = await attendanceClock.capture();
+      if (!attendanceAllowed() || inputGeneration !== attendanceInputGeneration) throw new Error("Attendance mode changed. Return to attendance and scan again.");
+      const commit = queue.enqueue({ eventId: event.eventId || crypto.randomUUID(), memberId: event.memberId, meetingId: event.meetingId, ...timing, ...(config?.pairingId ? { pairingId: config.pairingId } : {}) });
       directAttendanceCommits.add(commit);
       let accepted; try { accepted = await commit; } finally { directAttendanceCommits.delete(commit); }
       // Acknowledge durable local storage, not cloud delivery. An unavailable
@@ -508,6 +592,7 @@ async function handleRequest(request, response) {
     return;
   }
   if (pathname === "/enroll" && request.method === "POST") {
+    if (dashboardEnrollment.active()) { response.statusCode = 409; response.end(JSON.stringify({ error: "Finish or cancel dashboard enrollment before local enrollment." })); return; }
     if (enrollmentInProgress) { response.statusCode = 409; response.end(JSON.stringify({ error: "Enrollment is already in progress", code: "enrollment_busy" })); return; }
     enrollmentInProgress = true;
     requireFingerRemoval();
@@ -558,8 +643,8 @@ const server = createServer(async (request, response) => {
 
 if (process.env.NODE_ENV !== "test") {
   server.listen(port, process.env.LANCERLOGIN_KIOSK_HOST ?? "0.0.0.0", () => console.log(`LancerLogin kiosk service listening on port ${port}`));
-  void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod()]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, 60_000).unref(); setInterval(pollCloud, 5_000).unref();
-  setInterval(() => { void refreshCapturePermission(); void checkFingerRemoval(); }, 250).unref();
+  void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod(), attendanceClock.refresh().catch(() => undefined)]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, 60_000).unref(); setInterval(pollCloud, 5_000).unref();
+  setInterval(() => { void dashboardEnrollment.expire(); void refreshCapturePermission(); void checkFingerRemoval(); }, 250).unref();
 }
 
 export { server, network };

@@ -2,6 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { attendanceSetupState, attendanceSnapshot } from "./module-fixtures";
 
+test.use({ timezoneId: "UTC" });
+
 const referenceSettings = {
   organizationName: "Reference Arts Collective",
   subtitle: "Shared operations",
@@ -36,6 +38,7 @@ async function expectResponsiveFit(page: Page) {
 for (const viewport of dashboardConformanceReferences.viewports) {
   for (const theme of dashboardConformanceReferences.themes) {
     test(`Attendance setup shows one validated card at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+      await page.clock.setFixedTime(new Date("2026-10-25T23:59:59.900Z"));
       await page.setViewportSize(viewport);
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
       await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
@@ -47,7 +50,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
         await route.fulfill({ json: state });
       });
       await page.route("**/module-setup/attendance/rules", (route) => route.fulfill({ json: { values: { lateScanMinutes: 30, attendanceReportingStartsOn: null, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 10 } } }));
-      await page.route("**/module-setup/attendance/meeting", (route) => route.fulfill({ json: { meetings: [] } }));
+      await page.route("**/module-setup/attendance/meeting", (route) => route.fulfill({ json: { meetings: [], timeZone: "UTC" } }));
       await page.goto("/dashboard");
       await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toBeVisible();
       await expect(page.getByRole("heading", { level: 2, name: "Attendance rules" })).toBeVisible();

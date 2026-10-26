@@ -12,6 +12,8 @@ import { brandTheme } from "./theme";
 import { loadDashboardSession, startDashboardEntry, type DashboardSession } from "./dashboard-startup";
 import type { ModuleNavigationResult } from "./module-navigation";
 import { PublicOutreachForm } from "./public-outreach-form";
+import { WalkthroughSessionProvider } from "./page-walkthrough";
+import { clearWalkthroughSession } from "./walkthrough-session";
 
 type CloudflareStep = { id: string; title: string; detail: string; action?: { label: string; href: string } };
 
@@ -194,7 +196,7 @@ function ConfiguredInstallation({ initialSession, initialModules, status, onStat
     return () => { active = false; };
   }, []);
   if (checking) return <section className="centered-state auth-check" aria-live="polite" aria-busy="true"><p className="kicker">Secure sign-in</p><h1>Checking your session…</h1><p>Confirming whether this browser already has an active dashboard session.</p></section>;
-  if (session) return <AppShell initialModules={moduleRequest} themeControl={<ThemeToggle theme={theme} onTheme={onTheme} />} role={session.role} debugMode={session.debugMode} onDebugModeChanged={async (debugMode) => { const response = await fetch(`${apiBaseUrl}/auth/preferences`, { method: "PATCH", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ debugMode }) }); if (!response.ok) throw new Error("Could not save Debug mode."); setSession((current) => current ? { ...current, debugMode } : current); }} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => { setModuleRequest(undefined); setSession(undefined); }); }} />;
+  if (session) return <WalkthroughSessionProvider userId={session.id}><AppShell initialModules={moduleRequest} themeControl={<ThemeToggle theme={theme} onTheme={onTheme} />} role={session.role} debugMode={session.debugMode} onDebugModeChanged={async (debugMode) => { const response = await fetch(`${apiBaseUrl}/auth/preferences`, { method: "PATCH", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ debugMode }) }); if (!response.ok) throw new Error("Could not save Debug mode."); setSession((current) => current ? { ...current, debugMode } : current); }} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => { clearWalkthroughSession(session.id); setModuleRequest(undefined); setSession(undefined); }); }} /></WalkthroughSessionProvider>;
   return <><EntryHeader branding={status.settings} theme={theme} onTheme={onTheme} /><LocalLogin status={status} onSignedIn={setSession} /></>;
 }
 

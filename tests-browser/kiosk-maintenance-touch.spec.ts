@@ -42,7 +42,7 @@ async function chooseSearchKeys(page: Page, key: string) {
   await tap(page, keyboard.getByRole("button", { name: /^(123|ABC)$/ }));
 }
 
-async function swipe(page: Page, scroller: Locator, direction: "up" | "down" | "left" = "up", origin?: "row" | "blank") {
+async function swipe(page: Page, scroller: Locator, direction: "up" | "down" | "left" = "up", origin?: "row" | "blank" | "padding") {
   const visible = await scroller.evaluate((element) => {
     const r = element.getBoundingClientRect();
     let left = Math.max(1, r.left + element.clientLeft), right = Math.min(innerWidth - 1, r.left + element.clientLeft + element.clientWidth);
@@ -69,7 +69,7 @@ async function swipe(page: Page, scroller: Locator, direction: "up" | "down" | "
   const from = direction === "down" ? top + inset : bottom - inset;
   const to = direction === "down" ? bottom - inset : top + inset;
   const session = await page.context().newCDPSession(page);
-  const startX = origin === "blank" ? right - 12 : direction === "left" ? right - 20 : x;
+  const startX = origin === "padding" ? left + 4 : origin === "blank" ? right - 12 : direction === "left" ? right - 20 : x;
   const endX = direction === "left" ? left + 20 : startX;
   const startY = origin === "row" ? await scroller.locator("button").evaluateAll((buttons, bounds) => {
     const rows = buttons.map((button) => button.getBoundingClientRect()).filter((r) => Math.min(r.bottom, bounds.bottom) - Math.max(r.top, bounds.top) >= 44);
@@ -85,7 +85,7 @@ async function swipe(page: Page, scroller: Locator, direction: "up" | "down" | "
   if (origin) expect(await scroller.evaluate((element, point) => {
     const hit = document.elementFromPoint(point.x, point.y);
     return point.origin === "row" ? !!hit?.closest("button") : hit === element;
-  }, { x: startX, y: startY, origin }), "Swipe starts on the specified roster row or blank list space").toBe(true);
+  }, { x: startX, y: startY, origin }), "Swipe starts on the specified row, blank list space, or outer card padding").toBe(true);
   await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: startX, y: startY, id: 1 }] });
   for (let step = 1; step <= 12; step++) {
     await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: startX + (endX - startX) * step / 12, y: startY + (endY - startY) * step / 12, id: 1 }] });
@@ -107,7 +107,7 @@ async function swipe(page: Page, scroller: Locator, direction: "up" | "down" | "
   expect(stable).toBe(3);
 }
 
-async function reachable(page: Page, target: Locator, scroller: Locator, direction: "up" | "down" = "up", origin?: "row" | "blank") {
+async function reachable(page: Page, target: Locator, scroller: Locator, direction: "up" | "down" = "up", origin?: "row" | "blank" | "padding") {
   for (let attempt = 0; attempt < 80; attempt++) {
     if (await target.evaluate((element) => {
       const r = element.getBoundingClientRect();
@@ -310,6 +310,7 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     await expect(page.locator("#workspace")).toBeHidden();
     await pin(page);
     await expect(page.locator("#workspace")).toBeVisible();
+    await reachable(page, page.locator("#test-reader"), page.locator(".reader-card"));
     await tap(page, page.locator("#test-reader"));
     await expect(page.locator("#reader-status")).toContainText("Reader online");
     if (viewport.height === 360) {
@@ -408,9 +409,14 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     expect(await reader.evaluate((e) => e.scrollTop)).toBeGreaterThan(20);
     await reachable(page, page.locator("#test-reader"), reader, "down");
     await tap(page, page.locator("#test-reader"));
+    await tap(page, page.getByRole("tab", { name: "Fingerprint mappings" }));
+    await expect(page.getByRole("tab", { name: "Fingerprint mappings" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".enroll-card")).toBeHidden();
     const table = page.locator("[data-fingerprint].mappings-card .table-wrap");
-    // Swipe the heading to expose the nested table before scrolling its rows.
-    await reachable(page, table, page.locator("[data-fingerprint].mappings-card .card-heading"));
+    // The heading can scroll out of view on short screens. Swipe visible outer
+    // card padding so the nested table does not consume the parent gesture.
+    const mappingsCard = page.locator("[data-fingerprint].mappings-card");
+    await reachable(page, table, mappingsCard, "up", "padding");
     const initialTableTop = await table.evaluate(element => element.scrollTop);
     expect(await table.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeGreaterThan(20);
     await swipe(page, table);
@@ -426,7 +432,7 @@ for (const viewport of [{ width: 800, height: 480 }, { width: 1024, height: 600 
     expect(mock.removed).toHaveLength(0);
     await tap(page, remove); await tap(page, page.locator("#accept-action"));
     await expect.poll(() => mock.removed.length).toBe(1);
-    await reachable(page, page.locator("#refresh"), page.locator("[data-fingerprint].mappings-card .card-heading"), "down");
+    await reachable(page, page.locator("#refresh"), mappingsCard, "down", "padding");
     await tap(page, page.locator("#refresh"));
     await expect(page.locator("#member")).toHaveValue("");
     expect(await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }))).toEqual(viewport);
@@ -633,6 +639,7 @@ for (const height of [480, 360]) test(`mobile roster keyboard keeps digits visib
 for (const origin of ["row", "remove"] as const) test(`mapping list mouse drag from ${origin} scrolls without removing a fingerprint`, async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 480 });
   await fixture(page); await page.goto(`${base}/maintenance`); await pin(page);
+  await tap(page, page.getByRole("tab", { name: "Fingerprint mappings" }));
   const list = page.locator("[data-fingerprint].mappings-card .table-wrap");
   await expect(list.locator("tbody tr").first()).toBeVisible();
   const before = await list.locator("tbody tr").count();

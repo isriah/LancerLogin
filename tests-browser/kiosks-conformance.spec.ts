@@ -33,6 +33,7 @@ function kioskFor(state: KioskState, authenticationMethod = "fingerprint") {
 
 async function useKioskContext(page: Page, { role = "admin", state = "healthy", discordConfigured = true, configuredAuthenticationMethod = "fingerprint", reportedAuthenticationMethod = "fingerprint" }: { role?: Role; state?: KioskState; discordConfigured?: boolean; configuredAuthenticationMethod?: string; reportedAuthenticationMethod?: string } = {}) {
   await page.route("**/admin/update-channel", route => route.fulfill({ json: { channel: "stable", revision: 0 } }));
+  await page.route("**/admin/kiosks/scan-reviews?**", route => route.fulfill({ json: { records: [], hasMore: false } }));
   await page.route("**/admin/kiosks/fingerprint-sync", route => route.fulfill({ json: { enabled: false } }));
   await page.route("**/admin/kiosks/fingerprint-vault", route => route.fulfill({ json: { enabled: false, keyStatus: "ready", storedFingerprints: 0, serverManagedKeys: true } }));
   await page.route("**/setup/status", (route) => route.fulfill({
@@ -60,6 +61,47 @@ async function useKioskContext(page: Page, { role = "admin", state = "healthy", 
   await page.route("**/admin/simulator", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ simulator: { name: "Browser test", active: 1, online: 1, lastSeenAt: iso(0), readerOnline: false, releaseVersion: "browser simulator" } }) }));
   await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: "v0.19.0", html_url: "https://example.test/release" }) }));
 }
+
+for (const width of [390, 1280]) test(`Per-kiosk enrollment popup selects a member and follows progress at ${width}`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 });
+  await useKioskContext(page);
+  await page.route("**/admin/members", route => route.fulfill({ json: { members: [{ id: "roster-1", memberId: "SYN-001", firstName: "Synthetic", lastName: "Member", active: true }] } }));
+  let session: Record<string, unknown> | null = null, starts = 0, cancellations = 0;
+  await page.route("**/admin/kiosks/kiosk-1/enrollment**", async route => {
+    const method = route.request().method();
+    if (method === "POST") { starts++; session = { id: "session-1", expiresAt: iso(5), state: "waiting_member", progress: "waiting_member" }; }
+    if (method === "PATCH") { expect(route.request().postDataJSON()).toEqual({ memberId: "roster-1" }); session = { ...session, state: "ready", progress: "awaiting_confirmation", member: { rosterId: "roster-1", memberId: "SYN-001", firstName: "Synthetic", lastName: "Member" } }; }
+    if (method === "DELETE") cancellations++;
+    await route.fulfill({ json: { session, cancelled: method === "DELETE" } });
+  });
+  await page.goto("/kiosks");
+  const begin = page.getByRole("button", { name: `Begin enrollment on ${longDeviceName}` });
+  await begin.click();
+  const dialog = page.getByRole("dialog", { name: "Fingerprint enrollment" });
+  await expect(dialog).toBeVisible(); await expect(dialog.getByText(longDeviceName, { exact: true })).toBeVisible();
+  await dialog.getByRole("searchbox", { name: "Search members" }).fill("SYN-001");
+  await dialog.getByRole("button", { name: "Synthetic Member SYN-001" }).click();
+  await expect(dialog.getByText("Waiting for name confirmation on the kiosk.")).toBeVisible();
+  session = { ...session, progress: "enroll_wait_first" };
+  await expect(dialog.getByText("Place a finger on the kiosk reader for the first scan.")).toBeVisible();
+  session = { ...session, progress: "enroll_success" };
+  await expect(dialog.getByText("Fingerprint enrolled successfully.")).toBeVisible();
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(dialog).toHaveCount(0); expect(cancellations).toBe(0); expect(starts).toBe(1);
+  await begin.click(); await dialog.getByRole("button", { name: "Cancel enrollment", exact: true }).click();
+  await expect(dialog).toHaveCount(0); expect(cancellations).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+});
+
+test("Unconfigured simulator links to guided setup and operators cannot start enrollment", async ({ page }) => {
+  await useKioskContext(page);
+  await page.route("**/admin/simulator", route => route.fulfill({ json: { simulator: null } }));
+  await page.goto("/kiosks");
+  await expect(page.getByRole("link", { name: "Set up browser simulator" })).toHaveAttribute("href", "/settings/guided-setup");
+  await useKioskContext(page, { role: "operator" });
+  await page.reload();
+  await expect(page.getByRole("button", { name: /^Begin enrollment/ })).toHaveCount(0);
+});
 
 test("Fingerprint sharing cards use one themed spacing interval", async ({ page }) => {
   await useKioskContext(page);
@@ -221,12 +263,12 @@ for (const state of ["degraded", "offline", "unpaired"] as const) {
   test(`Kiosks presents the ${state} physical-device state without changing its operational contract`, async ({ page }) => {
     await useKioskContext(page, { state });
     await page.goto("/kiosks");
-    const expected = state === "unpaired" ? "Not paired" : state[0].toUpperCase() + state.slice(1);
+    const expected = state === "unpaired" ? "No kiosk paired" : state[0].toUpperCase() + state.slice(1);
     await expect(page.getByText(expected, { exact: true }).first()).toBeVisible();
     if (state === "degraded") {
       await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
       await page.getByText("Diagnostics", { exact: true }).click();
-      await expect(page.getByText("offline queue", { exact: true })).toBeVisible();
+      await expect(page.getByText("Saved scans need attention. Open maintenance on this kiosk to check its clock and review rejected scans.", { exact: true })).toBeVisible();
       await expect(page.getByText("17", { exact: true })).toBeVisible();
     }
     if (state === "unpaired") await expect(page.getByRole("button", { name: "Add kiosk" })).toBeVisible();
@@ -479,3 +521,79 @@ for (const role of ["admin", "operator"] as const) for (const state of ["offline
     await expect(page.locator(".page-intro .status-pill")).toHaveText(state === "offline" ? "Offline" : "Degraded");
   });
 }
+
+
+test("Admin reviews rejected scans from retired kiosks without changing attendance", async ({ page }) => {
+  await useKioskContext(page, { state: "unpaired" });
+  let reviewed = false, attempts = 0, loadFailed = true;
+  const writes: string[] = [];
+  const record = { kioskId: "retired-1", kioskName: "Retired entrance kiosk", eventId: "event-1", memberId: "member-record-1", occurredAt: "2020-01-01T07:00:00Z", receivedAt: "2026-10-25T12:00:00Z", reasonCode: "outside_meeting_window", reviewStatus: "open", clock: { verified: false, observedAt: "2020-01-01T06:00:00Z", source: "offline" }, meetingId: "meeting-1" };
+  page.on("request", (request) => { if (request.method() === "POST") writes.push(new URL(request.url()).pathname); });
+  await page.route("**/admin/kiosks/scan-reviews?**", (route) => {
+    if (loadFailed) return route.fulfill({ status: 503, json: { error: "Could not load scan evidence" } });
+    const url = new URL(route.request().url()), status = url.searchParams.get("status"), offset = Number(url.searchParams.get("offset"));
+    const records = status === "reviewed" ? reviewed ? [{ ...record, reviewStatus: "reviewed", reviewNote: "Presence corrected from event roster", reviewedAt: "2026-10-25T13:00:00Z" }] : [] : reviewed ? [] : offset ? [{ ...record, eventId: "event-2", memberId: "member-record-2" }] : [record];
+    return route.fulfill({ json: { records, hasMore: status === "open" && !reviewed && offset === 0 } });
+  });
+  await page.route("**/admin/kiosks/retired-1/scan-reviews/event-1/review", (route) => {
+    expect(route.request().postDataJSON()).toEqual({ note: "Presence corrected from event roster" });
+    attempts++;
+    if (attempts === 1) return route.fulfill({ status: 503, json: { error: "Review service unavailable. Try again." } });
+    reviewed = true; return route.fulfill({ json: { reviewed: true } });
+  });
+  await page.goto("/kiosks");
+  const panel = page.getByRole("region", { name: "Rejected scans", exact: true });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole("alert")).toContainText("Could not load scan evidence");
+  await expect(panel).not.toContainText("No scans need review");
+  loadFailed = false;
+  await panel.getByRole("button", { name: "Refresh rejected scans" }).click();
+  await expect(page.getByText("No kiosk paired", { exact: true })).toBeVisible();
+  await panel.locator("summary").click();
+  await expect(panel).toContainText("recorded scan time may be wrong");
+  await expect(panel).toContainText("2020-01-01T07:00:00Z");
+  await expect(panel.getByRole("link", { name: "Open associated meeting attendance" })).toHaveAttribute("href", "/meetings/meeting-1");
+  await panel.getByRole("link", { name: "Open associated meeting attendance" }).click();
+  await expect(page).toHaveURL(/\/meetings\/meeting-1$/);
+  await page.goBack();
+  await panel.locator("summary").click();
+  await expect(panel.getByRole("button", { name: "Mark reviewed", exact: true })).toBeDisabled();
+  await panel.getByRole("button", { name: "Next rejected scans" }).click();
+  await expect(panel).toContainText("member-record-2");
+  await panel.getByRole("button", { name: "Previous rejected scans" }).click();
+  await panel.locator("summary").click();
+  await panel.getByLabel("Review note", { exact: true }).fill("Presence corrected from event roster");
+  await panel.getByRole("button", { name: "Mark reviewed", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText("Review service unavailable");
+  await expect(panel.getByLabel("Review note", { exact: true })).toHaveValue("Presence corrected from event roster");
+  await panel.getByRole("button", { name: "Mark reviewed", exact: true }).click();
+  await expect(panel).toContainText("Attendance was not changed");
+  await expect(panel).toContainText("No scans need review");
+  await panel.getByRole("combobox", { name: "Review status", exact: true }).selectOption("reviewed");
+  await panel.locator("summary").click();
+  await expect(panel).toContainText("Presence corrected from event roster");
+  await expect(panel.getByRole("button", { name: "Mark reviewed", exact: true })).toHaveCount(0);
+  expect(writes).toEqual(["/admin/kiosks/retired-1/scan-reviews/event-1/review", "/admin/kiosks/retired-1/scan-reviews/event-1/review"]);
+  for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.locator(".app").evaluate((element, theme) => element.setAttribute("data-theme", theme), theme);
+    const refresh = panel.getByRole("button", { name: "Refresh rejected scans" });
+    await refresh.scrollIntoViewIfNeeded(); await page.mouse.move(0, 0); await refresh.focus(); await expect(refresh).toBeFocused();
+    const styles = await refresh.evaluate((element) => {
+      const style = getComputedStyle(element), probe = document.createElement("span"); element.append(probe); probe.style.cssText = "background:var(--ui-surface-subtle);color:var(--ui-text);border:1px solid var(--ui-border);border-radius:var(--radius-control)"; const expected = getComputedStyle(probe);
+      const result = { background: style.backgroundColor, expectedBackground: expected.backgroundColor, color: style.color, expectedColor: expected.color, border: style.borderTopColor, expectedBorder: expected.borderTopColor, radius: style.borderRadius, expectedRadius: expected.borderRadius, height: element.getBoundingClientRect().height }; probe.remove(); return result;
+    });
+    expect(styles.background).toBe(styles.expectedBackground); expect(styles.color).toBe(styles.expectedColor); expect(styles.border).toBe(styles.expectedBorder); expect(styles.radius).toBe(styles.expectedRadius); expect(styles.height).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }
+});
+
+test("Operators cannot open rejected-scan reviews or request their records", async ({ page }) => {
+  await useKioskContext(page, { role: "operator" });
+  let reads = 0;
+  await page.route("**/admin/kiosks/scan-reviews?**", route => { reads++; return route.fulfill({ status: 403, json: { error: "Forbidden" } }); });
+  await page.goto("/kiosks");
+  await expect(page.getByRole("heading", { level: 1, name: "Kiosks", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Rejected scans", exact: true })).toHaveCount(0);
+  expect(reads).toBe(0);
+});

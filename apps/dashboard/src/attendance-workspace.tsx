@@ -36,7 +36,10 @@ const formatScanTime = (value?: string) => value ? new Date(value).toLocaleStrin
 export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; role: "admin" | "operator" }) {
   const { path, navigate } = usePath();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
-  const [meeting, setMeeting] = useState<Meeting>();
+  const [loadedMeeting, setMeeting] = useState<Meeting>();
+  const meeting = loadedMeeting?.id === meetingId ? loadedMeeting : undefined;
+  const [loadState, setLoadState] = useState({ meetingId, loading: true });
+  const loading = loadState.meetingId !== meetingId || loadState.loading;
   const carpoolLinks = useCarpoolMeetingLinks(meeting);
   const [expandedAttendance, setExpandedAttendance] = useState<string[]>([]);
   const [rows, setRows] = useState<AttendanceRow[]>([]);
@@ -56,7 +59,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const [clock, setClock] = useState(() => Date.now());
   const loadSequence = useRef(0);
   useEffect(() => setExpandedAttendance([]), [meetingId]);
-  useDashboardLoadingOverlay(notice === "Loading meeting…", "Loading meeting…");
+  useDashboardLoadingOverlay(loading, "Loading meeting…");
 
   async function attendanceFor(id = meetingId) { return api<{ attendance: AttendanceRow[]; audience: string }>(`/attendance?meetingId=${encodeURIComponent(id)}`); }
   async function refreshAttendance(id = meetingId) { const result = await attendanceFor(id); setRows(result.attendance); setAudience(result.audience ?? "All"); }
@@ -92,13 +95,15 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   }
 
   useEffect(() => {
+    let current = true;
+    setLoadState({ meetingId, loading: true });
     setNotice("Loading meeting…");
     setMeeting(undefined);
     setRows([]);
     setContests([]);
     setDiscordNotice("");
-    void load().catch((error: Error) => setNotice(error.message));
-    return () => { loadSequence.current += 1; };
+    void load().then(loaded => { if (current && loaded) setLoadState({ meetingId, loading: false }); }).catch((error: Error) => { if (current) { setNotice(error.message); setLoadState({ meetingId, loading: false }); } });
+    return () => { current = false; loadSequence.current += 1; };
   }, [meetingId]);
 
   const lifecycle = useMemo(() => meeting ? lifecycleFor(meeting, clock) : undefined, [meeting, clock]);
@@ -174,7 +179,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
       <button type="button" onClick={() => navigate("/dashboard")}>Back to Dashboard</button>
 
     </nav>
-    {meeting ? <>
+    {loading ? <section className="empty-page ui-card" aria-busy="true"><h1 id="meeting-detail-title">Loading meeting</h1><p className="ui-status" role="status">Loading meeting…</p></section> : meeting ? <>
       <header className="meeting-detail-heading" data-walkthrough="meeting-management"><div><span className={`meeting-lifecycle ${lifecycle}`}>{lifecycleLabel(lifecycle!)}</span><h1 id="meeting-detail-title">{meeting.title}</h1></div><div className="meeting-detail-actions"><button type="button" onClick={() => setManagementAction("edit")}>Edit</button><button type="button" onClick={() => setManagementAction("duplicate")}>Duplicate</button><details className="meeting-more-actions"><summary>More</summary><div className="meeting-more-panel"><button className="danger-button" type="button" onClick={() => setManagementAction("delete")}>Delete meeting</button>{integrationActions}</div></details></div></header>
       <MeetingCarpoolLinks links={carpoolLinks.filter((link) => link.meetingId === meeting.id)} navigate={navigate} />
       <dl className="meeting-summary ui-card" aria-label="Meeting summary" data-walkthrough="meeting-summary">
@@ -186,7 +191,7 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
         <div className="meeting-summary-notes"><dt>Notes</dt><dd>{meeting.notes || "No notes"}</dd></div>
       </dl>
       {calendarNotice && <p className="meeting-discord-notice ui-status" data-tone={calendarNoticeTone} role="status" aria-live="polite">{calendarNotice}</p>}{discordNotice && <p className="meeting-discord-notice ui-status" data-tone={discordNoticeTone} role="status" aria-live="polite">{discordNotice}</p>}
-      {discordConfigured && contests.length > 0 && <section className="task-card meeting-contests ui-card" aria-labelledby="meeting-contests-title" data-walkthrough="meeting-contests"><div className="panel-heading"><InfoHeading id="meeting-contests-title" info="Review requests submitted for this meeting.">Attendance contests</InfoHeading><span className="progress-count">{contests.length} open</span></div><ContestReviewList contests={contests} onBulkResolved={(accepted) => { const keys = new Set(accepted.map(contest => JSON.stringify([contest.meetingId, contest.memberId]))); setContests(current => current.filter(contest => !keys.has(JSON.stringify([contest.meetingId, contest.memberId])))); setDiscordNotice(`${accepted.length} contests approved.`); setDiscordNoticeTone("success"); void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message)); }} onResolved={(resolution, contest) => { setContests((current) => current.filter((item) => item.meetingId !== contest.meetingId || item.memberId !== contest.memberId)); setDiscordNotice(`Contest ${resolution}.`); setDiscordNoticeTone("success"); if (resolution === "approved") void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message)); }} /></section>}
+      {discordConfigured && contests.length > 0 && <section className="task-card meeting-contests ui-card" aria-labelledby="meeting-contests-title" data-walkthrough="meeting-contests"><div className="panel-heading"><InfoHeading id="meeting-contests-title" info="Review requests submitted for this meeting.">Attendance contests</InfoHeading><span className="progress-count">{contests.length} open</span></div><ContestReviewList contests={contests} onBulkResolved={(accepted, resolution) => { const keys = new Set(accepted.map(contest => JSON.stringify([contest.meetingId, contest.memberId]))); setContests(current => current.filter(contest => !keys.has(JSON.stringify([contest.meetingId, contest.memberId])))); setDiscordNotice(`${accepted.length} contests ${resolution}.`); setDiscordNoticeTone("success"); if (resolution === "approved") void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message)); }} onResolved={(resolution, contest) => { setContests((current) => current.filter((item) => item.meetingId !== contest.meetingId || item.memberId !== contest.memberId)); setDiscordNotice(`Contest ${resolution}.`); setDiscordNoticeTone("success"); if (resolution === "approved") void refreshAttendance(meeting.id).catch((error: Error) => setNotice(error.message)); }} /></section>}
       <div className="attendance-utilities"><span role="status" aria-live="polite">{notice}</span><span className="progress-count">{rows.filter((row) => row.disposition === "present").length} present</span></div>
       <section className="attendance-card ui-card" aria-labelledby="meeting-attendance-title" data-walkthrough="meeting-attendance"><div className="panel-heading"><h2 id="meeting-attendance-title">Attendance</h2></div>{rows.length ? <div className="attendance-table" role="table" aria-label="Meeting attendance"><div className="attendance-row header" role="row"><span role="columnheader">Member</span><span role="columnheader">Scan times</span><span role="columnheader">Status</span><span role="columnheader">Actions</span></div>{rows.map((row) => <div className={`attendance-row${expandedAttendance.includes(row.memberId) ? " corrections-expanded" : ""}`} role="row" key={row.memberId}><span role="cell"><RouteLink className="attendance-member-link" href={`/roster/${encodeURIComponent(row.externalId)}`} currentPath={path} navigate={navigate}><strong>{row.firstName} {row.lastName}</strong></RouteLink><small>{row.externalId} · {row.eligibility?.replace("_"," ")??"required"}{row.rateEligible?" · rate eligible":""}</small>{memberNotices[row.memberId] && <small className="member-action-notice" role="status">{memberNotices[row.memberId]}</small>}</span><div role="cell"><dl className="attendance-scan-times"><div><dt>Check-in</dt><dd>{row.checkedInAt ? <time dateTime={row.checkedInAt}>{formatScanTime(row.checkedInAt)}</time> : formatScanTime()}</dd></div><div><dt>Check-out</dt><dd>{row.checkedOutAt ? <time dateTime={row.checkedOutAt}>{formatScanTime(row.checkedOutAt)}</time> : formatScanTime()}</dd></div></dl></div><span role="cell" className={`attendance-state ${row.disposition}`}>{row.disposition === "active" ? "Active · not checked out" : row.disposition === "not_required" ? "Not required" : row.disposition}</span><span role="cell" className="attendance-correction-cell"><button className="ui-button compact-pencil attendance-correction-toggle" type="button" aria-label={`Adjust attendance for ${row.firstName} ${row.lastName}`} aria-expanded={expandedAttendance.includes(row.memberId)} aria-controls={`attendance-corrections-${row.memberId}`} onClick={() => setExpandedAttendance(current => current.includes(row.memberId) ? current.filter(id => id !== row.memberId) : [...current, row.memberId])}><PencilIcon /></button><span id={`attendance-corrections-${row.memberId}`} className="correction-actions" hidden={!expandedAttendance.includes(row.memberId)} data-walkthrough="meeting-corrections"><button type="button" disabled={row.disposition === "present"} onClick={() => void correct(row, "present")}>Present</button><button type="button" disabled={row.disposition === "excused"} onClick={() => void correct(row, "excused")}>Excuse</button><button type="button" disabled={row.disposition === "absent"} onClick={() => void correct(row, "absent")}>Absent</button>{role === "admin" && <button type="button" disabled={row.disposition === "not_required"} onClick={() => void clear(row)}>Clear</button>}</span></span></div>)}</div> : <p className="empty-state">No active roster records are available.</p>}</section>
       {managementAction === "edit" && <MeetingEditDialog meeting={meeting} onClose={() => setManagementAction(undefined)} onSaved={managementComplete} />}

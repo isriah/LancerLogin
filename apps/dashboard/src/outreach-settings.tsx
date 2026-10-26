@@ -47,7 +47,7 @@ function Catalog({ kind, onChanged, setNotice }: { kind: Kind; onChanged: () => 
   const [page, setPage] = useState<CatalogPage>(); const [busy, setBusy] = useState(true); const [error, setError] = useState(""); const [version, setVersion] = useState(0); const [editing, setEditing] = useState<{ item?: Item }>();
   const title = kind === "teams" ? "Supported teams" : "Outreach labels"; const noun = kind === "teams" ? "team" : "label";
   function resetPage() { setCursor(null); setPrevious([]); }
-  useEffect(() => { const timer = window.setTimeout(() => { setSearch(query); resetPage(); }, 250); return () => window.clearTimeout(timer); }, [query]);
+  useEffect(() => { if (query === search) return; const timer = window.setTimeout(() => { setSearch(query); resetPage(); }, 250); return () => window.clearTimeout(timer); }, [query, search]);
   useEffect(() => {
     const controller = new AbortController(); setBusy(true); setError(""); setPage(undefined);
     const params = new URLSearchParams({ archived, limit: "20", q: search }); if (cursor) params.set("after", cursor);

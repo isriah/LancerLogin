@@ -1,3 +1,4 @@
+import { attendanceSetupInterval } from "./attendance-setup-interval";
 import { useEffect, useState } from "react";
 import type { ModuleSnapshotItem } from "../../../packages/shared/src/module-platform.ts";
 import { api } from "./dashboard-api";
@@ -24,12 +25,14 @@ function readState(value: unknown, module: ModuleSnapshotItem): SetupState {
 
 function localInput(value: Date) {
   const offset = value.getTimezoneOffset() * 60_000;
-  return new Date(value.getTime() - offset).toISOString().slice(0, 16);
+  return new Date(value.getTime() - offset).toISOString().slice(0, -1);
 }
 
-function defaultMeeting() {
-  const start = new Date(Date.now() - 5 * 60_000); start.setSeconds(0, 0);
-  return { title: "First Attendance meeting", startsAt: localInput(start), endsAt: localInput(new Date(start.getTime() + 60 * 60_000)), required: true };
+const meetingInstant = (value: string, original: string) => value === localInput(new Date(original)) ? original : new Date(value).toISOString();
+
+function defaultMeeting(timeZone: string) {
+  const interval = attendanceSetupInterval(Date.now(), timeZone);
+  return { timeZone, originalStartsAt: interval.startsAt, originalEndsAt: interval.endsAt, title: "First Attendance meeting", startsAt: localInput(new Date(interval.startsAt)), endsAt: localInput(new Date(interval.endsAt)), required: true };
 }
 
 type ModuleSetupWorkspaceProps = { module: ModuleSnapshotItem; navigate: (path: string) => void; onReady: () => Promise<void> | void };
@@ -51,7 +54,7 @@ function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSetupWork
   const [rules, setRules] = useState<Rules>();
   const [storedRules, setStoredRules] = useState<Rules>();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
-  const [meeting, setMeeting] = useState(defaultMeeting);
+  const [meeting, setMeeting] = useState<ReturnType<typeof defaultMeeting>>();
   const [createAnotherMeeting, setCreateAnotherMeeting] = useState(false);
   const [input, setInput] = useState<InputState>();
   const [simulatorName, setSimulatorName] = useState("Browser simulator");
@@ -76,7 +79,7 @@ function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSetupWork
     if (!step) return;
     setNotice("");
     if (step.id === "rules") void api<{ values: Rules }>("/module-setup/attendance/rules").then((result) => { setRules(result.values); setStoredRules(result.values); }).catch((error: Error) => setNotice(error.message));
-    if (step.id === "meeting") void api<{ meetings: Meeting[] }>("/module-setup/attendance/meeting").then((result) => { setMeetings(result.meetings); setMeetingId(result.meetings[0]?.id ?? ""); setCreateAnotherMeeting(false); }).catch((error: Error) => setNotice(error.message));
+    if (step.id === "meeting") void api<{ meetings: Meeting[]; timeZone: string }>("/module-setup/attendance/meeting").then((result) => { if (!result.timeZone) throw new Error("The organization time zone is unavailable. Reload setup."); setMeeting((current) => current ?? defaultMeeting(result.timeZone)); setMeetings(result.meetings); setMeetingId(result.meetings[0]?.id ?? ""); setCreateAnotherMeeting(false); }).catch((error: Error) => setNotice(error.message));
     if (step.id === "input") void api<InputState>("/module-setup/attendance/input").then((result) => { setInput(result); setMemberId(result.members[0]?.id ?? ""); setMeetingId(result.meetings[0]?.id ?? ""); }).catch((error: Error) => setNotice(error.message));
   }, [step?.id]);
 
@@ -89,7 +92,8 @@ function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSetupWork
         await api("/module-setup/attendance/rules", { method: "PUT", body: JSON.stringify({ values: rules, expected: storedRules }) });
         setStoredRules(rules);
       } else if (step.id === "meeting" && (!meetings.length || createAnotherMeeting)) {
-        const created = await api<{ id: string }>("/module-setup/attendance/meeting", { method: "POST", body: JSON.stringify({ title: meeting.title, startsAt: new Date(meeting.startsAt).toISOString(), endsAt: new Date(meeting.endsAt).toISOString(), required: meeting.required }) });
+        if (!meeting) throw new Error("Meeting defaults are still loading. Try again.");
+        const created = await api<{ id: string }>("/module-setup/attendance/meeting", { method: "POST", body: JSON.stringify({ title: meeting.title, startsAt: meetingInstant(meeting.startsAt, meeting.originalStartsAt), endsAt: meetingInstant(meeting.endsAt, meeting.originalEndsAt), required: meeting.required }) });
         setMeetingId(created.id);
         setCreateAnotherMeeting(false);
       } else if (step.id === "input" && !step.valid) {
@@ -121,7 +125,7 @@ function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSetupWork
         {step.id === "input" && <InputStep state={input} simulatorName={simulatorName} setSimulatorName={setSimulatorName} memberId={memberId} setMemberId={setMemberId} meetingId={meetingId} setMeetingId={setMeetingId} navigate={navigate} valid={step.valid} />}
         {step.id === "calendar" && <IntegrationStep provider="Google Calendar" valid={step.valid} navigate={navigate} />}
         {step.id === "discord" && <IntegrationStep provider="Discord" valid={step.valid} navigate={navigate} />}
-        <div className="module-actions"><button type="button" disabled={busy || current === 0} onClick={() => setCurrent((index) => index - 1)}>Back</button><button className="primary-button" type="button" disabled={busy} onClick={() => void saveCurrent()}>{busy ? "Saving..." : !step.required && !step.valid ? "Set up later and continue" : current === state.steps.length - 1 ? "Finish Attendance setup" : "Save and continue"}</button></div>
+        <div className="module-actions"><button type="button" disabled={busy || current === 0} onClick={() => setCurrent((index) => index - 1)}>Back</button><button className="primary-button" type="button" disabled={busy || step.id === "meeting" && !meeting} onClick={() => void saveCurrent()}>{busy ? "Saving..." : !step.required && !step.valid ? "Set up later and continue" : current === state.steps.length - 1 ? "Finish Attendance setup" : "Save and continue"}</button></div>
       </article>
     </>}
     {!state && !busy && <button type="button" onClick={() => void load()}>Try again</button>}
@@ -133,8 +137,9 @@ function RulesStep({ value, onChange }: { value?: Rules; onChange: (value: Rules
   return <div className="form-grid"><label>Late scan minutes<input type="number" min={0} max={180} value={value.lateScanMinutes} onChange={(event) => onChange({ ...value, lateScanMinutes: Number(event.target.value) })} /></label><label>Reporting starts on <span>(optional)</span><input type="date" value={value.attendanceReportingStartsOn ?? ""} onChange={(event) => onChange({ ...value, attendanceReportingStartsOn: event.target.value || null })} /></label><label>Late anomaly threshold<input type="number" min={0} max={180} value={value.anomalyLateThresholdMinutes} onChange={(event) => onChange({ ...value, anomalyLateThresholdMinutes: Number(event.target.value) })} /></label><label>Early anomaly threshold<input type="number" min={0} max={180} value={value.anomalyEarlyThresholdMinutes} onChange={(event) => onChange({ ...value, anomalyEarlyThresholdMinutes: Number(event.target.value) })} /></label></div>;
 }
 
-function MeetingStep({ meetings, value, onChange, createAnother, onCreateAnother }: { meetings: Meeting[]; value: ReturnType<typeof defaultMeeting>; onChange: (value: ReturnType<typeof defaultMeeting>) => void; createAnother: boolean; onCreateAnother: (value: boolean) => void }) {
-  const form = <><p>Create a same-day meeting whose attendance window is open now.</p><label>Meeting title<input maxLength={120} value={value.title} onChange={(event) => onChange({ ...value, title: event.target.value })} /></label><div className="form-grid"><label>Starts<input type="datetime-local" value={value.startsAt} onChange={(event) => onChange({ ...value, startsAt: event.target.value })} /></label><label>Ends<input type="datetime-local" value={value.endsAt} onChange={(event) => onChange({ ...value, endsAt: event.target.value })} /></label></div><label className="checkbox-field"><input type="checkbox" checked={value.required} onChange={(event) => onChange({ ...value, required: event.target.checked })} /> Required meeting</label></>;
+function MeetingStep({ meetings, value, onChange, createAnother, onCreateAnother }: { meetings: Meeting[]; value?: ReturnType<typeof defaultMeeting>; onChange: (value: ReturnType<typeof defaultMeeting>) => void; createAnother: boolean; onCreateAnother: (value: boolean) => void }) {
+  if (!value) return <p role="status">Loading meeting defaults...</p>;
+  const form = <><p>Create a meeting whose attendance window is open now and whose start and end share one date in {value.timeZone}. Times below are shown in your browser time zone ({Intl.DateTimeFormat().resolvedOptions().timeZone}).</p><label>Meeting title<input maxLength={120} value={value.title} onChange={(event) => onChange({ ...value, title: event.target.value })} /></label><div className="form-grid"><label>Starts<input type="datetime-local" step="0.001" value={value.startsAt} onChange={(event) => onChange({ ...value, startsAt: event.target.value })} /></label><label>Ends<input type="datetime-local" step="0.001" value={value.endsAt} onChange={(event) => onChange({ ...value, endsAt: event.target.value })} /></label></div><label className="checkbox-field"><input type="checkbox" checked={value.required} onChange={(event) => onChange({ ...value, required: event.target.checked })} /> Required meeting</label></>;
   if (meetings.length) return <div><p>{meetings.length} existing meeting{meetings.length === 1 ? " is" : "s are"} available. Continue with the current schedule, or replace an unsuitable first choice by creating a different meeting now.</p><ul className="compact-list">{meetings.slice(0, 3).map((item) => <li key={item.id}><strong>{item.title}</strong> - {new Date(item.startsAt).toLocaleString()}</li>)}</ul><label className="checkbox-field"><input type="checkbox" checked={createAnother} onChange={(event) => onCreateAnother(event.target.checked)} /> Create a different meeting before continuing</label>{createAnother && form}</div>;
   return <div>{form}</div>;
 }

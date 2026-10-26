@@ -52,7 +52,7 @@ function memberValues(member: MemberRow, labels: Map<string, string>): Record<st
     "core.member.email": { text: member.email ?? "", sortValue: member.email?.toLowerCase() ?? null },
     "core.member.discord-id": { text: member.discordUserId ?? "", sortValue: member.discordUserId ?? null },
     "core.member.status": { text: member.active ? "Active" : "Inactive", sortValue: member.active ? 1 : 0 },
-    "core.member.labels": { text: labelText, sortValue: labelText.toLocaleLowerCase() },
+    "core.member.labels": { text: labelText, sortValue: labelText.toLocaleLowerCase(), empty: !labels.size },
   };
 }
 
@@ -128,7 +128,7 @@ async function projectOutreachActivities(db: D1Database, definition: NormalizedR
     const labels = parseOutreachLabels(activity.labels); if (!outreachLabelsMatch(definition, labels)) return [];
     return [reportRow(definition, activity.id, activity.title, {
     "outreach.activity.id": { text: activity.id, sortValue: activity.id }, "outreach.activity.title": { text: activity.title, sortValue: activity.title.toLocaleLowerCase() }, "outreach.activity.date": { text: activity.serviceDate, sortValue: activity.serviceDate },
-    "outreach.activity.labels": { text: outreachLabelText(labels), sortValue: outreachLabelText(labels).toLocaleLowerCase() }, "outreach.activity.mode": { text: activity.mode === "event" ? "Event" : activity.mode === "team" ? "Team support" : "Other service", sortValue: activity.mode },
+    "outreach.activity.labels": { text: outreachLabelText(labels), sortValue: outreachLabelText(labels).toLocaleLowerCase(), empty: !labels.length }, "outreach.activity.mode": { text: activity.mode === "event" ? "Event" : activity.mode === "team" ? "Team support" : "Other service", sortValue: activity.mode },
     "outreach.activity.team-id": { text: activity.teamId ?? "", sortValue: activity.teamId }, "outreach.activity.team": { text: activity.team ?? "N/A", sortValue: activity.team?.toLocaleLowerCase() ?? null },
     "outreach.activity.participants": { text: String(Number(activity.participants)), sortValue: Number(activity.participants) }, "outreach.activity.entries": { text: String(Number(activity.entries)), sortValue: Number(activity.entries) }, "outreach.activity.minutes": { text: String(Number(activity.minutes)), sortValue: Number(activity.minutes) },
     })];
@@ -140,7 +140,7 @@ async function projectOutreachEntries(db: D1Database, definition: NormalizedRepo
   return filterAndSortReportRows(definition, entries.filter((entry) => outreachLabelsMatch(definition, entry.activityLabels)).map((entry) => reportRow(definition, entry.id, entry.activityTitle, {
     "outreach.entry.id": { text: entry.id, sortValue: entry.id }, "outreach.entry.member": { text: members.get(entry.memberId) ?? "Unavailable member", sortValue: (members.get(entry.memberId) ?? "").toLocaleLowerCase() },
     "outreach.entry.activity-id": { text: entry.activityId, sortValue: entry.activityId }, "outreach.entry.activity": { text: entry.activityTitle, sortValue: entry.activityTitle.toLocaleLowerCase() }, "outreach.entry.date": { text: entry.serviceDate, sortValue: entry.serviceDate },
-    "outreach.entry.labels": { text: outreachLabelText(entry.activityLabels), sortValue: outreachLabelText(entry.activityLabels).toLocaleLowerCase() },
+    "outreach.entry.labels": { text: outreachLabelText(entry.activityLabels), sortValue: outreachLabelText(entry.activityLabels).toLocaleLowerCase(), empty: !entry.activityLabels.length },
     "outreach.entry.start": { text: entry.startLocal, sortValue: entry.startLocal }, "outreach.entry.end": { text: entry.endLocal, sortValue: entry.endLocal }, "outreach.entry.minutes": { text: String(entry.durationMinutes), sortValue: entry.durationMinutes },
     "outreach.entry.channel": { text: entry.channel, sortValue: entry.channel }, "outreach.entry.status": { text: entry.status, sortValue: entry.status },
   })));

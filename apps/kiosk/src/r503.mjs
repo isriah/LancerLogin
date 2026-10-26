@@ -79,11 +79,12 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
       requireSuccess(image, "finger removal check");
       return true;
     },
-    async enroll(slot, { attempts = 60, delayMs = 250, onProgress = async () => undefined, replaceExisting = false } = {}) {
+    async enroll(slot, { attempts = 60, delayMs = 250, onProgress = async () => undefined, replaceExisting = false, checkActive = () => {}, beforeStore = async () => {} } = {}) {
       if (!Number.isInteger(slot) || slot < 0 || slot >= capacity) throw new Error(`R503 slot must be between 0 and ${capacity - 1}`);
       if ((await reader.occupiedSlots()).includes(slot) && replaceExisting !== true) throw new Error(`Sensor slot ${slot} already contains a fingerprint. Confirm replacement or choose an empty slot.`);
       const capture = async (buffer) => {
         for (let attempt = 0; attempt < attempts; attempt += 1) {
+          checkActive();
           const image = await send(0x01);
           if (image.confirmation === 0) { requireSuccess(await send(0x02, [buffer]), `image ${buffer} conversion`); return; }
           if (image.confirmation !== 0x02) requireSuccess(image, `image ${buffer} capture`);
@@ -96,6 +97,7 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
       await onProgress("enroll_scan_accepted");
       let removed = false;
       for (let attempt = 0; attempt < attempts; attempt += 1) {
+        checkActive();
         const image = await send(0x01);
         if (image.confirmation === 0x02) { removed = true; break; }
         requireSuccess(image, "finger removal check"); await delay(delayMs);
@@ -103,7 +105,10 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
       if (!removed) throw new Error("R503 enrollment timed out waiting for the finger to be removed");
       await onProgress("enroll_wait_second");
       await capture(0x02);
+      await beforeStore();
+      checkActive();
       requireSuccess(await send(0x05), "template creation");
+      checkActive();
       requireSuccess(await send(0x06, [0x01, (slot >> 8) & 0xff, slot & 0xff]), "template storage");
       await onProgress("enroll_success");
       return { slot };

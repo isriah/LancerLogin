@@ -1143,7 +1143,7 @@ test("loopback display state exposes only a safe release version and local Wi-Fi
     assert.equal("sensorPath" in displayState, false);
     const health = await (await request("/health")).json();
     assert.equal("releaseVersion" in health, false);
-    assert.deepEqual(health.attendance, { saved: 1, pending: 0, accepted: 0, duplicate: 0, rejected: 1, historyComplete: true });
+    assert.deepEqual(health.attendance, { saved: 1, pending: 0, accepted: 0, duplicate: 0, rejected: 1, needsReview: 1, clockPending: 0, historyComplete: true });
 
     assert.equal((await request("/network/wifi")).status, 403);
     assert.equal((await request("/sensor/slots")).status, 403);
@@ -1151,6 +1151,7 @@ test("loopback display state exposes only a safe release version and local Wi-Fi
       assert.equal((await request(path, { method })).status, 403);
     }
     assert.equal((await request("/attendance/rejections")).status, 403);
+    assert.equal((await request("/maintenance/clock", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ currentTime: "2026-10-24T11:00:00.000Z" }) })).status, 403);
     assert.equal((await request("/network/pin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: "123456" }) })).status, 201);
     const unavailableSlots = await request("/sensor/slots");
     assert.equal(unavailableSlots.status, 503);
@@ -1159,6 +1160,9 @@ test("loopback display state exposes only a safe release version and local Wi-Fi
     assert.equal(unavailableSync.status, 410);
     assert.match((await unavailableSync.json()).error, /retired/);
     assert.equal((await (await request("/maintenance/session")).json()).authorized, true);
+    assert.equal((await request("/maintenance/clock", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ currentTime: "not-a-date" }) })).status, 400);
+    assert.equal((await request("/maintenance/clock", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ currentTime: "2026-10-24T11:00:00.000Z" }) })).status, 200);
+    assert.equal((await (await request("/display-state")).json()).clock.source, "operator");
     assert.equal((await request("/fingerprint-sync", { headers: { origin: "https://untrusted.example.test" } })).status, 403);
     const scan = await request("/network/wifi");
     assert.equal(scan.status, 200);
@@ -1278,7 +1282,10 @@ test("local attendance acknowledges durable offline saves without waiting for cl
             assert.deepEqual(await response.json(),{accepted:true,queued:1});
             const retry=await submit();assert.equal(retry.status,200);
             assert.deepEqual(await retry.json(),{accepted:false,queued:1});
-            assert.deepEqual(JSON.parse(await readFile(process.env.LANCERLOGIN_QUEUE,'utf8')),[{...event,pairingId:'synthetic-pairing'}]);
+            const saved=JSON.parse(await readFile(process.env.LANCERLOGIN_QUEUE,'utf8'));
+            assert.equal(saved.length,1);assert.equal(saved[0].eventId,event.eventId);assert.equal(saved[0].memberId,event.memberId);assert.equal(saved[0].pairingId,'synthetic-pairing');
+            assert.equal(saved[0].clock.version,1);assert.equal(saved[0].clock.verified,false);
+            assert.ok(Number.isFinite(Date.parse(saved[0].occurredAt)));assert.notEqual(saved[0].occurredAt,event.occurredAt);
           }
         }finally{release();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
       `;
@@ -1364,7 +1371,7 @@ test("interrupted replay leaves the original event for idempotent recovery", asy
     assert.deepEqual((await createFileQueue(path).pending()).map((event) => event.eventId), ["interrupted-1"]);
     const restarted = createFileQueue(path);
     assert.deepEqual(await restarted.flush(async () => ({ duplicate: true })), ["interrupted-1"]);
-    assert.deepEqual(await restarted.diagnostics(), { saved: 1, pending: 0, accepted: 0, duplicate: 1, rejected: 0, historyComplete: true });
+    assert.deepEqual(await restarted.diagnostics(), { saved: 1, pending: 0, accepted: 0, duplicate: 1, rejected: 0, needsReview: 0, clockPending: 0, historyComplete: true });
   } finally {
     if (child && child.exitCode === null) child.kill();
     await rm(directory, { recursive: true });
@@ -1387,13 +1394,13 @@ test("rejected scans and safe reasons survive replay without blocking later vali
     });
     assert.deepEqual(sent, ["rejected-1", "accepted-2", "duplicate-3"]);
     const restarted = createFileQueue(path);
-    assert.deepEqual(await restarted.diagnostics(), { saved: 3, pending: 0, accepted: 1, duplicate: 1, rejected: 1, historyComplete: true });
+    assert.deepEqual(await restarted.diagnostics(), { saved: 3, pending: 0, accepted: 1, duplicate: 1, rejected: 1, needsReview: 1, clockPending: 0, historyComplete: true });
     assert.deepEqual(await restarted.rejections(), [{ eventId: "rejected-1", memberId: "synthetic-a", occurredAt: "2026-09-19T12:00:00.000Z", httpStatus: 409, reasonCode: "no_eligible_meeting", reviewStatus: "open" }]);
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")), []);
     assert.equal(await restarted.markReviewed("missing-event"), false);
     assert.equal(await restarted.markReviewed("rejected-1"), true);
     assert.equal((await createFileQueue(path).rejections())[0].reviewStatus, "reviewed");
-    assert.deepEqual(await restarted.diagnostics(), { saved: 3, pending: 0, accepted: 1, duplicate: 1, rejected: 1, historyComplete: true });
+    assert.deepEqual(await restarted.diagnostics(), { saved: 3, pending: 0, accepted: 1, duplicate: 1, rejected: 1, needsReview: 0, clockPending: 0, historyComplete: true });
     assert.equal((await readFile(path, "utf8")).includes("Do not store this raw message"), false);
   } finally { await rm(directory, { recursive: true }); }
 });
@@ -1403,10 +1410,10 @@ test("the release 1.0.6 array queue upgrades without losing its pending scan", a
   try {
     await writeFile(path, JSON.stringify([{ eventId: "legacy-1", memberId: "synthetic-a", occurredAt: "2026-09-19T12:00:00.000Z" }]));
     const queue = createFileQueue(path);
-    assert.deepEqual(await queue.diagnostics(), { saved: 1, pending: 1, accepted: 0, duplicate: 0, rejected: 0, historyComplete: false });
+    assert.deepEqual(await queue.diagnostics(), { saved: 1, pending: 1, accepted: 0, duplicate: 0, rejected: 0, needsReview: 0, clockPending: 0, historyComplete: false });
     await queue.flush(async () => ({ rejected: true, status: 404, code: "roster_inactive" }));
     const restarted = createFileQueue(path);
-    assert.deepEqual(await restarted.diagnostics(), { saved: 1, pending: 0, accepted: 0, duplicate: 0, rejected: 1, historyComplete: false });
+    assert.deepEqual(await restarted.diagnostics(), { saved: 1, pending: 0, accepted: 0, duplicate: 0, rejected: 1, needsReview: 1, clockPending: 0, historyComplete: false });
     assert.equal((await restarted.rejections())[0].eventId, "legacy-1");
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")), []);
   } finally { await rm(directory, { recursive: true }); }
@@ -1423,7 +1430,7 @@ test("recovery finishes a saved rejection after interruption between outcome and
     const queue = createFileQueue(path);
     assert.deepEqual(await queue.pending(), []);
     assert.deepEqual(await queue.flush(async () => assert.fail("A terminal rejection must not be sent again")), []);
-    assert.deepEqual(await createFileQueue(path).diagnostics(), { saved: 1, pending: 0, accepted: 0, duplicate: 0, rejected: 1, historyComplete: false });
+    assert.deepEqual(await createFileQueue(path).diagnostics(), { saved: 1, pending: 0, accepted: 0, duplicate: 0, rejected: 1, needsReview: 1, clockPending: 0, historyComplete: false });
   } finally { await rm(directory, { recursive: true }); }
 });
 
@@ -1820,6 +1827,15 @@ test("R503 enrollment creates and stores a template without returning biometric 
   assert.deepEqual(instructions, [0x1f, 0x01, 0x02, 0x01, 0x01, 0x02, 0x05, 0x06]);
   assert.deepEqual(progress, ["enroll_wait_first", "enroll_scan_accepted", "enroll_wait_second", "enroll_success"]);
   assert.equal(JSON.stringify(enrolled).includes("template"), false);
+});
+
+test("R503 remote enrollment cannot create or store a template after authority is revoked", async () => {
+  const replies = [acknowledgement(0, Array(32).fill(0)), acknowledgement(0), acknowledgement(0), acknowledgement(2), acknowledgement(0), acknowledgement(0)];
+  const instructions = [];
+  const sensor = createR503(async packet => { instructions.push(packet[9]); return replies.shift(); });
+  await assert.rejects(sensor.enroll(3, { delayMs: 0, attempts: 2, beforeStore: async () => { throw new Error("Session cancelled"); } }), /Session cancelled/);
+  assert.deepEqual(instructions, [0x1f, 0x01, 0x02, 0x01, 0x01, 0x02]);
+  assert.equal(instructions.includes(0x05), false); assert.equal(instructions.includes(0x06), false);
 });
 
 test("R503 slot index reads bitmap pages without downloading fingerprint templates", async () => {

@@ -10,6 +10,80 @@ import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 const secret = "A".repeat(43);
 const hash = (value: string) => createHash("sha256").update(value).digest("base64url");
 
+test("dashboard enrollment is kiosk-bound, confirms a current member and accepts only ordered progress", async context => {
+  const { database, call, pair } = await fixture(context);
+  const device = await pair("Synthetic enrollment"), other = await pair("Synthetic other");
+  database.sqlite.prepare("UPDATE kiosks SET last_seen_at=?,reader_online=1,authentication_method='fingerprint' WHERE id=?").run(new Date().toISOString(), device.kioskId);
+  const path = `/admin/kiosks/${device.kioskId}/enrollment`;
+  const started = await call(path, {}); assert.equal(started.status, 201, await started.clone().text());
+  const { session } = await started.json() as { session: { id: string; state: string; expiresAt: string } };
+  assert.equal(session.state, "waiting_member");
+  assert.ok(Date.parse(session.expiresAt) - Date.now() <= 300_000);
+  assert.equal((await call(path, {})).status, 409);
+  const poll = await call("/kiosk/poll?v=1&enrollment=1", undefined, device.kioskToken);
+  assert.equal((await poll.json() as { enrollment: { id: string } }).enrollment.id, session.id);
+  assert.equal((await (await call("/kiosk/enrollment", undefined, other.kioskToken)).json() as { enrollment: unknown }).enrollment, null);
+  const progress = `/kiosk/enrollment/${session.id}/progress`;
+  assert.equal((await call(progress, { status: "enroll_wait_first" }, device.kioskToken)).status, 409);
+  assert.equal((await call(`${path}/${session.id}`, { memberId: "member" }, undefined, "PATCH")).status, 200);
+  assert.equal((await call(`${path}/${session.id}`, { memberId: "member" }, undefined, "PATCH")).status, 409);
+  assert.equal((await call(progress, { status: "enroll_success" }, device.kioskToken)).status, 409);
+  assert.equal((await call(progress, { status: "awaiting_confirmation" }, other.kioskToken)).status, 409);
+  for (const status of ["awaiting_confirmation", "enroll_wait_first", "enroll_remove", "enroll_wait_second", "enroll_success"]) {
+    const result = await call(progress, { status }, device.kioskToken); assert.equal(result.status, 200, await result.clone().text());
+  }
+  assert.equal((await call(progress, { status: "enroll_wait_first" }, device.kioskToken)).status, 409);
+  assert.equal((await call(path, {})).status, 201);
+});
+
+test("enrollment authority expires and follows member, creator, pairing and kiosk revocation", async context => {
+  const { database, call, pair } = await fixture(context);
+  const device = await pair("Synthetic enrollment revocation");
+  database.sqlite.prepare("UPDATE kiosks SET last_seen_at=?,reader_online=1,authentication_method='fingerprint' WHERE id=?").run(new Date().toISOString(), device.kioskId);
+  const path = `/admin/kiosks/${device.kioskId}/enrollment`;
+  const { session } = await (await call(path, {})).json() as { session: { id: string } };
+  await call(`${path}/${session.id}`, { memberId: "member" }, undefined, "PATCH");
+  for (const [revoke, restore] of [
+    ["UPDATE members SET active=0 WHERE id='member'", "UPDATE members SET active=1 WHERE id='member'"],
+    ["UPDATE users SET role='operator' WHERE id='admin'", "UPDATE users SET role='admin' WHERE id='admin'"],
+    ["UPDATE kiosks SET configured_authentication_method='member_id'", "UPDATE kiosks SET configured_authentication_method='fingerprint'"],
+  ]) {
+    database.sqlite.exec(revoke);
+    assert.equal((await (await call("/kiosk/enrollment", undefined, device.kioskToken)).json() as { enrollment: unknown }).enrollment, null);
+    assert.equal((await call(`/kiosk/enrollment/${session.id}/progress`, { status: "enroll_wait_first" }, device.kioskToken)).status, 409);
+    database.sqlite.exec(restore);
+  }
+  database.sqlite.prepare("UPDATE kiosk_enrollment_sessions SET expires_at=?").run(new Date(Date.now() - 1000).toISOString());
+  assert.equal((await (await call("/kiosk/enrollment", undefined, device.kioskToken)).json() as { enrollment: unknown }).enrollment, null);
+  assert.equal((await (await call(path)).json() as { session: { progress: string } }).session.progress, "expired");
+  database.sqlite.exec("UPDATE kiosks SET active=0");
+  assert.equal((await call("/kiosk/enrollment", undefined, device.kioskToken)).status, 401);
+});
+
+test("a revoked member grant does not block a fresh enrollment session", async context => {
+  const { database, call, pair } = await fixture(context);
+  const device = await pair("Synthetic enrollment recovery"), path = `/admin/kiosks/${device.kioskId}/enrollment`;
+  database.sqlite.prepare("UPDATE kiosks SET last_seen_at=?,reader_online=1,authentication_method='fingerprint' WHERE id=?").run(new Date().toISOString(), device.kioskId);
+  const { session } = await (await call(path, {})).json() as { session: { id: string } };
+  await call(`${path}/${session.id}`, { memberId: "member" }, undefined, "PATCH");
+  database.sqlite.exec("UPDATE members SET active=0 WHERE id='member'");
+  const replacement = await call(path, {}); assert.equal(replacement.status, 201);
+  assert.notEqual((await replacement.json() as { session: { id: string } }).session.id, session.id);
+  assert.equal((await call(`/kiosk/enrollment/${session.id}/progress`, { status: "enroll_wait_first" }, device.kioskToken)).status, 409);
+});
+
+test("cancelled remote enrollment cannot resume and offline kiosks cannot start it", async context => {
+  const { database, call, pair } = await fixture(context);
+  const device = await pair("Synthetic enrollment cancel"), path = `/admin/kiosks/${device.kioskId}/enrollment`;
+  assert.equal((await call(path, {})).status, 409);
+  database.sqlite.prepare("UPDATE kiosks SET last_seen_at=?,reader_online=1,authentication_method='fingerprint' WHERE id=?").run(new Date().toISOString(), device.kioskId);
+  const { session } = await (await call(path, {})).json() as { session: { id: string } };
+  assert.equal((await call(`${path}/${session.id}`, undefined, undefined, "DELETE")).status, 403);
+  assert.equal((await call(`${path}/${session.id}`, {}, undefined, "DELETE")).status, 200);
+  assert.equal((await call(`${path}/${session.id}`, { memberId: "member" }, undefined, "PATCH")).status, 409);
+  assert.equal((await call(`/kiosk/enrollment/${session.id}/progress`, { status: "enroll_wait_first" }, device.kioskToken)).status, 409);
+});
+
 type Statement = { execute(): unknown };
 
 // Real SQLite with D1's atomic batch semantics. The optional read barrier makes

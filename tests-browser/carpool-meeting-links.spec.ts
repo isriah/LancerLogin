@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { attendanceSnapshot, carpoolSnapshot } from "./module-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
+import { openActiveMeetingCalendar } from "./meeting-calendar-fixture";
 
 const meeting = { id: "active-meeting", title: "Build session", startsAt: "2026-10-10T15:00:00Z", endsAt: "2026-10-10T17:00:00Z" };
 function plan(id: string, title: string) { return { id, title, meetingId: meeting.id as string | null, destination: "Synthetic venue", eventReference: null, eventTitleSnapshot: null, eventStartsAtSnapshot: null, radiusMiles: 12, preferredRadiusMiles: 4, notes: "", archived: false, revision: 0, createdAt: "2026-10-10", updatedAt: "2026-10-10" }; }
@@ -47,7 +48,7 @@ for (const scenario of [{ width: 1280, height: 900, appearance: "light" }, { wid
 
 test("Meetings show inline car icons and multiple Carpool links with stable bidirectional routes", async ({ page }) => {
   await fixtures(page, "light");
-  await page.goto("/dashboard");
+  await openActiveMeetingCalendar(page);
   const calendarMeeting = page.locator(".calendar-selected-record").filter({ hasText: "Build session" }); await expect(calendarMeeting.locator(".carpool-meeting-marker")).toHaveAttribute("title", "2 linked carpools");
   const marker = calendarMeeting.locator(".carpool-meeting-marker");
   await expect(marker).toHaveCSS("display", "inline-flex");

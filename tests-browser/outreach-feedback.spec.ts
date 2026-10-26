@@ -132,6 +132,19 @@ for (const change of [{ date: "2026-03-08", hour: 2, message: "This local time d
   await expect(start).toHaveAttribute("aria-invalid", "false"); await expect(times.getByText(change.message, { exact: true })).toHaveCount(0); expect(state.writes).toHaveLength(0);
 });
 
+test("an unchanged initial search must not reset a newly selected catalog page", async ({ page }) => {
+  await fixture(page);
+  await page.clock.pauseAt(new Date("2026-10-13T18:01:00Z"));
+  await page.goto("/settings/outreach-setup?section=labels");
+  const table = page.getByRole("table", { name: "Outreach labels" });
+  await expect(table).toContainText("Synthetic label 000");
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(table).toContainText("Synthetic label 020");
+  await page.clock.runFor(300);
+  await expect(table).toContainText("Synthetic label 020");
+  await expect(table).not.toContainText("Synthetic label 000");
+});
+
 for (const theme of ["light", "dark"]) for (const width of [1280, 390]) test(`catalog tabs search every page and use focused dialogs at ${width} in ${theme}`, async ({ page }) => {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 }); await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), theme); const state = await fixture(page); await page.goto("/settings/outreach-setup");
   const sections = page.getByRole("combobox", { name: "Outreach section", exact: true });

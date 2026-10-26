@@ -138,3 +138,22 @@ test("Outreach walkthrough stays unavailable without module workspace access", a
   await expect(page.locator(".walkthrough-panel")).toHaveCount(0);
   expect(walkthroughRequests).toBe(0);
 });
+
+test("Outreach Not now stays deferred after opening an activity and returning", async ({ page }) => {
+  const state = { progress: { pageId: "outreach", version: 1, status: "not_started", stepId: null } as Progress };
+  await routeOutreach(page, "admin", state);
+  const writes: string[] = [];
+  page.on("request", request => { if (request.method() === "PATCH" && request.url().includes("/auth/walkthroughs/")) writes.push(request.url()); });
+  await page.goto("/hours");
+  await page.locator(".walkthrough-panel").getByRole("button", { name: "Not now", exact: true }).click();
+  await page.getByRole("radio", { name: "Table", exact: true }).check();
+  await page.getByRole("link", { name: activity.title, exact: true }).click();
+  await page.getByRole("link", { name: "← Outreach", exact: true }).click();
+  await expect(page.locator('[data-walkthrough-page="outreach"]')).toHaveAttribute("data-walkthrough-ready", "true");
+  await expect(page.locator(".walkthrough-panel")).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('[data-walkthrough-page="outreach"]')).toHaveAttribute("data-walkthrough-ready", "true");
+  await expect(page.locator(".walkthrough-panel")).toHaveCount(0);
+  expect(writes).toEqual([]);
+  expect(state.progress.status).toBe("not_started");
+});

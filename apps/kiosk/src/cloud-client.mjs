@@ -32,6 +32,15 @@ export async function sendHeartbeat(config, { readerOnline = false, authenticati
   return parseResponse(response);
 }
 
+export async function sendScanReviews(config, records, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/scan-reviews`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
+    body: JSON.stringify({ records }),
+  });
+  try { return await parseResponse(response); }
+  catch (error) { error.status = response.status; throw error; }
+}
+
 export async function fetchKioskConfiguration(config, { fetchImpl = fetch } = {}) {
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/config`, { headers: { authorization: `Bearer ${config.kioskToken}` } });
   return parseResponse(response);
@@ -54,6 +63,23 @@ export async function completeKioskCommand(config, commandId, result, { fetchImp
     body: JSON.stringify({ success: Boolean(result.success), message: String(result.message || "").slice(0, 200) }),
   });
   return parseResponse(response);
+}
+
+export async function fetchKioskEnrollment(config, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/enrollment`, { headers: { authorization: `Bearer ${config.kioskToken}` } });
+  if ([404, 405].includes(response.status)) { await response.body?.cancel(); return null; }
+  const value = await parseResponse(response);
+  if (!Object.hasOwn(value, "enrollment")) throw new Error("Dashboard enrollment authority is unavailable.");
+  return value.enrollment;
+}
+
+export async function sendKioskEnrollmentProgress(config, sessionId, progress, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/enrollment/${encodeURIComponent(sessionId)}/progress`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` }, body: JSON.stringify(progress),
+  });
+  const value = await parseResponse(response);
+  if (!Object.hasOwn(value, "session")) throw new Error("Dashboard enrollment progress was not confirmed.");
+  return value.session;
 }
 
 export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) {

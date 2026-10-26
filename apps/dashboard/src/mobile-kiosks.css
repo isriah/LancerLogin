@@ -19,3 +19,10 @@
 
 .fingerprint-sharing-page .kiosk-actions { display: flex; align-items: center; flex-wrap: wrap; }
 .fingerprint-sharing-page .kiosk-actions button { width: auto; }
+/* Enrollment stays with its device; the modal follows the shared dialog tokens. */
+.kiosk-device-option { display: flex; flex-direction: column; }
+.kiosk-device-option .kiosk-device-row { order: -1; }
+.kiosk-enrollment-button { align-self: flex-start; margin-top: var(--space-2); }
+.kiosk-enrollment-dialog { width: min(100%, 36rem); }
+.kiosk-enrollment-members { display: grid; gap: var(--space-2); max-height: 18rem; overflow-y: auto; }
+.kiosk-enrollment-members button { display: flex; justify-content: space-between; gap: var(--space-3); text-align: left; overflow-wrap: anywhere; }

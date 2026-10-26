@@ -2,7 +2,7 @@ import { kioskDisplayForQueuedScan } from "./kiosk-presentation.mjs";
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-export function createIdentityScanner({ captureIdentity, captureAllowed = () => true, setFeedback = async () => undefined, queue, loadPairing, flushAttendance, onDisplay, onInput = () => undefined, onCloud, now = () => Date.now(), delay = wait, eventId = () => crypto.randomUUID(), debounceMs = 8_000, flushWaitMs = 1_000 }) {
+export function createIdentityScanner({ captureIdentity, captureAllowed = () => true, captureTime, setFeedback = async () => undefined, queue, loadPairing, flushAttendance, onDisplay, onInput = () => undefined, onCloud, now = () => Date.now(), delay = wait, eventId = () => crypto.randomUUID(), debounceMs = 8_000, flushWaitMs = 1_000 }) {
   let stopped = false; let paused = false; let lastIdentity; let lastIdentityAt = 0; let lastUnknownAt = 0;
   async function show(id, overrides) { await onDisplay(id, overrides); try { await setFeedback(id); } catch { /* Screen feedback remains available if optional hardware feedback fails. */ } }
   let currentTick, currentCommit, captureGeneration = 0;
@@ -32,9 +32,10 @@ export function createIdentityScanner({ captureIdentity, captureAllowed = () => 
     const identityKey = observation.identityKey || observation.memberId;
     if (lastIdentity === identityKey && timestamp - lastIdentityAt < debounceMs) { await delay(250); return; }
     await show("processing", observation.processingDetail ? { detail: observation.processingDetail } : undefined);
-    const event = { eventId: eventId(), memberId: observation.memberId, occurredAt: new Date(timestamp).toISOString(), ...(config.pairingId ? { pairingId: config.pairingId } : {}) };
+    let event;
     let queuedDisplay;
     try {
+      event = { eventId: eventId(), memberId: observation.memberId, ...(captureTime ? await captureTime() : { occurredAt: new Date(timestamp).toISOString() }), ...(config.pairingId ? { pairingId: config.pairingId } : {}) };
       queuedDisplay = kioskDisplayForQueuedScan(observation.memberId, await queue.pending());
       if (!valid()) return;
       lastIdentity = identityKey; lastIdentityAt = timestamp;
@@ -56,7 +57,7 @@ export function createIdentityScanner({ captureIdentity, captureAllowed = () => 
         if (result) onCloud(Boolean(acknowledgement));
       } finally { clearTimeout(timer); }
     } catch { onCloud(false); }
-    if (!acknowledgement) { await show(queuedDisplay.id, { detail: queuedDisplay.detail }); await delay(250); return; }
+    if (!acknowledgement) { await show(queuedDisplay.id, { detail: event.clock?.verified === false ? "Saved on kiosk | Clock needs sync before attendance can be confirmed" : queuedDisplay.detail }); await delay(250); return; }
     if (acknowledgement.rejected) { await show("rejected", { detail: acknowledgement.error }); await delay(250); return; }
     const displayName = acknowledgement.member?.displayName;
     const meetingTitle = acknowledgement.meeting?.title;

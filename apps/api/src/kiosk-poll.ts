@@ -1,5 +1,6 @@
 import type { D1Database } from "./d1-usage.ts";
 import { HttpError } from "./http-error.ts";
+import { readKioskEnrollment } from "./kiosk-enrollment.ts";
 import { fingerprintVaultFormat, fingerprintVaultKeyId } from "./fingerprint-vault-crypto.ts";
 
 type Context = { db: D1Database; credentialHash: string; secret?: string; respond(value: unknown, status?: number): Response };
@@ -14,11 +15,11 @@ type Row = { id: string; name: string; pairingBound: number; command: string | n
  */
 export async function kioskPoll(request: Request, { db, credentialHash, secret, respond }: Context): Promise<Response> {
   const query = new URL(request.url).searchParams;
-  const fields = new Set(["v", "fingerprints", "config", "rosterRevision", "peerAfter"]);
+  const fields = new Set(["v", "fingerprints", "config", "rosterRevision", "peerAfter", "enrollment"]);
   let invalidQuery = false;
   query.forEach((_value, key) => { if (!fields.has(key) || query.getAll(key).length !== 1) invalidQuery = true; });
   if (invalidQuery || query.get("v") !== "1") throw new HttpError(400, "Unsupported kiosk poll request");
-  for (const flag of ["fingerprints", "config"]) if (query.has(flag) && query.get(flag) !== "1") throw new HttpError(400, "Invalid kiosk poll section");
+  for (const flag of ["fingerprints", "config", "enrollment"]) if (query.has(flag) && query.get(flag) !== "1") throw new HttpError(400, "Invalid kiosk poll section");
   const fingerprints = query.has("fingerprints"), configuration = query.has("config");
   const revisionText = query.get("rosterRevision"), after = query.get("peerAfter") ?? "";
   if (revisionText !== null && (!/^\d{1,16}$/.test(revisionText) || !Number.isSafeInteger(Number(revisionText))) || after && !/^[A-Za-z0-9._:-]{1,128}$/.test(after)) throw new HttpError(400, "Invalid kiosk poll revision or cursor");
@@ -59,6 +60,7 @@ export async function kioskPoll(request: Request, { db, credentialHash, secret, 
       FROM current_kiosk k`).bind(...bindings).first<Row>();
   if (!row) throw new HttpError(401, "Kiosk credential is invalid");
   const result: Record<string, unknown> = { protocol: 1, command: row.command ? JSON.parse(row.command) : null };
+  if (query.has("enrollment")) result.enrollment = await readKioskEnrollment(db, row.id);
   if (configuration) result.configuration = { kiosk: { id: row.id, name: row.name }, settings: row.configuration ? JSON.parse(row.configuration) : null };
   if (fingerprints) {
     const bound = Boolean(row.pairingBound), reset = row.reset ? JSON.parse(row.reset) : null;

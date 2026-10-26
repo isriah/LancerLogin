@@ -1,0 +1,13 @@
+.kiosk-scan-reviews { display: grid; gap: var(--space-4); min-width: 0; }
+.kiosk-scan-reviews .panel-heading { flex-wrap: wrap; gap: var(--space-3); }
+.scan-review-status { display: grid; gap: var(--space-1); max-width: 20rem; }
+.scan-review-record { min-width: 0; border: 1px solid var(--ui-border); border-radius: var(--radius-card); }
+.scan-review-record > summary { min-height: var(--control-min-block-size); padding: var(--space-3); overflow-wrap: anywhere; cursor: pointer; }
+.scan-review-evidence { display: grid; gap: var(--space-3); padding: var(--space-3); border-top: 1px solid var(--ui-border); }
+.scan-review-evidence dl { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-3); margin: 0; }
+.scan-review-evidence dt { color: var(--ui-text-muted); }
+.scan-review-evidence dd { margin: 0; overflow-wrap: anywhere; }
+.scan-review-evidence textarea { width: 100%; }
+.scan-review-note { white-space: pre-wrap; overflow-wrap: anywhere; }
+.scan-review-pages { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+@media (max-width: 600px) { .scan-review-evidence dl { grid-template-columns: minmax(0,1fr); } }

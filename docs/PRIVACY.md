@@ -4,6 +4,8 @@ LancerLogin stores organization configuration, roster, meeting, attendance, audi
 
 ## Kiosk identity and attendance data
 
+Retained rejected scans also synchronize to the kiosk's existing paired installation for Administrator review. This includes member and event IDs, recorded time, rejection reason, optional meeting/pairing references, and clock-verification evidence. It does not include biometric data or raw credentials. The kiosk keeps its original protected records; dashboard review adds an audit entry and synchronizes reviewed status back to the device. Recorded device time can be unverified and is not silently converted into attendance.
+
 Fingerprint templates remain in the attached R503 sensor by default. Optional cloud storage changes this boundary as described below. LancerLogin does not capture or upload raw fingerprint images. RFID, NFC, and QR values are transformed by HMAC-SHA256 with a kiosk-local owner-only secret; only the keyed digest and member mapping are retained locally. Raw badge and QR values, local digests, and the transform secret are not sent to the Worker, stored in D1, logged, placed in fixtures, or included in portable dashboard backups.
 
 Member ID entry is checked against an owner-only local active-roster cache. Badge and QR mappings also require the mapped member to remain active. The kiosk sends only the resolved member ID and operational attendance fields through the existing queue. Local queued attendance events are retained until they can be delivered or handled through the documented recovery process.

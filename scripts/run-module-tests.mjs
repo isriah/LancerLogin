@@ -107,9 +107,9 @@ export function runModuleTests({ root = process.cwd(), mode, moduleId, execute =
   const selection = manifest[mode];
   printSelection(manifest, mode);
   if (!execute) return 0;
-  if (selection.javascript.length) run(root, `${manifest.label} JavaScript tests`, process.execPath, ["--test", ...selection.javascript]);
-  if (selection.typescript.length) run(root, `${manifest.label} TypeScript tests`, process.execPath, ["--experimental-strip-types", "--test", ...selection.typescript]);
-  if (selection.browser.length) run(root, `${manifest.label} browser tests`, process.execPath, [join(root, "scripts", "run-browser-tests.mjs"), ...selection.browser]);
+  if (selection.javascript.length) run(root, `${manifest.label} JavaScript tests`, process.execPath, ["--test", "--test-concurrency=2", ...selection.javascript]);
+  if (selection.typescript.length) run(root, `${manifest.label} TypeScript tests`, process.execPath, ["--experimental-strip-types", "--test", "--test-concurrency=2", ...selection.typescript]);
+  if (selection.browser.length) run(root, `${manifest.label} browser tests`, process.execPath, [join(root, "scripts", "run-browser-tests.mjs"), ...selection.browser, `--workers=${process.env.CI ? 1 : 2}`]);
   if (selection.typecheckWorkspaces.length) runNpm(root, `${manifest.label} typechecks`, ["run", "typecheck", ...selection.typecheckWorkspaces.flatMap((workspace) => ["--workspace", workspace])]);
   if (selection.buildWorkspaces.length) runNpm(root, `${manifest.label} builds`, ["run", "build", ...selection.buildWorkspaces.flatMap((workspace) => ["--workspace", workspace])]);
   return 0;

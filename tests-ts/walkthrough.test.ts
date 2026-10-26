@@ -1,3 +1,4 @@
+import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -63,7 +64,7 @@ const endpoint = "/auth/walkthroughs/dashboard";
 const progress = { version: 1, status: "in_progress", stepId: "search" };
 
 function historicalBackup(source: any, version: number) {
-  source.schemaVersion = version;
+  source.schemaVersion = version; omitContestResubmissionFields(source);
   if (version < 40) for (const row of source.tables.kiosks ?? []) delete row.configured_authentication_method;
   if (version < 36) for (const row of source.tables.hours_publication_operations ?? []) delete row.event_snapshot_json;
   if (version < 35) {
@@ -91,7 +92,7 @@ test("portable kiosk methods round-trip independently and older backups preserve
       ('side','primary','pair-side','Side','synthetic-side',1,'2026-09-25','rfid','nfc');
       UPDATE organization_settings SET kiosk_authentication_method='member_id' WHERE installation_id='primary'`);
     const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
-    assert.equal(backup.schemaVersion, 40);
+    assert.equal(backup.schemaVersion, 41);
     const restore = (source: any) => call(db, "/admin/data/restore", "admin", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: source });
     for (const method of ["camera", null, undefined]) {
       const invalid = structuredClone(backup); invalid.tables.kiosks[0].configured_authentication_method = method;
@@ -119,7 +120,7 @@ test("Outreach schema33 restores privacy and event corrections while older owner
       INSERT INTO hours_correction_requests(installation_id,id,channel,attribution,requester_member_id,entry_id,claimed_service_date,message,key_hash,fingerprint,status,revision,created_at,activity_id)
         VALUES('primary','synthetic-request','public','self_asserted','synthetic-member',NULL,'2026-09-28','Please review the morning entry.','synthetic-key','synthetic-fingerprint','open',0,'2026-09-28T18:00:00Z','synthetic-event');`);
     const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
-    assert.equal(backup.schemaVersion, 40); assert.equal(backup.tables.hours_public_form_settings[0].member_validation, "name");
+    assert.equal(backup.schemaVersion, 41); assert.equal(backup.tables.hours_public_form_settings[0].member_validation, "name");
     assert.equal(backup.tables.hours_correction_requests[0].activity_id, "synthetic-event"); assert.equal(backup.tables.hours_public_lookup_limits, undefined);
     const restore = (source: unknown) => call(db, "/admin/data/restore", "admin", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: source });
     const invalid = structuredClone(backup); invalid.tables.hours_public_form_settings[0].member_validation = "roster";
@@ -200,7 +201,7 @@ test("entire-installation backups round-trip progress, older backups reset it, a
     await call(db, endpoint, "admin", { ...progress, status: "completed", stepId: "recurrence" });
     db.sqlite.exec("INSERT INTO hours_publication_settings(installation_id,automatic,revision,created_at,updated_at) VALUES('primary',0,0,'2026-09-28','2026-09-28'); INSERT INTO hours_activities(installation_id,id,category_id,mode,service_date,title,event_start_local,event_end_local,created_at,updated_at) VALUES('primary','scheduled-event','event','event','2026-10-10','Scheduled event','17:00','18:00','2026-09-28','2026-09-28'); INSERT INTO carpool_plans(installation_id,id,title,destination,radius_miles,preferred_radius_miles,notes,archived,revision,created_at,updated_at) VALUES('primary','schema-30-plan','Schema 30 plan','Competition venue',12,4,'',0,0,'2026-09-28','2026-09-28')");
     const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
-    assert.equal(backup.schemaVersion, 40);
+    assert.equal(backup.schemaVersion, 41);
     assert.equal(backup.tables.organization_settings[0].kiosk_authentication_method, "fingerprint");
     assert.deepEqual(backup.tables.hours_publication_settings.map((item: any) => [item.automatic, item.revision]), [[0, 0]]);
     assert.equal(backup.tables.hours_activities.find((item: any) => item.id === "scheduled-event")?.event_start_local, "17:00");
@@ -273,4 +274,22 @@ test("walkthrough migration preserves an existing installation and saved reports
     db.exec("INSERT INTO user_walkthroughs VALUES ('primary', 'admin', 'reports', 1, 'in_progress', 'filters', '2026-09-26');");
     assert.equal(db.prepare("SELECT local_username FROM users WHERE id = 'admin'").get()?.local_username, "admin");
   } finally { db.close(); }
+});
+
+test("installation recovery preserves the contest block setting and previous rejection history", async () => {
+  const database = new Database();
+  try {
+    database.sqlite.exec(`UPDATE organization_settings SET discord_block_recontests_after_rejection=1;
+      INSERT INTO members(id,installation_id,external_id,first_name,last_name,created_at) VALUES('contest-member','primary','SYN','Synthetic','Member','2026-10-15');
+      INSERT INTO meetings(id,installation_id,title,starts_at,created_by,created_at) VALUES('contest-meeting','primary','Synthetic','2026-10-15T10:00:00Z','admin','2026-10-15');`);
+    const history = JSON.stringify([{ messageId: "old", createdAt: "2026-10-15T10:00:00Z", status: "rejected", resolvedBy: "admin", resolvedAt: "2026-10-15T11:00:00Z", reviewNote: "Retained review", submittedByDiscordUserId: "synthetic" }]);
+    database.sqlite.prepare("INSERT INTO discord_attendance_contests(installation_id,meeting_id,member_id,message_id,status,created_at,prior_reviews_json) VALUES('primary','contest-meeting','contest-member','new','open','2026-10-15T12:00:00Z',?)").run(history);
+    const backup = await (await call(database, "/admin/data/backup?scope=installation")).json() as any;
+    assert.equal(backup.tables.organization_settings[0].discord_block_recontests_after_rejection, 1);
+    database.sqlite.exec("UPDATE organization_settings SET discord_block_recontests_after_rejection=0; UPDATE discord_attendance_contests SET prior_reviews_json='[]'");
+    const result = await call(database, "/admin/data/restore", "admin", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup });
+    assert.equal(result.status, 200, await result.clone().text());
+    assert.equal(database.sqlite.prepare("SELECT discord_block_recontests_after_rejection AS blocked FROM organization_settings WHERE installation_id='primary'").get()!.blocked, 1);
+    assert.equal(database.sqlite.prepare("SELECT prior_reviews_json FROM discord_attendance_contests").get()!.prior_reviews_json, history);
+  } finally { database.sqlite.close(); }
 });

@@ -4,6 +4,8 @@ This guide is for Administrators. Back up before a web update, bulk deletion, or
 
 ## Dashboard backups
 
+The dashboard's rejected-scan review list is an operational mirror of protected records retained on each kiosk. It is excluded from portable dashboard backups; review audits remain in audit history. Preserve kiosk state separately before recovery or replacement. Authorized kiosks periodically resend retained records, including reviewed status, but an installation restore revokes kiosk credentials and requires the documented pairing/recovery procedure. Do not assume a dashboard backup alone preserves every rejected scan.
+
 Open **Settings → Data**. Each category has separate download, restore, and typed-confirmation deletion controls.
 
 | Category | Includes | Important boundary |

@@ -19,6 +19,11 @@ export type ModuleDiscordCommandDefinition = {
   readonly options?: readonly { readonly name: string; readonly description: string; readonly type: 3; readonly required?: boolean }[];
 };
 
+export type ReportFilterOperator = "contains" | "minimum" | "equals" | "maximum" | "between" | "empty" | "not_empty";
+export function reportFilterOperators(valueType: "text" | "number" | "date"): readonly ReportFilterOperator[] {
+  return valueType === "text" ? ["contains", "equals", "empty", "not_empty"] : valueType === "date" ? ["contains", "equals", "minimum", "maximum", "between", "empty", "not_empty"] : ["minimum", "equals", "maximum", "between", "empty", "not_empty"];
+}
+
 export type ReportDurationUnit = "minutes" | "hours";
 
 export type ReportFieldDefinition = {
@@ -28,7 +33,7 @@ export type ReportFieldDefinition = {
   readonly kind: "dimension" | "measure";
   readonly valueType: "text" | "number" | "date";
   readonly sortable: boolean;
-  readonly filterOperators: readonly ("contains" | "minimum")[];
+  readonly filterOperators: readonly ReportFilterOperator[];
   readonly requiresLabel?: boolean;
   readonly durationUnits?: readonly ReportDurationUnit[];
   readonly defaultDurationUnit?: ReportDurationUnit;
@@ -182,7 +187,7 @@ export function createModuleRegistry(input: readonly ModuleDefinition[]) {
       const fields = new Map(dataset.fields.map((field) => [field.id, field]));
       if (!capabilityPattern.test(dataset.id) || !dataset.label || !dataset.description || !capabilityPattern.test(dataset.rowIdentity) || reportDatasets.has(dataset.id)) throw new Error("Invalid or duplicate report dataset contribution");
       if (!module.capabilities.some((capability) => capability.id === dataset.capability) || fields.size !== dataset.fields.length || !fields.has(dataset.rowIdentity)) throw new Error("Invalid report dataset authority or row identity");
-      if (dataset.fields.some((field) => !capabilityPattern.test(field.id) || !field.label || !field.group || !["dimension", "measure"].includes(field.kind) || !["text", "number", "date"].includes(field.valueType) || field.filterOperators.some((operator) => operator !== (field.valueType === "number" ? "minimum" : "contains")) || field.durationUnits && (field.valueType !== "number" || !field.durationUnits.length || new Set(field.durationUnits).size !== field.durationUnits.length || field.durationUnits.some((unit) => !["minutes", "hours"].includes(unit)) || !field.defaultDurationUnit || !field.durationUnits.includes(field.defaultDurationUnit)) || !field.durationUnits && field.defaultDurationUnit)) throw new Error("Invalid report field contribution");
+      if (dataset.fields.some((field) => !capabilityPattern.test(field.id) || !field.label || !field.group || !["dimension", "measure"].includes(field.kind) || !["text", "number", "date"].includes(field.valueType) || field.filterOperators.some((operator) => !reportFilterOperators(field.valueType).includes(operator)) || field.durationUnits && (field.valueType !== "number" || !field.durationUnits.length || new Set(field.durationUnits).size !== field.durationUnits.length || field.durationUnits.some((unit) => !["minutes", "hours"].includes(unit)) || !field.defaultDurationUnit || !field.durationUnits.includes(field.defaultDurationUnit)) || !field.durationUnits && field.defaultDurationUnit)) throw new Error("Invalid report field contribution");
       if (!dataset.defaultColumns.length || dataset.defaultColumns.some((field) => !fields.has(field)) || new Set(dataset.defaultColumns).size !== dataset.defaultColumns.length || !fields.get(dataset.defaultSort.field)?.sortable) throw new Error("Invalid report dataset defaults");
       if (dataset.groupBy.some((field) => fields.get(field)?.kind !== "dimension") || new Set(dataset.groupBy).size !== dataset.groupBy.length || new Set(dataset.filters).size !== dataset.filters.length) throw new Error("Invalid report dataset grouping or filters");
       if (dataset.relationships.some((relationship) => !capabilityPattern.test(relationship.dataset) || !fields.has(relationship.localField) || !capabilityPattern.test(relationship.foreignField))) throw new Error("Invalid report dataset relationship");
@@ -221,13 +226,13 @@ export function createModuleRegistry(input: readonly ModuleDefinition[]) {
 }
 
 const memberFields = Object.freeze<readonly ReportFieldDefinition[]>([
-  { id: "core.member.identity", label: "Member record ID", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "core.member.name", label: "Member", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "core.member.id", label: "Member ID", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "core.member.email", label: "Email", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "core.member.discord-id", label: "Discord ID", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "core.member.status", label: "Roster status", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "core.member.labels", label: "Current labels", group: "Roster", kind: "dimension", valueType: "text", sortable: false, filterOperators: ["contains"] },
+  { id: "core.member.identity", label: "Member record ID", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "core.member.name", label: "Member", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "core.member.id", label: "Member ID", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "core.member.email", label: "Email", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "core.member.discord-id", label: "Discord ID", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "core.member.status", label: "Roster status", group: "Roster", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "core.member.labels", label: "Current labels", group: "Roster", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
 ]);
 
 export const coreReportDatasets = Object.freeze<readonly ReportDatasetDefinition[]>([
@@ -239,66 +244,66 @@ export const coreReportDatasets = Object.freeze<readonly ReportDatasetDefinition
 
 const attendanceFields = Object.freeze<readonly ReportFieldDefinition[]>([
   ...memberFields,
-  { id: "attendance.member.required-from", label: "Attendance starts", group: "Attendance", kind: "dimension", valueType: "date", sortable: true, filterOperators: ["contains"] },
-  { id: "attendance.member.regular-rate", label: "Regular attendance", group: "Regular attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "attendance.member.weighted-present", label: "Regular weighted present", group: "Regular attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "attendance.member.weighted-eligible", label: "Regular weighted eligible", group: "Regular attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "attendance.member.regular-period", label: "Regular reporting period", group: "Regular attendance", kind: "dimension", valueType: "text", sortable: false, filterOperators: ["contains"] },
-  { id: "attendance.member.assigned-policies", label: "Assigned policies", group: "Policies", kind: "dimension", valueType: "text", sortable: false, filterOperators: ["contains"] },
-  ...["official-result", "official-status", "official-target", "official-type", "official-excused", "official-period", "report-result", "report-status", "report-target", "report-period"].map((id): ReportFieldDefinition => ({ id: `attendance.policy.${id}`, label: ({ "official-result": "Official policy result", "official-status": "Official policy status", "official-target": "Official policy target", "official-type": "Official policy type", "official-excused": "Official excuse handling", "official-period": "Official policy period", "report-result": "Report-period policy result", "report-status": "Report-period policy status", "report-target": "Report-period policy target", "report-period": "Report-period policy period" } as Record<string, string>)[id]!, group: "Policies", kind: id.includes("target") || id.includes("result") ? "measure" : "dimension", valueType: id.includes("target") || id.includes("result") ? "number" : "text", sortable: !id.includes("period"), filterOperators: id.includes("target") || id.includes("result") ? ["minimum"] : ["contains"], requiresLabel: true })),
-  { id: "attendance.policy.report-summary", label: "Report-period policies", group: "Policies", kind: "dimension", valueType: "text", sortable: false, filterOperators: ["contains"] },
-  { id: "attendance.policy.history", label: "Policy history", group: "Policies", kind: "dimension", valueType: "text", sortable: false, filterOperators: ["contains"] },
+  { id: "attendance.member.required-from", label: "Attendance starts", group: "Attendance", kind: "dimension", valueType: "date", sortable: true, filterOperators: reportFilterOperators("date") },
+  { id: "attendance.member.regular-rate", label: "Regular attendance", group: "Regular attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "attendance.member.weighted-present", label: "Regular weighted present", group: "Regular attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "attendance.member.weighted-eligible", label: "Regular weighted eligible", group: "Regular attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "attendance.member.regular-period", label: "Regular reporting period", group: "Regular attendance", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
+  { id: "attendance.member.assigned-policies", label: "Assigned policies", group: "Policies", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
+  ...["official-result", "official-status", "official-target", "official-type", "official-excused", "official-period", "report-result", "report-status", "report-target", "report-period"].map((id): ReportFieldDefinition => ({ id: `attendance.policy.${id}`, label: ({ "official-result": "Official policy result", "official-status": "Official policy status", "official-target": "Official policy target", "official-type": "Official policy type", "official-excused": "Official excuse handling", "official-period": "Official policy period", "report-result": "Report-period policy result", "report-status": "Report-period policy status", "report-target": "Report-period policy target", "report-period": "Report-period policy period" } as Record<string, string>)[id]!, group: "Policies", kind: id.includes("target") || id.includes("result") ? "measure" : "dimension", valueType: id.includes("target") || id.includes("result") ? "number" : "text", sortable: !id.includes("period"), filterOperators: reportFilterOperators(id.includes("target") || id.includes("result") ? "number" : "text"), requiresLabel: true })),
+  { id: "attendance.policy.report-summary", label: "Report-period policies", group: "Policies", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
+  { id: "attendance.policy.history", label: "Policy history", group: "Policies", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
   ...["present", "absent", "excused"].flatMap((status): ReportFieldDefinition[] => [
-    { id: `attendance.detail.${status}-count`, label: `${status[0]!.toUpperCase()}${status.slice(1)} count`, group: "Attendance detail", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-    { id: `attendance.detail.${status}-dates`, label: `${status[0]!.toUpperCase()}${status.slice(1)} dates`, group: "Attendance detail", kind: "dimension", valueType: "text", sortable: false, filterOperators: ["contains"] },
+    { id: `attendance.detail.${status}-count`, label: `${status[0]!.toUpperCase()}${status.slice(1)} count`, group: "Attendance detail", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+    { id: `attendance.detail.${status}-dates`, label: `${status[0]!.toUpperCase()}${status.slice(1)} dates`, group: "Attendance detail", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
   ]),
 ]);
 
 const outreachMemberFields = Object.freeze<readonly ReportFieldDefinition[]>([
   ...memberFields,
-  { id: "outreach.member.minutes", label: "Outreach minutes", group: "Outreach participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"], durationUnits: ["minutes", "hours"], defaultDurationUnit: "hours" },
-  { id: "outreach.member.entries", label: "Participation entries", group: "Outreach participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "outreach.member.activities", label: "Distinct activities", group: "Outreach participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "outreach.member.supported-teams", label: "Supported teams", group: "Outreach participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "outreach.member.last-service-date", label: "Last participation date", group: "Outreach participation", kind: "dimension", valueType: "date", sortable: true, filterOperators: ["contains"] },
+  { id: "outreach.member.minutes", label: "Outreach minutes", group: "Outreach participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number"), durationUnits: ["minutes", "hours"], defaultDurationUnit: "hours" },
+  { id: "outreach.member.entries", label: "Participation entries", group: "Outreach participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "outreach.member.activities", label: "Distinct activities", group: "Outreach participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "outreach.member.supported-teams", label: "Supported teams", group: "Outreach participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "outreach.member.last-service-date", label: "Last participation date", group: "Outreach participation", kind: "dimension", valueType: "date", sortable: true, filterOperators: reportFilterOperators("date") },
 ]);
 
 const outreachActivityFields = Object.freeze<readonly ReportFieldDefinition[]>([
-  { id: "outreach.activity.id", label: "Activity record ID", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.activity.title", label: "Activity", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.activity.date", label: "Service date", group: "Activity", kind: "dimension", valueType: "date", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.activity.labels", label: "Outreach labels", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.activity.mode", label: "Activity type", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.activity.team-id", label: "Supported team record ID", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.activity.team", label: "Supported team", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.activity.participants", label: "Distinct participants", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "outreach.activity.entries", label: "Entries", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "outreach.activity.minutes", label: "Minutes", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"], durationUnits: ["minutes", "hours"], defaultDurationUnit: "minutes" },
+  { id: "outreach.activity.id", label: "Activity record ID", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.activity.title", label: "Activity", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.activity.date", label: "Service date", group: "Activity", kind: "dimension", valueType: "date", sortable: true, filterOperators: reportFilterOperators("date") },
+  { id: "outreach.activity.labels", label: "Outreach labels", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.activity.mode", label: "Activity type", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.activity.team-id", label: "Supported team record ID", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.activity.team", label: "Supported team", group: "Activity", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.activity.participants", label: "Distinct participants", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "outreach.activity.entries", label: "Entries", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "outreach.activity.minutes", label: "Minutes", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number"), durationUnits: ["minutes", "hours"], defaultDurationUnit: "minutes" },
 ]);
 
 const outreachEntryFields = Object.freeze<readonly ReportFieldDefinition[]>([
-  { id: "outreach.entry.id", label: "Entry record ID", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.entry.member", label: "Member", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.entry.activity-id", label: "Activity record ID", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.entry.activity", label: "Activity", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.entry.labels", label: "Outreach labels", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.entry.date", label: "Service date", group: "Entry", kind: "dimension", valueType: "date", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.entry.start", label: "Start", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.entry.end", label: "End", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.entry.minutes", label: "Minutes", group: "Entry", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"], durationUnits: ["minutes", "hours"], defaultDurationUnit: "minutes" },
-  { id: "outreach.entry.channel", label: "Submission channel", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.entry.status", label: "Status", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
+  { id: "outreach.entry.id", label: "Entry record ID", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.entry.member", label: "Member", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.entry.activity-id", label: "Activity record ID", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.entry.activity", label: "Activity", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.entry.labels", label: "Outreach labels", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.entry.date", label: "Service date", group: "Entry", kind: "dimension", valueType: "date", sortable: true, filterOperators: reportFilterOperators("date") },
+  { id: "outreach.entry.start", label: "Start", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.entry.end", label: "End", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.entry.minutes", label: "Minutes", group: "Entry", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number"), durationUnits: ["minutes", "hours"], defaultDurationUnit: "minutes" },
+  { id: "outreach.entry.channel", label: "Submission channel", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.entry.status", label: "Status", group: "Entry", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
 ]);
 
 const outreachTeamFields = Object.freeze<readonly ReportFieldDefinition[]>([
-  { id: "outreach.team.id", label: "Team record ID", group: "Team", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.team.name", label: "Supported team", group: "Team", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.team.number", label: "Team number", group: "Team", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.team.program", label: "Program", group: "Team", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] },
-  { id: "outreach.team.participants", label: "Distinct participants", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "outreach.team.activities", label: "Activities", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "outreach.team.entries", label: "Entries", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"] },
-  { id: "outreach.team.minutes", label: "Minutes", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: ["minimum"], durationUnits: ["minutes", "hours"], defaultDurationUnit: "minutes" },
+  { id: "outreach.team.id", label: "Team record ID", group: "Team", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.team.name", label: "Supported team", group: "Team", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.team.number", label: "Team number", group: "Team", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.team.program", label: "Program", group: "Team", kind: "dimension", valueType: "text", sortable: true, filterOperators: reportFilterOperators("text") },
+  { id: "outreach.team.participants", label: "Distinct participants", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "outreach.team.activities", label: "Activities", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "outreach.team.entries", label: "Entries", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "outreach.team.minutes", label: "Minutes", group: "Participation", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number"), durationUnits: ["minutes", "hours"], defaultDurationUnit: "minutes" },
 ]);
 
 export const attendanceModule = freeze<ModuleDefinition>({
@@ -364,6 +369,7 @@ export const attendanceModule = freeze<ModuleDefinition>({
   persistence: {
     tables: [
       "label_weekly_targets", "label_attendance_rules", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
+      "kiosk_scan_reviews", "kiosk_enrollment_sessions",
       "attendance_events", "attendance_corrections", "pairing_codes", "kiosks", "simulated_kiosk_sessions",
       "kiosk_fingerprint_sync", "kiosk_fingerprint_keys", "kiosk_fingerprint_deliveries",
       "kiosk_fingerprint_vault_settings", "kiosk_fingerprint_vault_templates", "kiosk_fingerprint_vault_enrollments", "kiosk_fingerprint_vault_retirements",
@@ -374,9 +380,10 @@ export const attendanceModule = freeze<ModuleDefinition>({
     ],
     sharedFields: [
       { table: "members", columns: ["attendance_required_from"] },
-      { table: "organization_settings", columns: ["late_scan_minutes", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method"] },
+      { table: "organization_settings", columns: ["late_scan_minutes", "discord_contest_window_hours", "discord_block_recontests_after_rejection", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method"] },
     ],
     transientAuthority: [
+      { table: "kiosk_enrollment_sessions", columns: ["state", "expires_at"] },
       { table: "pairing_codes", columns: ["code_hash", "expires_at", "redeemed_at"] },
       { table: "kiosk_fingerprint_sync", columns: ["enabled", "sync_id"] },
       { table: "kiosk_fingerprint_keys", columns: ["pairing_id", "key_id"] },
@@ -393,7 +400,7 @@ export const attendanceModule = freeze<ModuleDefinition>({
   },
   backup: {
     version: 2,
-    nonPortableTables: ["kiosk_fingerprint_sync", "kiosk_fingerprint_keys", "kiosk_fingerprint_deliveries", "kiosk_fingerprint_vault_settings", "kiosk_fingerprint_vault_templates", "kiosk_fingerprint_vault_enrollments", "kiosk_fingerprint_vault_retirements", "kiosk_fingerprint_review_requests", "kiosk_fingerprint_review_manifests", "kiosk_fingerprint_review_slots", "kiosk_fingerprint_reset_batches", "kiosk_fingerprint_reset_commands", "kiosk_fingerprint_retired_review_grants"],
+    nonPortableTables: ["kiosk_scan_reviews", "kiosk_enrollment_sessions", "kiosk_fingerprint_sync", "kiosk_fingerprint_keys", "kiosk_fingerprint_deliveries", "kiosk_fingerprint_vault_settings", "kiosk_fingerprint_vault_templates", "kiosk_fingerprint_vault_enrollments", "kiosk_fingerprint_vault_retirements", "kiosk_fingerprint_review_requests", "kiosk_fingerprint_review_manifests", "kiosk_fingerprint_review_slots", "kiosk_fingerprint_reset_batches", "kiosk_fingerprint_reset_commands", "kiosk_fingerprint_retired_review_grants"],
     tables: [
       "label_weekly_targets", "label_attendance_rules", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
       "attendance_events", "attendance_corrections", "pairing_codes", "kiosks", "simulated_kiosk_sessions",
@@ -403,7 +410,7 @@ export const attendanceModule = freeze<ModuleDefinition>({
   },
   lifecycle: {
     cleanupTargets: [
-      "kiosk_commands", "simulated_kiosk_sessions", "kiosks", "pairing_codes", "discord_attendance_recipients", "discord_attendance_contests",
+      "kiosk_scan_reviews", "kiosk_enrollment_sessions", "kiosk_commands", "simulated_kiosk_sessions", "kiosks", "pairing_codes", "discord_attendance_recipients", "discord_attendance_contests",
       "discord_attendance_notifications", "discord_anomaly_reports", "discord_calendar_operations", "discord_calendar_event_mappings",
       "google_calendar_operations", "google_calendar_event_mappings", "attendance_corrections", "attendance_events", "meeting_audience_labels",
       "meetings", "meeting_templates", "label_attendance_rules", "meeting_weight_categories", "integration_deliveries:attendance",

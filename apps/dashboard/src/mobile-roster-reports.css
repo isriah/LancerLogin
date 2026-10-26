@@ -4,10 +4,11 @@
 .member-history-correction > summary::-webkit-details-marker { display: none; }
 .member-history-correction > summary { list-style: none; }
 .member-history-correction > summary:focus-visible,.member-roster-link:focus-visible,.roster-label-csv > summary:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
-.roster-page .roster-row { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) var(--control-min-block-size); }
-.roster-page .roster-row.with-discord { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) var(--control-min-block-size); }
-.roster-page .roster-row.bulk-selecting { grid-template-columns: var(--control-min-block-size) minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) var(--control-min-block-size); }
-.roster-page .roster-row.with-discord.bulk-selecting { grid-template-columns: var(--control-min-block-size) minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) var(--control-min-block-size); }
+.app .roster-page .roster-row { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) var(--control-min-block-size); }
+.app .roster-page .roster-row.with-discord { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) var(--control-min-block-size); }
+.app .roster-page .roster-row.bulk-selecting { grid-template-columns: var(--control-min-block-size) minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) var(--control-min-block-size); }
+.app .roster-page .roster-row.with-discord.bulk-selecting { grid-template-columns: var(--control-min-block-size) minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) var(--control-min-block-size); }
+.app .roster-page .roster-row :is(.roster-identity,.member-link,.member-link strong,.roster-member-id) { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .roster-label-csv { padding: var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-card); }
 .roster-label-csv > summary { display: flex; align-items: center; min-height: var(--control-min-block-size); cursor: pointer; }
 .roster-label-csv[open] > summary { margin-bottom: var(--space-3); }
@@ -30,6 +31,9 @@
 .compact-leaderboard .report-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: var(--space-3); min-height: var(--control-min-block-size); padding: 0 var(--space-3); }
 .compact-leaderboard .report-row.header { padding-block: var(--space-2); }
 .compact-leaderboard .report-row > span { display: block; }
+.app .compact-leaderboard .report-row > span:first-child { grid-column: 1; grid-row: 1; min-width: 0; }
+.app .compact-leaderboard .report-row > span:nth-child(2) { grid-column: 2; grid-row: 1; }
+.app .compact-leaderboard .report-row > span::before { content: none; }
 .compact-leaderboard .report-row > span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 .compact-leaderboard a { display: flex; align-items: center; min-height: var(--control-min-block-size); color: var(--ui-text); text-decoration: underline; text-underline-offset: var(--space-1); overflow-wrap: anywhere; }
 .report-results .editable-report-table { min-width: 100%; width: 100%; table-layout: auto; }
@@ -41,22 +45,22 @@
 .report-results .report-column-header { align-items: center; }
 .report-edit-settings > summary { min-height: var(--control-min-block-size); }
 @media (max-width: 900px) {
-  .roster-page .roster-row,.roster-page .roster-row.with-discord,.roster-page .roster-row.bulk-selecting,.roster-page .roster-row.with-discord.bulk-selecting { grid-template-columns: minmax(0,1fr) minmax(0,.7fr) var(--control-min-block-size); grid-template-rows: auto auto auto; gap: var(--space-1) var(--space-2); padding: var(--space-3) var(--space-2); align-items: start; }
-  .roster-page .roster-row.header { display: none; }
-  .roster-page .roster-identity { grid-column: 1; grid-row: 1 / 4; align-self: start; }
-  .roster-page .roster-row .roster-member-id { grid-column: 2; grid-row: 1; justify-self: stretch; text-align: right; }
-  .roster-page .roster-row .roster-member-id::before { content: none; }
-  .roster-page .roster-row .roster-attendance-rate { grid-column: 2; grid-row: 2; text-align: right; font-size: var(--text-caption); overflow-wrap: anywhere; }
-  .roster-page .roster-row .roster-attendance-rate::before { content: none; }
-  .roster-page .roster-row .roster-discord-id { grid-column: 2; grid-row: 3; text-align: right; font-size: var(--text-caption); }
-  .roster-page .roster-row .roster-discord-id::before { font-size: var(--text-caption); }
-  .roster-page .roster-row .roster-action-cell { grid-column: 3; grid-row: 1 / 4; width: auto; align-self: center; justify-self: end; }
-  .roster-page .roster-row.bulk-selecting > [role="cell"]:first-child { grid-column: 1 / -1; grid-row: 1; }
-  .roster-page .roster-row.bulk-selecting .roster-identity { grid-row: 2 / 5; }
-  .roster-page .roster-row.bulk-selecting .roster-member-id { grid-row: 2; }
-  .roster-page .roster-row.bulk-selecting .roster-attendance-rate { grid-row: 3; }
-  .roster-page .roster-row.bulk-selecting .roster-discord-id { grid-row: 4; }
-  .roster-page .roster-row.bulk-selecting .roster-action-cell { grid-row: 2 / 5; }
+  .app .roster-page .roster-row,.app .roster-page .roster-row.with-discord,.app .roster-page .roster-row.bulk-selecting,.app .roster-page .roster-row.with-discord.bulk-selecting { grid-template-columns: minmax(0,1fr) minmax(0,.7fr) var(--control-min-block-size); grid-template-rows: auto auto auto; gap: var(--space-1) var(--space-2); padding: var(--space-3) var(--space-2); align-items: start; }
+  .app .roster-page .roster-row.header { display: none; }
+  .app .roster-page .roster-identity { grid-column: 1; grid-row: 1 / 4; align-self: start; }
+  .app .roster-page .roster-row .roster-member-id { grid-column: 2; grid-row: 1; justify-self: stretch; text-align: right; }
+  .app .roster-page .roster-row .roster-member-id::before { content: none; }
+  .app .roster-page .roster-row .roster-attendance-rate { grid-column: 2; grid-row: 2; text-align: right; font-size: var(--text-caption); overflow-wrap: anywhere; }
+  .app .roster-page .roster-row .roster-attendance-rate::before { content: none; }
+  .app .roster-page .roster-row .roster-discord-id { grid-column: 2; grid-row: 3; text-align: right; font-size: var(--text-caption); }
+  .app .roster-page .roster-row .roster-discord-id::before { font-size: var(--text-caption); }
+  .app .roster-page .roster-row .roster-action-cell { grid-column: 3; grid-row: 1 / 4; width: auto; align-self: center; justify-self: end; }
+  .app .roster-page .roster-row.bulk-selecting > [role="cell"]:first-child { grid-column: 1 / -1; grid-row: 1; }
+  .app .roster-page .roster-row.bulk-selecting .roster-identity { grid-row: 2 / 5; }
+  .app .roster-page .roster-row.bulk-selecting .roster-member-id { grid-row: 2; }
+  .app .roster-page .roster-row.bulk-selecting .roster-attendance-rate { grid-row: 3; }
+  .app .roster-page .roster-row.bulk-selecting .roster-discord-id { grid-row: 4; }
+  .app .roster-page .roster-row.bulk-selecting .roster-action-cell { grid-row: 2 / 5; }
   .member-profile-details > div { grid-template-columns: minmax(0,.8fr) minmax(0,1fr); gap: var(--space-3); }
   .member-detail-page .member-history-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr) var(--control-min-block-size); }
   .member-detail-page .member-history-row.header { display: none; }

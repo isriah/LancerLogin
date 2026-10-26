@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "./dashboard-api";
+import { WalkthroughSession, walkthroughSessionStorage } from "./walkthrough-session";
 import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough";
 
 export type WalkthroughStep = { id: string; title: string; description: string; targets: string; practice?: string; navigation?: boolean };
@@ -16,7 +17,14 @@ export type WalkthroughExperienceDefinition = {
 };
 type Phase = "idle" | "welcome" | "active" | "complete";
 
+const WalkthroughSessionContext = createContext<WalkthroughSession | undefined>(undefined);
+export function WalkthroughSessionProvider({ userId, children }: { userId: string; children: ReactNode }) {
+  const session = useMemo(() => new WalkthroughSession(userId, walkthroughSessionStorage()), [userId]);
+  return <WalkthroughSessionContext.Provider value={session}>{children}</WalkthroughSessionContext.Provider>;
+}
+
 export function usePageWalkthrough(pageId: WalkthroughPage, ready: boolean) {
+  const session = useContext(WalkthroughSessionContext);
   const [progress, setProgress] = useState(() => initialWalkthroughProgress(pageId));
   const [loaded, setLoaded] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -40,7 +48,7 @@ export function usePageWalkthrough(pageId: WalkthroughPage, ready: boolean) {
   }, [pageId]);
 
   useEffect(() => {
-    if (!loaded || !ready || offered.current || phase !== "idle" || ["completed", "dismissed"].includes(progress.status)) return;
+    if (!loaded || !ready || offered.current || phase !== "idle" || session?.isDeferred(pageId, definition.version) || ["completed", "dismissed"].includes(progress.status)) return;
     const offer = () => {
       if (offered.current || document.querySelector('[role="dialog"], .primary-navigation.mobile-open')) return;
       offered.current = true;
@@ -50,7 +58,7 @@ export function usePageWalkthrough(pageId: WalkthroughPage, ready: boolean) {
     const observer = new MutationObserver(offer);
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "role"] });
     return () => observer.disconnect();
-  }, [loaded, ready, phase, progress.status]);
+  }, [loaded, ready, phase, progress.status, session, pageId, definition.version]);
 
   function save(status: WalkthroughProgress["status"], stepId: string | null) {
     // Replaying a completed or dismissed tour never opts the account back in.
@@ -79,9 +87,10 @@ export function usePageWalkthrough(pageId: WalkthroughPage, ready: boolean) {
     if (index >= definition.steps.length) { save("completed", definition.steps.at(-1)!); setPhase("complete"); }
     else { setStepIndex(index); save("in_progress", definition.steps[index]); }
   }
-  function exit() { offered.current = true; setPhase("idle"); }
+  function exit() { if (phase === "welcome") session?.defer(pageId, definition.version); offered.current = true; setPhase("idle"); }
   function dismiss() { save("dismissed", progress.stepId); exit(); }
   function reset() {
+    session?.reset(pageId, definition.version);
     automaticStopped.current = false;
     offered.current = true;
     setStepIndex(0);

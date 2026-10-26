@@ -4,6 +4,60 @@ import { attendanceSnapshot } from "./module-fixtures";
 
 const kioskBaseUrl = process.env.LANCERLOGIN_KIOSK_BASE_URL ?? "http://127.0.0.1:8792";
 
+test("public attendance screen shows clock guidance without administrative review counts", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  const needsReview = 12;
+  let verified = false;
+  await page.route(`${kioskBaseUrl}/display-state`, async route => {
+    const response = await route.fetch(); const state = await response.json();
+    await route.fulfill({ json: { ...state, pendingEvents: 0, attendance: { needsReview, clockPending: 0 }, clock: { verified } } });
+  });
+  await page.goto(`${kioskBaseUrl}/`);
+  await expect(page.locator("#queue-status")).toHaveText("0 queued");
+  await expect(page.locator("body")).not.toContainText("12 scans need review");
+  await expect(page.getByRole("status")).toContainText("Clock needs confirmation");
+  const box = await page.locator("#attendance-warning").boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(800);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(480);
+  verified = true;
+  await expect(page.locator("#attendance-warning")).not.toContainText("Clock needs confirmation");
+  await expect(page.locator("body")).not.toContainText("12 scans need review");
+  await expect(page.locator("#attendance-warning")).toBeHidden();
+});
+
+test.describe("offline clock confirmation", () => {
+  test.use({ timezoneId: "America/New_York" });
+  test("boot prompt requires the PIN, accepts date and time, then returns to attendance", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 800, height: 480 });
+    let authorized = false, verified = false, submitted: unknown;
+    await page.route(`${kioskBaseUrl}/display-state`, async route => {
+      const response = await route.fetch(); const state = await response.json();
+      await route.fulfill({ json: { ...state, clock: { verified }, display: verified ? state.display : { id: "clock_required", message: "Confirm date and time", detail: "Open maintenance and enter the local PIN to set the current date and time.", tone: "notice" } } });
+    });
+    await page.route(`${kioskBaseUrl}/maintenance/session`, route => route.fulfill({ json: { configured: true, authorized } }));
+    await page.route(`${kioskBaseUrl}/network/unlock`, async route => { authorized = true; await route.fulfill({ json: { authorized: true } }); });
+    await page.route(`${kioskBaseUrl}/maintenance/clock`, async route => { submitted = route.request().postDataJSON(); verified = true; await route.fulfill({ json: { clock: { verified: true, source: "operator" } } }); });
+    await page.goto(`${kioskBaseUrl}/`);
+    await expect(page.getByRole("heading", { name: "Confirm date and time" })).toBeVisible();
+    await page.getByRole("button", { name: "Open maintenance", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Unlock maintenance" })).toBeVisible();
+    await expect(page.getByLabel("Current date", { exact: true })).toBeHidden();
+    for (const digit of ["1", "2", "3", "4", "5", "6"]) await page.getByLabel("PIN keypad").getByRole("button", { name: digit, exact: true }).click();
+    await page.getByRole("button", { name: "Unlock for five minutes" }).click();
+    await expect(page.getByRole("heading", { name: "Confirm current date and time" })).toBeVisible();
+    await page.getByLabel("Current date", { exact: true }).fill("2026-10-24");
+    await page.getByLabel("Current time", { exact: true }).fill("07:00");
+    await expect(page.getByText("Time zone: America/New_York")).toBeVisible();
+    const confirm = page.getByRole("button", { name: "Confirm time and return to kiosk" });
+    await expect(confirm).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath("clock-confirmation.png") });
+    await confirm.click();
+    await expect(page).toHaveURL(`${kioskBaseUrl}/`);
+    expect(submitted).toEqual({ currentTime: "2026-10-24T11:00:00.000Z" });
+    await expect(page.getByRole("button", { name: "Open maintenance", exact: true })).toBeHidden();
+  });
+});
+
 for (const reducedMotion of ["no-preference", "reduce"] as const) {
   test(`queued kiosk Welcome and Goodbye retain exact copy and cues with ${reducedMotion} motion`, async ({ page }) => {
     await page.emulateMedia({ reducedMotion });

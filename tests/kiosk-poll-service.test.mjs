@@ -24,12 +24,21 @@ async function startKiosk(root, device, apiUrl) {
   let diagnostics = ""; child.stderr.on("data", chunk => { diagnostics += chunk; });
   const port = await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error(`Synthetic child startup timed out: ${diagnostics}`)), 5000); child.on("message", message => { if (message.ready) { clearTimeout(timer); resolve(message.port); } }); child.once("exit", () => { clearTimeout(timer); reject(new Error(`Synthetic child failed: ${diagnostics}`)); }); });
   let sequence = 0;
-  return { directory, child,
+  const kiosk = { directory, child,
     request: (path, body, method = body === undefined ? "GET" : "POST") => fetch(`http://127.0.0.1:${port}${path}`, { method, headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(8000) }),
     reader: (input = {}) => { const id = ++sequence; return new Promise(resolve => { const listener = message => { if (message.id === id) { child.off("message", listener); resolve(message); } }; child.on("message", listener); child.send({ ...input, id }); }); },
     mappings: () => readFile(env.LANCERLOGIN_MAPPINGS, "utf8").then(JSON.parse).catch(error => { if (error.code === "ENOENT") return {}; throw error; }),
     async stop() { if (child.exitCode === null && child.signalCode === null) { const stopped = once(child, "exit"); child.kill(); await stopped; } },
   };
+  try {
+    if (!(await (await kiosk.request("/health")).json()).clock.verified) {
+      assert.equal((await kiosk.request("/network/unlock", { pin: "123456" })).status, 200);
+      const confirmed = await kiosk.request("/maintenance/clock", { currentTime: new Date().toISOString() });
+      assert.ok(confirmed.ok || (await (await kiosk.request("/health")).json()).clock.verified);
+      await kiosk.request("/network/session", undefined, "DELETE");
+    }
+    return kiosk;
+  } catch (error) { await kiosk.stop(); throw error; }
 }
 
 test("two real services preserve timers, encrypted transfer, offline scans, commands and reset across a planned drained restart", { timeout: 150000 }, async t => {

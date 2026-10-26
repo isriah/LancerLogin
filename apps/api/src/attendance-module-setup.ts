@@ -92,7 +92,9 @@ function instant(value: unknown) {
 async function meeting(request: Request, db: D1Database, userId: string) {
   if (request.method === "GET") {
     const result = await db.prepare("SELECT id,title,starts_at AS startsAt,ends_at AS endsAt,required FROM meetings WHERE installation_id=? AND deleted_at IS NULL AND is_test=0 ORDER BY starts_at DESC,id LIMIT 100").bind(installationId).all();
-    return json({ meetings: result.results ?? [] });
+    const settings = await db.prepare("SELECT time_zone AS timeZone FROM organization_settings WHERE installation_id=?").bind(installationId).first<{ timeZone: string }>();
+    if (!settings) throw new HttpError(409, "Save organization setup before creating a meeting");
+    return json({ meetings: result.results ?? [], timeZone: settings.timeZone });
   }
   if (request.method !== "POST") throw new HttpError(405, "Use GET or POST for first-meeting setup");
   const input = await readJson(request);

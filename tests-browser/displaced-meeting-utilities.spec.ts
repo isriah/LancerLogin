@@ -1,4 +1,5 @@
 import { setDashboardTheme } from "./dashboard-theme";
+import { openActiveMeetingCalendar } from "./meeting-calendar-fixture";
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
@@ -6,7 +7,7 @@ test("Dashboard delegates live attendance and contest review to complete replace
   let attendanceLoads = 0;
   await page.route(/\/attendance\?meetingId=/, async (route) => { attendanceLoads += 1; await route.continue(); });
 
-  await page.goto("/dashboard");
+  await openActiveMeetingCalendar(page);
   await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Meetings in progress/ })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Attendance contests" })).toHaveCount(0);

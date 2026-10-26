@@ -23,9 +23,12 @@ test("update notices clear after installation changes without another release lo
   await expect(popup(page)).toBeVisible();
   const readsBeforeUpdate = state.installationReads;
   state.installed = bundledVersion;
-  // Let the next poll's real network response settle before advancing more simulated time.
-  for (let second = 0; second < 31 && state.installationReads === readsBeforeUpdate; second++) await page.clock.runFor(1_000);
-  expect(state.installationReads).toBeGreaterThan(readsBeforeUpdate);
+  // Polling reschedules after real network promises settle. Yield between clock
+  // advances so a slow response cannot consume the entire simulated-time budget.
+  await expect.poll(async () => {
+    await page.clock.runFor(1_000);
+    return state.installationReads;
+  }, { intervals: [100] }).toBeGreaterThan(readsBeforeUpdate);
   await expect(popup(page)).toHaveCount(0);
   await expect(page.getByRole("button", { name: `LancerLogin ${bundledVersion} is available. Open Updates.`, exact: true })).toHaveCount(0);
   expect(state.releaseCalls).toBe(1);

@@ -1,3 +1,4 @@
+import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
@@ -115,7 +116,7 @@ const setupCode = "private setup code 1234";
 const setupCodeHash = createHash("sha256").update(setupCode).digest("base64url");
 const request = (path: string, body?: unknown, options: { method?: string; cookie?: string } = {}) => new Request(`https://api.example.test${path}`, {
   method: options.method ?? (body ? "POST" : "GET"),
-  headers: { ...(body ? { "content-type": "application/json" } : {}), ...(options.cookie ? { cookie: options.cookie } : {}), ...((/^\/admin\/kiosks\/[^/]+\/commands$/.test(path) || path === "/discord/contests/accept") && body ? { origin: "https://dashboard.example.test" } : {}) },
+  headers: { ...(body ? { "content-type": "application/json" } : {}), ...(options.cookie ? { cookie: options.cookie } : {}), ...((/^\/admin\/kiosks\/[^/]+\/commands$/.test(path) || ["/discord/contests/accept", "/discord/contests/reject"].includes(path)) && body ? { origin: "https://dashboard.example.test" } : {}) },
   body: body ? JSON.stringify(path === "/setup/bootstrap" && typeof body === "object" ? { setupCode, ...body } : body) : undefined,
 });
 const sessionSecret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -985,6 +986,11 @@ test("Members detailed exports preserve cross-module filters, order and period w
     assert.doesNotMatch(csv, /Avery|Meeting 1/);
     assert.match(csv, /Meeting 2/);
   }
+  const rangeDefinition = { ...definition, columnFilters: [{ column: { key: "outreach.member.minutes", unit: "hours" }, operator: "between", value: "0.5", upperValue: "1.5" }] };
+  const rangeExport = await worker.fetch(request("/exports/report-detail.csv", { definition: rangeDefinition }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(rangeExport.status, 200);
+  const rangeCsv = await rangeExport.text();
+  assert.match(rangeCsv, /Avery/); assert.match(rangeCsv, /Blair/); assert.doesNotMatch(rangeCsv, /Casey/);
   const cookie = await sessionCookie("operator");
   database.rows.set("SELECT m.generation FROM users u", (_sql, values) => values[0] === "hour-tracking" ? { generation: 1 } : undefined);
   const forbidden = await worker.fetch(request("/exports/report-detail.csv", { definition }, { cookie }), env);
@@ -997,6 +1003,7 @@ test("Members detailed exports preserve cross-module filters, order and period w
 test("Admins and Operators can create shared reports with duration units and creation pins the new tab", async () => {
   for (const role of ["admin", "operator"] as const) {
     const definition = defaultReportDefinition(false, "outreach.members");
+    definition.columnFilters = [{ column: { key: "outreach.member.minutes", unit: "hours" }, operator: "between", value: "0", upperValue: "2.5" }];
     const database = new FakeDatabase(); seedPolicy(database); database.rows.set("COALESCE(MAX(position)", { position: 2 }); database.rows.set("SELECT id, owner_user_id AS ownerUserId", { id: "report-1", ownerUserId: `${role}-1`, scope: "shared", name: "Outreach ranked members", definitionJson: JSON.stringify(definition), revision: 1, createdBy: `${role}-1`, updatedBy: `${role}-1`, createdAt: "2026-09-25", updatedAt: "2026-09-25" });
     const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
     const result = await worker.fetch(request("/reports/views", { name: "Outreach ranked members", scope: "shared", definition }, { cookie: await sessionCookie(role) }), env); assert.equal(result.status, 201);
@@ -1004,6 +1011,7 @@ test("Admins and Operators can create shared reports with duration units and cre
     assert.ok(reportInsert?.values.includes("shared"));
     const stored = reportInsert?.values.find((value) => typeof value === "string" && value.startsWith('{"version"'));
     assert.equal((JSON.parse(String(stored)) as { columns: Array<{ key: string; unit?: string }> }).columns.find((column) => column.key === "outreach.member.minutes")?.unit, "hours");
+    assert.deepEqual(JSON.parse(String(stored)).columnFilters, definition.columnFilters);
     assert.ok(database.batches[0].some((call) => call.sql.includes("INSERT INTO saved_report_tabs") && call.values.includes(2))); assert.ok(database.calls.some((call) => call.values.includes("report.created")));
   }
 });
@@ -2085,11 +2093,15 @@ test("Discord channel manager settings are Admin-only and audited", async () => 
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const adminCookie = await sessionCookie("admin");
   const read = await worker.fetch(request("/admin/integrations/discord/channel-manager", undefined, { cookie: adminCookie }), env);
-  assert.deepEqual(await read.json(), { enabled: true, contestWindowHours: 36 });
+  assert.deepEqual(await read.json(), { enabled: true, contestWindowHours: 36, blockRecontestsAfterRejection: false });
   const saved = await worker.fetch(request("/admin/integrations/discord/channel-manager", { enabled: false, contestWindowHours: 48 }, { method: "PATCH", cookie: adminCookie }), env);
   assert.deepEqual(await saved.json(), { enabled: false, contestWindowHours: 48 });
   assert.ok(database.calls.some((call) => call.sql.includes("SET discord_channel_manager_enabled = ?") && call.values[0] === 0 && call.values[1] === 48));
   assert.ok(database.calls.some((call) => call.values.includes("discord.channel_manager_updated")));
+  const blocked = await worker.fetch(request("/admin/integrations/discord/channel-manager", { enabled: true, contestWindowHours: 48, blockRecontestsAfterRejection: true }, { method: "PATCH", cookie: adminCookie }), env);
+  assert.equal(blocked.status, 200); assert.equal((await blocked.json() as { blockRecontestsAfterRejection: boolean }).blockRecontestsAfterRejection, true);
+  assert.ok(database.calls.some(call => call.sql.includes("SET discord_channel_manager_enabled") && call.values[2] === 1));
+  assert.equal((await worker.fetch(request("/admin/integrations/discord/channel-manager", { enabled: true, contestWindowHours: 48, blockRecontestsAfterRejection: "yes" }, { method: "PATCH", cookie: adminCookie }), env)).status, 400);
   assert.equal((await worker.fetch(request("/admin/integrations/discord/channel-manager", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
 });
 
@@ -2722,21 +2734,22 @@ test("Operators and Admins can list contest lifetime counts and raw partial, no-
   ]);
   const listQuery = database.calls.find((call) => call.sql.includes("FROM discord_attendance_contests c"));
   assert.ok(listQuery?.sql.includes("mt.starts_at AS meetingStartsAt"));
-  assert.match(listQuery?.sql ?? "", /SELECT COUNT\(\*\) FROM discord_attendance_contests history WHERE history\.installation_id = c\.installation_id AND history\.member_id = c\.member_id/);
+  assert.match(listQuery?.sql ?? "", /SELECT SUM\(1 \+ json_array_length\(history\.prior_reviews_json\)\) FROM discord_attendance_contests history WHERE history\.installation_id = c\.installation_id AND history\.member_id = c\.member_id/);
   assert.doesNotMatch(listQuery?.sql ?? "", /history\.status/);
   assert.match(listQuery?.sql ?? "", /FROM attendance_events check_in/);
   assert.match(listQuery?.sql ?? "", /FROM attendance_events check_out/);
   assert.doesNotMatch(listQuery?.sql ?? "", /attendance_corrections/);
   assert.equal((await worker.fetch(request("/discord/contests", undefined, { cookie: await sessionCookie("admin") }), env)).status, 200);
-  const missingReason = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved", reviewNote: "   " }, { cookie }), env);
+  const missingReason = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", createdAt: "2026-10-15T10:00:00Z", resolution: "approved", reviewNote: "   " }, { cookie }), env);
   assert.equal(missingReason.status, 400);
   assert.deepEqual(await missingReason.json(), { error: "A review reason is required before resolving this contest" });
   assert.equal(database.batches.length, 0);
-  const resolved = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved", reviewNote: "Member showed the Operator a kiosk error." }, { cookie }), env);
+  database.lists.set("AS resolved FROM json_each", [{ meetingId: "meeting-1", memberId: "member-1", resolved: 1 }]);
+  const resolved = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", createdAt: "2026-10-15T10:00:00Z", resolution: "approved", reviewNote: "Member showed the Operator a kiosk error." }, { cookie }), env);
   assert.equal(resolved.status, 200);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("UPDATE discord_attendance_contests")));
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO attendance_corrections")));
-  assert.ok(database.calls.some((call) => call.values.includes("discord.contest_resolved")));
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("discord.contest_resolved")));
 });
 
 test("unverified Discord exposes no contest list or resolution operation", async () => {
@@ -2749,27 +2762,28 @@ test("unverified Discord exposes no contest list or resolution operation", async
   const listed = await worker.fetch(request("/discord/contests", undefined, { cookie }), env);
   assert.equal(listed.status, 409);
   assert.deepEqual(await listed.json(), { error: "Discord must be enabled and verified" });
-  const resolved = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", resolution: "approved", reviewNote: "Verified in person." }, { cookie }), env);
+  const resolved = await worker.fetch(request("/discord/contests/resolve", { meetingId: "meeting-1", memberId: "member-1", createdAt: "2026-10-15T10:00:00Z", resolution: "approved", reviewNote: "Verified in person." }, { cookie }), env);
   assert.equal(resolved.status, 409);
   assert.equal(database.batches.length, 0);
 });
 
-test("bulk contest acceptance retains authenticated staff, origin and verified Discord boundaries", async () => {
+for (const action of ["accept", "reject"]) test(`bulk contest ${action} retains authenticated staff, origin and verified Discord boundaries`, async () => {
   const database = new FakeDatabase();
   database.rows.set("google_enabled AS googleEnabled", { googleEnabled: 0, resendEnabled: 0, discordEnabled: 1 });
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ciphertext: "unused", iv: "unused", updatedAt: "2026-08-30T00:00:00Z", verifiedAt: null, enabled: 1 });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const input = { contests: [{ meetingId: "meeting-1", memberId: "member-1" }], reviewNote: "Verified synthetic attendance" };
-  assert.equal((await worker.fetch(request("/discord/contests/accept", input), env)).status, 401);
+  const input = { contests: [{ meetingId: "meeting-1", memberId: "member-1", createdAt: "2026-10-15T10:00:00Z" }], reviewNote: "Verified synthetic attendance" };
+  assert.equal((await worker.fetch(request(`/discord/contests/${action}`, input), env)).status, 401);
   const cookie = await sessionCookie("operator");
-  assert.equal((await worker.fetch(request("/discord/contests/accept", input, { cookie }), env)).status, 409);
+  assert.equal((await worker.fetch(request(`/discord/contests/${action}`, input, { cookie }), env)).status, 409);
   assert.equal(database.batches.length, 0);
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ciphertext: "unused", iv: "unused", updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
-  assert.equal((await worker.fetch(new Request("https://worker.example.test/discord/contests/accept", { method: "POST", headers: { cookie, origin: "https://untrusted.example.test", "content-type": "application/json" }, body: JSON.stringify(input) }), env)).status, 403);
+  assert.equal((await worker.fetch(new Request(`https://worker.example.test/discord/contests/${action}`, { method: "POST", headers: { cookie, origin: "https://untrusted.example.test", "content-type": "application/json" }, body: JSON.stringify(input) }), env)).status, 403);
   assert.equal(database.batches.length, 0);
-  const accepted = await worker.fetch(request("/discord/contests/accept", input, { cookie }), env);
+  const accepted = await worker.fetch(request(`/discord/contests/${action}`, input, { cookie }), env);
   assert.equal(accepted.status, 200, await accepted.clone().text());
-  assert.ok(database.batches.some(batch => batch.some(statement => statement.sql.includes("INSERT INTO attendance_corrections"))));
+  assert.equal(database.batches.some(batch => batch.some(statement => statement.sql.includes("INSERT INTO attendance_corrections"))), action === "accept");
+  assert.ok(database.batches.some(batch => batch.some(statement => statement.sql.includes("discord.contest_resolved") && statement.values.includes(action === "accept" ? "approved" : "rejected"))));
 });
 
 test("a signed Discord button creates a contest only for the delivered linked member", async () => {
@@ -2778,7 +2792,7 @@ test("a signed Discord button creates a contest only for the delivered linked me
   const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
-  database.rows.set("FROM discord_attendance_recipients", { memberId: "member-1" });
+  database.rows.set("FROM discord_attendance_recipients", { memberId: "member-1", deliveredAt: new Date().toISOString() });
   database.rows.set("FROM discord_attendance_contests WHERE", { status: "open" });
   database.lists.set("FROM members m WHERE", [{ id: "member-1", discordUserId: "323456789012345678" }]);
   database.lists.set("SELECT id, discord_user_id AS discordUserId FROM members", [{ id: "member-1", discordUserId: "323456789012345678" }]);
@@ -2791,7 +2805,7 @@ test("a signed Discord button creates a contest only for the delivered linked me
   const result = await worker.fetch(interaction, env);
   assert.equal(result.status, 200);
   assert.deepEqual(await result.json(), { type: 4, data: { content: "Your attendance contest was recorded for review. Your attendance has not been changed.", flags: 64, allowed_mentions: { parse: [] } } });
-  assert.ok(database.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO discord_attendance_contests") && call.values.includes("323456789012345678")));
+  assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO discord_attendance_contests") && call.values.includes("323456789012345678")));
 });
 
 test("retired privacy compatibility stays disabled with historical consent and never writes or transmits", async () => {
@@ -3037,7 +3051,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 40); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 41); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
@@ -3057,7 +3071,7 @@ test("installation backup retains Discord role mappings while roster backup omit
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 40); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 41); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(installation.tables.saved_report_views.length, 1); assert.equal(installation.tables.saved_report_tabs.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   assert.equal(Object.hasOwn(roster.tables, "saved_report_views"), false);
@@ -3071,7 +3085,7 @@ test("installation backup retains Discord role mappings while roster backup omit
   tampered.tables.carpool_assignments = [{ installation_id: "primary", plan_id: "plan-1", direction: "outbound", rider_id: "rider", vehicle_person_id: "driver", distance_miles: 1, locked: 0, manual: 0, created_at: savedAt, updated_at: savedAt }];
   tampered.tables.carpool_unresolved = [{ installation_id: "primary", plan_id: "plan-1", direction: "outbound", rider_id: "rider", reason: "needs-review", detail: "Conflicting state", created_at: savedAt }];
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: tampered }, { cookie }), env)).status, 400); assert.equal(database.batches.length, 0);
-  const schema29 = structuredClone(installation) as { schemaVersion: number; tables: Record<string, Record<string, unknown>[]> }; schema29.schemaVersion = 29;
+  const schema29 = structuredClone(installation) as { schemaVersion: number; tables: Record<string, Record<string, unknown>[]> }; schema29.schemaVersion = 29; omitContestResubmissionFields(schema29);
   for (const table of Object.keys(schema29.tables).filter((name) => name.startsWith("carpool_"))) delete schema29.tables[table];
   schema29.tables.platform_module_epochs = schema29.tables.platform_module_epochs.filter((row) => row.module_id !== "carpool"); schema29.tables.platform_modules = schema29.tables.platform_modules.filter((row) => row.module_id !== "carpool");
   const restored29 = await worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: schema29 }, { cookie }), env); assert.equal(restored29.status, 200, await restored29.clone().text()); assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO platform_modules") && item.values.includes("carpool")));
@@ -3100,7 +3114,7 @@ test("Carpool meeting links survive strict schema33 recovery and older archives 
   database.lists.set("FROM carpool_plans WHERE", [{ installation_id: "primary", id: "plan-1", title: "Synthetic navigation", destination: "", event_reference: null, event_title_snapshot: null, event_starts_at_snapshot: null, radius_miles: 12, preferred_radius_miles: 4, notes: "", archived: 0, revision: 0, created_by: "admin-1", created_at: savedAt, updated_at: savedAt, meeting_id: "unavailable-meeting", trip_scope: "both", group_settings_json: "[]", last_rebuild_json: null, time_zone: "UTC", outbound_departure_at: null, return_departure_at: null }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Record<string, any>;
-  assert.equal(current.schemaVersion, 40); assert.equal(current.tables.carpool_plans[0].meeting_id, "unavailable-meeting");
+  assert.equal(current.schemaVersion, 41); assert.equal(current.tables.carpool_plans[0].meeting_id, "unavailable-meeting");
   const restore = (backup: unknown) => worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
   const missing = structuredClone(current); delete missing.tables.carpool_plans[0].meeting_id;
   assert.equal((await restore(missing)).status, 400);
@@ -3108,7 +3122,7 @@ test("Carpool meeting links survive strict schema33 recovery and older archives 
   assert.equal(database.batches.length, 0);
   const restored = await restore(current); assert.equal(restored.status, 200, await restored.clone().text());
   assert.ok(database.batches.at(-1)!.some(item => item.sql.includes("INSERT INTO carpool_plans") && item.values.includes("unavailable-meeting")), "Optional opaque links do not require an Attendance table foreign key");
-  const previous = structuredClone(current); previous.schemaVersion = 32; delete previous.tables.carpool_settings; previous.ownership.modules.find((module: { id: string }) => module.id === "carpool").tables = previous.ownership.modules.find((module: { id: string }) => module.id === "carpool").tables.filter((table: string) => table !== "carpool_settings");
+  const previous = structuredClone(current); previous.schemaVersion = 32; omitContestResubmissionFields(previous); delete previous.tables.carpool_settings; previous.ownership.modules.find((module: { id: string }) => module.id === "carpool").tables = previous.ownership.modules.find((module: { id: string }) => module.id === "carpool").tables.filter((table: string) => table !== "carpool_settings");
   delete previous.tables.hours_public_form_settings;
   const outreachOwner = previous.ownership.modules.find((module: Record<string, unknown>) => module.id === "hour-tracking");
   outreachOwner.tables = outreachOwner.tables.filter((table: string) => table !== "hours_public_form_settings");
@@ -3123,11 +3137,11 @@ test("Carpool schema37 preserves trip scope and pin provenance and defaults sche
   database.lists.set("FROM carpool_plans WHERE", [{ installation_id: "primary", id: "plan-1", title: "Synthetic return plan", destination: "Synthetic venue", event_reference: null, event_title_snapshot: null, event_starts_at_snapshot: null, radius_miles: 12, preferred_radius_miles: 4, notes: "", archived: 0, revision: 0, created_by: "admin-1", created_at: savedAt, updated_at: savedAt, meeting_id: null, trip_scope: "return", group_settings_json: "[]", last_rebuild_json: null, time_zone: "UTC", outbound_departure_at: null, return_departure_at: null }]);
   database.lists.set("FROM carpool_people WHERE", [{ installation_id: "primary", plan_id: "plan-1", id: "person-1", member_id: null, display_name: "Synthetic rider", contact: "", source_row: null, import_identity: null, import_snapshot_json: null, outbound_status: "unknown", outbound_address: "", outbound_lat: null, outbound_lon: null, outbound_seats: null, return_status: "needs-ride", return_address: "Synthetic address", return_lat: 40, return_lon: -74, return_seats: null, return_same_as_outbound: 0, notes: "", revision: 0, created_at: savedAt, updated_at: savedAt, outbound_location_source: null, outbound_location_label: null, return_location_source: "lookup", return_location_label: "Synthetic matched address" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Record<string, any>; assert.equal(current.schemaVersion, 40);
+  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Record<string, any>; assert.equal(current.schemaVersion, 41);
   const restore = (backup: unknown) => worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
   for (const mutate of [(backup: Record<string, any>) => { delete backup.tables.carpool_plans[0].trip_scope; }, (backup: Record<string, any>) => { backup.tables.carpool_plans[0].trip_scope = "unexpected"; }, (backup: Record<string, any>) => { backup.tables.carpool_people[0].return_location_source = "no-match"; }, (backup: Record<string, any>) => { delete backup.tables.carpool_people[0].return_location_label; }]) { const bad = structuredClone(current); mutate(bad); assert.equal((await restore(bad)).status, 400); }
   assert.equal(database.batches.length, 0); const result = await restore(current); assert.equal(result.status, 200, await result.clone().text()); assert.ok(database.batches.at(-1)?.some(item => item.sql.includes("INSERT INTO carpool_people") && item.values.includes("lookup") && item.values.includes("Synthetic matched address"))); assert.ok(database.batches.at(-1)?.some(item => item.sql.includes("INSERT INTO carpool_plans") && item.values.at(-6) === "return"));
-  const older = structuredClone(current); older.schemaVersion = 36; delete older.tables.carpool_plans[0].trip_scope; delete older.tables.carpool_plans[0].group_settings_json; delete older.tables.carpool_plans[0].last_rebuild_json; delete older.tables.carpool_plans[0].time_zone; delete older.tables.carpool_plans[0].outbound_departure_at; delete older.tables.carpool_plans[0].return_departure_at; for (const row of older.tables.carpool_people) for (const key of ["outbound_location_source", "outbound_location_label", "return_location_source", "return_location_label"]) delete row[key];
+  const older = structuredClone(current); older.schemaVersion = 36; omitContestResubmissionFields(older); delete older.tables.carpool_plans[0].trip_scope; delete older.tables.carpool_plans[0].group_settings_json; delete older.tables.carpool_plans[0].last_rebuild_json; delete older.tables.carpool_plans[0].time_zone; delete older.tables.carpool_plans[0].outbound_departure_at; delete older.tables.carpool_plans[0].return_departure_at; for (const row of older.tables.carpool_people) for (const key of ["outbound_location_source", "outbound_location_label", "return_location_source", "return_location_label"]) delete row[key];
   const migrated = await restore(older); assert.equal(migrated.status, 200, await migrated.clone().text()); assert.ok(database.batches.at(-1)?.some(item => item.sql.includes("INSERT INTO carpool_plans") && item.values.at(-6) === "both")); assert.ok(database.batches.at(-1)?.some(item => item.sql.includes("INSERT INTO carpool_people") && item.values.slice(-4).every(value => value === null)));
 });
 
@@ -3137,22 +3151,22 @@ test("Carpool schema38 validates group labels and complete rebuild recovery whil
   database.lists.set("FROM carpool_plans WHERE", [{ installation_id: "primary", id: "plan-1", title: "Synthetic groups", destination: "Synthetic venue", event_reference: null, event_title_snapshot: null, event_starts_at_snapshot: null, radius_miles: 20, preferred_radius_miles: 6, notes: "", archived: 0, revision: 3, created_by: "admin-1", created_at: savedAt, updated_at: savedAt, meeting_id: null, trip_scope: "both", group_settings_json: settings, last_rebuild_json: JSON.stringify(snapshot), time_zone: "UTC", outbound_departure_at: null, return_departure_at: null }]);
   database.lists.set("FROM carpool_people WHERE", ["driver", "rider"].map(id => ({ installation_id: "primary", plan_id: "plan-1", id, member_id: null, display_name: "Synthetic " + id, contact: "", source_row: null, import_identity: null, import_snapshot_json: null, outbound_status: id === "driver" ? "offer" : "needs-ride", outbound_address: "Synthetic pickup", outbound_lat: 40, outbound_lon: -74, outbound_seats: id === "driver" ? 1 : null, return_status: "transit", return_address: "", return_lat: null, return_lon: null, return_seats: null, return_same_as_outbound: 0, notes: "", revision: 0, created_at: savedAt, updated_at: savedAt, outbound_location_source: "manual", outbound_location_label: null, return_location_source: null, return_location_label: null })));
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Record<string, any>; assert.equal(current.schemaVersion, 40);
+  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Record<string, any>; assert.equal(current.schemaVersion, 41);
   const restore = (backup: unknown) => worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
   for (const mutate of [(backup: Record<string, any>) => { delete backup.tables.carpool_plans[0].group_settings_json; }, (backup: Record<string, any>) => { backup.tables.carpool_plans[0].group_settings_json = JSON.stringify([{ direction: "outbound", vehiclePersonId: "missing", label: "Group", color: "blue" }]); }, (backup: Record<string, any>) => { backup.tables.carpool_plans[0].last_rebuild_json = JSON.stringify({ ...snapshot, revision: 4 }); }, (backup: Record<string, any>) => { backup.tables.carpool_plans[0].last_rebuild_json = JSON.stringify({ ...snapshot, assignments: [...snapshot.assignments, ...snapshot.assignments] }); }, (backup: Record<string, any>) => { backup.tables.carpool_people[0].outbound_seats = 0; }]) { const bad = structuredClone(current); mutate(bad); assert.equal((await restore(bad)).status, 400); }
   assert.equal(database.batches.length, 0); const restored = await restore(current); assert.equal(restored.status, 200, await restored.clone().text()); assert.ok(database.batches.at(-1)?.some(item => item.sql.includes("INSERT INTO carpool_plans") && item.values.includes(settings) && item.values.includes(JSON.stringify(snapshot))));
-  const older = structuredClone(current); older.schemaVersion = 37; delete older.tables.carpool_plans[0].group_settings_json; delete older.tables.carpool_plans[0].last_rebuild_json; delete older.tables.carpool_plans[0].time_zone; delete older.tables.carpool_plans[0].outbound_departure_at; delete older.tables.carpool_plans[0].return_departure_at; const migrated = await restore(older); assert.equal(migrated.status, 200, await migrated.clone().text()); assert.ok(database.batches.at(-1)?.some(item => item.sql.includes("INSERT INTO carpool_plans") && item.values.at(-5) === "[]" && item.values.at(-4) === null));
+  const older = structuredClone(current); older.schemaVersion = 37; omitContestResubmissionFields(older); delete older.tables.carpool_plans[0].group_settings_json; delete older.tables.carpool_plans[0].last_rebuild_json; delete older.tables.carpool_plans[0].time_zone; delete older.tables.carpool_plans[0].outbound_departure_at; delete older.tables.carpool_plans[0].return_departure_at; const migrated = await restore(older); assert.equal(migrated.status, 200, await migrated.clone().text()); assert.ok(database.batches.at(-1)?.some(item => item.sql.includes("INSERT INTO carpool_plans") && item.values.at(-5) === "[]" && item.values.at(-4) === null));
 });
 
 test("Carpool schema39 validates trip timing before writes and defaults schema38 timing", async () => {
   const database = new FakeDatabase(); const cookie = await sessionCookie("admin"); seedInstallationBackupFoundation(database); const savedAt = "2026-10-14T00:00:00Z";
   database.lists.set("FROM carpool_plans WHERE", [{ installation_id: "primary", id: "plan-1", title: "Synthetic timed event", destination: "Synthetic venue", event_reference: null, event_title_snapshot: null, event_starts_at_snapshot: null, radius_miles: 12, preferred_radius_miles: 4, notes: "", archived: 0, revision: 0, created_by: "admin-1", created_at: savedAt, updated_at: savedAt, meeting_id: null, trip_scope: "both", group_settings_json: "[]", last_rebuild_json: null, time_zone: "America/New_York", outbound_departure_at: "2026-10-14T12:00:00.000Z", return_departure_at: "2026-10-14T22:00:00.000Z" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Record<string, any>; assert.equal(current.schemaVersion, 40);
+  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Record<string, any>; assert.equal(current.schemaVersion, 41);
   const restore = (backup: unknown) => worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
   for (const mutate of [(row: Record<string, any>) => { delete row.time_zone; }, (row: Record<string, any>) => { row.time_zone = null; }, (row: Record<string, any>) => { row.time_zone = "Invalid/Zone"; }, (row: Record<string, any>) => { row.outbound_departure_at = "2026-02-30T12:00:00.000Z"; }, (row: Record<string, any>) => { row.outbound_departure_at = ""; }, (row: Record<string, any>) => { row.return_departure_at = row.outbound_departure_at; }]) { const bad = structuredClone(current); mutate(bad.tables.carpool_plans[0]); assert.equal((await restore(bad)).status, 400); }
   assert.equal(database.batches.length, 0); const restored = await restore(current); assert.equal(restored.status, 200, await restored.clone().text()); assert.ok(database.batches.at(-1)?.some(item => item.sql.includes("INSERT INTO carpool_plans") && item.values.at(-3) === "America/New_York" && item.values.at(-2) === "2026-10-14T12:00:00.000Z"));
-  const older = structuredClone(current); older.schemaVersion = 38; for (const key of ["time_zone", "outbound_departure_at", "return_departure_at"]) delete older.tables.carpool_plans[0][key]; const migrated = await restore(older); assert.equal(migrated.status, 200, await migrated.clone().text()); assert.ok(database.batches.at(-1)?.some(item => item.sql.includes("INSERT INTO carpool_plans") && item.values.at(-3) === "UTC" && item.values.at(-2) === null && item.values.at(-1) === null));
+  const older = structuredClone(current); older.schemaVersion = 38; omitContestResubmissionFields(older); for (const key of ["time_zone", "outbound_departure_at", "return_departure_at"]) delete older.tables.carpool_plans[0][key]; const migrated = await restore(older); assert.equal(migrated.status, 200, await migrated.clone().text()); assert.ok(database.batches.at(-1)?.some(item => item.sql.includes("INSERT INTO carpool_plans") && item.values.at(-3) === "UTC" && item.values.at(-2) === null && item.values.at(-1) === null));
 });
 
 test("installation restore validates ownership before writes and replaces transient authority", async () => {
@@ -3174,7 +3188,7 @@ test("installation restore validates ownership before writes and replaces transi
 
   const wrongOwnership = structuredClone(backup); wrongOwnership.ownership.modules[0].tables = [];
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: wrongOwnership }, { cookie }), env)).status, 400);
-  const oldModular = structuredClone(backup); oldModular.schemaVersion = 27; oldModular.tables.platform_module_configuration = [];
+  const oldModular = structuredClone(backup); oldModular.schemaVersion = 27; omitContestResubmissionFields(oldModular); oldModular.tables.platform_module_configuration = [];
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: oldModular }, { cookie }), env)).status, 400);
   const invalidLifecycle = structuredClone(backup); invalidLifecycle.tables.platform_modules.find((row: Record<string, unknown>) => row.module_id === "hour-tracking").delete_after = "2026-10-01T00:00:00Z";
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: invalidLifecycle }, { cookie }), env)).status, 400);
@@ -3202,7 +3216,7 @@ test("Community 1.2.5 backups and previous Modular archives preserve explicit fo
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Record<string, any>;
   const restore = (backup: unknown) => worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
-  const previous = structuredClone(current); previous.schemaVersion = 31; for (const row of previous.tables.kiosks) delete row.configured_authentication_method; delete previous.tables.carpool_settings; previous.ownership.modules.find((module: { id: string }) => module.id === "carpool").tables = previous.ownership.modules.find((module: { id: string }) => module.id === "carpool").tables.filter((table: string) => table !== "carpool_settings");
+  const previous = structuredClone(current); previous.schemaVersion = 31; omitContestResubmissionFields(previous); for (const row of previous.tables.kiosks) delete row.configured_authentication_method; delete previous.tables.carpool_settings; previous.ownership.modules.find((module: { id: string }) => module.id === "carpool").tables = previous.ownership.modules.find((module: { id: string }) => module.id === "carpool").tables.filter((table: string) => table !== "carpool_settings");
   delete previous.tables.hours_public_form_settings;
   previous.ownership.modules.find((module: Record<string, unknown>) => module.id === "hour-tracking").tables = previous.ownership.modules.find((module: Record<string, unknown>) => module.id === "hour-tracking").tables.filter((table: string) => table !== "hours_public_form_settings");
   for (const row of previous.tables.hours_correction_requests) delete row.activity_id;
@@ -3213,7 +3227,7 @@ test("Community 1.2.5 backups and previous Modular archives preserve explicit fo
   assert.equal((await restore(extraColumn)).status, 400);
   assert.equal(database.batches.length, 0);
   assert.equal((await restore(previous)).status, 200);
-  const community = structuredClone(current); community.schemaVersion = 22;
+  const community = structuredClone(current); community.schemaVersion = 22; omitContestResubmissionFields(community);
   delete community.format; delete community.formatVersion; delete community.ownership;
   for (const name of Object.keys(community.tables)) if (/^(platform_module|hours_|carpool_)/.test(name) || name === "user_preferences") delete community.tables[name];
   for (const row of community.tables.organization_settings) delete row.kiosk_authentication_method;
@@ -3284,7 +3298,7 @@ test("schema 17 installation backups default fields added by parallel attendance
   database.lists.set("FROM discord_attendance_notifications WHERE", [{ installation_id: "primary", meeting_id: "meeting-1", status: "delivered", message_id: "notice-1", attempts: 1, last_error: null, processed_at: "2026-09-01T22:00:00Z", updated_at: "2026-09-01T22:00:00Z", channel_id: "223456789012345678", expires_at: "2026-09-02T22:00:00Z", deleted_at: null, thread_created_at: "2026-09-01T22:01:00Z" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const backup = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, Record<string, unknown>[]> };
-  backup.schemaVersion = 17; delete backup.tables.carpool_settings;
+  backup.schemaVersion = 17; omitContestResubmissionFields(backup); delete backup.tables.carpool_settings;
   delete backup.tables.users[0].debug_mode;
   delete backup.tables.label_attendance_rules[0].excused_handling;
   delete backup.tables.discord_attendance_notifications[0].thread_created_at;
@@ -3301,7 +3315,7 @@ test("schema 16 meeting restore defaults Discord thread tracking", async () => {
   database.lists.set("FROM discord_attendance_notifications WHERE", [{ installation_id: "primary", meeting_id: "meeting-1", status: "delivered", message_id: "notice-1", attempts: 1, last_error: null, processed_at: "2026-09-01T22:00:00Z", updated_at: "2026-09-01T22:00:00Z", channel_id: "223456789012345678", expires_at: "2026-09-02T22:00:00Z", deleted_at: null }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const backup = await (await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
-  backup.schemaVersion = 16;
+  backup.schemaVersion = 16; omitContestResubmissionFields(backup);
   const restored = await worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup }, { cookie }), env);
   assert.equal(restored.status, 200, await restored.clone().text());
   assert.ok(database.batches.at(-1)?.some((item) => item.sql.includes("INSERT INTO discord_attendance_notifications") && item.values.at(-1) === null));
@@ -3445,4 +3459,79 @@ test("Carpool settings require current Admin authorization and never expose cred
   assert.equal(database.calls.some(call => call.sql.includes("carpool_settings") || call.sql.includes("carpool_geocoding_credentials")), false);
   const admin = await worker.fetch(request("/admin/carpool/settings", undefined, { cookie: await sessionCookie("admin") }), env); assert.equal(admin.status, 200, await admin.clone().text());
   assert.deepEqual(await admin.json(), { radiusMiles: 12, preferredRadiusMiles: 4, revision: 0, geocodingConfigured: false, canSaveApiKey: true });
+});
+
+test("contest backups retain rejected submission history, default schema40 and reject malformed history before writes", async () => {
+  const database = new FakeDatabase(); seedInstallationBackupFoundation(database);
+  const cookie = await sessionCookie("admin");
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const history = JSON.stringify([{ messageId: "original-message", createdAt: "2026-10-15T10:00:00Z", status: "rejected", resolvedBy: "admin-1", resolvedAt: "2026-10-15T11:00:00Z", reviewNote: "Original review", submittedByDiscordUserId: "synthetic-discord" }]);
+  database.lists.set("FROM discord_attendance_contests WHERE", [{ installation_id: "primary", meeting_id: "meeting", member_id: "member", message_id: "new-message", status: "open", resolved_by: null, resolved_at: null, created_at: "2026-10-15T12:00:00Z", submitted_by_discord_user_id: "synthetic-discord", review_note: null, prior_reviews_json: history }]);
+  const backup = await (await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie }), env)).json() as any;
+  assert.equal(backup.schemaVersion, 41); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
+  const restore = (value: unknown) => worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup: value }, { cookie }), env);
+  const restored = await restore(backup); assert.equal(restored.status, 200, await restored.clone().text());
+  assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("INSERT INTO discord_attendance_contests") && call.values.includes(history)));
+  const legacy = structuredClone(backup); legacy.schemaVersion = 40; omitContestResubmissionFields(legacy);
+  const old = await restore(legacy); assert.equal(old.status, 200, await old.clone().text());
+  assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("INSERT INTO discord_attendance_contests") && call.values.at(-1) === "[]"));
+  for (const invalid of ["{}", "[null]", '[{"status":"rejected","reviewNote":{}}]']) {
+    const bad = structuredClone(backup); bad.tables.discord_attendance_contests[0].prior_reviews_json = invalid;
+    const before = database.batches.length; assert.equal((await restore(bad)).status, 400); assert.equal(database.batches.length, before);
+  }
+});
+
+test("retained scan review routes require an active Admin, dashboard origin and enabled Attendance", async () => {
+  const database = new FakeDatabase(), admin = await sessionCookie("admin"), operator = await sessionCookie("operator");
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const listing = "/admin/kiosks/scan-reviews", review = "/admin/kiosks/kiosk-a/scan-reviews/synthetic-scan/review";
+  database.lists.set("FROM kiosk_scan_reviews r JOIN kiosks", [{ kioskId: "kiosk-a", kioskName: "Synthetic kiosk", evidence: JSON.stringify({ eventId: "synthetic-scan", memberId: "synthetic-member", occurredAt: "2020-01-01T07:00:00Z", reasonCode: "clock_unverified", httpStatus: null }), reviewStatus: "open", reviewedAt: null, reviewNote: null, receivedAt: "2026-10-25T10:00:00Z" }]);
+  database.lists.set("SELECT review_status AS status FROM kiosk_scan_reviews", [{ status: "reviewed" }]);
+  assert.equal((await worker.fetch(request(listing), env)).status, 401);
+  assert.equal((await worker.fetch(request(listing, undefined, { cookie: operator }), env)).status, 403);
+  const listed = await worker.fetch(request(listing, undefined, { cookie: admin }), env);
+  assert.equal(listed.status, 200); assert.equal(listed.headers.get("cache-control"), "no-store");
+  assert.equal((await listed.json() as any).records[0].reasonCode, "clock_unverified");
+  assert.equal((await worker.fetch(request(listing + "?offset=-1", undefined, { cookie: admin }), env)).status, 400);
+  assert.equal((await worker.fetch(request(listing + "?status=invalid", undefined, { cookie: admin }), env)).status, 400);
+  const mutation = (cookie: string, origin?: string, note = "Corrected attendance separately") => new Request("https://api.example.test" + review, { method: "POST", headers: { cookie, "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify({ note }) });
+  assert.equal((await worker.fetch(mutation(operator, env.ALLOWED_ORIGIN), env)).status, 403);
+  assert.equal((await worker.fetch(mutation(admin), env)).status, 403);
+  assert.equal((await worker.fetch(mutation(admin, "https://untrusted.example.test"), env)).status, 403);
+  assert.equal((await worker.fetch(mutation(admin, env.ALLOWED_ORIGIN, " "), env)).status, 400);
+  assert.equal(database.batches.length, 0);
+  const note = "Checked the retained scan.\nAttendance corrected separately.";
+  const saved = await worker.fetch(mutation(admin, env.ALLOWED_ORIGIN, note), env); assert.equal(saved.status, 200, await saved.clone().text());
+  assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("UPDATE kiosk_scan_reviews") && call.values.includes(note)));
+  assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("kiosk.scan_reviewed")));
+  assert.equal(database.batches.at(-1)?.some(call => /attendance_events|attendance_corrections/.test(call.sql)), false);
+  const before = database.batches.length;
+  database.rows.set("SELECT m.generation FROM users u", null);
+  assert.equal((await worker.fetch(request(listing, undefined, { cookie: admin }), env)).status, 403);
+  assert.equal((await worker.fetch(mutation(admin, env.ALLOWED_ORIGIN), env)).status, 403);
+  assert.equal(database.batches.length, before);
+});
+
+test("retained scan upload binds authority to the authenticated kiosk and rejects disabled or malformed requests", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const record = { eventId: "synthetic-scan", memberId: "synthetic-member", occurredAt: "2020-01-01T07:00:00Z", reasonCode: "clock_unverified", httpStatus: null, reviewStatus: "open" };
+  const upload = (body: unknown = { records: [record] }, token?: string) => new Request("https://api.example.test/kiosk/scan-reviews", { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) }, body: JSON.stringify(body) });
+  assert.equal((await worker.fetch(upload(), env)).status, 401);
+  assert.equal((await worker.fetch(upload(undefined, "invalid"), env)).status, 401);
+  database.rows.set("FROM kiosks WHERE", { id: "kiosk-a", name: "Synthetic kiosk", pairingId: "pair-a", pairingBound: 1 });
+  assert.equal((await worker.fetch(upload({ records: [{ ...record, fingerprint: "forbidden" }] }, "paired-token"), env)).status, 400);
+  assert.equal((await worker.fetch(upload({ records: [record], kioskId: "other-kiosk" }, "paired-token"), env)).status, 400);
+  assert.equal(database.batches.length, 0);
+  database.lists.set("SELECT event_id AS eventId,review_status AS reviewStatus", [{ eventId: "synthetic-scan", reviewStatus: "reviewed" }]);
+  const result = await worker.fetch(upload(undefined, "paired-token"), env); assert.equal(result.status, 200, await result.clone().text());
+  assert.deepEqual(await result.json(), { reviews: [{ eventId: "synthetic-scan", reviewStatus: "reviewed" }] });
+  const transaction = database.batches.at(-1)!;
+  assert.ok(transaction.some(call => call.sql.includes("token_hash=?") && call.values.includes(createHash("sha256").update("paired-token").digest("base64url"))));
+  assert.ok(transaction.some(call => call.sql.includes("INSERT INTO kiosk_scan_reviews") && call.values[0] === "kiosk-a"));
+  assert.equal(transaction.some(call => /attendance_events|attendance_corrections/.test(call.sql)), false);
+  database.rows.set("SELECT m.generation FROM platform_modules m", null);
+  const before = database.batches.length;
+  assert.equal((await worker.fetch(upload(undefined, "paired-token"), env)).status, 409);
+  assert.equal(database.batches.length, before);
 });

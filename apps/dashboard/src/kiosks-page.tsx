@@ -1,3 +1,4 @@
+import { KioskScanReviews } from "./kiosk-scan-reviews";
 import { visiblePoll } from "./visible-poll";
 import { RouteLink, usePath } from "./router";
 import "./mobile-kiosks.css";
@@ -9,6 +10,7 @@ import { useDashboardLoadingOverlay } from "./loading-overlay";
 import { formatVersion, isNewerRelease } from "./update-indicator";
 import { hasComparableStableVersions, kioskUpdateTransition } from "./update-release";
 import { useReleaseCheck } from "./use-release-check";
+import { KioskEnrollmentDialog, type EnrollmentSession } from "./kiosk-enrollment-dialog";
 
 type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; readerOnline?: number; authenticationMethod?: KioskAuthenticationMethod; configuredAuthenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string; pendingEvents?: number; lastSyncAt?: string; errorCategory?: string; pairedAt: string };
 type Simulator = { name: string; active: number; online: number; lastSeenAt?: string; readerOnline: false; releaseVersion: string };
@@ -69,6 +71,16 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
   const [notice, setNotice] = useState<Notice>({ message: "Loading kiosk status…", tone: "neutral" });
   useDashboardLoadingOverlay(notice.message === "Loading kiosk status…", "Loading kiosk status…");
   const [pairing, setPairing] = useState(false);
+  const [enrolling, setEnrolling] = useState<{ kiosk: Kiosk; session: EnrollmentSession }>();
+  const [enrollmentBusy, setEnrollmentBusy] = useState(false);
+  async function beginEnrollment(kiosk: Kiosk) {
+    setEnrollmentBusy(true);
+    try {
+      const { session } = await api<{ session: EnrollmentSession }>(`/admin/kiosks/${encodeURIComponent(kiosk.id)}/enrollment`, { method: "POST" });
+      setEnrolling({ kiosk, session });
+    } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); }
+    finally { setEnrollmentBusy(false); }
+  }
   const [editing, setEditing] = useState<string>();
   const [renameBusy, setRenameBusy] = useState(false);
   const renameInput = useRef<HTMLInputElement>(null);
@@ -144,6 +156,7 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
         {active && !managing && <div className="kiosk-device-switcher" role="group" aria-label="Active physical kiosks">{(example ? [active] : activeKiosks).map((kiosk) => {
           const state = kioskHealth(kiosk);
           return <div className="kiosk-device-option" key={kiosk.id} data-selected={active?.id === kiosk.id ? "true" : undefined}>
+            {role === "admin" && <button className="ui-button kiosk-enrollment-button" type="button" disabled={example || enrollmentBusy || !state.online || !kiosk.readerOnline || kiosk.configuredAuthenticationMethod !== "fingerprint" || kiosk.authenticationMethod !== "fingerprint"} onClick={() => void beginEnrollment(kiosk)} aria-label={`Begin enrollment on ${kiosk.name}`}>Begin enrollment</button>}
             <div className="kiosk-device-row" data-walkthrough={active?.id === kiosk.id ? "kiosk-status" : undefined}>
               <button className="ui-button kiosk-device-select" type="button" disabled={example} aria-pressed={active?.id === kiosk.id} onClick={() => { setSelectedKioskId(kiosk.id); setEditing(undefined); setMaintenanceHelp(false); }}><strong>{kiosk.name}</strong><span className="status-pill ui-status" data-tone={state.health === "healthy" ? "success" : state.health === "degraded" ? "warning" : "error"}>{state.label}</span></button>
               {role === "admin" && <button className="ui-button kiosk-edit-button" type="button" aria-label={`Rename ${kiosk.name}`} title={`Rename ${kiosk.name}`} disabled={example || renameBusy} data-walkthrough={active?.id === kiosk.id ? "kiosk-rename" : undefined} ref={element => { editButtons.current[kiosk.id] = element; }} onClick={() => { setSelectedKioskId(kiosk.id); setName(kiosk.name); setEditing(kiosk.id); }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m16 3 5 5-12 12-6 1 1-6Z M14 5l5 5" /></svg></button>}
@@ -156,7 +169,7 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
         {active ? <>
           <dl className="kiosk-diagnostics kiosk-summary" data-walkthrough="kiosk-diagnostics"><div><dt>Authentication</dt><dd>{authenticationMethodLabels[activeAuthenticationMethod]}{configuredAuthenticationMethod !== activeAuthenticationMethod && <small>{authenticationMethodLabels[configuredAuthenticationMethod]} configured - waiting for kiosk sync</small>}</dd></div><div><dt>{activeAuthenticationMethod === "fingerprint" ? "Fingerprint reader" : "Input service"}</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Installed release</dt><dd>{active.releaseVersion ?? "Unknown"}</dd></div><div><dt>{release.channel === "stable" ? "Latest stable release" : release.channel === "beta" ? "Latest beta release" : "Latest release"}</dt><dd>{latestRelease || "Unavailable"}{!release.fresh && latestRelease ? <small>Previously checked; confirmation required</small> : release.fresh && kioskUpdateTransition(release.release, active.releaseVersion ?? "") === "replace-development" ? <small>Replace development build with confirmation</small> : release.fresh && hasComparableStableVersions(release.release, active.releaseVersion ?? "") ? <small>{releaseCurrent ? "Up to date" : "Update available"}</small> : null}</dd></div></dl>
           {!managing && !example && <RouteLink className="secondary-button action-link kiosk-manage-link" href={`/kiosks/${encodeURIComponent(active.id)}/manage`} currentPath={path} navigate={navigate}>Manage kiosk</RouteLink>}
-          {(managing || walkthroughOpen) && <details className="kiosk-management-section" open={walkthroughOpen || undefined}><summary>Diagnostics</summary><dl className="kiosk-diagnostics"><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div><div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div>{active.errorCategory && <div className="kiosk-diagnostic-error"><dt>Reported issue</dt><dd>{active.errorCategory.replaceAll("_", " ")}</dd></div>}</dl></details>}
+          {(managing || walkthroughOpen) && <details className="kiosk-management-section" open={walkthroughOpen || undefined}><summary>Diagnostics</summary><dl className="kiosk-diagnostics"><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div><div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div>{active.errorCategory && <div className="kiosk-diagnostic-error"><dt>Reported issue</dt><dd>{active.errorCategory === "offline_queue" ? "Saved scans need attention. Open maintenance on this kiosk to check its clock and review rejected scans." : active.errorCategory.replaceAll("_", " ")}</dd></div>}</dl></details>}
           {role === "admin" && !releaseCurrent && <div className="kiosk-update-action"><button className="primary-button" type="button" data-walkthrough="kiosk-update" disabled={example || !online || release.checking || !release.fresh || !["upgrade", "replace-development"].includes(kioskUpdateTransition(release.release, active.releaseVersion ?? ""))} onClick={() => void command("install_latest", "Kiosk update")}>Update kiosk</button></div>}
           {role === "admin" && (managing || walkthroughOpen) && <>
             <details className="kiosk-management-section" open={walkthroughOpen || undefined}><summary>Authentication settings</summary>
@@ -181,8 +194,10 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
           </>}
         </> : !managing && <p>Pair a Raspberry Pi to begin unattended attendance. Fingerprint is the default, and an Admin can select another authentication method after pairing.</p>}
       </article>
-      {role === "admin" && !managing && <article className="task-card kiosk-simulator-card" data-walkthrough="kiosk-simulator"><h2>Browser simulator</h2><div className="kiosk-state"><strong>{simulator?.name ?? "Not configured"}</strong><span className="status-pill ui-status" data-tone={simulator?.active && simulator.online ? "success" : simulator?.active ? "error" : "neutral"}>{simulator?.active ? simulator.online ? "Online" : "Offline" : "Not paired"}</span></div><p>Uses the kiosk scan surface with browser-selected simulated reads. Events are audited and do not count as physical kiosk activity.</p>{simulator?.active === 1 && <div className="kiosk-actions"><a className="primary-button action-link" href="/simulator">Open simulator</a><button type="button" onClick={() => void stopSimulator()}>Stop simulator</button></div>}</article>}
+      {role === "admin" && !managing && <article className="task-card kiosk-simulator-card" data-walkthrough="kiosk-simulator"><h2>Browser simulator</h2><div className="kiosk-state"><strong>{simulator?.name ?? "Not configured"}</strong><span className="status-pill ui-status" data-tone={simulator?.active && simulator.online ? "success" : simulator?.active ? "error" : "neutral"}>{simulator?.active ? simulator.online ? "Online" : "Offline" : "Not paired"}</span></div><p>Uses the kiosk scan surface with browser-selected simulated reads. Events are audited and do not count as physical kiosk activity.</p>{simulator?.active !== 1 && <RouteLink className="secondary-button action-link" href="/settings/guided-setup" currentPath={path} navigate={navigate}>Set up browser simulator</RouteLink>}{simulator?.active === 1 && <div className="kiosk-actions"><a className="primary-button action-link" href="/simulator">Open simulator</a><button type="button" onClick={() => void stopSimulator()}>Stop simulator</button></div>}</article>}
     </div>
+    {role === "admin" && !managing && <KioskScanReviews />}
     {pairing && <PairKioskDialog onClose={() => setPairing(false)} onPaired={load} />}
+    {enrolling && <KioskEnrollmentDialog kiosk={enrolling.kiosk} initial={enrolling.session} onClose={() => setEnrolling(undefined)} />}
   </section>;
 }

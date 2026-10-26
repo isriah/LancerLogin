@@ -1,8 +1,9 @@
+import { ReportColumnFilterControl } from "./report-column-filter";
 import "./mobile-roster-reports.css";
 import { reportDisplayDataset } from "./member-report-types";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { RouteLink } from "./router";
-import { reportColumnId, reportColumnLabel, type ReportCatalog, type ReportColumn, type ReportDefinition, type ReportDurationUnit, type ReportQueryResult } from "./saved-reports";
+import { reportColumnId, reportColumnLabel, type ReportColumnFilter, type ReportCatalog, type ReportColumn, type ReportDefinition, type ReportDurationUnit, type ReportQueryResult } from "./saved-reports";
 
 type PopoverState = { kind: "column"; columnId: string; top: number; left: number } | { kind: "add"; top: number; left: number };
 type CatalogItem = ReportCatalog["columns"][number];
@@ -158,11 +159,11 @@ export function EditableReportTable({ catalog, definition, result, loading, edit
   function setSort(column: ReportColumn, direction: "asc" | "desc") {
     onChange((next) => { next.sort = { column, direction }; });
   }
-  function setFilter(column: ReportColumn, operator: "contains" | "minimum", value: string) {
+  function setFilter(column: ReportColumn, operator: ReportColumnFilter["operator"], value: string, upperValue?: string) {
     const id = reportColumnId(column);
     onChange((next) => {
       const filters = (next.columnFilters ?? []).filter((filter) => reportColumnId(filter.column) !== id);
-      if (value.trim()) filters.push({ column, operator, value: value.trim() });
+      if (value.trim() || operator === "empty" || operator === "not_empty") filters.push({ column, operator, value: value.trim(), ...(upperValue !== undefined ? { upperValue } : {}) });
       next.columnFilters = filters;
     });
   }
@@ -174,9 +175,8 @@ export function EditableReportTable({ catalog, definition, result, loading, edit
       next.sort.column = update(next.sort.column);
       next.columnFilters = (next.columnFilters ?? []).map((filter) => {
         if (reportColumnId(filter.column) !== id) return filter;
-        const numeric = Number(filter.value);
-        const converted = filter.operator === "minimum" && Number.isFinite(numeric) && priorUnit !== unit ? unit === "hours" ? numeric / 60 : numeric * 60 : numeric;
-        return { ...filter, column: update(filter.column), value: Number.isFinite(converted) ? String(Math.round(converted * 100) / 100) : filter.value };
+        const convert = (value: string) => value && Number.isFinite(Number(value)) && priorUnit !== unit ? String(Math.round((unit === "hours" ? Number(value) / 60 : Number(value) * 60) * 100) / 100) : value;
+        return { ...filter, column: update(filter.column), value: convert(filter.value), ...(filter.upperValue !== undefined ? { upperValue: convert(filter.upperValue) } : {}) };
       });
     });
   }
@@ -221,9 +221,9 @@ export function EditableReportTable({ catalog, definition, result, loading, edit
       </> : activeColumn && <>
         <div className="report-column-popover-heading"><strong>{columnName(activeColumn)}</strong>{activeFilter && <span>Filtered</span>}</div>{!columnAvailability(activeColumn).available && <p className="ui-status" data-tone="warning">{columnAvailability(activeColumn).explanation} Remove this column or its controls to change the preserved definition.</p>}
         {activeCatalog?.sortable && <fieldset className="report-column-sort"><legend className="visually-hidden">Sort column</legend><button className={`ui-button${definition.sort.direction === "asc" && reportColumnId(definition.sort.column) === reportColumnId(activeColumn) ? " is-selected" : ""}`} type="button" aria-pressed={definition.sort.direction === "asc" && reportColumnId(definition.sort.column) === reportColumnId(activeColumn)} onClick={() => { setSort(activeColumn, "asc"); closePopover(true); }}><ColumnIcon name="sort-asc" />Ascending</button><button className={`ui-button${definition.sort.direction === "desc" && reportColumnId(definition.sort.column) === reportColumnId(activeColumn) ? " is-selected" : ""}`} type="button" aria-pressed={definition.sort.direction === "desc" && reportColumnId(definition.sort.column) === reportColumnId(activeColumn)} onClick={() => { setSort(activeColumn, "desc"); closePopover(true); }}><ColumnIcon name="sort-desc" />Descending</button></fieldset>}
-        {filterable && activeCatalog?.filterKind === "text" && <div className="report-column-filter-control"><label className="report-column-filter">Contains<input type="search" value={activeFilter?.value ?? ""} placeholder="Type to filter" onChange={(event) => setFilter(activeColumn, "contains", event.target.value)} /></label>{activeFilter && <button className="ui-button" type="button" onClick={() => setFilter(activeColumn, "contains", "")}>Clear filter</button>}</div>}
+
         {activeCatalog?.durationUnits && <label className="report-column-filter">Units<select value={activeColumn.unit ?? "minutes"} onChange={(event) => setDurationUnit(activeColumn, event.target.value as ReportDurationUnit)}>{activeCatalog.durationUnits.map((unit) => <option key={unit} value={unit}>{unit === "hours" ? "Hours" : "Minutes"}</option>)}</select></label>}
-        {filterable && activeCatalog?.filterKind === "number" && <div className="report-column-filter-control"><label className="report-column-filter">Minimum{activeCatalog.durationUnits ? ` (${activeColumn.unit ?? "minutes"})` : ""}<input type="number" value={activeFilter?.value ?? ""} placeholder={activeColumn.unit === "hours" ? "0.00" : "0"} onChange={(event) => setFilter(activeColumn, "minimum", event.target.value)} /></label>{activeFilter && <button className="ui-button" type="button" onClick={() => setFilter(activeColumn, "minimum", "")}>Clear filter</button>}</div>}
+        {filterable && dataset.fields.find((field) => field.id === activeColumn.key)?.filterOperators.length ? <ReportColumnFilterControl key={`${reportColumnId(activeColumn)}:${activeColumn.unit ?? ""}`} field={dataset.fields.find((field) => field.id === activeColumn.key)!} filter={activeFilter} unit={activeCatalog?.durationUnits ? activeColumn.unit ?? "minutes" : undefined} onChange={(operator, value, upperValue) => setFilter(activeColumn, operator, value, upperValue)} /> : null}
         {activeIndex > 0 && <div className="report-column-actions"><button className="ui-button" type="button" disabled={activeIndex <= 1} onClick={() => { moveColumn(reportColumnId(activeColumn), -1); closePopover(true); }}><ColumnIcon name="left" />Move left</button><button className="ui-button report-remove-column" type="button" onClick={() => { toggleColumn(activeColumn, false); closePopover(true); }}><ColumnIcon name="trash" />Remove column</button><button className="ui-button" type="button" disabled={activeIndex >= definition.columns.length - 1} onClick={() => { moveColumn(reportColumnId(activeColumn), 1); closePopover(true); }}>Move right<ColumnIcon name="right" /></button></div>}
       </>}
     </div>}

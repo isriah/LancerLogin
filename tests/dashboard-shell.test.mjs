@@ -144,7 +144,7 @@ test("meeting detail keeps meeting-specific attendance, Discord, and contest ope
   assert.doesNotMatch(meetings, /Sync all to Discord/);
   assert.doesNotMatch(meetings, />Sync Discord<|calendarByMeeting/);
   assert.match(source, /calendarProviders/);
-  assert.match(management, /addMinutes\(value\.date, startTime, 150\)/);
+  assert.match(management, /moveMeetingStart\(value, \{ startTime \}, lastDuration\.current\)/);
   assert.doesNotMatch(source, /Kiosk meeting ID/);
   assert.doesNotMatch(source, /Copy ID/);
   assert.match(management, /Notes <span>\(optional\)<\/span>/);
@@ -288,7 +288,7 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(calendar, /BrowserViewIcon view=\{view\}/);
   assert.match(home, /className="meeting-browser-select"><span>Meeting<\/span><select className="ui-control ui-native-select"/);
   assert.match(home, /Add meeting/);
-  assert.match(home, /setCalendarOffset/);
+  assert.match(home, /setCalendarSelection/);
   assert.match(home, /MeetingsPage[^>]+discordEnabled=\{discordEnabled\} navigate=\{openMeeting\} embedded meetings=\{meetings\} onMeetingsChange=\{load\}/);
   assert.match(home, /MeetingCreationDialog[^>]+open=\{creating \|\| practiceForm\}/);
   assert.match(meetings, /useModalFocus\(dialog, open && !practice, busy, close\)/);

@@ -11,18 +11,28 @@ import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { for (let n = 0; n < 100; n++) { if (await check()) return; await wait(30); } assert.fail("Synthetic runtime condition did not become true"); }
-async function fixture(t, { method = "fingerprint", modern = false, holdConfiguration = false, holdCommand = false } = {}) {
+async function fixture(t, { method = "fingerprint", modern = false, holdConfiguration = false, holdCommand = false, enrollment = false, confirmClock = true, reviewUnavailable = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), "kiosk-operator-service-")); await chmod(root, 0o700);
   let rosterMode = "valid", heartbeats = 0, configurationStarted = false, commandStarted = false, releaseConfiguration, releaseCommand;
   const attendance = [];
+  const reviewRequests = [];
+  const heartbeatReports = [];
+  let enrollmentSession = enrollment ? { id: "synthetic-session", pairingId: "synthetic-pairing", expiresAt: new Date(Date.now() + 300000).toISOString(), state: "ready", progress: "awaiting_confirmation", member: { memberId: "synthetic-member", rosterId: "synthetic-roster", firstName: "Sample", lastName: "Member" } } : null;
+  const enrollmentProgress = [];
   const cloud = createServer(async (request, response) => {
     response.setHeader("content-type", "application/json");
     let data = {};
     if (request.url?.startsWith("/kiosk/poll?")) {
       if (!modern) { response.statusCode = 404; data = { error: "Not found" }; }
-      else data = { protocol: 1, command: holdCommand ? { id: "synthetic-command", type: "reload_display" } : null,
+      else data = { protocol: 1, command: holdCommand ? { id: "synthetic-command", type: "reload_display" } : null, ...(enrollment ? { enrollment: enrollmentSession } : {}),
         configuration: { kiosk: { id: "synthetic-kiosk", name: "Dashboard configured name" }, settings: { authenticationMethod: method } },
         fingerprints: { reset: { status: "ok", commands: [] }, roster: { status: "ok", revision: 1, notModified: false, members: [{ memberId: "synthetic-member", rosterId: "synthetic-roster" }] }, peer: { status: "ok", enabled: false, syncId: null, deliveries: [] }, vault: { status: "ok", enabled: false, vaultId: null, catalogRevision: null } } };
+    }
+    else if (request.url === "/kiosk/enrollment") data = { enrollment: enrollmentSession };
+    else if (request.url === "/kiosk/enrollment/synthetic-session/progress") {
+      const chunks = []; for await (const chunk of request) chunks.push(chunk);
+      const input = JSON.parse(Buffer.concat(chunks).toString()); enrollmentProgress.push(input.status);
+      enrollmentSession = { ...enrollmentSession, progress: input.status }; data = { session: enrollmentSession };
     }
     else if (request.url === "/kiosk/config") {
       configurationStarted = true;
@@ -33,7 +43,18 @@ async function fixture(t, { method = "fingerprint", modern = false, holdConfigur
       if (holdCommand) await new Promise(resolve => { releaseCommand = resolve; });
       data = { completed: true };
     }
-    else if (request.url === "/kiosk/heartbeat") heartbeats++;
+    else if (request.url === "/kiosk/scan-reviews") {
+      const chunks = []; for await (const chunk of request) chunks.push(chunk);
+      const { records } = JSON.parse(Buffer.concat(chunks).toString());
+      reviewRequests.push(records);
+      if (reviewUnavailable) { response.statusCode = 404; data = { error: "Not found" }; }
+      else data = { reviews: records.map(record => ({ eventId: record.eventId, reviewStatus: "reviewed" })) };
+    }
+    else if (request.url === "/kiosk/heartbeat") {
+      heartbeats++;
+      const chunks = []; for await (const chunk of request) chunks.push(chunk);
+      heartbeatReports.push(JSON.parse(Buffer.concat(chunks).toString()));
+    }
     else if (request.url === "/kiosk/roster") {
       if (rosterMode === "offline") { response.statusCode = 503; data = { error: "Synthetic private error" }; }
       else data = { members: rosterMode === "missing" ? [] : [{ memberId: "synthetic-member", ...(rosterMode === "no_identity" ? {} : { rosterId: "synthetic-roster" }) }] };
@@ -62,14 +83,86 @@ async function fixture(t, { method = "fingerprint", modern = false, holdConfigur
     let sequence=0;
     async function reader(input={}) { const id=++sequence; return new Promise(resolve=>{const listener=message=>{if(message.id===id){child.off("message",listener);resolve(message);}};child.on("message",listener);child.send({...input,id});}); }
     const request=(path,input,headers={})=>fetch(`http://127.0.0.1:${port}${path}`,{method:input===undefined?"GET":"POST",headers:{"content-type":"application/json",...headers},...(input===undefined?{}:{body:JSON.stringify(input)}),signal:AbortSignal.timeout(5000)});
+    // These operator tests begin with an established attendance clock. Exercise
+    // the real PIN-protected confirmation without leaving maintenance unlocked.
+    if (confirmClock && !(await (await request("/health")).json()).clock.verified) {
+      assert.equal((await request("/network/unlock", { pin: "123456" })).status, 200);
+      const confirmed = await request("/maintenance/clock", { currentTime: new Date().toISOString() });
+      assert.ok(confirmed.ok || (await (await request("/health")).json()).clock.verified);
+      await fetch(`http://127.0.0.1:${port}/network/session`, { method: "DELETE" });
+    }
     async function presence(mode, previous) { const response=await request("/operator-presence",{action:previous?"transition":"enter",pageId:"synthetic-runtime-page",mode,...(previous?{generation:previous.generation}:{})});assert.equal(response.status,200);return response.json(); }
     return { child, request, reader, presence };
   }
-  return { root, start, attendance, roster: mode=>{rosterMode=mode;}, heartbeats:()=>heartbeats,
+  return { root, start, attendance, reviewRequests, heartbeatReports, enrollmentProgress, roster: mode=>{rosterMode=mode;}, heartbeats:()=>heartbeats,
     configurationStarted: () => configurationStarted, commandStarted: () => commandStarted,
     releaseConfiguration: () => { holdConfiguration = false; releaseConfiguration?.(); }, releaseCommand: () => { holdCommand = false; releaseCommand?.(); },
   };
 }
+
+test("a real kiosk synchronizes retained review evidence and applies acknowledgement without attendance writes", { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  const record = { eventId: "synthetic-rejected", memberId: "synthetic-member", occurredAt: "2026-01-01T00:00:00.000Z", reasonCode: "clock_unverified", httpStatus: null, reviewStatus: "open" };
+  await writeFile(join(f.root, "attendance-queue.json.outcomes.json"), JSON.stringify({ version: 1, accepted: 0, duplicate: 0, rejected: [record], pendingAck: null, historyComplete: true }), { mode: 0o600 });
+  const runtime = await f.start();
+  await until(() => f.reviewRequests.length === 1);
+  assert.deepEqual(f.reviewRequests[0], [record]);
+  await until(async () => (await (await runtime.request("/health")).json()).attendance.needsReview === 0);
+  const saved = JSON.parse(await readFile(join(f.root, "attendance-queue.json.outcomes.json"), "utf8"));
+  assert.equal(saved.rejected[0].reviewStatus, "reviewed");
+  assert.equal(saved.rejected[0].occurredAt, record.occurredAt);
+  assert.equal(f.attendance.length, 0);
+});
+
+test("an older review API leaves attendance delivery active and reports review sync failure to administrators", { timeout: 15000 }, async t => {
+  const f = await fixture(t, { reviewUnavailable: true });
+  const record = { eventId: "synthetic-rejected", memberId: "synthetic-member", occurredAt: "2026-01-01T00:00:00.000Z", reasonCode: "clock_unverified", httpStatus: null, reviewStatus: "open" };
+  await writeFile(join(f.root, "attendance-queue.json.outcomes.json"), JSON.stringify({ version: 1, accepted: 0, duplicate: 0, rejected: [record], pendingAck: null, historyComplete: true }), { mode: 0o600 });
+  await writeFile(join(f.root, "attendance-queue.json"), JSON.stringify([{ eventId: "synthetic-pending", memberId: "synthetic-member", pairingId: "synthetic-pairing", occurredAt: "2026-01-01T08:00:00.000Z", clock: { version: 1, verified: true } }]), { mode: 0o600 });
+  const runtime = await f.start();
+  await until(() => f.heartbeatReports.length > 0);
+  assert.equal(f.attendance.length, 1);
+  assert.equal(f.heartbeatReports[0].errorCategory, "cloud_sync");
+  const health = await (await runtime.request("/health")).json();
+  assert.equal(health.cloudOnline, true);
+  assert.equal(health.attendance.pending, 0);
+  assert.equal(health.attendance.needsReview, 1);
+  const saved = JSON.parse(await readFile(join(f.root, "attendance-queue.json.outcomes.json"), "utf8"));
+  assert.deepEqual(saved.rejected, [record]);
+});
+
+test("a real kiosk pauses scans until the operator confirms the offline boot clock", { timeout: 15000 }, async t => {
+  const f = await fixture(t, { confirmClock: false }), runtime = await f.start();
+  let presence = await runtime.presence("attendance");
+  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true }); await wait(350);
+  assert.equal(f.attendance.length, 0);
+  assert.equal((await (await runtime.request("/display-state")).json()).display.id, "clock_required");
+  assert.equal((await runtime.request("/maintenance/clock", { currentTime: new Date().toISOString() })).status, 403);
+  presence = await runtime.presence("maintenance", presence);
+  await runtime.request("/network/unlock", { pin: "123456" });
+  assert.equal((await runtime.request("/maintenance/clock", { currentTime: new Date().toISOString() })).status, 200);
+  await runtime.presence("attendance", presence);
+  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+  await until(() => f.attendance.length === 1);
+  assert.equal((await (await runtime.request("/display-state")).json()).clock.source, "operator");
+});
+
+test("dashboard enrollment in a real service never unlocks local maintenance or replaces occupied slots", { timeout: 15000 }, async t => {
+  const f = await fixture(t, { modern: true, enrollment: true }), runtime = await f.start();
+  await until(async () => Boolean((await (await runtime.request("/display-state")).json()).enrollment));
+  assert.equal((await (await runtime.request("/maintenance/session")).json()).authorized, false);
+  assert.equal((await runtime.request("/sensor/test", {})).status, 403);
+  assert.equal((await runtime.request("/maintenance/enrollment/synthetic-session/confirm", { slot: 0 })).status, 409);
+  assert.equal((await runtime.reader()).enrollCalls, 0);
+  assert.equal((await runtime.request("/maintenance/enrollment/synthetic-session/confirm", {}, { origin: "https://untrusted.example" })).status, 403);
+  const response = await runtime.request("/maintenance/enrollment/synthetic-session/confirm", {});
+  assert.equal(response.status, 201, await response.clone().text()); assert.equal((await response.json()).slot, 1);
+  assert.deepEqual(f.enrollmentProgress, ["awaiting_confirmation", "enroll_wait_first", "enroll_remove", "enroll_wait_second", "enroll_success"]);
+  assert.equal((await (await runtime.request("/maintenance/session")).json()).authorized, false);
+  assert.equal((await runtime.request("/sensor/test", {})).status, 403);
+  const mappings = JSON.parse(await readFile(join(f.root, "slot-mappings.json"), "utf8"));
+  assert.equal(mappings[0].memberId, "synthetic-member"); assert.equal(mappings[1].rosterId, "synthetic-roster");
+});
 
 test("real service starts sync immediately, persists name, and gates held fingers across restart", {timeout:20000}, async t => {
   const f=await fixture(t); let runtime=await f.start();

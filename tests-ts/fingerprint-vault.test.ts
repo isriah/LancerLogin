@@ -733,8 +733,19 @@ test("catalog refresh discovers early sorted enrollments immediately and batches
     const metadata = (await poll.poll({ fingerprints: true })).fingerprints!;
     return controller.tick({ ...metadata.vault, roster: metadata.roster });
   };
-  for (let i = 0; i < 12; i++) {
-    assert.equal((await f.call("/kiosk/fingerprint-vault/templates", { vaultId, memberId: "SYN-001", rosterId: "member", enrollmentId: `synthetic-refresh-${i}`, template: fingerprintVaultBase64(new Uint8Array(1536).fill(i + 20)) }, "source-token")).status, 200);
+  // Reserve the smallest of a fixed candidate set before uploading anything.
+  // Searching for an ID below a random existing minimum can exhaust any bound.
+  const keyId = await fingerprintVaultKeyId(vaultSecret);
+  const candidates = await Promise.all(Array.from({ length: 13 }, async (_, i) => {
+    const enrollmentId = `synthetic-refresh-${i}`;
+    const id = await fingerprintVaultEnrollmentId({ vaultId, keyId, memberId: "member", sourceKioskId: "source", sourcePairingId: "pair-a", enrollmentId, templateDigest: "", createdAt: 0 });
+    return { enrollmentId, id };
+  }));
+  candidates.sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+  const [earliest, ...initial] = candidates;
+  assert.ok(initial.every(candidate => candidate.id > earliest.id));
+  for (const [i, candidate] of initial.entries()) {
+    assert.equal((await f.call("/kiosk/fingerprint-vault/templates", { vaultId, memberId: "SYN-001", rosterId: "member", enrollmentId: candidate.enrollmentId, template: fingerprintVaultBase64(new Uint8Array(1536).fill(i + 20)) }, "source-token")).status, 200);
   }
   destination.models.set(29, new Uint8Array(1536).fill(250));
   const controller = make();
@@ -746,14 +757,8 @@ test("catalog refresh discovers early sorted enrollments immediately and batches
   await tick(make()); assert.equal(batchReads, 2); assert.equal(catalogReads, 1);
   // Add a new enrollment whose ID sorts before the old final page.
   const firstId = String(f.db.sqlite.prepare("SELECT min(fingerprint_id) AS id FROM kiosk_fingerprint_vault_templates").get()?.id);
-  let enrollmentId = "";
-  for (let i = 0; i < 10000; i++) {
-    const candidate = `synthetic-before-cursor-${i}`;
-    const id = await fingerprintVaultEnrollmentId({ vaultId, keyId: await fingerprintVaultKeyId(vaultSecret), memberId: "member", sourceKioskId: "source", sourcePairingId: "pair-a", enrollmentId: candidate, templateDigest: "", createdAt: 0 });
-    if (id < firstId) { enrollmentId = candidate; break; }
-  }
-  assert.ok(enrollmentId, "construct a new enrollment before every existing catalog entry");
-  const uploaded = await f.call("/kiosk/fingerprint-vault/templates", { vaultId, memberId: "SYN-001", rosterId: "member", enrollmentId, template: fingerprintVaultBase64(new Uint8Array(1536).fill(99)) }, "source-token");
+  assert.ok(earliest.id < firstId, "reserved enrollment precedes every existing catalog entry");
+  const uploaded = await f.call("/kiosk/fingerprint-vault/templates", { vaultId, memberId: "SYN-001", rosterId: "member", enrollmentId: earliest.enrollmentId, template: fingerprintVaultBase64(new Uint8Array(1536).fill(99)) }, "source-token");
   assert.equal(uploaded.status, 200); assert.ok((await uploaded.json() as any).fingerprintId < firstId);
   const result = await tick(controller); assert.equal(result.received, 1); assert.equal(result.pendingDownloads, 0); assert.equal(catalogReads, 2); assert.equal(batchReads, 3);
   for (const [slot, model] of existing) assert.deepEqual(destination.models.get(slot), model);

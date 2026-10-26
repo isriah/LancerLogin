@@ -5,6 +5,7 @@ import { useDashboardLoadingOverlay } from "./loading-overlay";
 import { calendarDeliveryMessage, type CalendarDelivery, type CalendarSync, type PendingMeetingDeletion } from "./meeting-management";
 import { clearMeetingDeletion, readMeetingDeletion } from "./meeting-deletion-undo";
 import { MeetingCreationDialog, MeetingsPage, type Meeting, type MeetingTableState } from "./meetings-page";
+import { useCalendarSelection, type CalendarSelection } from "./calendar-selection";
 import { CalendarViewToggle, MonthCalendar } from "./mobile-calendar";
 import { CarpoolMarker, useCarpoolMeetingLinks } from "./carpool-meeting-links";
 
@@ -20,20 +21,21 @@ export function HomePage({ navigate, discordEnabled, onWalkthroughChange, debugM
   const carpoolLinks = useCarpoolMeetingLinks(meetings);
   const [noticeTone, setNoticeTone] = useState<"neutral" | "success" | "error">("neutral");
   const [meetingView, setMeetingView] = useState<MeetingView>(() => window.localStorage.getItem(dashboardMeetingViewKey) === "table" ? "table" : "calendar");
-  const [calendarOffset, setCalendarOffset] = useState(0); const [creating, setCreating] = useState(false); const [creationNotice, setCreationNotice] = useState("");
+  const [creating, setCreating] = useState(false); const [creationNotice, setCreationNotice] = useState("");
   const [undo, setUndo] = useState<PendingMeetingDeletion | undefined>(readMeetingDeletion);
   const [undoBusy, setUndoBusy] = useState(false); const [deleteBusy, setDeleteBusy] = useState(false); const restoring = useRef(false); const mounted = useRef(true);
   useEffect(() => { mounted.current = true; clearMeetingDeletion(); return () => { mounted.current = false; }; }, []);
   const [tableState, setTableState] = useState<MeetingTableState>({ search: "", selectedIds: [] });
   const walkthrough = usePageWalkthrough("dashboard", notice === "" && !undo && !creating);
   const active = walkthrough.phase === "active";
+  const [calendarSelection, setCalendarSelection] = useCalendarSelection("lancerlogin-dashboard-calendar", dayKey(new Date()), !active);
   const step = active ? dashboardWalkthrough[walkthrough.stepIndex] : undefined;
   const shownView = active && walkthrough.stepIndex < 3 ? "calendar" : active && walkthrough.stepIndex >= 4 && walkthrough.stepIndex < 6 ? "table" : meetingView;
   const practiceForm = active && walkthrough.stepIndex >= 6;
-  const savedState = useRef<{ view: MeetingView; offset: number; table: MeetingTableState } | undefined>(undefined);
+  const savedState = useRef<{ view: MeetingView; calendar: CalendarSelection; table: MeetingTableState } | undefined>(undefined);
   const dashboardHeading = useRef<HTMLHeadingElement>(null);
   function startWalkthrough(restart = false) {
-    savedState.current = { view: meetingView, offset: calendarOffset, table: tableState };
+    savedState.current = { view: meetingView, calendar: calendarSelection, table: tableState };
     walkthrough.start(restart);
   }
   useEffect(() => {
@@ -42,7 +44,7 @@ export function HomePage({ navigate, discordEnabled, onWalkthroughChange, debugM
   useEffect(() => () => onWalkthroughChange({ open: false, navigation: false }), [onWalkthroughChange]);
   useEffect(() => {
     if (!active && savedState.current) {
-      setMeetingView(savedState.current.view); setCalendarOffset(savedState.current.offset); setTableState(savedState.current.table); savedState.current = undefined;
+      setMeetingView(savedState.current.view); setCalendarSelection(savedState.current.calendar); setTableState(savedState.current.table); savedState.current = undefined;
     }
     if (walkthrough.phase === "idle") dashboardHeading.current?.focus();
   }, [active, walkthrough.stepIndex, walkthrough.phase]);
@@ -76,7 +78,7 @@ export function HomePage({ navigate, discordEnabled, onWalkthroughChange, debugM
     {(creationNotice || notice) && <p className="setup-status ui-status dashboard-meeting-status" data-tone={noticeTone} role="status">{creationNotice || notice}</p>}
     {undo && <div className="undo-meeting ui-status" data-tone={undo.calendarDelivery?.google_calendar.failed || undo.calendarDelivery?.discord.failed || undo.calendarSync?.failed ? "error" : "success"} role="status"><span>{undo.message}{calendarDeliveryMessage(undo.calendarDelivery, undo.calendarSync)}</span><button className="ui-button" type="button" disabled={undoBusy || deleteBusy} onClick={() => void restore()}>{undoBusy ? "Restoring…" : "Undo"}</button></div>}
     {shownView === "table" && <section className="meeting-browser-controls compact-table-controls ui-card" aria-label="Meeting browser controls"><label data-walkthrough="meeting-picker" className="meeting-browser-select"><span>Meeting</span><select className="ui-control ui-native-select" value="" onChange={(event) => { if (event.target.value) openMeeting(`/meetings/${encodeURIComponent(event.target.value)}`); }}><option value="">Choose a meeting</option>{meetings.map((meeting) => <option key={meeting.id} value={meeting.id}>{new Date(meeting.startsAt).toLocaleDateString()} · {meeting.title}</option>)}</select></label><button className="primary-button" type="button" onClick={addMeeting}><span aria-hidden="true">+ </span>Add meeting</button></section>}
-    {shownView === "calendar" ? <MonthCalendar title="Meeting calendar" id="calendar-title" showToday today={dayKey(new Date())} offset={calendarOffset} onOffset={setCalendarOffset} items={[...meetings].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))} itemDate={meeting => dayKey(new Date(meeting.startsAt))} emptyText="No meetings scheduled." action={<button className="primary-button" type="button" onClick={addMeeting}><span aria-hidden="true">+ </span>Add meeting</button>} renderItem={meeting => <article className="calendar-selected-record" key={meeting.id}><strong className="carpool-meeting-title">{meeting.title}<CarpoolMarker count={carpoolLinks.filter(link => link.meetingId === meeting.id).length} /></strong><p>{new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} - {new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · {meeting.required ? "Required" : "Optional"}</p>{meeting.notes && <p>{meeting.notes}</p>}<button className="ui-button" data-walkthrough="calendar-entry" type="button" onClick={() => openMeeting(`/meetings/${encodeURIComponent(meeting.id)}`)}>Open meeting<span className="visually-hidden"> {meeting.title}</span></button></article>} /> : <MeetingsPage state={tableState} onStateChange={setTableState} practice={active} discordEnabled={discordEnabled} navigate={openMeeting} embedded meetings={meetings} onMeetingsChange={load} onDeleted={deleted} deleteDisabled={undoBusy} onDeleteBusyChange={setDeleteBusy} />}
+    {shownView === "calendar" ? <MonthCalendar title="Meeting calendar" id="calendar-title" showToday today={dayKey(new Date())} selection={calendarSelection} onSelectionChange={setCalendarSelection} items={[...meetings].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))} itemDate={meeting => dayKey(new Date(meeting.startsAt))} emptyText="No meetings scheduled." action={<button className="primary-button" type="button" onClick={addMeeting}><span aria-hidden="true">+ </span>Add meeting</button>} renderItem={meeting => <article className="calendar-selected-record" key={meeting.id}><strong className="carpool-meeting-title">{meeting.title}<CarpoolMarker count={carpoolLinks.filter(link => link.meetingId === meeting.id).length} /></strong><p>{new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} - {new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · {meeting.required ? "Required" : "Optional"}</p>{meeting.notes && <p>{meeting.notes}</p>}<button className="ui-button" data-walkthrough="calendar-entry" type="button" onClick={() => openMeeting(`/meetings/${encodeURIComponent(meeting.id)}`)}>Open meeting<span className="visually-hidden"> {meeting.title}</span></button></article>} /> : <MeetingsPage state={tableState} onStateChange={setTableState} practice={active} discordEnabled={discordEnabled} navigate={openMeeting} embedded meetings={meetings} onMeetingsChange={load} onDeleted={deleted} deleteDisabled={undoBusy} onDeleteBusyChange={setDeleteBusy} />}
     <MeetingCreationDialog key={practiceForm ? "practice" : "live"} practice={practiceForm} open={creating || practiceForm} meetings={meetings} discordEnabled={discordEnabled} onClose={() => practiceForm ? walkthrough.exit() : setCreating(false)} onCreated={created} />
     {walkthrough.phase === "idle" && !walkthrough.loading && !creating && !undo && notice === "" && <WalkthroughDebugReset debugMode={debugMode} disabled={false} onReset={walkthrough.reset} />}
     {walkthrough.phase !== "idle" && <WalkthroughPanel step={step} onExit={walkthrough.exit} label={step ? "Dashboard walkthrough" : walkthrough.phase === "complete" ? "Walkthrough complete" : "Get ready for your next meeting"}>

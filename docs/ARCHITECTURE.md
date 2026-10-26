@@ -46,6 +46,7 @@ Compatible kiosks combine background reads through `/kiosk/poll`: commands every
 - Pairing codes are single-use, time-limited, hashed at rest, and bound to one installation.
 - Dashboard-to-Pi recovery accepts four short-lived enumerated commands only; it provides no remote shell or arbitrary arguments.
 - Network and authentication maintenance controls are loopback-only, protected by a locally salted and rate-limited PIN, and backed by narrow Polkit permissions.
+- An Admin can start a five-minute fingerprint enrollment session for one online kiosk from the dashboard. The kiosk confirms the member locally and uses a free reader slot for two scans. This session grants enrollment only, not general maintenance access. Every delivery checks current pairing, creator and member authority; sessions are operational state excluded from portable backups.
 - Worker session tokens use Secure, HTTP-only, SameSite=Strict cookies through the same-origin Pages proxy; OAuth ID tokens are verified server-side.
 - Every permission-sensitive API path reloads the active user and current role from D1 before checking Admin or Operator capability.
 - Destructive actions require an explicit confirmation phrase and immutable audit record.

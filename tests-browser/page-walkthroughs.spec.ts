@@ -218,6 +218,11 @@ for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, 
     for (let index = 0; index < 12; index++) {
       await expect(panel(page)).toContainText(`Step ${index + 1} of 12`);
       await expect(page.locator(".walkthrough-highlight").first()).toBeVisible();
+      if (index === 2) {
+        await expect(panel(page)).toContainText("Adding a kiosk preserves every existing kiosk and its credential.");
+        await expect(panel(page)).toContainText("Retire an old device separately");
+        await expect(panel(page)).not.toContainText("retires the old credential");
+      }
       if (index === 4 || index === 8) await page.screenshot({ path: testInfo.outputPath(`kiosk-step-${index + 1}.png`) });
       await panel(page).getByRole("button", { name: "Next", exact: true }).click();
     }
@@ -238,3 +243,30 @@ test("legacy roster summary resumes at filters and finishes without an empty pan
   await expect(panel(page)).toContainText("You're ready to work with the roster");
   await expect.poll(() => state.progress.status).toBe("completed");
 });
+
+for (const story of stories.filter(item => ["roster", "reports"].includes(item.pageId))) {
+  test(`${story.pageId} Not now defers only the current tab session without saving permanent dismissal`, async ({ page, browser, baseURL }) => {
+    const state = { progress: { pageId: story.pageId, version: 1, status: "not_started", stepId: null } as Progress };
+    await walkthroughAccount(page, story.pageId, state);
+    const writes: string[] = [];
+    page.on("request", request => { if (request.method() === "PATCH" && request.url().includes("/auth/walkthroughs/")) writes.push(request.url()); });
+    await page.goto(story.path);
+    await panel(page).getByRole("button", { name: "Not now", exact: true }).click();
+    await page.getByRole("link", { name: "Meetings", exact: true }).click();
+    await page.getByRole("link", { name: story.pageId === "roster" ? "Roster" : "Reports", exact: true }).click();
+    await expect(page.locator(story.root)).toHaveAttribute("data-walkthrough-ready", "true");
+    await expect(panel(page)).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator(story.root)).toHaveAttribute("data-walkthrough-ready", "true");
+    await expect(panel(page)).toHaveCount(0);
+    expect(writes).toEqual([]);
+    expect(state.progress.status).toBe("not_started");
+    const otherContext = await browser.newContext({ baseURL });
+    try {
+      const other = await otherContext.newPage();
+      await walkthroughAccount(other, story.pageId, state);
+      await other.goto(story.path);
+      await expect(panel(other)).toContainText(story.welcome);
+    } finally { await otherContext.close(); }
+  });
+}

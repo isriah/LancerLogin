@@ -43,6 +43,7 @@ Stable is the default update track. Admins can explicitly opt in to Beta without
 - [Privacy](docs/PRIVACY.md) and [security](docs/SECURITY.md)
 - [Release notes](docs/releases/README.md)
 - [Local development and verification](docs/DEVELOPMENT.md)
+- [Authoring bundled modules](docs/MODULE-AUTHORING.md)
 
 ## Support
 

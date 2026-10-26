@@ -1,3 +1,4 @@
+import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
 import { bundledModuleRegistry } from "../packages/shared/src/module-platform.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -720,16 +721,16 @@ test("portable publication snapshots validate before restore and adapt schema 35
     const session = await createSessionCodec("A".repeat(43)).issue({ userId: "admin", role: "admin" }); const cookie = `lancerlogin_session=${session}`;
     const result = await worker.fetch(new Request("https://synthetic.test/admin/data/backup?scope=installation", { headers: { cookie } }), env); assert.equal(result.status, 200, await result.clone().text());
     const backup = await result.json() as { schemaVersion: number; tables: Record<string, Array<Record<string, unknown>>> };
-    assert.equal(backup.schemaVersion, 40); const snapshot = JSON.parse(String(backup.tables.hours_publication_operations![0]!.event_snapshot_json)); assert.equal(snapshot.allDay, true);
+    assert.equal(backup.schemaVersion, 41); const snapshot = JSON.parse(String(backup.tables.hours_publication_operations![0]!.event_snapshot_json)); assert.equal(snapshot.allDay, true);
     const restore = (value: unknown) => worker.fetch(new Request("https://synthetic.test/admin/data/restore", { method: "POST", headers: { cookie, origin: "https://synthetic.test", "content-type": "application/json" }, body: JSON.stringify({ scope: "installation", confirmation: "RESTORE INSTALLATION", backup: value }) }), env);
     const corrupted = structuredClone(backup); corrupted.tables.hours_publication_operations![0]!.event_snapshot_json = JSON.stringify({ ...snapshot, activityId: "unrelated" });
     const rejected = await restore(corrupted); assert.equal(rejected.status, 400, await rejected.clone().text()); assert.match(await rejected.text(), /publication snapshots/); assert.equal(database.sqlite.prepare("SELECT status FROM hours_publication_operations WHERE activity_id=?").get(id)?.status, "pending");
     const currentRestore = await restore(backup); assert.equal(currentRestore.status, 200, await currentRestore.clone().text());
     const currentRow = database.sqlite.prepare("SELECT status,event_snapshot_json,next_attempt_at FROM hours_publication_operations WHERE activity_id=?").get(id)!; assert.equal(JSON.parse(String(currentRow.event_snapshot_json)).allDay, true); assert.equal(currentRow.status, "failed"); assert.equal(currentRow.next_attempt_at, null);
-    const legacy = structuredClone(backup); legacy.schemaVersion = 35; for (const row of legacy.tables.hours_publication_operations!) delete row.event_snapshot_json;
+    const legacy = structuredClone(backup); legacy.schemaVersion = 35; omitContestResubmissionFields(legacy); for (const row of legacy.tables.hours_publication_operations!) delete row.event_snapshot_json;
     const restored = await restore(legacy); assert.equal(restored.status, 200, await restored.clone().text());
     const retained = database.sqlite.prepare("SELECT status,event_snapshot_json,next_attempt_at FROM hours_publication_operations WHERE activity_id=?").get(id)!; assert.equal(retained.event_snapshot_json, null); assert.equal(retained.status, "failed"); assert.equal(retained.next_attempt_at, null);
-    const legacy28 = structuredClone(backup); legacy28.schemaVersion = 28;
+    const legacy28 = structuredClone(backup); legacy28.schemaVersion = 28; omitContestResubmissionFields(legacy28);
     for (const table of Object.keys(legacy28.tables).filter(table => table.startsWith("carpool_"))) delete legacy28.tables[table];
     for (const table of ["platform_module_epochs", "platform_modules", "platform_module_assignments", "platform_module_setup_progress"]) legacy28.tables[table] = legacy28.tables[table]!.filter(row => row.module_id !== "carpool");
     delete legacy28.tables.carpool_settings; delete legacy28.tables.hours_public_form_settings; delete legacy28.tables.hours_labels; delete legacy28.tables.hours_activity_labels; delete legacy28.tables.hours_publication_settings;

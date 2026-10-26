@@ -90,16 +90,24 @@ export function createFileQueue(path) {
     await recoverPendingAck();
   }
 
-  async function drain(send) {
+  async function drain(send, prepare) {
     const delivered = [];
     while (true) {
+      let prepared;
       const event = await exclusive(async () => {
         await load();
+        if (events[0] && prepare) {
+          prepared = await prepare({ ...events[0] });
+          if (prepared?.event && JSON.stringify(prepared.event) !== JSON.stringify(events[0])) {
+            if (prepared.event.eventId !== events[0].eventId) throw new Error("Prepared scan identity changed");
+            await persistQueue([prepared.event, ...events.slice(1)]);
+          }
+        }
         return events[0] && { ...events[0] };
       });
-      if (!event) return delivered;
+      if (!event || prepared?.deferred) return delivered;
       let result;
-      try { result = await send(event); } catch { return delivered; }
+      try { result = prepared?.rejected ? prepared : await send(event); } catch { return delivered; }
       await exclusive(async () => {
         if (events[0]?.eventId !== event.eventId) throw new Error("Attendance queue changed during replay");
         const updated = { ...outcomes, rejected: [...outcomes.rejected], pendingAck: { eventId: event.eventId } };
@@ -107,6 +115,7 @@ export function createFileQueue(path) {
           updated.rejected.push({ eventId: event.eventId, memberId: event.memberId, occurredAt: event.occurredAt,
             ...(event.meetingId ? { meetingId: event.meetingId } : {}),
             ...(event.pairingId ? { pairingId: event.pairingId } : {}),
+            ...(event.clock ? { clock: { ...event.clock } } : {}),
             httpStatus: Number.isInteger(result.status) ? result.status : null,
             reasonCode: /^[a-z][a-z0-9_]{0,39}$/.test(result.code ?? "") ? result.code : "unclassified",
             reviewStatus: "open" });
@@ -141,7 +150,8 @@ export function createFileQueue(path) {
         await load();
         return { saved: events.length + outcomes.accepted + outcomes.duplicate + outcomes.rejected.length,
           pending: events.length, accepted: outcomes.accepted, duplicate: outcomes.duplicate,
-          rejected: outcomes.rejected.length, historyComplete: outcomes.historyComplete };
+          rejected: outcomes.rejected.length, needsReview: outcomes.rejected.filter(record => record.reviewStatus !== "reviewed").length,
+          clockPending: events.filter(event => event.clock?.verified === false).length, historyComplete: outcomes.historyComplete };
       });
     },
     rejections() {
@@ -162,8 +172,8 @@ export function createFileQueue(path) {
         return true;
       });
     },
-    flush(send) {
-      if (!flushing) flushing = drain(send).finally(() => { flushing = undefined; });
+    flush(send, { prepare } = {}) {
+      if (!flushing) flushing = drain(send, prepare).finally(() => { flushing = undefined; });
       return flushing;
     },
   };

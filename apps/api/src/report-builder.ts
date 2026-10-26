@@ -1,5 +1,5 @@
 import { localDate, type AttendanceRule, type PolicyCompliance, type PolicyHistory, type PolicyLabel, type PolicyMeeting, type PolicyMemberResult } from "./attendance-policy.ts";
-import { bundledModuleRegistry, coreReportDatasets, type ReportDatasetDefinition, type ReportDurationUnit, type ReportFieldDefinition } from "../../../packages/shared/src/module-platform.ts";
+import { bundledModuleRegistry, coreReportDatasets, type ReportDatasetDefinition, type ReportDurationUnit, type ReportFieldDefinition, type ReportFilterOperator } from "../../../packages/shared/src/module-platform.ts";
 
 export type ReportScope = "personal" | "shared";
 export type ReportPeriod =
@@ -16,7 +16,7 @@ export type LegacyReportColumnKey =
   | "report_policy_summary" | "report_policy_result" | "report_policy_status" | "report_policy_target" | "report_policy_period" | "policy_history"
   | "present_count" | "present_dates" | "absent_count" | "absent_dates" | "excused_count" | "excused_dates";
 export type ReportColumn = { key: string; labelId?: string; unit?: ReportDurationUnit };
-export type ReportColumnFilter = { column: ReportColumn; operator: "contains" | "minimum"; value: string };
+export type ReportColumnFilter = { column: ReportColumn; operator: ReportFilterOperator; value: string; upperValue?: string };
 type ReportDefinitionBase = {
   period: ReportPeriod;
   roster: "active" | "all";
@@ -36,7 +36,7 @@ export type ReportDefinitionV1 = ReportDefinitionBase & {
 export type ReportDefinitionV2 = ReportDefinitionBase & { version: 2; dataset: string; groupBy: string[] };
 export type ReportDefinition = ReportDefinitionV1 | ReportDefinitionV2;
 export type NormalizedReportDefinition = ReportDefinitionV2;
-export type ReportCell = { text: string; sortValue: string | number | null; dates?: string[]; unavailable?: boolean; explanation?: string };
+export type ReportCell = { text: string; sortValue: string | number | null; dates?: string[]; empty?: boolean; unavailable?: boolean; explanation?: string };
 export type ReportResultRow = { id: string; label: string; href?: string; member?: { id: string; memberId: string; name: string }; cells: Record<string, ReportCell> };
 export type ReportColumnCatalogItem = { key: string; label: string; group: string; sortable: boolean; filterKind: "text" | "number"; requiresLabel?: boolean; durationUnits?: readonly ReportDurationUnit[]; defaultDurationUnit?: ReportDurationUnit; datasets: string[] };
 
@@ -160,7 +160,7 @@ export function validateReportDefinition(value: unknown, labels: PolicyLabel[], 
   const requestedSortColumn = dataset ? parseColumn(input.sort?.column, dataset, legacy, knownLabels, allowMissingLabels, warnings) : undefined; const sortColumn = requestedSortColumn ? columns.find((column) => columnId(column) === columnId(requestedSortColumn)) : undefined; const direction = input.sort?.direction;
   if (!sortColumn || !["asc", "desc"].includes(String(direction)) || !fields.get(sortColumn.key)?.sortable) errors.push("Choose a visible sortable report column.");
   const rawColumnFilters = input.columnFilters ?? [];
-  const columnFilters = Array.isArray(rawColumnFilters) ? rawColumnFilters.flatMap((value) => {
+  const columnFilters = Array.isArray(rawColumnFilters) ? rawColumnFilters.flatMap((value): ReportColumnFilter[] => {
     if (!value || typeof value !== "object") return [];
     const candidate = value as Partial<ReportColumnFilter>;
     const column = dataset ? parseColumn(candidate.column, dataset, legacy, knownLabels, allowMissingLabels, warnings) : undefined;
@@ -168,8 +168,13 @@ export function validateReportDefinition(value: unknown, labels: PolicyLabel[], 
     const item = visibleColumn ? fields.get(visibleColumn.key) : undefined;
     const operator = candidate.operator;
     const filterValue = typeof candidate.value === "string" ? candidate.value.trim() : "";
-    if (!visibleColumn || !item || !filterValue || filterValue.length > 100 || !item.filterOperators.includes(operator as "contains" | "minimum") || operator === "minimum" && !Number.isFinite(Number(filterValue))) return [];
-    return [{ column: visibleColumn, operator, value: filterValue } as ReportColumnFilter];
+    const upperValue = typeof candidate.upperValue === "string" ? candidate.upperValue.trim() : "";
+    if (!visibleColumn || !item || !operator || !item.filterOperators.includes(operator)) return [];
+    if (operator === "empty" || operator === "not_empty") return [{ column: visibleColumn, operator, value: "" }];
+    const validValue = (value: string) => Boolean(value) && value.length <= 100 && (item.valueType === "number" ? Number.isFinite(Number(value)) : item.valueType === "date" && operator !== "contains" ? /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value : true);
+    if (!validValue(filterValue)) return [];
+    if (operator === "between" && (!validValue(upperValue) || (item.valueType === "number" ? Number(filterValue) > Number(upperValue) : filterValue > upperValue))) return [];
+    return [{ column: visibleColumn, operator, value: filterValue, ...(operator === "between" ? { upperValue } : {}) }];
   }) : [];
   if (!Array.isArray(rawColumnFilters) || rawColumnFilters.length > 16 || columnFilters.length !== rawColumnFilters.length || new Set(columnFilters.map((filter) => columnId(filter.column))).size !== columnFilters.length) errors.push("Report column filters are invalid.");
   const requestedGroupBy = legacy ? dataset?.groupBy : Array.isArray(input.groupBy) ? input.groupBy.map((field) => typeof field === "string" ? canonicalField(field) : field) : input.groupBy;
@@ -236,25 +241,25 @@ export function buildReportRows(input: { definition: ReportDefinition; official:
         case "core.member.email": cell = { text: item.member.email ?? "", sortValue: item.member.email?.toLowerCase() ?? null }; break;
         case "core.member.discord-id": cell = { text: item.member.discordUserId ?? "", sortValue: item.member.discordUserId ?? null }; break;
         case "core.member.status": cell = { text: item.member.active ? "Active" : "Inactive", sortValue: item.member.active ? 1 : 0 }; break;
-        case "core.member.labels": { const names = full.currentLabelIds.map((labelId) => labelNames.get(labelId) ?? "Unavailable label").sort(); cell = { text: names.join("; ") || "None", sortValue: null }; break; }
+        case "core.member.labels": { const names = full.currentLabelIds.map((labelId) => labelNames.get(labelId) ?? "Unavailable label").sort(); cell = { text: names.join("; ") || "None", sortValue: null, empty: !names.length }; break; }
         case "attendance.member.required-from": cell = { text: item.member.attendanceRequiredFrom ?? "", sortValue: item.member.attendanceRequiredFrom ?? null }; break;
         case "attendance.member.regular-rate": cell = { text: percentage(item.regularAttendance.rate), sortValue: item.regularAttendance.rate }; break;
         case "attendance.member.weighted-present": cell = { text: String(item.regularAttendance.attended), sortValue: item.regularAttendance.attended }; break;
         case "attendance.member.weighted-eligible": cell = { text: String(item.regularAttendance.required), sortValue: item.regularAttendance.required }; break;
         case "attendance.member.regular-period": cell = { text: `${item.regularAttendance.from ?? "First eligible meeting"} to ${item.regularAttendance.to}`, sortValue: null }; break;
-        case "attendance.member.assigned-policies": cell = { text: full.currentCompliances.length ? full.currentCompliances.map(policyResult).join("; ") : "No assigned policy", sortValue: null }; break;
+        case "attendance.member.assigned-policies": cell = { text: full.currentCompliances.length ? full.currentCompliances.map(policyResult).join("; ") : "No assigned policy", sortValue: null, empty: !full.currentCompliances.length }; break;
         case "attendance.policy.official-result": cell = { text: policyResult(officialPolicy), sortValue: officialPolicy?.ruleType === "weekly_count" ? officialPolicy.attended : officialPolicy?.rate ?? null }; break;
         case "attendance.policy.official-status": cell = { text: officialPolicy ? statusText(officialPolicy.status) : "N/A", sortValue: officialPolicy?.status ?? null }; break;
         case "attendance.policy.official-target": cell = { text: officialPolicy?.threshold == null ? "N/A" : String(officialPolicy.threshold), sortValue: officialPolicy?.threshold ?? null }; break;
         case "attendance.policy.official-type": cell = { text: officialPolicy?.ruleType === "weekly_count" ? "Weekly count" : officialPolicy?.ruleType === "weighted_percentage" ? "Weighted percentage" : "N/A", sortValue: officialPolicy?.ruleType ?? null }; break;
         case "attendance.policy.official-excused": cell = { text: officialPolicy?.excusedHandling === "count_missed" ? "Count as missed" : officialPolicy?.excusedHandling === "exclude" ? "Exclude" : "N/A", sortValue: officialPolicy?.excusedHandling ?? null }; break;
         case "attendance.policy.official-period": cell = { text: officialPolicy && officialPolicy.status !== "no_rule" ? `${officialPolicy.from} to ${officialPolicy.to}` : "N/A", sortValue: null }; break;
-        case "attendance.policy.report-summary": cell = { text: item.historySummaries.length ? item.historySummaries.map(historyResult).join("; ") : "No policy results", sortValue: null }; break;
+        case "attendance.policy.report-summary": cell = { text: item.historySummaries.length ? item.historySummaries.map(historyResult).join("; ") : "No policy results", sortValue: null, empty: !item.historySummaries.length }; break;
         case "attendance.policy.report-result": cell = { text: periodPolicies.length ? periodPolicies.map(historyResult).join("; ") : "N/A", sortValue: periodPolicies.length === 1 ? periodPolicies[0].rate : null }; break;
         case "attendance.policy.report-status": cell = { text: periodPolicies.length === 1 ? statusText(periodPolicies[0].status) : periodPolicies.length ? "Multiple periods" : "N/A", sortValue: periodPolicies.length === 1 ? periodPolicies[0].status : null }; break;
         case "attendance.policy.report-target": { const target = ruleTarget(periodRule); cell = { text: target === null ? "N/A" : String(target), sortValue: target }; break; }
         case "attendance.policy.report-period": cell = { text: periodPolicies.length ? periodPolicies.map((summary) => historyPeriod(summary, input.from, input.to)).join("; ") : "N/A", sortValue: null }; break;
-        case "attendance.policy.history": cell = { text: full.historySummaries.length ? full.historySummaries.map(historyResult).join("; ") : "No policy history", sortValue: null }; break;
+        case "attendance.policy.history": cell = { text: full.historySummaries.length ? full.historySummaries.map(historyResult).join("; ") : "No policy history", sortValue: null, empty: !full.historySummaries.length }; break;
         case "attendance.detail.present-count": cell = { text: String(dates.present.length), sortValue: dates.present.length }; break;
         case "attendance.detail.present-dates": cell = { text: dates.present.join("; ") || "None", sortValue: null, dates: dates.present }; break;
         case "attendance.detail.absent-count": cell = { text: String(dates.absent.length), sortValue: dates.absent.length }; break;
@@ -272,9 +277,20 @@ export function buildReportRows(input: { definition: ReportDefinition; official:
 export function filterAndSortReportRows(definition: ReportDefinition, rows: ReportResultRow[]): ReportResultRow[] {
   const filteredRows = rows.filter((row) => (definition.columnFilters ?? []).every((filter) => {
     const cell = row.cells[columnId(filter.column)];
-    if (!cell) return false;
-    if (filter.operator === "minimum") return typeof cell.sortValue === "number" && cell.sortValue >= Number(filter.value);
-    return cell.text.toLocaleLowerCase().includes(filter.value.toLocaleLowerCase());
+    if (!cell || cell.unavailable) return false;
+    const numeric = fields.get(canonicalField(filter.column.key))?.valueType === "number";
+    const empty = cell.empty ?? (cell.dates ? !cell.dates.length : numeric ? cell.sortValue === null : !cell.text.trim() || cell.sortValue === null && cell.text === "N/A");
+    if (filter.operator === "empty") return empty;
+    if (filter.operator === "not_empty") return !empty;
+    if (filter.operator === "contains") return cell.text.toLocaleLowerCase().includes(filter.value.toLocaleLowerCase());
+    if (empty) return false;
+    const value = numeric ? Number(cell.sortValue) : cell.text.toLocaleLowerCase();
+    const lower = typeof value === "number" ? Number(filter.value) : filter.value.toLocaleLowerCase();
+    const upper = typeof value === "number" ? Number(filter.upperValue) : (filter.upperValue ?? "").toLocaleLowerCase();
+    if (filter.operator === "equals") return value === lower;
+    if (filter.operator === "minimum") return value >= lower;
+    if (filter.operator === "maximum") return value <= lower;
+    return value >= lower && value <= upper;
   }));
   const sortId = columnId(definition.sort.column), direction = definition.sort.direction === "asc" ? 1 : -1;
   return filteredRows.sort((left, right) => { const a = left.cells[sortId]?.sortValue ?? null, b = right.cells[sortId]?.sortValue ?? null; if (a === null && b !== null) return 1; if (a !== null && b === null) return -1; if (a === null && b === null) return left.label.localeCompare(right.label) || left.id.localeCompare(right.id); const compared = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b)); return compared * direction || left.label.localeCompare(right.label) || left.id.localeCompare(right.id); });

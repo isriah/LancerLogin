@@ -70,7 +70,13 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     const manager = card.locator(".discord-channel-manager");
     await expect(manager.getByRole("switch", { name: "Manage the configured attendance channel" })).toBeChecked();
     await expect(manager.getByLabel("Contest window (hours)")).toHaveValue("36");
+    const blockRecontests = manager.getByRole("checkbox", { name: "Block re-contests after rejection" });
+    await expect(blockRecontests).not.toBeChecked();
+    await blockRecontests.focus(); await page.keyboard.press("Space");
+    const savedManager = page.waitForRequest(request => request.url().endsWith("/admin/integrations/discord/channel-manager") && request.method() === "PATCH");
     await manager.getByRole("button", { name: "Save channel manager" }).click();
+    expect((await savedManager).postDataJSON()).toMatchObject({ blockRecontestsAfterRejection: true });
+    await expect(blockRecontests).toBeChecked();
     await expect(card.getByText("Discord channel manager settings saved.")).toBeVisible();
     const anomalyReports = card.locator(".discord-anomaly-reports");
     await expect(anomalyReports.getByRole("switch", { name: "Send private anomaly reports" })).toBeChecked();

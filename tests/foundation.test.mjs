@@ -105,10 +105,12 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /const backupSchemaVersion = 40;/);
-  assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -12\)/);
-  for (const [version, omitted] of [[8, 10], [9, 8], [10, 6], [15, 3]]) assert.match(source, new RegExp(`schemaVersion < ${version} && table === "organization_settings" \\? tableColumns\\.organization_settings\\.slice\\(0, -${omitted}\\)`));
-  assert.match(source, /schemaVersion < 31 && table === "organization_settings" \? tableColumns\.organization_settings\.slice\(0, -1\)/);
+  assert.match(source, /const backupSchemaVersion = 41;/);
+  assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -13\)/);
+  for (const [version, omitted] of [[8, 11], [9, 9], [10, 7], [15, 4], [31, 2], [41, 1]]) assert.match(source, new RegExp(`schemaVersion < ${version} && table === "organization_settings" \\? tableColumns\\.organization_settings\\.slice\\(0, -${omitted}\\)`));
+  assert.match(source, /table === "discord_attendance_contests" && schemaVersion < 41 \? tableColumns\.discord_attendance_contests\.slice\(0, schemaVersion === 1 \? -3 : -1\)/);
+  assert.match(source, /discord_block_recontests_after_rejection: 0/);
+  assert.match(source, /prior_reviews_json: "\[\]"/);
   assert.match(source, /Number\(value\.schemaVersion\) < 1 \|\| Number\(value\.schemaVersion\) > backupSchemaVersion/);
   assert.match(source, /legacy-restore-checkout:/);
   assert.match(source, /late_scan_minutes: 30, logo_backdrop: "auto"/);
@@ -319,7 +321,7 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   assert.match(ciWorkflow, /HEAD_COMMIT_MESSAGE.*Release\\ v\*/);
   assert.match(ciWorkflow, /outputs\.full == 'true'[\s\S]*kiosk-artifacts\.test\.mjs/);
   assert.match(ciWorkflow, /outputs\.full != 'true' && steps\.verification-scope\.outputs\.kiosk == 'true'/);
-  assert.equal((ciWorkflow.match(/npm ci --no-audit/g) ?? []).length, 2);
+  assert.equal((ciWorkflow.match(/npm ci --no-audit/g) ?? []).length, 3);
   assert.match(ciWorkflow, /schedule:[\s\S]*cron:/);
   assert.match(ciWorkflow, /workflow_dispatch:/);
   assert.match(ciWorkflow, /dependency-audit:[\s\S]*npm run audit:release/);

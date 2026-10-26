@@ -534,7 +534,10 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await expect(page).toHaveURL(/\/reports$/);
 });
 
-test("attendance requirement alerts appear in Reports instead of the Dashboard",async ({ page }) => {
+for (const viewport of dashboardConformanceReferences.viewports) for (const theme of dashboardConformanceReferences.themes) {
+test(`attendance requirement alerts use readable warning pills at ${viewport.width}px in ${theme} mode`,async ({ page }, testInfo) => {
+  await page.setViewportSize(viewport);
+  await page.addInitScript(savedTheme => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
   await useReferenceContext(page);
   await page.route("**/meetings",(route) => route.fulfill({ json: { meetings: [] } }));
   await page.route("**/discord/contests",(route) => route.fulfill({ json: { contests: [] } }));
@@ -552,8 +555,40 @@ test("attendance requirement alerts appear in Reports instead of the Dashboard",
   await expect(alerts.getByRole("heading",{ name: "Below attendance requirement" })).toBeVisible();
   await expect(alerts).toContainText("Avery Stone");
   await expect(alerts).toContainText("Class: 70% of 80% · below");
+  const pills = alerts.locator(".status-pill");
+  await expect(pills).toHaveCount(2);
+  for (const pill of await pills.all()) {
+    const style = await pill.evaluate(element => {
+      const css = getComputedStyle(element), rect = element.getBoundingClientRect();
+      const context = document.createElement("canvas").getContext("2d")!;
+      const normalize = (color: string) => { context.fillStyle = color; return context.fillStyle; };
+      const luminance = (color: string) => {
+        const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map(value => value / 255).map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+        return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
+      };
+      const foreground = luminance(css.color), background = luminance(css.backgroundColor);
+      return { radius: parseFloat(css.borderRadius), height: rect.height, padding: parseFloat(css.paddingInlineStart),
+        color: normalize(css.color), warning: normalize(css.getPropertyValue("--ui-warning")),
+        background: normalize(css.backgroundColor), warningSurface: normalize(css.getPropertyValue("--ui-warning-surface")),
+        contrast: (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05),
+        fits: rect.width <= element.parentElement!.getBoundingClientRect().width };
+    });
+    expect(style.radius).toBeGreaterThanOrEqual(style.height / 2);
+    expect(style.padding).toBeGreaterThan(0);
+    expect(style.color).toBe(style.warning);
+    expect(style.background).toBe(style.warningSurface);
+    expect(style.contrast).toBeGreaterThanOrEqual(4.5);
+    expect(style.fits).toBe(true);
+  }
+  const member = alerts.getByRole("link", { name: "Avery Stone" });
+  await member.focus();
+  await expect(member).toBeFocused();
+  expect(await member.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe("none");
+  await expectResponsiveFit(page);
+  await alerts.screenshot({ path: testInfo.outputPath(`requirement-pill-${viewport.width}-${theme}.png`) });
   expect(reportRequests).toBeGreaterThan(0);
 });
+}
 
 test("Admin member and import dialogs contain focus, report errors, and return focus with reduced motion",async ({ page }) => {
   await page.setViewportSize({ width: 390,height: 844 });

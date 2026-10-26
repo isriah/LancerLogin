@@ -18,7 +18,7 @@ import { ReportDataCache } from "./report-data-cache.ts";
 import { HttpError } from "./http-error.ts";
 import { fingerprintVaultRoute } from "./fingerprint-vault.ts";
 import { kioskPoll } from "./kiosk-poll.ts";
-import { syncKioskScanReviews, listKioskScanReviews, markKioskScanReviewed } from "./kiosk-scan-reviews.ts";
+import { syncKioskScanReviews, listKioskScanReviews, markKioskScanReviewed, markKioskScansReviewed } from "./kiosk-scan-reviews.ts";
 import { readKioskEnrollment, startKioskEnrollment, selectEnrollmentMember, cancelKioskEnrollment, progressKioskEnrollment } from "./kiosk-enrollment.ts";
 import { fingerprintResetRoute } from "./fingerprint-reset.ts";
 import { bundledModuleRegistry } from "../../../packages/shared/src/module-platform.ts";
@@ -3845,7 +3845,12 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     }
     else if (url.pathname === "/admin/kiosks/scan-reviews" && request.method === "GET") {
       await requireRole(request, env, ["admin"]);
-      result = response(await listKioskScanReviews(requireDatabase(env), url.searchParams.get("status") ?? "open", Number(url.searchParams.get("offset") ?? 0)));
+      result = response(await listKioskScanReviews(requireDatabase(env), url.searchParams.get("status") ?? "open", Number(url.searchParams.get("offset") ?? 0), url.searchParams.get("kioskId") ?? "", url.searchParams.get("reasonCode") ?? ""));
+    }
+    else if (url.pathname === "/admin/kiosks/scan-reviews/review" && request.method === "POST") {
+      const principal = await requireRole(request, env, ["admin"]);
+      if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Scan review requires the dashboard origin");
+      result = response(await markKioskScansReviewed(requireDatabase(env), principal.userId, await parseJson(request, 150_000)));
     }
     else if (/^\/admin\/kiosks\/[^/]+\/scan-reviews\/[^/]+\/review$/.test(url.pathname) && request.method === "POST") {
       const principal = await requireRole(request, env, ["admin"]);

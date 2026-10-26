@@ -53,6 +53,8 @@ LancerLogin never takes port 8788 from another program. If a pre-community or ot
 
 The service and the desktop browser start separately. The service runs as `lancerlogin-kiosk.service`; the browser opens at desktop login through `/etc/xdg/autostart/lancerlogin-kiosk.desktop`. A headless boot does not start a desktop browser. From the signed-in desktop account, open **LancerLogin Kiosk**, or run `/usr/local/bin/lancerlogin-open-kiosk` in that desktop's terminal. Run the launcher as the desktop user, without `sudo`.
 
+A short, orderly service restart preserves still-live page sessions, allowing an open attendance screen to reconnect without a refresh. An open maintenance screen continues to pause attendance. Restarting does not restore PIN authorization, extend expired sessions, or reuse sessions from an earlier boot. After a crash or an expired session, use **Retry attendance** or reopen the attendance screen.
+
 If the screen does not open, first inspect `systemctl status lancerlogin-kiosk.service --no-pager` and `journalctl -u lancerlogin-kiosk.service -n 30 --no-pager`. Check `http://127.0.0.1:8788/health` on the Pi before troubleshooting Chromium. Keep diagnostics private. A healthy service does not prove that a screen has registered attendance presence, or that queued scans have reached the dashboard.
 
 Changing the Pi's hostname changes its `.local` address, not its kiosk pairing or dashboard display name. Check `hostname` and `hostname -I` on that Pi when finding its new LAN address. The installed desktop launcher uses `127.0.0.1`, so it does not need a new URL. Rename the dashboard device separately if desired; do not pair it again just to change a name.

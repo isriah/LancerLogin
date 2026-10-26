@@ -38,7 +38,7 @@ const reviewedNativeControls: Record<string, Counts> = {
   "info-tip.tsx": { button: 1 },
   "integration-settings.tsx": { button: 15, input: 9, select: 1, summary: 2 },
   "kiosk-enrollment-dialog.tsx": { button: 4, input: 1 },
-  "kiosk-scan-reviews.tsx": { button: 4, select: 1, textarea: 1, summary: 1 },
+  "kiosk-scan-reviews.tsx": { button: 8, input: 1, select: 3, textarea: 2, summary: 1 },
   "kiosks-page.tsx": { button: 21, input: 2, select: 1, summary: 4 },
   "mobile-calendar.tsx": { button: 4, input: 1 },
   "main.tsx": { button: 6, input: 13 },

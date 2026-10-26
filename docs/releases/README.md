@@ -4,6 +4,8 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 > Release notes record what was true when a version shipped. For current procedures, use the linked guide rather than applying older transition steps out of context.
 
+- [v2.0.0-beta.7](v2.0.0-beta.7.md) - Bulk rejected-scan dismissal, desktop calendar details and kiosk restart recovery
+- [v2.0.0-beta.6](v2.0.0-beta.6.md) - Offline clock recovery, rejected-scan review, contest handling and report filters
 - [v2.0.0-beta.5](v2.0.0-beta.5.md) - Mobile dashboard polish, kiosk management and report improvements
 - [v2.0.0-beta.4](v2.0.0-beta.4.md) - Kiosk enrollment, cloud efficiency and faster reports
 - [v2.0.0-beta.3](v2.0.0-beta.3.md) - Outreach activity management and Carpool workflow improvements

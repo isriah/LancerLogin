@@ -2,7 +2,7 @@
   "name": "lancerlogin",
   "private": true,
   "type": "module",
-  "version": "2.0.0-beta.6",
+  "version": "2.0.0-beta.7",
   "description": "Self-hosted modular attendance and operations",
   "license": "Apache-2.0",
   "workspaces": [
@@ -15,7 +15,7 @@
     "test:dashboard": "node --test tests/dashboard-shell.test.mjs && node --experimental-strip-types --test tests-ts/dashboard-update.test.ts tests-ts/dashboard-conformance.test.ts tests-ts/ui-control-inventory.test.ts",
     "test:browser": "node scripts/run-browser-tests.mjs",
     "test:docs": "node --test tests/docs-site.test.mjs",
-    "test:kiosk": "node --test --test-concurrency=2 tests/kiosk-runtime.test.mjs tests/kiosk-attendance-clock.test.mjs tests/kiosk-scan-review-sync.test.mjs tests/kiosk-reassociation.test.mjs tests/kiosk-artifacts.test.mjs tests/fingerprint-reset.test.mjs tests/fingerprint-state-lock.test.mjs tests/kiosk-operator-runtime.test.mjs tests/kiosk-operator-service.test.mjs tests/kiosk-poll.test.mjs tests/kiosk-poll-service.test.mjs tests/fingerprint-diagnostics.test.mjs tests/fingerprint-roster.test.mjs tests/kiosk-desktop.test.mjs tests/kiosk-presence-client.test.mjs",
+    "test:kiosk": "node --test --test-concurrency=2 tests/kiosk-runtime.test.mjs tests/kiosk-attendance-clock.test.mjs tests/kiosk-scan-review-sync.test.mjs tests/kiosk-reassociation.test.mjs tests/kiosk-artifacts.test.mjs tests/fingerprint-reset.test.mjs tests/fingerprint-state-lock.test.mjs tests/kiosk-operator-runtime.test.mjs tests/kiosk-operator-service.test.mjs tests/kiosk-poll.test.mjs tests/kiosk-poll-service.test.mjs tests/fingerprint-diagnostics.test.mjs tests/fingerprint-roster.test.mjs tests/kiosk-desktop.test.mjs tests/kiosk-presence-client.test.mjs tests/kiosk-presence-restart.test.mjs",
     "test:provisioning": "node --test tests/cloudflare-setup.test.mjs tests/d1-maintenance.test.mjs tests/foundation.test.mjs tests/pages-proxy.test.mjs tests/provision-plan.test.mjs tests/provision-resources.test.mjs tests/web-upgrade.test.mjs tests/release-policy.test.mjs",
     "rehearse:web-upgrade": "node scripts/rehearse-web-upgrade.mjs",
     "verify:migrations": "node scripts/verify-d1-migrations.mjs && node scripts/rehearse-community-upgrade.mjs",

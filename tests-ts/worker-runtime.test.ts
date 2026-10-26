@@ -3495,11 +3495,12 @@ test("retained scan review routes require an active Admin, dashboard origin and 
   assert.equal((await worker.fetch(request(listing + "?offset=-1", undefined, { cookie: admin }), env)).status, 400);
   assert.equal((await worker.fetch(request(listing + "?status=invalid", undefined, { cookie: admin }), env)).status, 400);
   const mutation = (cookie: string, origin?: string, note = "Corrected attendance separately") => new Request("https://api.example.test" + review, { method: "POST", headers: { cookie, "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify({ note }) });
+  const readBatches = database.batches.length;
   assert.equal((await worker.fetch(mutation(operator, env.ALLOWED_ORIGIN), env)).status, 403);
   assert.equal((await worker.fetch(mutation(admin), env)).status, 403);
   assert.equal((await worker.fetch(mutation(admin, "https://untrusted.example.test"), env)).status, 403);
   assert.equal((await worker.fetch(mutation(admin, env.ALLOWED_ORIGIN, " "), env)).status, 400);
-  assert.equal(database.batches.length, 0);
+  assert.equal(database.batches.length, readBatches);
   const note = "Checked the retained scan.\nAttendance corrected separately.";
   const saved = await worker.fetch(mutation(admin, env.ALLOWED_ORIGIN, note), env); assert.equal(saved.status, 200, await saved.clone().text());
   assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("UPDATE kiosk_scan_reviews") && call.values.includes(note)));
@@ -3509,6 +3510,26 @@ test("retained scan review routes require an active Admin, dashboard origin and 
   database.rows.set("SELECT m.generation FROM users u", null);
   assert.equal((await worker.fetch(request(listing, undefined, { cookie: admin }), env)).status, 403);
   assert.equal((await worker.fetch(mutation(admin, env.ALLOWED_ORIGIN), env)).status, 403);
+  assert.equal(database.batches.length, before);
+});
+
+test("bulk scan dismissal requires Admin authority, exact origin and enabled Attendance", async () => {
+  const database = new FakeDatabase(), admin = await sessionCookie("admin"), operator = await sessionCookie("operator");
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const post = (cookie: string, origin?: string, records: unknown = [{ kioskId: "kiosk-a", eventId: "scan-a" }]) => new Request("https://api.example.test/admin/kiosks/scan-reviews/review", { method: "POST", headers: { cookie, "content-type": "application/json", ...(origin ? { origin } : {}) }, body: JSON.stringify({ records, note: "Checked retained evidence.\nAttendance unchanged." }) });
+  assert.equal((await worker.fetch(post("", env.ALLOWED_ORIGIN), env)).status, 401);
+  assert.equal((await worker.fetch(post(operator, env.ALLOWED_ORIGIN), env)).status, 403);
+  assert.equal((await worker.fetch(post(admin), env)).status, 403);
+  assert.equal((await worker.fetch(post(admin, "https://untrusted.example.test"), env)).status, 403);
+  assert.equal((await worker.fetch(post(admin, env.ALLOWED_ORIGIN, []), env)).status, 400);
+  assert.equal(database.batches.length, 0);
+  const response = await worker.fetch(post(admin, env.ALLOWED_ORIGIN), env);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("scan-review-admin")));
+  assert.equal(database.batches.at(-1)?.some(call => /attendance_events|attendance_corrections/.test(call.sql)), false);
+  const before = database.batches.length;
+  database.rows.set("SELECT m.generation FROM users u", null);
+  assert.equal((await worker.fetch(post(admin, env.ALLOWED_ORIGIN), env)).status, 403);
   assert.equal(database.batches.length, before);
 });
 

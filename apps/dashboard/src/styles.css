@@ -2333,7 +2333,7 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
 .report-policy-alerts { display: grid; gap: var(--space-2); padding: 0; margin: 0; list-style: none; }
 .report-policy-alerts li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); padding: var(--space-2) var(--space-3); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); }
 .report-policy-alerts a { display: inline-flex; align-items: center; min-height: var(--control-min-block-size); color: var(--ui-text); text-underline-offset: var(--space-1); }
-.report-policy-alerts li > span { color: var(--ui-warning); font-size: var(--text-small); }
+.report-policy-warning { max-width: 100%; font-size: var(--text-small); white-space: normal; }
 .contest-indicator { border-color: var(--ui-border); }
 .contest-indicator > span { width: auto; min-width: var(--space-6); height: var(--space-6); padding: 0 var(--space-1); color: var(--ui-text); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--radius-pill); }
 .trend-frame { display: grid; grid-template-columns: auto minmax(0,1fr); gap: var(--space-2); min-width: 0; }

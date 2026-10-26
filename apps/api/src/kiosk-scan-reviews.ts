@@ -60,12 +60,54 @@ export async function syncKioskScanReviews(db: D1Database, kiosk: { id: string; 
   }
 }
 
-export async function listKioskScanReviews(db: D1Database, status: string, offset: number) {
+export async function listKioskScanReviews(db: D1Database, status: string, offset: number, kioskId = "", reasonCode = "") {
   if (!["open", "reviewed"].includes(status) || !Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000) throw new HttpError(400, "Invalid scan review page");
-  const rows = (await db.prepare(`SELECT r.kiosk_id AS kioskId,k.name AS kioskName,r.record_json AS evidence,r.received_at AS receivedAt,r.review_status AS reviewStatus,r.reviewed_at AS reviewedAt,r.review_note AS reviewNote
+  if (kioskId && !text(kioskId) || reasonCode && !/^[a-z][a-z0-9_]{0,39}$/.test(reasonCode)) throw new HttpError(400, "Invalid scan review filter");
+  const filter = `r.installation_id='primary' AND r.review_status=? AND (?='' OR r.kiosk_id=?) AND (?='' OR json_extract(r.record_json,'$.reasonCode')=?)`;
+  const values = [status, kioskId, kioskId, reasonCode, reasonCode];
+  const result = await db.batch([
+    db.prepare(`SELECT r.kiosk_id AS kioskId,k.name AS kioskName,r.record_json AS evidence,r.received_at AS receivedAt,r.review_status AS reviewStatus,r.reviewed_at AS reviewedAt,r.review_note AS reviewNote
     FROM kiosk_scan_reviews r JOIN kiosks k ON k.installation_id=r.installation_id AND k.id=r.kiosk_id
-    WHERE r.installation_id='primary' AND r.review_status=? ORDER BY r.received_at,r.kiosk_id,r.event_id LIMIT 51 OFFSET ?`).bind(status, offset).all<{ kioskId: string; kioskName: string; evidence: string; receivedAt: string; reviewStatus: string; reviewedAt: string | null; reviewNote: string | null }>()).results ?? [];
-  return { records: rows.slice(0, 50).map(({ evidence, ...row }) => ({ ...JSON.parse(evidence), ...row })), hasMore: rows.length > 50 };
+    WHERE ${filter} ORDER BY r.received_at,r.kiosk_id,r.event_id LIMIT 51 OFFSET ?`).bind(...values, offset),
+    db.prepare(`SELECT r.kiosk_id AS kioskId,r.event_id AS eventId,COUNT(*) OVER() AS total FROM kiosk_scan_reviews r WHERE ${filter} ORDER BY r.received_at,r.kiosk_id,r.event_id LIMIT 501`).bind(...values),
+    db.prepare(`SELECT DISTINCT r.kiosk_id AS kioskId,k.name AS kioskName,json_extract(r.record_json,'$.reasonCode') AS reasonCode FROM kiosk_scan_reviews r JOIN kiosks k ON k.installation_id=r.installation_id AND k.id=r.kiosk_id WHERE r.installation_id='primary' ORDER BY k.name,r.kiosk_id,reasonCode`),
+  ]);
+  const rows = (result[0].results ?? []) as { evidence: string; [key: string]: unknown }[];
+  const matching = (result[1].results ?? []) as { kioskId: string; eventId: string; total: number }[];
+  // Freeze explicit immutable record identities from this read transaction. A later
+  // upload cannot enter an already confirmed all-matching dismissal.
+  return { records: rows.slice(0, 50).map(({ evidence, ...row }) => ({ ...JSON.parse(evidence), ...row })), hasMore: rows.length > 50,
+    matchingCount: matching[0]?.total ?? 0, selection: matching.length <= 500 ? matching.map(({ kioskId, eventId }) => ({ kioskId, eventId })) : null,
+    filters: result[2].results ?? [] };
+}
+
+export async function markKioskScansReviewed(db: D1Database, actor: string, input: unknown) {
+  if (!object(input) || Object.keys(input).some(key => !["records", "note"].includes(key)) || !Array.isArray(input.records) || !input.records.length || input.records.length > 500
+    || typeof input.note !== "string" || !input.note.trim() || input.note.length > 500 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(input.note)) throw new HttpError(400, "Select 1 to 500 scans and provide a review note of 1 to 500 characters");
+  const seen = new Set<string>();
+  const records = input.records.map(record => {
+    if (!object(record) || Object.keys(record).some(key => !["kioskId", "eventId"].includes(key)) || !text(record.kioskId) || !text(record.eventId)) throw new HttpError(400, "Invalid scan selection");
+    const key = JSON.stringify([record.kioskId, record.eventId]);
+    if (seen.has(key)) throw new HttpError(400, "Duplicate scan selection");
+    seen.add(key); return { kioskId: record.kioskId, eventId: record.eventId, auditId: crypto.randomUUID() };
+  });
+  const selected = JSON.stringify(records), now = new Date().toISOString(), note = input.note.trim();
+  const results = await db.batch([
+    db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM users WHERE installation_id='primary' AND id=? AND active=1 AND role='admin') THEN 1 ELSE json_extract('{}','scan-review-admin') END`).bind(actor),
+    db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM json_each(?) s WHERE NOT EXISTS(SELECT 1 FROM kiosk_scan_reviews r WHERE r.installation_id='primary' AND r.kiosk_id=json_extract(s.value,'$.kioskId') AND r.event_id=json_extract(s.value,'$.eventId'))) THEN json_extract('{}','scan-review-selection') ELSE 1 END`).bind(selected),
+    db.prepare(`INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,metadata_json,created_at)
+      SELECT json_extract(s.value,'$.auditId'),'primary',?,'kiosk.scan_reviewed','kiosk',r.kiosk_id,json_object('eventId',r.event_id,'note',?,'bulk',json('true')),?
+      FROM kiosk_scan_reviews r JOIN json_each(?) s ON r.kiosk_id=json_extract(s.value,'$.kioskId') AND r.event_id=json_extract(s.value,'$.eventId') WHERE r.installation_id='primary' AND r.review_status='open'`).bind(actor, note, now, selected),
+    db.prepare(`UPDATE kiosk_scan_reviews SET review_status='reviewed',reviewed_at=?,review_note=? WHERE installation_id='primary' AND review_status='open'
+      AND EXISTS(SELECT 1 FROM json_each(?) s JOIN audit_log a ON a.id=json_extract(s.value,'$.auditId') WHERE kiosk_id=json_extract(s.value,'$.kioskId') AND event_id=json_extract(s.value,'$.eventId'))`).bind(now, note, selected),
+    db.prepare(`SELECT COUNT(*) AS reviewedCount FROM audit_log WHERE id IN (SELECT json_extract(value,'$.auditId') FROM json_each(?))`).bind(selected),
+  ]).catch(error => {
+    if (error instanceof Error && error.message.includes("scan-review-admin")) throw new HttpError(403, "Administrator authorization changed");
+    if (error instanceof Error && error.message.includes("scan-review-selection")) throw new HttpError(409, "A selected scan is no longer available. Refresh the list before dismissing scans.");
+    throw error;
+  });
+  const reviewedCount = Number((results.at(-1)?.results?.[0] as { reviewedCount?: number } | undefined)?.reviewedCount ?? 0);
+  return { reviewedCount, alreadyReviewedCount: records.length - reviewedCount };
 }
 
 export async function markKioskScanReviewed(db: D1Database, actor: string, kioskId: string, eventId: string, input: unknown) {

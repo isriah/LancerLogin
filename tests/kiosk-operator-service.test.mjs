@@ -76,7 +76,7 @@ async function fixture(t, { method = "fingerprint", modern = false, holdConfigur
   await writeFile(env.LANCERLOGIN_CONFIG, JSON.stringify({ apiUrl:`http://127.0.0.1:${cloud.address().port}`,kioskId:"synthetic-kiosk",pairingId:"synthetic-pairing",kioskToken:"synthetic-token",kioskName:"Old name" }), { mode:0o600 });
   await writeFile(env.LANCERLOGIN_MAPPINGS, JSON.stringify({0:{memberId:"synthetic-member",rosterId:"synthetic-roster",finger:"legacy"}}), {mode:0o600});
   await createNetworkPinStore(env.LANCERLOGIN_NETWORK_PIN).set("123456");
-  async function start() {
+  async function start({ initializeClock = confirmClock } = {}) {
     const child = fork(new URL("./fixtures/kiosk-operator-runtime-child.mjs",import.meta.url), [], { env, execArgv:["--experimental-test-module-mocks"], stdio:["ignore","pipe","pipe","ipc"] }); children.push(child);
     let diagnostics=""; child.stderr.on("data", chunk => { diagnostics += chunk; });
     const port = await new Promise((resolve,reject) => { const timer=setTimeout(()=>reject(new Error("Child startup timed out: "+diagnostics)),5000); child.on("message",message=>{if(message.ready){clearTimeout(timer);resolve(message.port);}}); child.once("exit",()=>{clearTimeout(timer);reject(new Error("Child failed: "+diagnostics));}); });
@@ -85,20 +85,75 @@ async function fixture(t, { method = "fingerprint", modern = false, holdConfigur
     const request=(path,input,headers={})=>fetch(`http://127.0.0.1:${port}${path}`,{method:input===undefined?"GET":"POST",headers:{"content-type":"application/json",...headers},...(input===undefined?{}:{body:JSON.stringify(input)}),signal:AbortSignal.timeout(5000)});
     // These operator tests begin with an established attendance clock. Exercise
     // the real PIN-protected confirmation without leaving maintenance unlocked.
-    if (confirmClock && !(await (await request("/health")).json()).clock.verified) {
+    if (initializeClock && !(await (await request("/health")).json()).clock.verified) {
       assert.equal((await request("/network/unlock", { pin: "123456" })).status, 200);
       const confirmed = await request("/maintenance/clock", { currentTime: new Date().toISOString() });
       assert.ok(confirmed.ok || (await (await request("/health")).json()).clock.verified);
       await fetch(`http://127.0.0.1:${port}/network/session`, { method: "DELETE" });
     }
     async function presence(mode, previous) { const response=await request("/operator-presence",{action:previous?"transition":"enter",pageId:"synthetic-runtime-page",mode,...(previous?{generation:previous.generation}:{})});assert.equal(response.status,200);return response.json(); }
-    return { child, request, reader, presence };
+    async function stop(orderly = true) { const done = once(child, "exit"); child.send(orderly ? { orderlyStop: true } : { crashStop: true }); await done; }
+    return { child, request, reader, presence, stop };
   }
   return { root, start, attendance, reviewRequests, heartbeatReports, enrollmentProgress, roster: mode=>{rosterMode=mode;}, heartbeats:()=>heartbeats,
     configurationStarted: () => configurationStarted, commandStarted: () => commandStarted,
     releaseConfiguration: () => { holdConfiguration = false; releaseConfiguration?.(); }, releaseCommand: () => { holdCommand = false; releaseCommand?.(); },
   };
 }
+
+test("orderly restart recovery renews the existing attendance page without entering again", { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  let runtime = await f.start();
+  const page = await runtime.presence("attendance");
+  await runtime.stop();
+  const checkpoint = JSON.parse(await readFile(join(f.root, "pairing.json.presence-restart.json"), "utf8"));
+  assert.equal(checkpoint.presence.pages.length, 1);
+  assert.ok(checkpoint.presence.pages[0].remainingMs > 0 && checkpoint.presence.pages[0].remainingMs <= 15000);
+  runtime = await f.start({ initializeClock: false });
+  const renewal = await runtime.request("/operator-presence", { action: "renew", pageId: page.pageId, generation: page.generation, mode: "attendance" });
+  assert.equal(renewal.status, 200);
+  const renewed = await renewal.json();
+  assert.equal(renewed.generation, page.generation);
+  assert.equal(renewed.captureSuspended, false);
+  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+  await until(() => f.attendance.length === 1);
+  await assert.rejects(readFile(join(f.root, "pairing.json.presence-restart.json")), { code: "ENOENT" });
+});
+
+test("orderly restart recovery keeps maintenance capture blocked when attendance renews first and never restores PIN authorization", { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  let runtime = await f.start();
+  const attendance = await (await runtime.request("/operator-presence", { action: "enter", pageId: "synthetic-background-attendance", mode: "attendance" })).json();
+  const maintenance = await runtime.presence("maintenance");
+  assert.equal((await runtime.request("/network/unlock", { pin: "123456" })).status, 200);
+  assert.equal((await (await runtime.request("/maintenance/session")).json()).authorized, true);
+  await runtime.stop();
+  runtime = await f.start({ initializeClock: false });
+  const renewal = await runtime.request("/operator-presence", { action: "renew", pageId: attendance.pageId, generation: attendance.generation, mode: "attendance" });
+  assert.equal(renewal.status, 200);
+  assert.equal((await renewal.json()).captureSuspended, true);
+  assert.equal((await (await runtime.request("/maintenance/session")).json()).authorized, false);
+  assert.equal((await runtime.request("/sensor/test", {})).status, 403);
+  assert.equal((await runtime.request("/attendance", { memberId: "synthetic-member" })).status, 400);
+  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true }); await wait(350);
+  assert.equal(f.attendance.length, 0);
+  const maintenanceRenewal = await runtime.request("/operator-presence", { action: "renew", pageId: maintenance.pageId, generation: maintenance.generation, mode: "maintenance" });
+  assert.equal(maintenanceRenewal.status, 200);
+  assert.equal((await maintenanceRenewal.json()).captureSuspended, true);
+});
+
+test("unexpected stop recovery has no checkpoint and rejects the old page generation", { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  let runtime = await f.start();
+  const page = await runtime.presence("attendance");
+  await runtime.stop(false);
+  await assert.rejects(readFile(join(f.root, "pairing.json.presence-restart.json")), { code: "ENOENT" });
+  runtime = await f.start({ initializeClock: false });
+  assert.equal((await runtime.request("/operator-presence", { action: "renew", pageId: page.pageId, generation: page.generation, mode: "attendance" })).status, 409);
+  assert.equal((await runtime.request("/attendance", { memberId: "synthetic-member" })).status, 400);
+  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true }); await wait(350);
+  assert.equal(f.attendance.length, 0);
+});
 
 test("a real kiosk synchronizes retained review evidence and applies acknowledgement without attendance writes", { timeout: 15000 }, async t => {
   const f = await fixture(t);

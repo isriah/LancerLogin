@@ -597,3 +597,78 @@ test("Operators cannot open rejected-scan reviews or request their records", asy
   await expect(page.getByRole("region", { name: "Rejected scans", exact: true })).toHaveCount(0);
   expect(reads).toBe(0);
 });
+
+for (const theme of ["light", "dark"] as const) for (const width of [390, 1280]) {
+  test(`Admin bulk dismissal freezes matching scans and preserves retries at ${width} in ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
+    await useKioskContext(page, { state: "unpaired" });
+    const base = { memberId: "synthetic-member", occurredAt: "2020-01-01T07:00:00Z", receivedAt: "2026-10-25T12:00:00Z", reasonCode: "clock_unverified", reviewStatus: "open" };
+    const initial = [{ ...base, kioskId: "a:b", kioskName: "Retired North", eventId: "c" }, { ...base, kioskId: "a", kioskName: "Retired South", eventId: "b:c" }, { ...base, kioskId: "a", kioskName: "Retired South", eventId: "third" }];
+    let remaining = [...initial], failed = false;
+    const bodies: unknown[] = [], offsets: string[] = [];
+    const note = "Compared the event roster.\nNo attendance correction needed.";
+    await page.route("**/admin/kiosks/scan-reviews?**", route => {
+      const url = new URL(route.request().url()), kioskId = url.searchParams.get("kioskId"), reason = url.searchParams.get("reasonCode"), offset = Number(url.searchParams.get("offset"));
+      offsets.push(String(offset));
+      const matching = remaining.filter(row => (!kioskId || row.kioskId === kioskId) && (!reason || row.reasonCode === reason));
+      return route.fulfill({ json: { records: matching.slice(offset, offset + 2), hasMore: matching.length > offset + 2, matchingCount: matching.length, selection: matching.map(({ kioskId, eventId }) => ({ kioskId, eventId })), filters: initial.map(({ kioskId, kioskName, reasonCode }) => ({ kioskId, kioskName, reasonCode })) } });
+    });
+    await page.route("**/admin/kiosks/scan-reviews/review", route => {
+      const body = route.request().postDataJSON(); bodies.push(body);
+      expect(body).toEqual({ records: initial.map(({ kioskId, eventId }) => ({ kioskId, eventId })), note });
+      if (!failed) { failed = true; return route.fulfill({ status: 503, json: { error: "Dismissal temporarily unavailable. Your selection is safe to retry." } }); }
+      remaining = remaining.filter(row => !initial.includes(row));
+      return route.fulfill({ json: { reviewedCount: 2, alreadyReviewedCount: 1 } });
+    });
+    await page.goto("/kiosks");
+    const panel = page.getByRole("region", { name: "Rejected scans", exact: true });
+    await expect(panel).toContainText("3 matching scans");
+    // These two identities used to collide when joined with a colon.
+    const north = panel.getByRole("checkbox", { name: "Select scan c from Retired North" }), south = panel.getByRole("checkbox", { name: "Select scan b:c from Retired South" });
+    await north.check(); await expect(south).not.toBeChecked();
+    await panel.getByRole("combobox", { name: "Kiosk", exact: true }).selectOption("a");
+    await expect(panel).toContainText("2 matching scans");
+    await expect(panel.getByRole("form", { name: "Dismiss selected rejected scans" })).toHaveCount(0);
+    await panel.getByRole("combobox", { name: "Rejection reason" }).selectOption("clock_unverified");
+    await panel.getByRole("combobox", { name: "Kiosk", exact: true }).selectOption("");
+    await expect(panel).toContainText("3 matching scans");
+    await panel.getByRole("button", { name: "Next rejected scans" }).click();
+    await expect(panel).toContainText("Select scan third");
+    await panel.getByRole("button", { name: "Select all matching (3)", exact: true }).click();
+    await expect(panel.getByRole("button", { name: "Dismiss 3 scans", exact: true })).toBeDisabled();
+    await panel.getByLabel("Shared review note", { exact: true }).fill(note);
+    if (width === 390 && theme === "dark") await panel.screenshot({ path: testInfo.outputPath("bulk-dismissal-selection.png") });
+    remaining.push({ ...base, kioskId: "a", kioskName: "Retired South", eventId: "arrived-after-confirmation" });
+    await panel.getByRole("button", { name: "Dismiss 3 scans", exact: true }).click();
+    await expect(panel.getByRole("alert")).toContainText("Dismissal temporarily unavailable");
+    await expect(panel.getByLabel("Shared review note", { exact: true })).toHaveValue(note);
+    await panel.getByRole("button", { name: "Dismiss 3 scans", exact: true }).click();
+    await expect(panel).toContainText("2 scans dismissed. 1 was already reviewed; existing notes were preserved. Attendance was not changed.");
+    await expect(panel).toContainText("Select scan arrived-after-confirmation");
+    await expect(panel.getByRole("button", { name: "Previous rejected scans" })).toBeDisabled();
+    expect(offsets.at(-1)).toBe("0"); expect(bodies).toHaveLength(2);
+    await panel.getByRole("button", { name: "Select this page" }).focus();
+    await expect(panel.getByRole("button", { name: "Select this page" })).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  });
+}
+
+test("bulk dismissal limits all-matching while allowing a selected page", async ({ page }) => {
+  await useKioskContext(page);
+  const record = { kioskId: "retired-a", kioskName: "Retired kiosk", eventId: "limited-event", memberId: "member-a", reasonCode: "clock_unverified", occurredAt: "2020-01-01T07:00:00Z", receivedAt: "2026-10-25T12:00:00Z", reviewStatus: "open" };
+  let reviewed = false;
+  await page.route("**/admin/kiosks/scan-reviews?**", route => route.fulfill({ json: { records: reviewed ? [] : [record], hasMore: true, matchingCount: reviewed ? 500 : 501, selection: null, filters: [] } }));
+  await page.route("**/admin/kiosks/scan-reviews/review", route => {
+    expect(route.request().postDataJSON()).toEqual({ records: [{ kioskId: "retired-a", eventId: "limited-event" }], note: "Reviewed selected page" });
+    reviewed = true; return route.fulfill({ json: { reviewedCount: 1, alreadyReviewedCount: 0 } });
+  });
+  await page.goto("/kiosks");
+  const panel = page.getByRole("region", { name: "Rejected scans", exact: true });
+  await expect(panel.getByRole("button", { name: "Select all matching (501)", exact: true })).toBeDisabled();
+  await expect(panel).toContainText("More than 500 scans match");
+  await panel.getByRole("button", { name: "Select this page" }).click();
+  await panel.getByLabel("Shared review note").fill("Reviewed selected page");
+  await panel.getByRole("button", { name: "Dismiss 1 scan", exact: true }).click();
+  await expect(panel).toContainText("1 scan dismissed");
+});

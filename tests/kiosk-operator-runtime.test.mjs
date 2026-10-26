@@ -10,6 +10,69 @@ import { createR503 } from "../apps/kiosk/src/r503.mjs";
 const pageA = "synthetic-page-aaaaaaaa", pageB = "synthetic-page-bbbbbbbb";
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
+test("orderly restart restores a live attendance page and its acknowledged generation", () => {
+  let elapsed = 0;
+  const old = createOperatorPresence({ now: () => elapsed });
+  const entered = old.update({ action: "enter", pageId: pageA, mode: "attendance" });
+  elapsed = 1000;
+  const presence = createOperatorPresence({ now: () => 0, restored: old.checkpoint() });
+  assert.equal(presence.status().captureSuspended, false);
+  const renewed = presence.update({ action: "renew", pageId: pageA, mode: "attendance", generation: entered.generation });
+  assert.equal(renewed.generation, entered.generation);
+  assert.equal(renewed.captureSuspended, false);
+  assert.throws(() => presence.update({ action: "renew", pageId: pageA, mode: "attendance", generation: entered.generation + 1 }), /expired/);
+});
+
+test("restored operator pages dominate attendance regardless of renewal arrival order", () => {
+  for (const order of [[pageA, pageB], [pageB, pageA]]) {
+    const old = createOperatorPresence({ now: () => 0 });
+    const a = old.update({ action: "enter", pageId: pageA, mode: "attendance" });
+    const b = old.update({ action: "enter", pageId: pageB, mode: "maintenance" });
+    const presence = createOperatorPresence({ now: () => 0, restored: old.checkpoint() });
+    assert.equal(presence.status().reason, "operator_active");
+    for (const pageId of order) {
+      const page = pageId === pageA ? a : b;
+      assert.equal(presence.update({ action: "renew", pageId, generation: page.generation, mode: page.mode }).reason, "operator_active");
+    }
+  }
+});
+
+test("operator lease expiring during restart keeps surviving attendance latched off", () => {
+  let elapsed = 0;
+  const old = createOperatorPresence({ now: () => elapsed });
+  old.update({ action: "enter", pageId: pageB, mode: "maintenance" });
+  elapsed = 10_000;
+  const a = old.update({ action: "enter", pageId: pageA, mode: "attendance" });
+  const snapshot = old.checkpoint();
+  const restored = { ...snapshot, pages: snapshot.pages.map(page => ({ ...page, remainingMs: page.remainingMs - 6000 })) };
+  const presence = createOperatorPresence({ now: () => 0, restored });
+  assert.equal(presence.update({ action: "renew", pageId: pageA, mode: "attendance", generation: a.generation }).reason, "presence_lost");
+  assert.equal(presence.update({ action: "enter", pageId: pageA, mode: "attendance" }).captureSuspended, false);
+});
+
+test("attendance lease expiring during restart requires deliberate manual re-entry", () => {
+  const old = createOperatorPresence({ now: () => 0 });
+  const a = old.update({ action: "enter", pageId: pageA, mode: "attendance" });
+  const snapshot = old.checkpoint();
+  const restored = { ...snapshot, pages: snapshot.pages.map(page => ({ ...page, remainingMs: -1 })) };
+  const presence = createOperatorPresence({ now: () => 0, restored });
+  assert.equal(presence.status().reason, "presence_lost");
+  assert.throws(() => presence.update({ action: "renew", pageId: pageA, mode: "attendance", generation: a.generation }), /expired/);
+  assert.equal(presence.update({ action: "enter", pageId: pageA, mode: "attendance" }).captureSuspended, false);
+});
+
+test("explicit leave and suspension stay latched across a checkpoint restore", () => {
+  for (const action of ["leave", "suspend"]) {
+    const old = createOperatorPresence({ now: () => 0 });
+    const a = old.update({ action: "enter", pageId: pageA, mode: "attendance" });
+    const b = old.update({ action: "enter", pageId: pageB, mode: "attendance" });
+    if (action === "leave") old.update({ action, pageId: pageA, mode: "attendance", generation: a.generation });
+    else old.suspend();
+    const presence = createOperatorPresence({ now: () => 0, restored: old.checkpoint() });
+    assert.equal(presence.update({ action: "renew", pageId: pageB, mode: "attendance", generation: b.generation }).reason, "presence_lost");
+  }
+});
+
 test("network clock corrections do not expire active presence or extend abandoned leases", t => {
   let elapsed = 0;
   t.mock.method(performance, "now", () => elapsed);

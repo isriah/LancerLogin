@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInstallationActivities, createUnpairingStore } from "./unpairing-store.mjs";
@@ -15,6 +16,7 @@ import { enrollFingerprint } from "./fingerprint-enrollment.mjs";
 import { EnrollmentError, verifyEnrollmentMember } from "./verified-enrollment.mjs";
 import { createPairingCache } from "./pairing-cache.mjs";
 import { createOperatorPresence } from "./operator-presence.mjs";
+import { createPresenceRestartStore } from "./presence-restart.mjs";
 import { operatorPresenceApp } from "./operator-presence-ui.mjs";
 import { createDesktopControl } from "./desktop-control.mjs";
 import { fingerprintDiagnostic, fingerprintFailureReason } from "./fingerprint-diagnostics.mjs";
@@ -54,6 +56,9 @@ export function localReleaseVersion(value) {
 
 const port = Number(process.env.LANCERLOGIN_KIOSK_PORT ?? 8788);
 const configPath = process.env.LANCERLOGIN_CONFIG ?? "/var/lib/lancerlogin/pairing.json";
+let shuttingDown = false;
+const presenceRestart = createPresenceRestartStore(`${configPath}.presence-restart.json`);
+const presenceBinding = config => createHash("sha256").update(JSON.stringify([config?.apiUrl ?? null, config?.kioskId ?? null, config?.pairingId ?? null])).digest("hex");
 const brandingPath = process.env.LANCERLOGIN_BRANDING ?? "/var/lib/lancerlogin/branding.json";
 const networkPinPath = process.env.LANCERLOGIN_NETWORK_PIN ?? "/var/lib/lancerlogin/network-pin.json";
 const authenticationPath = process.env.LANCERLOGIN_AUTHENTICATION ?? "/var/lib/lancerlogin/authentication.json";
@@ -312,8 +317,8 @@ async function captureIdentity() {
   if (!memberId) return { status: "unknown", detail: "This fingerprint is not linked to an active roster member" };
   return { status: "identified", memberId, identityKey: `fingerprint:${observation.slot}` };
 }
-const scanner = createIdentityScanner({ captureIdentity, captureTime: () => attendanceClock.capture(), now: () => performance.now(), captureAllowed: () => attendanceClock.isVerified() && !operatorPresence.status().captureSuspended && !fingerRemovalRequired, setFeedback, queue, loadPairing, flushAttendance, onDisplay: showDisplay, onInput: (online) => { readerObserved = true; state.readerOnline = online; }, onCloud: (online) => { state.cloudOnline = online; if (online) { state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; } else state.errorCategory = "cloud_sync"; } });
-const operatorPresence = createOperatorPresence({ onSuspend: () => { attendanceInputGeneration++; identityInput.clear(); requireFingerRemoval(); void scanner.suspend("operator"); } });
+const scanner = createIdentityScanner({ captureIdentity, captureTime: () => attendanceClock.capture(), now: () => performance.now(), captureAllowed: () => !shuttingDown && attendanceClock.isVerified() && !operatorPresence.status().captureSuspended && !fingerRemovalRequired, setFeedback, queue, loadPairing, flushAttendance, onDisplay: showDisplay, onInput: (online) => { readerObserved = true; state.readerOnline = online; }, onCloud: (online) => { state.cloudOnline = online; if (online) { state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; } else state.errorCategory = "cloud_sync"; } });
+const operatorPresence = createOperatorPresence({ restored: await presenceRestart.take(presenceBinding(await loadPairing().catch(() => undefined))), onSuspend: () => { attendanceInputGeneration++; identityInput.clear(); requireFingerRemoval(); void scanner.suspend("operator"); } });
 const dashboardEnrollment = createDashboardEnrollment({
   loadPairing,
   fetchSession: config => fetchKioskEnrollment(config, { fetchImpl: boundedCloudFetch }),
@@ -350,7 +355,7 @@ void scanner.suspend("operator");
 void scanner.suspend("finger_removal");
 let captureWasAllowed = false;
 function requireFingerRemoval() { fingerRemovalRequired = true; removalGeneration++; void scanner.suspend("finger_removal"); }
-function attendanceAllowed() { return !operatorPresence.status().captureSuspended && !enrollmentInProgress && !dashboardEnrollment.active() && !unpairingBusy && !pairingRecovery; }
+function attendanceAllowed() { return !shuttingDown && !operatorPresence.status().captureSuspended && !enrollmentInProgress && !dashboardEnrollment.active() && !unpairingBusy && !pairingRecovery; }
 async function refreshCapturePermission() {
   // Unpairing owns graceful drainage; do not cancel its accepted in-flight scan.
   if (unpairingBusy) return;
@@ -629,6 +634,7 @@ async function handleRequest(request, response) {
 }
 
 const server = createServer(async (request, response) => {
+  if (shuttingDown) { response.statusCode = 503; response.end(); return; }
   try {
     await pairingBoundary;
     const pathname = new URL(request.url ?? "/", `http://127.0.0.1:${port}`).pathname;
@@ -642,6 +648,22 @@ const server = createServer(async (request, response) => {
 });
 
 if (process.env.NODE_ENV !== "test") {
+  process.once("SIGTERM", () => {
+    shuttingDown = true;
+    // Only an orderly, drained stop may retain still-live page leases. Crashes,
+    // expired leases and boot changes retain the existing manual recovery path.
+    const deadline = setTimeout(() => process.exit(1), 10_000);
+    void (async () => {
+      const closed = new Promise(resolve => server.close(resolve));
+      server.closeIdleConnections();
+      await scanner.suspend("shutdown");
+      await closed;
+      await Promise.all([...directAttendanceCommits]);
+      const config = await loadPairing();
+      if (config?.pairingId && !unpairingBusy && !pairingRecovery) await presenceRestart.save(operatorPresence.checkpoint(), presenceBinding(config));
+      clearTimeout(deadline); process.exit(0);
+    })().catch(() => process.exit(1));
+  });
   server.listen(port, process.env.LANCERLOGIN_KIOSK_HOST ?? "0.0.0.0", () => console.log(`LancerLogin kiosk service listening on port ${port}`));
   void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod(), attendanceClock.refresh().catch(() => undefined)]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, 60_000).unref(); setInterval(pollCloud, 5_000).unref();
   setInterval(() => { void dashboardEnrollment.expire(); void refreshCapturePermission(); void checkFingerRemoval(); }, 250).unref();

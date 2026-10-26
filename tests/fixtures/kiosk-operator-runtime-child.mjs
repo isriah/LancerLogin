@@ -5,8 +5,19 @@ import { once } from "node:events";
 const original = await import("../../apps/kiosk/src/r503.mjs");
 const identityResolver = await import("../../apps/kiosk/src/identity-resolver.mjs");
 const attendanceClock = await import("../../apps/kiosk/src/attendance-clock.mjs");
+const presenceRestart = await import("../../apps/kiosk/src/presence-restart.mjs");
+// Shared synthetic boot and comparable elapsed time let Windows exercise the
+// actual checkpoint implementation. OS boot validation has separate store tests.
+mock.module(new URL("../../apps/kiosk/src/presence-restart.mjs", import.meta.url).href, { namedExports: {
+  createPresenceRestartStore: path => presenceRestart.createPresenceRestartStore(path, {
+    sample: async () => ({ bootId: "synthetic-runtime-boot", elapsedMs: Math.floor(performance.timeOrigin + performance.now()) }),
+  }),
+} });
 mock.module(new URL("../../apps/kiosk/src/attendance-clock.mjs", import.meta.url).href, { namedExports: {
-  createAttendanceClock: path => attendanceClock.createAttendanceClock(path, { synchronized: async () => false }),
+  createAttendanceClock: path => attendanceClock.createAttendanceClock(path, {
+    synchronized: async () => false,
+    sample: async () => ({ bootId: "synthetic-runtime-boot", elapsedMs: Math.floor(performance.timeOrigin + performance.now()), wallMs: Date.now() }),
+  }),
 } });
 let present = true, slot = 0, enrollCalls = 0, holdEnrollment = false, releaseEnrollment;
 let holdIdentity = false, identityCalls = 0, releaseIdentity;
@@ -37,6 +48,8 @@ mock.module(new URL("../../apps/kiosk/src/identity-resolver.mjs", import.meta.ur
   return identityResolver.resolveIdentityObservation(input);
 } } });
 process.on("message", message => {
+  if (message.orderlyStop) { process.emit("SIGTERM"); return; }
+  if (message.crashStop) { process.exit(99); return; }
   if (message.present !== undefined) present = message.present;
   if (message.slot !== undefined) slot = message.slot;
   if (message.holdEnrollment !== undefined) holdEnrollment = message.holdEnrollment;

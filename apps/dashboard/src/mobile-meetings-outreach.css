@@ -23,6 +23,15 @@
 .app .compact-month-calendar .compact-calendar-day[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
 .app .compact-month-calendar .compact-calendar-day:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: -3px; }
 .app .calendar-day-indicator { min-height: var(--space-4); line-height: 1; font-size: var(--text-caption); }
+.app .calendar-day-summaries { display: none; }
+@media (min-width: 901px) {
+  .app .compact-month-calendar .calendar-grid { gap: var(--space-1); }
+  .app .compact-month-calendar .compact-calendar-day { justify-content: flex-start; align-items: stretch; text-align: left; min-height: 7.4rem; padding: var(--space-2); border-color: var(--ui-border); }
+  .app .calendar-day-indicator { display: none; }
+  .app .calendar-day-summaries { display: grid; gap: var(--space-2); min-width: 0; margin-top: var(--space-2); }
+  .app .calendar-day-summary { display: grid; gap: var(--space-1); overflow-wrap: anywhere; font-size: var(--text-caption); }
+  .app .calendar-day-summary strong { font-size: var(--text-small); }
+}
 .app .calendar-selected-day { margin: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--ui-border); }
 .app .calendar-selected-day h3 { margin: 0 0 var(--space-3); font-size: var(--text-card-heading); }
 .app .calendar-selected-day > p { color: var(--ui-text-muted); }

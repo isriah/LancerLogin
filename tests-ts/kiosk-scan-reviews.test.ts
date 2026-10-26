@@ -123,3 +123,35 @@ test("scan review mirror preserves evidence, audited monotonic review, isolation
     await assert.rejects(syncKioskScanReviews(db, { id: "other-kiosk", pairingId: "other-pair", tokenHash: "other-token" }, { records: [record()] }), /pairing changed/);
   } finally { await runtime.dispose(); }
 });
+
+test("kiosk review sync reads rows in proportion to the batch, not to the kiosk's stored history", async () => {
+  const runtime = new Miniflare(convertV4MiniflareOptions({ modules: true, script: "export default { fetch() { return new Response('ok'); } }", d1Databases: { DB: "synthetic-scan-review-cost" } }));
+  try {
+    const database = await runtime.getD1Database("DB");
+    for (const sql of [
+      "CREATE TABLE installations(id TEXT PRIMARY KEY)",
+      "CREATE TABLE kiosks(id TEXT PRIMARY KEY,installation_id TEXT,name TEXT,active INTEGER,pairing_code_id TEXT,token_hash TEXT)",
+      "CREATE TABLE audit_log(id TEXT PRIMARY KEY,installation_id TEXT,actor_user_id TEXT,action TEXT,target_type TEXT,target_id TEXT,metadata_json TEXT,created_at TEXT)",
+      ...readFileSync("apps/api/migrations/0077_kiosk_scan_reviews.sql", "utf8").split(";").filter(sql => sql.trim()),
+      "INSERT INTO installations VALUES('primary')",
+      "INSERT INTO kiosks VALUES('kiosk-a','primary','First kiosk',1,'pair-a','token-a')",
+    ]) await database.prepare(sql).run();
+    const kiosk = { id: "kiosk-a", pairingId: "pair-a", tokenHash: "token-a" };
+    const batch = (start: number) => ({ records: Array.from({ length: 50 }, (_, offset) => ({ ...record(`history-${start + offset}`), reviewStatus: offset % 2 ? "reviewed" : "open" })) });
+    let rowsRead = 0;
+    const db = { prepare: (sql: string) => database.prepare(sql), batch: async (statements: Parameters<typeof database.batch>[0]) => {
+      const results = await database.batch(statements);
+      rowsRead = results.reduce((total, result) => total + result.meta.rows_read, 0);
+      return results;
+    } } as unknown as D1Database;
+    const resend = async () => { await syncKioskScanReviews(db, kiosk, batch(0)); return rowsRead; };
+    for (let start = 0; start < 100; start += 50) await syncKioskScanReviews(db, kiosk, batch(start));
+    const small = await resend();
+    for (let start = 100; start < 1000; start += 50) await syncKioskScanReviews(db, kiosk, batch(start));
+    const large = await resend();
+    assert.ok(small <= 600, `a 50-record resend read ${small} rows`);
+    assert.equal(large, small, "ten times the stored history must not raise the cost of the same batch");
+  } finally {
+    await runtime.dispose();
+  }
+});

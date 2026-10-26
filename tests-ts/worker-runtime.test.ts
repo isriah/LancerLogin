@@ -3544,7 +3544,7 @@ test("retained scan upload binds authority to the authenticated kiosk and reject
   assert.equal((await worker.fetch(upload({ records: [{ ...record, fingerprint: "forbidden" }] }, "paired-token"), env)).status, 400);
   assert.equal((await worker.fetch(upload({ records: [record], kioskId: "other-kiosk" }, "paired-token"), env)).status, 400);
   assert.equal(database.batches.length, 0);
-  database.lists.set("SELECT event_id AS eventId,review_status AS reviewStatus", [{ eventId: "synthetic-scan", reviewStatus: "reviewed" }]);
+  database.lists.set("SELECT r.event_id AS eventId,r.review_status AS reviewStatus", [{ eventId: "synthetic-scan", reviewStatus: "reviewed" }]);
   const result = await worker.fetch(upload(undefined, "paired-token"), env); assert.equal(result.status, 200, await result.clone().text());
   assert.deepEqual(await result.json(), { reviews: [{ eventId: "synthetic-scan", reviewStatus: "reviewed" }] });
   const transaction = database.batches.at(-1)!;

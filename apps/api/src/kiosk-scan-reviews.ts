@@ -35,20 +35,22 @@ export function validateScanReviewUpload(input: unknown): Upload[] {
 export async function syncKioskScanReviews(db: D1Database, kiosk: { id: string; pairingId: string | null; tokenHash: string }, input: unknown) {
   const records = validateScanReviewUpload(input), now = new Date().toISOString();
   const selected = JSON.stringify(records.map(record => ({ eventId: record.evidence.eventId, evidence: JSON.stringify(record.evidence), reviewed: record.reviewed, auditId: crypto.randomUUID() })));
-  // A fixed number of statements keeps a full batch within request query budgets.
+  // A fixed number of statements keeps a full batch within request query budgets. Each statement drives from
+  // the uploaded batch into the primary key (CROSS JOIN fixes that loop order), so D1 rows read stay
+  // proportional to the batch rather than to every review the kiosk has already stored.
   const statements = [
     db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM kiosks WHERE installation_id='primary' AND id=? AND active=1 AND pairing_code_id IS ? AND token_hash=?) THEN 1 ELSE json_extract('{}','scan-review-authority') END`).bind(kiosk.id, kiosk.pairingId, kiosk.tokenHash),
-    db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM kiosk_scan_reviews r JOIN json_each(?) s ON r.event_id=json_extract(s.value,'$.eventId') WHERE r.installation_id='primary' AND r.kiosk_id=? AND r.record_json<>json_extract(s.value,'$.evidence')) THEN json_extract('{}','scan-review-conflict') ELSE 1 END`).bind(selected, kiosk.id),
+    db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM json_each(?) s CROSS JOIN kiosk_scan_reviews r ON r.installation_id='primary' AND r.kiosk_id=? AND r.event_id=json_extract(s.value,'$.eventId') WHERE r.record_json<>json_extract(s.value,'$.evidence')) THEN json_extract('{}','scan-review-conflict') ELSE 1 END`).bind(selected, kiosk.id),
     db.prepare(`INSERT INTO kiosk_scan_reviews(installation_id,kiosk_id,event_id,record_json,received_at)
       SELECT 'primary',?,json_extract(value,'$.eventId'),json_extract(value,'$.evidence'),? FROM json_each(?) WHERE 1
       ON CONFLICT(installation_id,kiosk_id,event_id) DO NOTHING`).bind(kiosk.id, now, selected),
     db.prepare(`INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,metadata_json,created_at)
       SELECT json_extract(s.value,'$.auditId'),'primary',NULL,'kiosk.scan_reviewed_locally','kiosk',?,json_object('eventId',r.event_id),?
-      FROM kiosk_scan_reviews r JOIN json_each(?) s ON r.event_id=json_extract(s.value,'$.eventId')
-      WHERE r.installation_id='primary' AND r.kiosk_id=? AND r.review_status='open' AND json_extract(s.value,'$.reviewed')=1`).bind(kiosk.id, now, selected, kiosk.id),
+      FROM json_each(?) s CROSS JOIN kiosk_scan_reviews r ON r.installation_id='primary' AND r.kiosk_id=? AND r.event_id=json_extract(s.value,'$.eventId')
+      WHERE r.review_status='open' AND json_extract(s.value,'$.reviewed')=1`).bind(kiosk.id, now, selected, kiosk.id),
     db.prepare(`UPDATE kiosk_scan_reviews SET review_status='reviewed',reviewed_at=?,review_note='Reviewed in kiosk maintenance'
-      WHERE installation_id='primary' AND kiosk_id=? AND review_status='open' AND EXISTS(SELECT 1 FROM json_each(?) s JOIN audit_log a ON a.id=json_extract(s.value,'$.auditId') WHERE event_id=json_extract(s.value,'$.eventId'))`).bind(now, kiosk.id, selected),
-    db.prepare(`SELECT event_id AS eventId,review_status AS reviewStatus FROM kiosk_scan_reviews WHERE installation_id='primary' AND kiosk_id=? AND event_id IN (SELECT json_extract(value,'$.eventId') FROM json_each(?))`).bind(kiosk.id, selected),
+      WHERE (installation_id,kiosk_id,event_id) IN (SELECT 'primary',?,json_extract(s.value,'$.eventId') FROM json_each(?) s CROSS JOIN audit_log a ON a.id=json_extract(s.value,'$.auditId')) AND review_status='open'`).bind(now, kiosk.id, selected),
+    db.prepare(`SELECT r.event_id AS eventId,r.review_status AS reviewStatus FROM json_each(?) s CROSS JOIN kiosk_scan_reviews r ON r.installation_id='primary' AND r.kiosk_id=? AND r.event_id=json_extract(s.value,'$.eventId')`).bind(selected, kiosk.id),
   ];
   try {
     const result = await db.batch(statements);

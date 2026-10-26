@@ -4,6 +4,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 > Release notes record what was true when a version shipped. For current procedures, use the linked guide rather than applying older transition steps out of context.
 
+- [v2.0.0-beta.11](v2.0.0-beta.11.md) - Kiosk scan review synchronization uses far fewer database reads
 - [v2.0.0-beta.10](v2.0.0-beta.10.md) - Release verification improvements; no user-facing changes
 - [v2.0.0-beta.9](v2.0.0-beta.9.md) - Kiosks report Beta update readiness to the dashboard
 - [v2.0.0-beta.8](v2.0.0-beta.8.md) - Consistent desktop dashboard layout and control fixes

@@ -17,10 +17,36 @@ test("review sync rotates bounded retained history and retries failed batches wi
   } });
   await assert.rejects(sync.tick({}), /Unavailable/);
   for (let n = 0; n < 3; n++) await sync.tick({});
-  assert.deepEqual(batches.map(batch => batch.length), [50, 50, 50, 50]);
+  // The fourth batch carries only the records still unacknowledged after the failed first batch.
+  assert.deepEqual(batches.map(batch => batch.length), [50, 50, 50, 21]);
   assert.equal(new Set(batches.flat().map(record => record.eventId)).size, 121);
   assert.ok(batches[1].some(record => record.reviewStatus === "reviewed"));
   assert.equal(batches[3][0].eventId, "synthetic-29");
+});
+
+test("acknowledged history is not resent every heartbeat, but local reviews and periodic refreshes still reach the cloud", async () => {
+  let clock = 0;
+  const records = Array.from({ length: 85 }, (_, index) => ({ eventId: `settled-${index}`, reviewStatus: "open" }));
+  const batches = [];
+  const sync = createScanReviewSync({ now: () => clock, queue: { rejections: async () => records, markReviewed: async () => {} }, send: async (_, batch) => {
+    batches.push(batch.map(record => record.eventId));
+    return { reviews: batch.map(({ eventId, reviewStatus }) => ({ eventId, reviewStatus })) };
+  } });
+  await sync.tick({});
+  await sync.tick({});
+  assert.deepEqual(batches.map(batch => batch.length), [50, 35]);
+  for (let minute = 0; minute < 30; minute++) { clock += 60_000; await sync.tick({}); }
+  assert.equal(batches.length, 2, "a settled history sends nothing on ordinary heartbeats");
+  records[7] = { ...records[7], reviewStatus: "reviewed" };
+  await sync.tick({});
+  assert.deepEqual(batches[2], ["settled-7"], "a local review is sent on the next heartbeat");
+  await sync.tick({});
+  assert.equal(batches.length, 3, "the reviewed acknowledgement settles it again");
+  clock += 60 * 60_000;
+  await sync.tick({});
+  await sync.tick({});
+  assert.deepEqual(batches.slice(3).map(batch => batch.length), [50, 35], "the hourly refresh can rebuild a lost cloud mirror");
+  assert.equal(sync.hasFailures(), false);
 });
 
 test("a poison record in a short history cannot starve other records or clear its failure diagnostic", async () => {

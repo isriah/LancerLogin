@@ -4,6 +4,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 > Release notes record what was true when a version shipped. For current procedures, use the linked guide rather than applying older transition steps out of context.
 
+- [v2.0.0-beta.9](v2.0.0-beta.9.md) - Kiosks report Beta update readiness to the dashboard
 - [v2.0.0-beta.8](v2.0.0-beta.8.md) - Consistent desktop dashboard layout and control fixes
 - [v2.0.0-beta.7](v2.0.0-beta.7.md) - Bulk rejected-scan dismissal, desktop calendar details and kiosk restart recovery
 - [v2.0.0-beta.6](v2.0.0-beta.6.md) - Offline clock recovery, rejected-scan review, contest handling and report filters

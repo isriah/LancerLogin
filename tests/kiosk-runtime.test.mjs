@@ -1218,6 +1218,15 @@ test("heartbeat authenticates with the kiosk token and reports only operational 
   assert.deepEqual(JSON.parse(request.body), { readerOnline: true, authenticationMethod: "nfc", releaseVersion: "1.0.0", uptimeSeconds: 3_600, networkType: "wifi", networkSignal: 82, lastWifiScanAt: "2026-09-02T20:00:00.000Z", pendingEvents: 0, lastSyncAt: null, errorCategory: null });
 });
 
+test("heartbeat reports the installed update policy and omits unrecognized values", async () => {
+  const bodies = [];
+  const fetchImpl = async (_url, init) => { bodies.push(JSON.parse(init.body)); return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }); };
+  const config = { apiUrl: "https://api.example.test", kioskToken: "secret" };
+  for (const updatePolicyVersion of [2, 1, 3, "2", undefined]) await sendHeartbeat(config, { readerOnline: true, releaseVersion: "2.0.0-beta.8", updatePolicyVersion, fetchImpl });
+  assert.deepEqual(bodies.map((body) => body.updatePolicyVersion), [2, 1, undefined, undefined, undefined]);
+  assert.deepEqual(bodies.slice(2).map((body) => "updatePolicyVersion" in body), [false, false, false]);
+});
+
 test("kiosk configuration fetch is authenticated and contains no biometric request data", async () => {
   let request;
   const result = await fetchKioskConfiguration({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { fetchImpl: async (url, init) => { request = { url, init }; return new Response(JSON.stringify({ settings: { organizationName: "Example" } }), { headers: { "content-type": "application/json" } }); } });

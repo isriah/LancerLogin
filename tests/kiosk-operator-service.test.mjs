@@ -178,6 +178,8 @@ test("an older review API leaves attendance delivery active and reports review s
   await until(() => f.heartbeatReports.length > 0);
   assert.equal(f.attendance.length, 1);
   assert.equal(f.heartbeatReports[0].errorCategory, "cloud_sync");
+  // The real service always reports its installed update policy; this host has no root update helper.
+  assert.equal(f.heartbeatReports[0].updatePolicyVersion, 1);
   const health = await (await runtime.request("/health")).json();
   assert.equal(health.cloudOnline, true);
   assert.equal(health.attendance.pending, 0);

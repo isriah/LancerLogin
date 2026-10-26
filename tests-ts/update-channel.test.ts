@@ -120,7 +120,14 @@ test("kiosk commands pin official targets, require the installed helper and lock
     assert.equal((await command({ command: "install_latest" }, "https://evil.test")).status, 403);
     assert.equal((await command({ command: "install_latest", targetTag: "v99.0.0", url: "https://evil.test" })).status, 400);
     assert.equal((await command({ command: "install_latest" })).status, 409);
-    database.sqlite.exec("UPDATE kiosks SET update_policy_version = 2");
+    // The Beta gate opens only from the kiosk's own authenticated heartbeat, and a heartbeat without the field reverts it.
+    const heartbeat = (body: Record<string, unknown>) => worker.fetch(new Request("https://worker.example/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer synthetic-kiosk-token", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "1.2.6", ...body }) }), environment);
+    assert.equal((await heartbeat({ updatePolicyVersion: 3 })).status, 400);
+    assert.equal((await heartbeat({ updatePolicyVersion: 2 })).status, 200);
+    assert.equal(database.sqlite.prepare("SELECT update_policy_version AS policy FROM kiosks").get()?.policy, 2);
+    assert.equal((await heartbeat({})).status, 200);
+    assert.equal((await command({ command: "install_latest" })).status, 409);
+    assert.equal((await heartbeat({ updatePolicyVersion: 2 })).status, 200);
     assert.equal((await command({ command: "install_latest" })).status, 202);
     const pinned = database.sqlite.prepare("SELECT requested_release_version, requested_release_sha, update_channel FROM kiosk_commands").get();
     assert.deepEqual({ ...pinned }, { requested_release_version: tag, requested_release_sha: sha, update_channel: "beta" });

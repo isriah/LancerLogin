@@ -3,6 +3,7 @@ import { dashboardConformanceReferences } from "../apps/dashboard/src/design-con
 import { expectDashboardTypography } from "./dashboard-typography";
 import { discovered } from "./release-discovery";
 import { attendanceSnapshot, carpoolSnapshot, outreachSnapshot } from "./module-fixtures";
+import { pairedViews } from "./paired-views";
 
 const settings = {
   organizationName: "Reference Arts Collective",
@@ -197,7 +198,7 @@ for (const width of [1280, 390]) test(`Modules disclosure dismisses without obsc
   await expect(menu).toBeHidden();
 });
 
-for (const theme of ["light", "dark"] as const) for (const width of [1280, 390]) test(`Attendance sections preserve deep links and themed keyboard navigation at ${width} in ${theme}`, async ({ page }) => {
+for (const { theme, width } of pairedViews) test(`Attendance sections preserve deep links and themed keyboard navigation at ${width} in ${theme}`, async ({ page }) => {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
   await page.addInitScript(saved => localStorage.setItem("lancerlogin-theme", saved), theme);
   await useSettingsContext(page);
@@ -317,8 +318,7 @@ test("information tips stay circular and inside the mobile viewport", async ({ p
   await expect(glyph).toHaveCSS("border-radius", "50%");
 });
 
-for (const viewport of dashboardConformanceReferences.viewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of pairedViews) {
 test(`Admin can add, edit, reorder, retire, and restore meeting-weight categories at ${viewport.width}x${viewport.height} ${theme}`, async ({ page }) => {
   await page.setViewportSize(viewport);
   await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
@@ -385,7 +385,6 @@ test(`Admin can add, edit, reorder, retire, and restore meeting-weight categorie
   ]));
 });
   }
-}
 
 async function expectResponsiveFit(page: Page) {
   const geometry = await page.evaluate(() => ({
@@ -401,8 +400,7 @@ async function expectResponsiveFit(page: Page) {
   expect(geometry.clipped).toEqual([]);
 }
 
-for (const viewport of dashboardConformanceReferences.viewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of pairedViews) {
     test(`all Settings routes conform at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
@@ -439,7 +437,6 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       }
     });
   }
-}
 
 for (const viewport of dashboardConformanceReferences.viewports) {
   test(`Google Calendar delivery status stays usable at ${viewport.width}x${viewport.height}`, async ({ page }) => {
@@ -542,8 +539,7 @@ test("Settings validation, integration states and data dialogs remain explicit a
   await expectResponsiveFit(page);
 });
 
-for (const viewport of dashboardConformanceReferences.viewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of pairedViews) {
     test(`Google integration guidance fits at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
@@ -572,10 +568,8 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expectResponsiveFit(page);
     });
   }
-}
 
-for (const viewport of dashboardConformanceReferences.viewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of pairedViews) {
     test(`managed Discord command setup is keyboard usable at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
@@ -603,10 +597,8 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expectResponsiveFit(page);
     });
   }
-}
 
-for (const viewport of dashboardConformanceReferences.viewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of pairedViews) {
     test(`configured Discord command repair is accessible at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
@@ -640,7 +632,6 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expectResponsiveFit(page);
     });
   }
-}
 
 test("Operator role cannot open administrative Settings routes", async ({ page }) => {
   await useSettingsContext(page, "operator");

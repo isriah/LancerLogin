@@ -340,8 +340,18 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   assert.match(browserShardJob, /workflow_dispatch/);
   assert.match(browserShardJob, /startsWith\(github\.event\.head_commit\.message, 'Release v'\)/);
   assert.match(browserShardJob, /fail-fast: false/);
-  assert.match(browserShardJob, /shard: \[1, 2, 3, 4\]/);
-  assert.match(browserShardJob, /npm run test:browser -- --shard=\$\{\{ matrix\.shard \}\}\/4/);
+  assert.match(browserShardJob, /shard: \[1, 2, 3, 4, 5, 6\]/);
+  assert.match(browserShardJob, /npm run test:browser -- --shard=\$\{\{ matrix\.shard \}\}\/6/);
+  assert.match(browserShardJob, /require\('playwright-core\/package\.json'\)\.version[\s\S]*actions\/cache@v4[\s\S]*path: ~\/\.cache\/ms-playwright[\s\S]*key: playwright-\$\{\{ runner\.os \}\}-\$\{\{ steps\.playwright-version\.outputs\.version \}\}/);
+  // The default-branch cache warmer stays outside Verify so release gates keep their exact required job list.
+  const cacheWorkflow = await readFile(".github/workflows/playwright-cache.yml", "utf8");
+  assert.match(cacheWorkflow, /schedule:[\s\S]*workflow_dispatch:/);
+  assert.match(cacheWorkflow, /key: playwright-\$\{\{ runner\.os \}\}-\$\{\{ steps\.playwright-version\.outputs\.version \}\}/);
+  assert.match(cacheWorkflow, /permissions:\s+contents: read/);
+  assert.doesNotMatch(ciWorkflow, /playwright-cache\.yml|name: Keep Playwright browser cached/);
+  assert.match(browserShardJob, /cache-hit != 'true'\s+run: npx playwright install --with-deps chromium/);
+  assert.match(browserShardJob, /cache-hit == 'true'\s+run: npx playwright install-deps chromium/);
+  assert.match(browserShardJob, /name: Run this browser shard\s+timeout-minutes: 15\s+run: npm run test:browser/);
   const browserGate = ciWorkflow.match(/  browser-smoke:([\s\S]*)$/)?.[1];
   assert.ok(browserGate);
   assert.match(browserGate, /needs: browser-shard/);
@@ -366,8 +376,9 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   assert.doesNotMatch(releaseWorkflow, /npm (?:ci|test|audit)|npm run (?:verify:migrations|typecheck|build)/);
   const publisher = await readFile("scripts/release-publication.mjs", "utf8");
   assert.match(publisher, /actions\/workflows\/ci\.yml\/runs\?head_sha=/);
-  assert.match(publisher, /run\.event !== "push"/);
-  assert.match(publisher, /run\.head_branch !== branch/);
+  assert.match(publisher, /run\.event === "push" && run\.head_branch === branch \|\| run\.event === "workflow_dispatch"/);
+  assert.match(publisher, /compare\/\$\{policy\.branch\}\.\.\.\$\{commit\.sha\}/);
+  assert.match(publisher, /\["identical", "behind"\]\.includes\(comparison\.status\)/);
   assert.match(publisher, /assertLatestPromotion/);
   assert.match(publisher, /immutable-releases/);
   assert.match(publisher, /--notes-file/);

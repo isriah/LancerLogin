@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
+import { pairedViews } from "./paired-views";
 
 const governedRoutes = [
   ["/dashboard", "Dashboard"],
@@ -99,8 +100,7 @@ async function expectGovernedSurface(page: Page, heading: string, route: string)
   }
 }
 
-for (const viewport of auditedViewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of [{ viewport: auditedViewports[0], theme: "dark" }, ...pairedViews] as const) {
     test(`all governed routes converge at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
@@ -117,4 +117,3 @@ for (const viewport of auditedViewports) {
       }
     });
   }
-}

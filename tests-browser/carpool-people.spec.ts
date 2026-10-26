@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { carpoolSnapshot } from "./module-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
+import { pairedViews } from "./paired-views";
 
 async function setup(page: Page, scope = "both", count = 30) {
   const plan = { id: "people", title: "Synthetic people review", destination: "Synthetic venue", tripScope: scope, meetingId: null, eventReference: null, eventTitleSnapshot: null, eventStartsAtSnapshot: null, radiusMiles: 12, preferredRadiusMiles: 4, notes: "", archived: false, revision: 0 };
@@ -15,7 +16,7 @@ async function setup(page: Page, scope = "both", count = 30) {
   await page.goto("/carpool/plans/people"); await expect(page.getByRole("heading", { name: "People", exact: true })).toBeVisible(); return { saved: () => saved, plan, detail };
 }
 
-for (const theme of ["light", "dark"] as const) for (const width of [1280, 390]) test(`People directory and complete editor work at ${width} ${theme}`, async ({ page }, info) => {
+for (const { theme, width } of pairedViews) test(`People directory and complete editor work at ${width} ${theme}`, async ({ page }, info) => {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 }); await page.emulateMedia({ reducedMotion: "reduce" }); const state = await setup(page); await setDashboardTheme(page, theme);
   const list = page.getByRole("list", { name: "Carpool participants" }); await expect(list.getByRole("listitem")).toHaveCount(25); await page.getByRole("button", { name: "Next participants" }).click(); await expect(list.getByRole("listitem")).toHaveCount(5); await expect(list).toContainText("Participant 29");
   await page.getByLabel("Show participants").selectOption("drivers"); await expect(list.getByRole("listitem")).toHaveCount(1); await expect(list).toContainText("Can drive - 3 passenger seats"); await page.getByLabel("Show participants").selectOption("unassigned"); await expect(list).not.toContainText("Participant 1person1@");

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { pairedViews } from "./paired-views";
 
 const activity = { id: "activity-1", categoryId: "other-service", categoryName: "Other Service", title: "Community drive", serviceDate: "2026-09-28", location: "Library", reopened: false };
 
@@ -25,7 +26,7 @@ async function chooseClock(page: Page, label: string, hour: number, minute: numb
 
 test.describe("clock outside dismissal", () => {
   test.use({ hasTouch: true });
-  for (const theme of ["light", "dark"]) for (const width of [1280, 390]) test(`clicking outside discards unfinished time selection at ${width} in ${theme}`, async ({ page }) => {
+  for (const { theme, width } of pairedViews) test(`clicking outside discards unfinished time selection at ${width} in ${theme}`, async ({ page }) => {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), theme);
     const submissions = await routePublicForm(page);

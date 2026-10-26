@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { carpoolSnapshot } from "./module-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
+import { pairedViews } from "./paired-views";
 
 function fixture() {
   const plan = { id: "trust", title: "Synthetic competition", destination: "Synthetic venue", meetingId: null, eventReference: null, eventTitleSnapshot: null, eventStartsAtSnapshot: null, radiusMiles: 12, preferredRadiusMiles: 4, notes: "", archived: false, revision: 0 };
@@ -103,7 +104,7 @@ test("passengers can swap by keyboard and locked assignments cannot be moved", a
   await rider.getByRole("button", { name: "Lock Rider One" }).click(); await expect(rider.getByRole("button", { name: "Move", exact: true })).toBeDisabled(); await expect(rider.getByRole("button", { name: "Swap", exact: true })).toBeDisabled();
 });
 
-for (const theme of ["light", "dark"] as const) for (const width of [1280, 390]) test(`assignment chooser supports keyboard, capacity and rendered theme at ${width} ${theme}`, async ({ page }, info) => {
+for (const { theme, width } of pairedViews) test(`assignment chooser supports keyboard, capacity and rendered theme at ${width} ${theme}`, async ({ page }, info) => {
   const data = fixture(); await page.setViewportSize({ width, height: width === 390 ? 844 : 900 }); await setup(page, data); await setDashboardTheme(page, theme); let body: Record<string, unknown> | undefined;
   await page.route("**/admin/carpool/plans/trust/assignments/outbound/person-3", async route => {
     body = route.request().postDataJSON(); data.assignments.push({ riderId: "person-3", vehiclePersonId: String(body!.vehiclePersonId), direction: "outbound", distanceMiles: .1, locked: false, manual: true }); data.unresolved = []; data.plan.revision++; await route.fulfill({ json: data });

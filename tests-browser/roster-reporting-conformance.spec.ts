@@ -1,6 +1,7 @@
 import { expect,test,type Locator, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { attendanceSnapshot } from "./module-fixtures";
+import { pairedViews } from "./paired-views";
 
 type Role="admin"|"operator";
 
@@ -363,8 +364,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
   }
 }
 
-for(const viewport of dashboardConformanceReferences.viewports) {
-  for(const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of pairedViews) {
     test(`member anomaly metric conforms at ${viewport.width}x${viewport.height} in ${theme} mode`,async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme",savedTheme),theme);
@@ -376,7 +376,6 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await expectResponsiveFit(page);
     });
   }
-}
 
 for(const viewport of dashboardConformanceReferences.viewports) {
   for(const theme of dashboardConformanceReferences.themes) {
@@ -1263,7 +1262,7 @@ test("compact custom reports put pagination below results and keep wide columns 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
+for (const { theme, width } of pairedViews) {
   test(`long roster identities and compact leaderboard cells remain separate at ${width} in ${theme}`, async ({ page }) => {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);

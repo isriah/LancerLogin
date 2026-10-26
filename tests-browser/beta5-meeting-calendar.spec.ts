@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Locator } from "@playwright/test";
 import { setDashboardTheme } from "./dashboard-theme";
 import { outreachSnapshot } from "./module-fixtures";
+import { pairedViews } from "./paired-views";
 
 test.use({ timezoneId: "America/New_York" });
 async function calendarPresentation(page: Page, day: Locator, title: string, detail: string, width: number) {
@@ -73,7 +74,7 @@ test("meeting initial loading stays neutral and unavailable appears only after a
   await expect(page.getByRole("status").filter({ hasText: "Meeting not found" })).toBeVisible();
 });
 
-for (const theme of ["light", "dark"] as const) for (const width of [390, 1280]) test(`Dashboard selected day survives view changes, detail and reload at ${width} in ${theme}`, async ({ page }) => {
+for (const { theme, width } of pairedViews) test(`Dashboard selected day survives view changes, detail and reload at ${width} in ${theme}`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 }); await prepare(page);
   await meetingRoutes(page, { ...overnight, startsAt: "2026-09-09T17:00:00Z", endsAt: "2026-09-09T18:00:00Z" });
   await page.goto("/dashboard"); await page.getByRole("button", { name: "Previous month of meetings", exact: true }).click();
@@ -89,7 +90,7 @@ for (const theme of ["light", "dark"] as const) for (const width of [390, 1280])
   await page.getByRole("button", { name: "Today", exact: true }).click(); await expect(page.getByRole("button", { name: "October 19, 2026, 0 meetings", exact: true })).toHaveAttribute("aria-pressed", "true");
 });
 
-for (const theme of ["light", "dark"] as const) for (const width of [390, 1280]) test(`Outreach retains selected day and all-day wording through detail and Table at ${width} in ${theme}`, async ({ page }) => {
+for (const { theme, width } of pairedViews) test(`Outreach retains selected day and all-day wording through detail and Table at ${width} in ${theme}`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 }); await prepare(page);
   const activity = { id: "synthetic-all-day", mode: "event", labelIds: [], labels: [], serviceDate: "2026-09-09", teamId: null, title: "Synthetic all-day service", description: "Practice materials", location: "Synthetic library", impactRelevant: true, archived: false, revision: 0, eventStartLocal: null, eventEndLocal: null, eventStartOccurrence: null, eventEndOccurrence: null };
   await page.route("**/platform/modules", route => route.fulfill({ json: outreachSnapshot() }));

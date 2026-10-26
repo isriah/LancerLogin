@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
+import { pairedViews } from "./paired-views";
 
 const activity = { id: "synthetic-event", mode: "event", labelIds: [], labels: [], serviceDate: "2026-10-09", teamId: null, title: "Synthetic Outreach event", description: "Service at the library", location: "Library", impactRelevant: true, archived: false, revision: 0, eventStartLocal: "09:00", eventEndLocal: "12:00", eventStartOccurrence: null, eventEndOccurrence: null };
 const entry = (id: string, durationMinutes: number, status = "counted") => ({ id, memberId: "member-1", activityId: activity.id, revision: 2, status, memberName: "Avery Synthetic", externalId: "SYN-001", activityTitle: activity.title, teamName: null, serviceDate: activity.serviceDate, startLocal: "09:00", endLocal: "10:00", timeZone: "America/Los_Angeles", durationMinutes, taskNotes: "Sorted donated supplies", staffReason: null, attribution: "self_asserted" });
@@ -81,7 +82,7 @@ test("Staff selects the affected submission for an event-only correction", async
   await expect(page.getByText("Correction applied as one immutable entry revision.")).toBeVisible(); expect(writes[0]).toMatchObject({ entryId: "entry-2", entryRevision: 2, memberId: "member-1", activityId: activity.id, action: "corrected" });
 });
 
-for (const view of ["light", "dark"].flatMap(theme => [{ width: 1280, height: 900, theme }, { width: 390, height: 844, theme }])) test(`Outreach activity edits all event details and retains logged hours at ${view.width} in ${view.theme}`, async ({ page }) => {
+for (const view of pairedViews) test(`Outreach activity edits all event details and retains logged hours at ${view.width} in ${view.theme}`, async ({ page }) => {
   await page.setViewportSize(view); await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), view.theme); const edits: Record<string, unknown>[] = []; await fixture(page, { edits }); await page.goto(`/hours/activities/${activity.id}`);
   await page.getByRole("button", { name: "Edit activity", exact: true }).click(); const dialog = page.getByRole("dialog", { name: "Edit Outreach activity" });
   await expect(dialog.getByLabel("Activity title")).toBeFocused(); await dialog.getByLabel("Activity title").fill("Updated library event"); await dialog.getByLabel("Service date").fill("2026-10-08");

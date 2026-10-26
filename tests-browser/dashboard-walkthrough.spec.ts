@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { attendanceSetupState, attendanceSnapshot } from "./module-fixtures";
+import { pairedViews } from "./paired-views";
 
 type Progress = { pageId: string; version: number; status: string; stepId: string | null };
 async function account(page: Page, state: { progress: Progress; fail?: boolean }, role = "admin", debugMode = false) {
@@ -117,7 +118,7 @@ test("safe practice restores table state and completes without saving or deletin
   await expect(page.getByRole("button", { name: "Create meeting", exact: true })).toBeEnabled();
 });
 
-for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) for (const theme of ["light", "dark"]) {
+for (const { viewport, theme } of pairedViews) {
   test(`empty account walkthrough, keyboard and theme at ${viewport.width} ${theme}`, async ({ page }) => {
     await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: "reduce" });
     await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), theme);

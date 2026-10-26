@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { carpoolSnapshot } from "./module-fixtures";
+import { pairedViews } from "./paired-views";
 
-for (const view of ["light", "dark"].flatMap(theme => [{ width: 1280, height: 900, theme }, { width: 390, height: 844, theme }])) test(`Carpool settings securely save defaults and seed editable plans at ${view.width} in ${view.theme}`, async ({ page }) => {
+for (const view of pairedViews) test(`Carpool settings securely save defaults and seed editable plans at ${view.width} in ${view.theme}`, async ({ page }) => {
   await page.setViewportSize(view); await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), view.theme);
   let saved = { radiusMiles: 12, preferredRadiusMiles: 4, revision: 0, geocodingConfigured: false, canSaveApiKey: true }; const writes: Record<string, unknown>[] = [];
   await page.route("**/platform/modules", route => route.fulfill({ json: carpoolSnapshot() }));

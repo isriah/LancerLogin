@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { discovered } from "./release-discovery";
+import { pairedViews } from "./paired-views";
 
 type Role = "admin" | "operator";
 type KioskState = "healthy" | "degraded" | "offline" | "unpaired";
@@ -419,7 +420,7 @@ test("Operator sees health without Admin management, simulator, or unconfigured 
   await expectResponsiveFit(page);
 });
 
-for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
+for (const { theme, width } of pairedViews) {
   test(`cloud enrollment retirement is explicit and preserves other enrollments ${theme} ${width}`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
@@ -598,7 +599,7 @@ test("Operators cannot open rejected-scan reviews or request their records", asy
   expect(reads).toBe(0);
 });
 
-for (const theme of ["light", "dark"] as const) for (const width of [390, 1280]) {
+for (const { theme, width } of pairedViews) {
   test(`Admin bulk dismissal freezes matching scans and preserves retries at ${width} in ${theme}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);

@@ -1,0 +1,31 @@
+name: Keep Playwright browser cached
+# Caches saved by pull requests and release branches are visible only to that ref. A scheduled run uses the
+# default branch, whose caches every branch and pull request can restore, so Verify browser shards skip the download.
+# This lives outside Verify so release gates keep their exact required job list.
+on:
+  schedule:
+    - cron: "41 9 * * 1,4"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  playwright-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: 24.21.0, cache: npm }
+      - run: npm ci --ignore-scripts --no-audit
+      - name: Read the locked Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Keep the Playwright browser cached on the default branch
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+      - name: Install the Playwright browser into the shared cache
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium

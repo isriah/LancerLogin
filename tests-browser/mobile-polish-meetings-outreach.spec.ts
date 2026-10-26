@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Locator } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
+import { pairedViews } from "./paired-views";
 
 const meeting = { id: "active-meeting", title: "Synthetic planning", startsAt: "2026-09-28T14:00:00Z", endsAt: "2026-09-28T16:30:00Z", attendanceClosesAt: "2026-09-28T17:00:00Z", required: true, notes: "Bring the synthetic project plan.", audienceMode: "all", audienceLabelIds: [] };
 const activity = { id: "synthetic-service", mode: "event", labelIds: [], labels: [], serviceDate: "2026-09-28", teamId: null, title: "Synthetic service day", description: "Sort practice materials", location: "Synthetic library", impactRelevant: true, archived: false, revision: 0, eventStartLocal: null, eventEndLocal: null, eventStartOccurrence: null, eventEndOccurrence: null };
@@ -13,7 +14,7 @@ async function appearance(page: Page, theme: string) {
 async function contained(page: Page) { expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); }
 async function sideBySide(left: Locator, right: Locator) { const a = (await left.boundingBox())!; const b = (await right.boundingBox())!; expect(Math.abs(a.y - b.y)).toBeLessThanOrEqual(1); expect(a.x + a.width).toBeLessThanOrEqual(b.x); expect(a.height).toBeGreaterThanOrEqual(44); }
 
-for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) for (const theme of ["light", "dark"]) {
+for (const { viewport, theme } of pairedViews) {
   test(`month selection and meeting dialog remain usable at ${viewport.width} ${theme}`, async ({ page }) => {
     await page.setViewportSize(viewport); await appearance(page, theme);
     await page.route("**/meetings", route => route.fulfill({ json: { meetings: [meeting, { ...meeting, id: "later", title: "Later synthetic planning", startsAt: "2026-09-30T14:00:00Z", endsAt: "2026-09-30T16:00:00Z" }] } }));

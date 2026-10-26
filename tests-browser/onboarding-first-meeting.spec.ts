@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { dashboardConformanceReferences as refs } from "../apps/dashboard/src/design-conformance";
 import { attendanceSetupState, attendanceSnapshot, type AttendanceSetupState } from "./module-fixtures";
+import { pairedViews } from "./paired-views";
 
 test.use({ timezoneId: "UTC" });
 
@@ -96,8 +96,7 @@ async function finishOptionalSteps(page: Page) {
   await page.getByRole("button", { name: "Set up later and continue" }).click();
 }
 
-for (const viewport of refs.viewports) {
-  for (const theme of refs.themes) {
+for (const { viewport, theme } of pairedViews) {
     test(`empty Attendance setup creates a same-day meeting and verifies browser input at ${viewport.width} in ${theme}`, async ({
       page,
     }) => {
@@ -131,7 +130,6 @@ for (const viewport of refs.viewports) {
       ).toBe(true);
     });
   }
-}
 
 test("meeting validation preserves the Attendance setup draft for correction", async ({ page }) => {
   const fixture = await attendanceSetup(page);

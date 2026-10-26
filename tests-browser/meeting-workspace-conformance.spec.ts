@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { expectDashboardTypography } from "./dashboard-typography";
+import { pairedViews } from "./paired-views";
 
 type Role = "admin" | "operator";
 
@@ -45,8 +46,7 @@ async function expectContained(page: Page) {
   expect(geometry.clipped).toEqual([]);
 }
 
-for (const viewport of dashboardConformanceReferences.viewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of pairedViews) {
     test(`meeting browser conforms at ${viewport.width}x${viewport.height} in ${theme} mode with reference branding`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
@@ -89,7 +89,6 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expect(add).toBeFocused();
     });
   }
-}
 
 test("meeting browser empty, loading, error, success, and partial Discord outcomes remain explicit", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });

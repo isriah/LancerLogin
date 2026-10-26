@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { carpoolSnapshot } from "./module-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
+import { pairedViews } from "./paired-views";
 
 async function setup(page: Page, cars = 2, delayGroupSave = false) {
   const plan: any = { id: "groups", title: "Synthetic group review", destination: "Synthetic venue", tripScope: "both", groupSettings: [], rebuildUndo: null, meetingId: null, eventReference: null, eventTitleSnapshot: null, eventStartsAtSnapshot: null, radiusMiles: 12, preferredRadiusMiles: 4, notes: "", archived: false, revision: 0 };
@@ -18,7 +19,7 @@ async function setup(page: Page, cars = 2, delayGroupSave = false) {
   await page.goto("/carpool/plans/groups?area=groups&direction=outbound"); await expect(page.getByRole("heading", { name: "Groups", exact: true })).toBeVisible(); return { plan, people, detail, touch, lastGroup: () => lastGroup, lastAssignment: () => lastAssignment, setGroupFailure: (value: boolean) => { groupFail = value; }, previewCount: () => previewCount, applyCount: () => applyCount };
 }
 
-for (const theme of ["light", "dark"] as const) for (const width of [1280, 390]) test(`one Groups board supports labels filters and optional map at ${width} ${theme}`, async ({ page }, info) => {
+for (const { theme, width } of pairedViews) test(`one Groups board supports labels filters and optional map at ${width} ${theme}`, async ({ page }, info) => {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 }); await page.emulateMedia({ reducedMotion: "reduce" }); const state = await setup(page, 2, true); await setDashboardTheme(page, theme); const board = page.locator(".carpool-group-grid"); await expect(board).toHaveCount(1); await expect(page.locator(".carpool-geography")).toHaveCount(0); const driverA = board.locator(".carpool-group").filter({ has: page.getByRole("heading", { name: "Driver A", exact: true }) }); await expect(driverA.locator(".carpool-open-seat")).toHaveCount(1); await expect(driverA.locator(".carpool-open-seat")).toContainText("98 passenger seats available");
   const positions = await page.evaluate(() => ({ exceptions: document.querySelector(".carpool-group-exceptions")!.getBoundingClientRect().top, board: document.querySelector(".carpool-group-grid")!.getBoundingClientRect().top })); expect(positions.exceptions).toBeLessThan(positions.board);
   await page.getByLabel("Search groups").fill("Rider Two"); await expect(board.locator(".carpool-group")).toHaveCount(1); await expect(board).toContainText("Driver B"); await page.getByLabel("Search groups").fill(""); await page.getByLabel("Show cars").selectOption("space"); await expect(board.locator(".carpool-group")).toHaveCount(1); await page.getByLabel("Show cars").selectOption("all");

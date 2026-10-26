@@ -9,7 +9,7 @@ import { assetNames, assertCompleteVerify, createBundle, publishRelease, resolve
 const sha = "a".repeat(40), producerSha = "b".repeat(40);
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const notes = Buffer.from("# Synthetic release\n\nBugs fixed\n\nNone.\n");
-const jobs = ["actionlint", "verify", "dependency-audit", "browser-smoke", ...[1, 2, 3, 4].map((n) => `Browser shard ${n}/4`)].map((name) => ({ name, conclusion: "success" }));
+const jobs = ["actionlint", "verify", "dependency-audit", "browser-smoke", ...[1, 2, 3, 4, 5, 6].map((n) => `Browser shard ${n}/6`)].map((name) => ({ name, conclusion: "success" }));
 async function fixture(tag = "v1.2.6", changes = {}) {
   const root = await mkdtemp(join(tmpdir(), "release-publisher-test-"));
   const source = join(root, "source"), bundle = join(root, "bundle");
@@ -22,7 +22,7 @@ async function fixture(tag = "v1.2.6", changes = {}) {
   await createBundle(tag, sha, source, bundle, { runId: 11, producerSha });
   const manifest = JSON.parse(await readFile(join(bundle, "bundle.json")));
   const branch = tag.includes("beta") ? "modular" : "main";
-  const ci = { id: 7, head_sha: sha, head_branch: branch, event: "push", status: "completed", conclusion: "success" };
+  const ci = { id: 7, head_sha: sha, head_branch: branch, event: "push", status: "completed", conclusion: "success", ...changes.ci };
   const run = { id: 11, repository: { full_name: "isriah/LancerLogin" }, head_repository: { full_name: "isriah/LancerLogin" }, head_sha: producerSha,
     head_branch: "main", event: "workflow_dispatch", path: ".github/workflows/release.yml", status: "completed", conclusion: "success", ...changes.run };
   const zip = Buffer.from("Synthetic ZIP bytes bound by GitHub artifact digest");
@@ -34,6 +34,7 @@ async function fixture(tag = "v1.2.6", changes = {}) {
     if (args[0] === "api") {
       const endpoint = args.at(-1).replace("repos/isriah/LancerLogin/", ""); let result;
       if (endpoint === `commits/${tag}`) { tagReads++; result = { sha: changes.tagChanged && tagReads > 1 ? producerSha : changes.sha ?? sha, commit: { message: `Release ${tag} with synthetic content` } }; }
+      else if (endpoint === `compare/${branch}...${changes.sha ?? sha}`) result = { status: changes.compare ?? "identical" };
       else if (endpoint.startsWith("actions/workflows/ci.yml/runs?")) result = { workflow_runs: [ci] };
       else if (endpoint === "actions/runs/7/jobs?per_page=100") result = { jobs: changes.jobs ?? jobs };
       else if (endpoint === "actions/runs/11") result = run;
@@ -70,8 +71,25 @@ async function fixture(tag = "v1.2.6", changes = {}) {
 test("trusted release requires every exact source-branch job", () => {
   const run = { head_sha: sha, head_branch: "main", event: "push", status: "completed", conclusion: "success" };
   assert.doesNotThrow(() => assertCompleteVerify(run, jobs, sha, "main"));
-  for (const bad of [{ ...run, event: "workflow_dispatch" }, { ...run, head_sha: producerSha }, { ...run, head_branch: "modular" }]) assert.throws(() => assertCompleteVerify(bad, jobs, sha, "main"));
-  for (const bad of [jobs.slice(1), jobs.map((item, index) => index ? item : { ...item, conclusion: "skipped" })]) assert.throws(() => assertCompleteVerify(run, bad, sha, "main"));
+  // A maintainer-dispatched run on the exact commit runs that commit's workflow and is equivalent evidence.
+  assert.doesNotThrow(() => assertCompleteVerify({ ...run, event: "workflow_dispatch", head_branch: "codex/release-v1.2.6" }, jobs, sha, "main"));
+  for (const bad of [{ ...run, event: "pull_request" }, { ...run, event: "schedule" }, { ...run, head_sha: producerSha }, { ...run, head_branch: "modular" },
+    { ...run, event: "workflow_dispatch", head_sha: producerSha }, { ...run, conclusion: "cancelled" }]) assert.throws(() => assertCompleteVerify(bad, jobs, sha, "main"));
+  for (const bad of [jobs.slice(1), jobs.map((item, index) => index ? item : { ...item, conclusion: "skipped" }),
+    jobs.map((item) => ({ ...item, name: item.name.replace("/6", "/4") }))]) assert.throws(() => assertCompleteVerify(run, bad, sha, "main"));
+});
+test("a dispatched exact-commit Verify satisfies the tag gate only when the commit is on the trusted branch", async () => {
+  const dispatched = { event: "workflow_dispatch", head_branch: "codex/release-v2.0.0-beta.9" };
+  for (const compare of ["identical", "behind"]) {
+    const f = await fixture("v2.0.0-beta.9", { ci: dispatched, compare });
+    try { assert.equal(resolveRelease("v2.0.0-beta.9", f.gh).sha, sha); } finally { await f.cleanup(); }
+  }
+  for (const changes of [{ ci: dispatched, compare: "ahead" }, { ci: dispatched, compare: "diverged" }, { ci: { ...dispatched, head_sha: producerSha } },
+    { ci: { event: "pull_request" } }, { ci: dispatched, jobs: jobs.slice(1) }]) {
+    const f = await fixture("v2.0.0-beta.9", changes);
+    try { assert.throws(() => resolveRelease("v2.0.0-beta.9", f.gh), /release_commit_not_on_trusted_branch|complete_trusted_branch_verify_required/, JSON.stringify(changes)); }
+    finally { await f.cleanup(); }
+  }
 });
 test("preview is read-only; explicit publication assembles a draft and advances Stable", async () => {
   const f = await fixture();

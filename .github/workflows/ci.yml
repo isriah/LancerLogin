@@ -133,23 +133,40 @@ jobs:
         if: steps.audit-policy.outputs.run == 'true'
         run: npm run audit:release
   browser-shard:
-    name: Browser shard ${{ matrix.shard }}/4
+    name: Browser shard ${{ matrix.shard }}/6
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Release v'))
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Setup on a slow runner must not cancel passing tests; the test step keeps its own limit.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with: { node-version: 24.21.0, cache: npm }
       - run: npm ci --no-audit
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser -- --shard=${{ matrix.shard }}/4
+      - name: Read the locked Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Restore the Playwright browser for this Playwright version
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+      - name: Install the Playwright browser and system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Playwright system dependencies for the cached browser
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      - name: Run this browser shard
+        timeout-minutes: 15
+        run: npm run test:browser -- --shard=${{ matrix.shard }}/6
   browser-smoke:
     if: >-
       !cancelled() &&

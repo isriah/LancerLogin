@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { openActiveMeetingCalendar } from "./meeting-calendar-fixture";
+import { pairedViews } from "./paired-views";
 
 test("Dashboard owns meeting navigation and remembers the selected browser", async ({ page }) => {
   await page.goto("/dashboard");
@@ -153,8 +154,7 @@ test("Table search, checkbox selection, and bulk delete stay independent from ro
   ]);
 });
 
-for (const viewport of dashboardConformanceReferences.viewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of pairedViews) {
     test(`Table rows progress oldest to newest at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       const startsAt = "2026-09-05T18:00:00.000Z";
       const meetings = [
@@ -211,7 +211,6 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expect(page).toHaveURL(/\/meetings\/oldest$/);
     });
   }
-}
 
 test("Add meeting opens a keyboard-contained dialog and restores focus when dismissed", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });

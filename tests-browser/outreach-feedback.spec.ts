@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
+import { pairedViews } from "./paired-views";
 
 const event = { id: "event-1", mode: "event", labelIds: [], labels: [], serviceDate: "2026-10-12", teamId: null, title: "Synthetic Outreach event", description: "Community service at the library", location: "Library", impactRelevant: true, archived: false, revision: 0, eventStartLocal: null, eventEndLocal: null, eventStartOccurrence: null, eventEndOccurrence: null };
 const entry = (id: string, startLocal: string, endLocal: string, durationMinutes: number) => ({ id, memberId: "member-a", activityId: event.id, memberName: "Avery Synthetic", externalId: "SYN-A", activityTitle: event.title, serviceDate: event.serviceDate, startLocal, endLocal, durationMinutes, timeZone: "America/New_York", revision: 0, status: "counted", attribution: "self_asserted", taskNotes: "Original notes", createdAt: "2026-10-13T17:00:00.000Z" });
@@ -145,7 +146,7 @@ test("an unchanged initial search must not reset a newly selected catalog page",
   await expect(table).not.toContainText("Synthetic label 000");
 });
 
-for (const theme of ["light", "dark"]) for (const width of [1280, 390]) test(`catalog tabs search every page and use focused dialogs at ${width} in ${theme}`, async ({ page }) => {
+for (const { theme, width } of pairedViews) test(`catalog tabs search every page and use focused dialogs at ${width} in ${theme}`, async ({ page }) => {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 }); await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), theme); const state = await fixture(page); await page.goto("/settings/outreach-setup");
   const sections = page.getByRole("combobox", { name: "Outreach section", exact: true });
   if (width === 390) { await expect(sections).toHaveValue("/settings/outreach-setup?section=general"); await expect(sections.locator("option")).toHaveText(["General", "Supported teams (1)", "Labels (41)"]); }
@@ -192,7 +193,7 @@ test("Filter closes on outside click and Escape; optional event times begin blan
   await page.getByRole("button", { name: "Create activity", exact: true }).click(); const dialog = page.getByRole("dialog", { name: "Create Outreach activity" }); await expect(dialog.getByLabel("Set event times")).toHaveCount(0); await expect(dialog.getByLabel("Event start time", { exact: true })).toHaveValue(""); await expect(dialog.getByLabel("Event end time", { exact: true })).toHaveValue("");
 });
 
-for (const theme of ["light", "dark"]) for (const width of [1280, 390]) test(`submission pagination stays at the screen bottom at ${width} in ${theme}`, async ({ page }) => {
+for (const { theme, width } of pairedViews) test(`submission pagination stays at the screen bottom at ${width} in ${theme}`, async ({ page }) => {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 }); await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), theme);
   const state = await fixture(page); const requests: string[] = []; let mode: "entries" | "empty" | "error" = "entries"; let releaseNext: (() => Promise<void>) | undefined;
   const firstPage = Array.from({ length: 25 }, (_, index) => ({ ...state.entries[0]!, id: `logged-${index}`, memberName: `Synthetic member ${index}` }));

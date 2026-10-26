@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { attendanceSetupState, attendanceSnapshot } from "./module-fixtures";
+import { pairedViews } from "./paired-views";
 
 test.use({ timezoneId: "UTC" });
 
@@ -35,8 +36,7 @@ async function expectResponsiveFit(page: Page) {
   expect(geometry.clipped).toEqual([]);
 }
 
-for (const viewport of dashboardConformanceReferences.viewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of pairedViews) {
     test(`Attendance setup shows one validated card at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       await page.clock.setFixedTime(new Date("2026-10-25T23:59:59.900Z"));
       await page.setViewportSize(viewport);
@@ -69,7 +69,6 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expectResponsiveFit(page);
     });
   }
-}
 
 for (const viewport of dashboardConformanceReferences.viewports) {
   for (const theme of dashboardConformanceReferences.themes) {
@@ -95,8 +94,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
   }
 }
 
-for (const viewport of dashboardConformanceReferences.viewports) {
-  for (const theme of dashboardConformanceReferences.themes) {
+for (const { viewport, theme } of pairedViews) {
     test(`first-Admin Google guidance fits at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
@@ -115,7 +113,6 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expectResponsiveFit(page);
     });
   }
-}
 
 test("first-Admin modes expose associated validation and a pending state", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });

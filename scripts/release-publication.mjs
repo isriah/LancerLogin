@@ -11,7 +11,8 @@ const shaPattern = /^[0-9a-f]{40}$/;
 const digestPattern = /^[0-9a-f]{64}$/;
 const validRun = (value) => /^[1-9][0-9]{0,15}$/.test(String(value)) && Number.isSafeInteger(Number(value));
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const requiredJobs = ["actionlint", "verify", "dependency-audit", "browser-smoke", ...[1, 2, 3, 4].map((n) => `Browser shard ${n}/4`)];
+const browserShards = 6;
+const requiredJobs = ["actionlint", "verify", "dependency-audit", "browser-smoke", ...Array.from({ length: browserShards }, (_, index) => `Browser shard ${index + 1}/${browserShards}`)];
 export function assetNames(tag) {
   releasePublicationPolicy(tag);
   return ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => {
@@ -28,20 +29,28 @@ export function github(args, binary = false) {
 }
 const api = (gh, path) => JSON.parse(gh(["api", "--hostname", "github.com", "-H", "X-GitHub-Api-Version: 2026-03-10", `repos/${repository}/${path}`]));
 const cliRepo = ["--repo", `github.com/${repository}`];
+// A complete Verify run counts for the exact commit when it ran on a push to the trusted branch, or when a maintainer
+// dispatched it for that same commit. A dispatch runs the workflow file from that commit, so its evidence is the same;
+// resolveRelease separately requires the commit to be on the trusted branch before accepting it.
+const trustedVerifyRun = (run, sha, branch) => run.head_sha === sha && (run.event === "push" && run.head_branch === branch || run.event === "workflow_dispatch");
 export function assertCompleteVerify(run, jobs, sha, branch) {
-  if (run.head_sha !== sha || run.head_branch !== branch || run.event !== "push" || run.status !== "completed" || run.conclusion !== "success"
+  if (!trustedVerifyRun(run, sha, branch) || run.status !== "completed" || run.conclusion !== "success"
     || jobs.length !== requiredJobs.length || !requiredJobs.every((name) => jobs.some((job) => job.name === name && job.conclusion === "success"))) throw new Error("complete_trusted_branch_verify_required");
 }
 export function resolveRelease(tag, gh = github) {
   const policy = releasePublicationPolicy(tag);
   const commit = api(gh, `commits/${tag}`);
   if (!shaPattern.test(commit.sha) || !commit.commit?.message?.split("\n")[0].startsWith(`Release ${tag}`)) throw new Error("verified_release_commit_required");
-  const runs = api(gh, `actions/workflows/ci.yml/runs?head_sha=${commit.sha}&status=success&per_page=100`).workflow_runs;
-  const run = runs?.find((item) => item.head_sha === commit.sha && item.head_branch === policy.branch && item.event === "push" && item.conclusion === "success");
-  if (!run || !validRun(run.id)) throw new Error("complete_trusted_branch_verify_required");
-  const jobs = api(gh, `actions/runs/${run.id}/jobs?per_page=100`).jobs;
-  assertCompleteVerify(run, jobs, commit.sha, policy.branch);
-  return { tag, sha: commit.sha, ...policy };
+  const comparison = api(gh, `compare/${policy.branch}...${commit.sha}`);
+  if (!["identical", "behind"].includes(comparison.status)) throw new Error("release_commit_not_on_trusted_branch");
+  const runs = api(gh, `actions/workflows/ci.yml/runs?head_sha=${commit.sha}&status=success&per_page=100`).workflow_runs ?? [];
+  const candidates = runs.filter((item) => item.conclusion === "success" && trustedVerifyRun(item, commit.sha, policy.branch) && validRun(item.id))
+    .toSorted((a, b) => Number(b.event === "push") - Number(a.event === "push"));
+  for (const run of candidates) {
+    const jobs = api(gh, `actions/runs/${run.id}/jobs?per_page=100`).jobs;
+    try { assertCompleteVerify(run, jobs, commit.sha, policy.branch); return { tag, sha: commit.sha, ...policy }; } catch {}
+  }
+  throw new Error("complete_trusted_branch_verify_required");
 }
 async function regularFile(path, limit) {
   const info = await lstat(path);

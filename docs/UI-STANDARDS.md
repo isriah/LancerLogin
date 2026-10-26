@@ -50,6 +50,8 @@ Scrollable regions use `--ui-scrollbar-track`, `--ui-scrollbar-thumb`, and `--ui
 
 Cards use one padding value at a given hierarchy and the spacing scale between children. Avoid compensating margins inside a card. Page stacks, card stacks, and form rows use `gap`; individual margins are reserved for intentional separation from a different section.
 
+Above the 800px mobile breakpoint, `apps/dashboard/src/desktop-layout.css` applies the shared desktop rhythm: `--card-padding` for every top-level card, a control-height card heading, one content inset across calendar cards, the `ui-button` type scale for action buttons, and one bordered plus-or-minus row for disclosures. It loads after every other dashboard stylesheet. Prefer the shared tokens and patterns in new page CSS; add a desktop rule there only when an existing page rule diverges from this rhythm, and keep narrow-screen layouts in their own stylesheets.
+
 ### Color roles
 
 Use the `--ui-*` semantic aliases for new component CSS: surface, subtle surface, text, muted text, border, focus, success, warning, and error. These roles have light and dark values and remain independent of adopter brand colors where meaning must stay stable. Primary and secondary colors may identify brand and emphasis, but must not be the sole indication of success, warning, error, selection, or disabled state.

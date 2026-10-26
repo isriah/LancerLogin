@@ -14,6 +14,8 @@ import type { ModuleNavigationResult } from "./module-navigation";
 import { PublicOutreachForm } from "./public-outreach-form";
 import { WalkthroughSessionProvider } from "./page-walkthrough";
 import { clearWalkthroughSession } from "./walkthrough-session";
+// Loaded last so desktop consistency rules follow every page and mobile stylesheet.
+import "./desktop-layout.css";
 
 type CloudflareStep = { id: string; title: string; detail: string; action?: { label: string; href: string } };
 

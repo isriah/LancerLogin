@@ -12,7 +12,7 @@
 @media (max-width: 760px) {
   .kiosk-diagnostics dt, .kiosk-diagnostics dd { font-size: var(--text-small); }
   .kiosk-diagnostics dd { overflow-wrap: anywhere; }
-  .kiosk-manage-link, .kiosk-update-action > button { width: 100%; justify-content: center; }
+  .app .kiosk-manage-link, .kiosk-update-action > button { width: 100%; justify-content: center; }
   .simulator-page .simulator-controls .primary-button { justify-self: stretch; width: 100%; margin-top: 0; }
   .simulator-page .simulator-controls { gap: var(--space-4); }
 }

@@ -1,0 +1,144 @@
+/* Desktop layout consistency. These rules apply only above the 800px mobile breakpoint and load after every
+   other dashboard stylesheet, so the reviewed mobile layouts keep their own rules. They reuse the UI-STANDARDS
+   tokens: one card padding, one action-button type scale and one content inset per card. */
+@media (min-width: 801px) {
+  /* Action buttons share the ui-button type scale. Content-bearing buttons such as calendar days keep their own text. */
+  .app main :is(button, summary.meeting-more-actions-summary):not(.compact-calendar-day):not(.trend-point):not(.info-tip-button):not(.settings-edit-button):not(.report-column-trigger):not(.kiosk-device-select):not([role="switch"]):not([role="option"]):not([role="tab"]),
+  .app .meeting-more-actions > summary,
+  .app .sign-out-button { font-family: var(--font-body); font-size: var(--text-small); font-weight: 750; line-height: 1.2; }
+
+  /* Every top-level card uses the shared card padding. */
+  .app main :is(.carpool-workflow-bar,.carpool-people-filters,.carpool-group-filters,.carpool-rebuild-controls,.carpool-group-exceptions,.carpool-rebuild-summary,.ui-card.developer-options,.meeting-browser-controls.ui-card) { padding: var(--card-padding); }
+
+  /* Meeting and activity tables: the selection column stays compact so titles keep their width. */
+  .app .meeting-directory .ui-table :is(th,td):first-child { width: 3.5rem; min-width: 0; }
+
+  /* Roster filter labels read like every other field label; the filter icon stays decorative. */
+  .app .roster-filters label:has(> :is(input:not([type="radio"]):not([type="checkbox"]),select,textarea)):not(.meeting-browser-select) > span:not([class]) { color: var(--ui-text); font-weight: 750; }
+
+  /* Meeting and Outreach month calendars: heading, month controls, grid and selected day share one inset. */
+  .app .compact-month-calendar .calendar-heading { padding: var(--card-padding) var(--card-padding) var(--space-4); }
+  .app .compact-month-calendar [data-walkthrough="calendar-navigation"] { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--card-padding) var(--space-4); }
+  .app .compact-month-calendar .compact-month-navigation { flex: 1; min-width: 0; padding: 0; }
+  .app .compact-month-calendar .compact-calendar-today { margin: 0; }
+  .app .compact-month-calendar .calendar-weekdays,.app .compact-month-calendar .calendar-grid { padding-inline: var(--card-padding); }
+  .app .compact-month-calendar .calendar-weekdays { padding-bottom: var(--space-2); }
+  .app .compact-month-calendar .calendar-selected-day { margin: var(--space-5) var(--card-padding) var(--card-padding); }
+
+  /* Meeting facts: empty grid tracks stay on the card surface instead of showing separator color. */
+  .app .meeting-summary { background: var(--ui-surface); }
+  .app .meeting-summary > div { box-shadow: 0 0 0 1px var(--ui-border); }
+
+  /* The attendance count belongs to its card heading; the empty status region needs no reserved row. */
+  .app .attendance-utilities { min-height: 0; }
+  .app .attendance-card .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+
+  /* Modules uses the same page frame as other Settings pages: heading outside, one card for the module list. */
+  .app .module-controls { gap: var(--space-4); padding: 0; border: 0; background: transparent; }
+  .app .module-controls > form { gap: var(--space-4); padding: var(--card-padding); border: 1px solid var(--ui-border); border-radius: var(--radius-panel); background: var(--ui-surface); }
+  .app .module-controls > form > fieldset { gap: 0; padding: 0; border: 0; }
+  .app .module-controls > form > fieldset > legend { margin: 0 0 var(--space-2); padding: 0; font-family: var(--font-display); font-size: var(--text-card-heading); letter-spacing: .02em; text-transform: uppercase; }
+  .app .module-controls .module-setting-choice { display: grid; grid-template-columns: minmax(0,1fr) auto; column-gap: var(--space-4); row-gap: var(--space-1); align-items: center; margin: 0; padding-block: var(--space-3); background: transparent; }
+  .app .module-controls .module-setting-choice > span { display: contents; }
+  .app .module-controls .module-setting-choice strong { grid-column: 1; grid-row: 1; min-height: var(--control-min-block-size); }
+  .app .module-controls .module-setting-choice > input[role="switch"] { grid-column: 2; grid-row: 1; margin: 0; }
+  .app .module-controls .module-setting-choice small { grid-column: 1 / -1; color: var(--ui-text-muted); font-size: var(--text-small); line-height: 1.5; }
+  .app .module-controls .module-setting-choice:last-of-type { border-bottom: 0; }
+  .app .module-controls .module-actions { display: flex; justify-content: flex-start; }
+
+  /* Section pickers are the narrow-screen replacement for section tabs. */
+  .app label.settings-section-picker { display: none; }
+
+  /* Kiosk list rows keep selection, rename and enrollment on one line. */
+  .app .kiosk-device-option { flex-direction: row; align-items: center; gap: var(--space-1); padding-right: var(--space-1); }
+  .app .kiosk-device-option .kiosk-device-row { flex: 1; min-width: 0; }
+  .app .kiosk-device-option .kiosk-enrollment-button { order: 1; align-self: center; margin: 0; }
+  .app .kiosk-device-option > .kiosk-rename-form { flex-basis: 100%; }
+  .app .kiosk-device-option:has(> .kiosk-rename-form) { flex-wrap: wrap; }
+
+  /* Card headings: the legacy 4.4rem panel heading height is replaced by the standard control height everywhere. */
+  .app main :is(.task-card,.ui-card):not(.attendance-card):not(.contest-card) > .panel-heading { min-height: var(--control-min-block-size); padding: 0 0 var(--space-4); border-color: var(--ui-border); }
+
+  /* Back navigation is a compact link above the page heading on every detail page. Text color keeps
+     contrast in both themes regardless of the adopter's primary color. */
+  .app :is(.back-link,.kiosk-back-link,.compact-back-link),.app .meeting-detail-navigation > button { display: inline-flex; align-items: center; width: fit-content; min-height: var(--control-min-block-size); margin: 0; padding: 0; border: 0; color: var(--ui-text); background: transparent; font-family: var(--font-body); font-size: var(--text-small); font-weight: 750; text-decoration: none; }
+  .app .meeting-detail-navigation > button::before { content: "\2190\00a0" / ""; }
+  .app :is(.back-link,.kiosk-back-link,.compact-back-link):hover,.app .meeting-detail-navigation > button:hover { text-decoration: underline; }
+  .app .meeting-detail-navigation { margin-bottom: var(--space-2); }
+
+  /* Section actions sit side by side with their heading. */
+  .app .carpool-section-heading { align-items: center; }
+  .app .carpool-section-heading > .module-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
+  .app .module-controls .module-actions > button { width: auto; }
+
+  /* Form grids align their submit action with the field it saves rather than stretching it to the label height. */
+  .app main .form-grid > button { align-self: end; }
+  .app main input::-webkit-datetime-edit { padding-block: 0; }
+
+  /* Keep the same stack spacing above the attendance card after its count moved into the heading. */
+  .app .attendance-utilities { margin-bottom: var(--space-4); }
+
+  /* Report and menu disclosures that act as buttons use the same type scale as buttons. */
+  .app :is(.report-browser > summary,.report-menu > summary) { font-family: var(--font-body); font-size: var(--text-small); font-weight: 750; line-height: 1.2; }
+
+  /* Report result rows keep every cell on the same vertical center. */
+  .app .report-results :is(.editable-report-table,.report-table-data) td { vertical-align: middle; }
+
+  /* Date and time fields match the height of neighboring text fields and selects. */
+  .app main :is(input[type="date"],input[type="time"],input[type="datetime-local"]) { padding-block: calc(var(--space-3) - 1px); }
+
+  /* Integration cards use the shared card inset. */
+  .app .settings-integrations .integration-title { padding: var(--space-4) var(--card-padding); }
+  .app .settings-integrations .integration-body { padding-inline: var(--card-padding); }
+
+  /* Inline links rendered with an empty class attribute get the same treatment as unclassified links. */
+  .app main :is(p,li,dd,small) a[class=""] { color: var(--ui-text); text-decoration: underline; text-decoration-color: color-mix(in srgb,var(--primary) 70%,currentColor); text-underline-offset: .18em; }
+
+  /* Updates uses the same unruled page header as other Settings pages. */
+  .app .settings-updates .updates-header { min-height: 0; padding: 0; border-bottom: 0; }
+
+  /* Every Settings disclosure shares the bordered row with a trailing plus or minus. */
+  .app .web-update-diagnostics > summary { justify-content: space-between; padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); background: var(--ui-surface-subtle); font-family: var(--font-body); font-size: var(--text-body); font-weight: 700; }
+  .app .web-update-diagnostics > summary::before { content: none; }
+  .app .web-update-diagnostics > summary::after { content: "+"; flex: none; }
+  .app .web-update-diagnostics[open] > summary::after { content: "\2212"; }
+
+  /* Field labels stay readable; only an inline optional marker is muted. */
+  .app .dashboard-page label:has(> :is(input:not([type="radio"]):not([type="checkbox"]),select,textarea)):not(.meeting-browser-select) > span:not([class]):has(> span) { color: var(--ui-text); font-weight: 750; }
+  .app .dashboard-page label:has(> :is(input:not([type="radio"]):not([type="checkbox"]),select,textarea)):not(.meeting-browser-select) > span:not([class]) > span { color: var(--ui-text-muted); font-weight: 500; }
+
+  /* Carpool event controls stay on one aligned row: event filters, plan summary, settings and direction. */
+  .app .carpool-workflow-bar > .carpool-event-picker > label { flex: 1 1 12rem; min-width: 0; }
+  .app .carpool-workflow-bar > .carpool-event-picker > .module-actions { flex-wrap: nowrap; }
+
+  /* Settings page stacks space cards with their grid gap only. */
+  .app .settings-page > :is(.task-card,.ui-card) { margin-block: 0; }
+
+  /* The Meeting weights disclosure reads as the card heading with the shared trailing plus or minus. */
+  .app .meeting-weight-disclosure > summary { gap: var(--space-3); min-height: var(--control-min-block-size); padding: 0; border: 0; background: transparent; list-style: none; }
+  .app .meeting-weight-disclosure > summary::-webkit-details-marker { display: none; }
+  .app .meeting-weight-disclosure > summary::before { content: none; }
+  .app .meeting-weight-disclosure > summary::after { content: "+"; flex: none; margin-left: var(--space-2); font-family: var(--font-body); font-weight: 700; }
+  .app .meeting-weight-disclosure[open] > summary::after { content: "\2212"; }
+  .app .meeting-weight-disclosure > summary .ui-status { margin-left: auto; background: transparent; }
+
+  /* A decorative leading symbol inside a button keeps a visible space before the label. */
+  .app button:has(> span[aria-hidden="true"]:first-child) { gap: var(--space-1); }
+
+  /* The Outreach Submission Log uses the same bordered disclosure row as Settings. */
+  .app .outreach-submission-disclosure { margin-top: var(--space-4); padding-top: 0; border-top: 0; }
+  .app .outreach-submission-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-control); background: var(--ui-surface-subtle); font-family: var(--font-body); font-size: var(--text-body); font-weight: 700; list-style: none; }
+  .app .outreach-submission-disclosure > summary::-webkit-details-marker { display: none; }
+  .app .outreach-submission-disclosure > summary::after { content: "+"; flex: none; }
+  .app .outreach-submission-disclosure[open] > summary::after { content: "\2212"; }
+
+  /* Kiosk management: a lone device card spans the page and its sections are separated plus-or-minus rows. */
+  .app .kiosk-grid:has(> :only-child) { grid-template-columns: minmax(0,1fr); }
+  .app .kiosk-management-section { border-top: 0; }
+  .app .kiosk-management-section + .kiosk-management-section { margin-top: var(--space-2); }
+  .app .kiosk-management-section > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); font-family: var(--font-body); font-size: var(--text-body); font-weight: 700; list-style: none; }
+  .app .kiosk-management-section > summary::-webkit-details-marker { display: none; }
+  .app .kiosk-management-section > summary::after { content: "+"; flex: none; }
+  .app .kiosk-management-section[open] > summary::after { content: "\2212"; }
+  .app .kiosk-management-section[open] > summary { margin-bottom: var(--space-3); }
+}

@@ -1,4 +1,4 @@
-import { RefObject, useEffect, useRef } from "react";
+import { RefObject, useEffect, useRef, useState } from "react";
 
 const focusableSelector = [
   "a[href]",
@@ -34,4 +34,11 @@ export function useModalFocus(dialog: RefObject<HTMLElement | null>, active: boo
     window.requestAnimationFrame(() => (dialog.current?.querySelector<HTMLElement>("[data-modal-initial-focus]") ?? focusable()[0] ?? dialog.current)?.focus());
     return () => { document.removeEventListener("keydown", keydown); previouslyFocused?.focus(); };
   }, [active, dialog]);
+}
+
+/** Focuses an error message after React commits it. A requestAnimationFrame callback can run before the message renders. */
+export function useErrorFocus(id: string) {
+  const [request, setRequest] = useState(0);
+  useEffect(() => { if (request) document.getElementById(id)?.focus(); }, [id, request]);
+  return () => setRequest((count) => count + 1);
 }

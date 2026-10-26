@@ -4,7 +4,7 @@ LancerLogin is standalone, open-source, self-hosted attendance software for club
 
 The current stable public release is **1.2.6**. The public repository contains source, reviewed releases, and public documentation. Create a separate **private** repository from the template for an installation. That private repository holds deployment history and secrets.
 
-This source is **2.0.0-beta.7**, an opt-in Modular beta. Stable remains the default update track. Follow the Community bridge prerequisites below before opting in.
+This source is **2.0.0-beta.8**, an opt-in Modular beta. Stable remains the default update track. Follow the Community bridge prerequisites below before opting in.
 
 ## What it does
 

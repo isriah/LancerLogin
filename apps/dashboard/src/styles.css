@@ -1328,7 +1328,7 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
 .settings-page input:focus-visible,.settings-page select:focus-visible,.settings-page textarea:focus-visible,.settings-integrations input:focus-visible,.settings-integrations select:focus-visible,.settings-integrations textarea:focus-visible { border-color: var(--primary); outline: 3px solid var(--ui-focus); outline-offset: 2px; }
 .settings-page input[aria-invalid="true"],.settings-integrations input[aria-invalid="true"] { border-color: var(--ui-error); }
 .settings-page .primary-button,.settings-integrations .primary-button { width: auto; min-height: var(--control-min-block-size); margin: 0; padding: var(--space-2) var(--space-4); border: 1px solid var(--primary); border-radius: var(--radius-control); }
-.settings-page .quiet-button,.settings-integrations button:not(.primary-button),.settings-integrations summary,.data-actions button,.dialog-actions button { min-height: var(--control-min-block-size); margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); cursor: pointer; }
+.settings-page .quiet-button,.settings-integrations button:not(.primary-button):not(.info-tip-button),.settings-integrations summary,.data-actions button,.dialog-actions button { min-height: var(--control-min-block-size); margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); cursor: pointer; }
 .settings-page .danger-button,.settings-integrations .danger-button,.data-actions .danger-button { border-color: var(--ui-error); color: var(--ui-error); background: var(--ui-error-surface); }
 .settings-page .field-help,.settings-integrations .field-help { margin: 0; color: var(--ui-text-muted); font-size: var(--text-small); }
 .settings-form > .primary-button { justify-self: start; }
@@ -2365,3 +2365,15 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
 .fingerprint-enrollment-list ul { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-3); max-height: 28rem; overflow: auto; }
 .fingerprint-enrollment-list li { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-control); }
 .fingerprint-enrollment-list li span { flex: 1 1 14rem; min-width: 0; overflow-wrap: anywhere; }
+
+/* Foundation repairs. Page rules that reset the background shorthand must not remove the shared inset select arrow. */
+.app select:not([multiple]):not([size]) { appearance: none; padding-right: var(--space-12); background-image: linear-gradient(45deg,transparent 50%,var(--ui-text-muted) 50%),linear-gradient(135deg,var(--ui-text-muted) 50%,transparent 50%); background-position: calc(100% - 1.5rem) calc(50% + .1rem),calc(100% - 1.12rem) calc(50% + .1rem); background-size: .38rem .38rem,.38rem .38rem; background-repeat: no-repeat; }
+/* A page heading receives programmatic focus for screen-reader context only; it is not an interactive target. */
+.app h1[tabindex="-1"]:focus { outline: none; }
+/* Navigation that looks like an action uses the same shared button treatment as button.ui-button. */
+.app a.ui-button { display: inline-flex; align-items: center; justify-content: center; width: fit-content; min-height: var(--control-min-block-size); margin: 0; padding: var(--space-2) var(--space-4); border: 1px solid var(--ui-border); border-radius: var(--radius-control); color: var(--ui-text); background: var(--ui-surface-subtle); font-family: var(--font-body); font-size: var(--text-small); font-weight: 750; line-height: 1.2; text-align: center; text-decoration: none; cursor: pointer; }
+.app a.ui-button:hover { border-color: var(--primary); background: var(--ui-surface); }
+.app a.ui-button:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+/* Unclassified links inside running text use readable text color instead of browser-default blue. */
+.app main :is(p,li,dd,small) a:not([class]) { color: var(--ui-text); text-decoration: underline; text-decoration-color: color-mix(in srgb,var(--primary) 70%,currentColor); text-underline-offset: .18em; }
+.app main :is(p,li,dd,small) a:not([class]):hover { text-decoration-thickness: 2px; }

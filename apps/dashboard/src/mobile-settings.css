@@ -25,7 +25,7 @@
 .module-setting-choice > span { flex: 1; }
 .module-setting-choice > span > small:empty { display: none; }
 .settings-page input[role="switch"],.module-setting-choice input[role="switch"] { appearance: none; -webkit-appearance: none; position: relative; flex: 0 0 2.5rem; width: 2.5rem; min-width: 2.5rem; height: 1.5rem; min-height: 1.5rem; padding: 0; margin: 0; border: 1px solid var(--ui-border); border-radius: var(--radius-pill); background: var(--ui-surface-subtle); cursor: pointer; }
-.settings-page input[role="switch"]::after,.module-setting-choice input[role="switch"]::after { content: ""; position: absolute; top: .1875rem; left: .1875rem; width: 1rem; height: 1rem; border-radius: 50%; background: var(--ui-text-muted); }
+.settings-page input[role="switch"]::after,.module-setting-choice input[role="switch"]::after { content: ""; position: absolute; top: .1875rem; left: .1875rem; width: 1rem; height: 1rem; border: 0; border-radius: 50%; background: var(--ui-text-muted); opacity: 1; transform: none; transition: left .16s ease; }
 .settings-page input[role="switch"]:checked,.module-setting-choice input[role="switch"]:checked { background: var(--primary); border-color: var(--primary); }
 .settings-page input[role="switch"]:checked::after,.module-setting-choice input[role="switch"]:checked::after { left: 1.1875rem; background: var(--on-primary); }
 .settings-page input[role="switch"]:disabled,.module-setting-choice input[role="switch"]:disabled { opacity: .5; cursor: not-allowed; }

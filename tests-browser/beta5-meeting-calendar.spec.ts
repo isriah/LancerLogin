@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Locator } from "@playwright/test";
 import { setDashboardTheme } from "./dashboard-theme";
 import { outreachSnapshot } from "./module-fixtures";
+import { requireOutreachPlugin } from "./outreach-fixtures";
 import { pairedViews } from "./paired-views";
 
 test.use({ timezoneId: "America/New_York" });
@@ -91,6 +92,7 @@ for (const { theme, width } of pairedViews) test(`Dashboard selected day survive
 });
 
 for (const { theme, width } of pairedViews) test(`Outreach retains selected day and all-day wording through detail and Table at ${width} in ${theme}`, async ({ page }) => {
+  requireOutreachPlugin();
   await page.setViewportSize({ width, height: 900 }); await prepare(page);
   const activity = { id: "synthetic-all-day", mode: "event", labelIds: [], labels: [], serviceDate: "2026-09-09", teamId: null, title: "Synthetic all-day service", description: "Practice materials", location: "Synthetic library", impactRelevant: true, archived: false, revision: 0, eventStartLocal: null, eventEndLocal: null, eventStartOccurrence: null, eventEndOccurrence: null };
   await page.route("**/platform/modules", route => route.fulfill({ json: outreachSnapshot() }));

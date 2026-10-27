@@ -8,7 +8,7 @@
   .app .sign-out-button { font-family: var(--font-body); font-size: var(--text-small); font-weight: 750; line-height: 1.2; }
 
   /* Every top-level card uses the shared card padding. */
-  .app main :is(.carpool-workflow-bar,.carpool-people-filters,.carpool-group-filters,.carpool-rebuild-controls,.carpool-group-exceptions,.carpool-rebuild-summary,.ui-card.developer-options,.meeting-browser-controls.ui-card) { padding: var(--card-padding); }
+  .app main :is(.ui-card.developer-options,.meeting-browser-controls.ui-card) { padding: var(--card-padding); }
 
   /* Meeting and activity tables: the selection column stays compact so titles keep their width. */
   .app .meeting-directory .ui-table :is(th,td):first-child { width: 3.5rem; min-width: 0; }
@@ -16,7 +16,7 @@
   /* Roster filter labels read like every other field label; the filter icon stays decorative. */
   .app .roster-filters label:has(> :is(input:not([type="radio"]):not([type="checkbox"]),select,textarea)):not(.meeting-browser-select) > span:not([class]) { color: var(--ui-text); font-weight: 750; }
 
-  /* Meeting and Outreach month calendars: heading, month controls, grid and selected day share one inset. */
+  /* Month calendars on meeting and module pages: heading, month controls, grid and selected day share one inset. */
   .app .compact-month-calendar .calendar-heading { padding: var(--card-padding) var(--card-padding) var(--space-4); }
   .app .compact-month-calendar [data-walkthrough="calendar-navigation"] { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--card-padding) var(--space-4); }
   .app .compact-month-calendar .compact-month-navigation { flex: 1; min-width: 0; padding: 0; }
@@ -61,14 +61,12 @@
 
   /* Back navigation is a compact link above the page heading on every detail page. Text color keeps
      contrast in both themes regardless of the adopter's primary color. */
-  .app :is(.back-link,.kiosk-back-link,.compact-back-link),.app .meeting-detail-navigation > button { display: inline-flex; align-items: center; width: fit-content; min-height: var(--control-min-block-size); margin: 0; padding: 0; border: 0; color: var(--ui-text); background: transparent; font-family: var(--font-body); font-size: var(--text-small); font-weight: 750; text-decoration: none; }
+  .app :is(.back-link,.kiosk-back-link),.app .meeting-detail-navigation > button { display: inline-flex; align-items: center; width: fit-content; min-height: var(--control-min-block-size); margin: 0; padding: 0; border: 0; color: var(--ui-text); background: transparent; font-family: var(--font-body); font-size: var(--text-small); font-weight: 750; text-decoration: none; }
   .app .meeting-detail-navigation > button::before { content: "\2190\00a0" / ""; }
-  .app :is(.back-link,.kiosk-back-link,.compact-back-link):hover,.app .meeting-detail-navigation > button:hover { text-decoration: underline; }
+  .app :is(.back-link,.kiosk-back-link):hover,.app .meeting-detail-navigation > button:hover { text-decoration: underline; }
   .app .meeting-detail-navigation { margin-bottom: var(--space-2); }
 
   /* Section actions sit side by side with their heading. */
-  .app .carpool-section-heading { align-items: center; }
-  .app .carpool-section-heading > .module-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
   .app .module-controls .module-actions > button { width: auto; }
 
   /* Form grids align their submit action with the field it saves rather than stretching it to the label height. */
@@ -107,10 +105,6 @@
   .app .dashboard-page label:has(> :is(input:not([type="radio"]):not([type="checkbox"]),select,textarea)):not(.meeting-browser-select) > span:not([class]):has(> span) { color: var(--ui-text); font-weight: 750; }
   .app .dashboard-page label:has(> :is(input:not([type="radio"]):not([type="checkbox"]),select,textarea)):not(.meeting-browser-select) > span:not([class]) > span { color: var(--ui-text-muted); font-weight: 500; }
 
-  /* Carpool event controls stay on one aligned row: event filters, plan summary, settings and direction. */
-  .app .carpool-workflow-bar > .carpool-event-picker > label { flex: 1 1 12rem; min-width: 0; }
-  .app .carpool-workflow-bar > .carpool-event-picker > .module-actions { flex-wrap: nowrap; }
-
   /* Settings page stacks space cards with their grid gap only. */
   .app .settings-page > :is(.task-card,.ui-card) { margin-block: 0; }
 
@@ -124,13 +118,6 @@
 
   /* A decorative leading symbol inside a button keeps a visible space before the label. */
   .app button:has(> span[aria-hidden="true"]:first-child) { gap: var(--space-1); }
-
-  /* The Outreach Submission Log uses the same bordered disclosure row as Settings. */
-  .app .outreach-submission-disclosure { margin-top: var(--space-4); padding-top: 0; border-top: 0; }
-  .app .outreach-submission-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-control); background: var(--ui-surface-subtle); font-family: var(--font-body); font-size: var(--text-body); font-weight: 700; list-style: none; }
-  .app .outreach-submission-disclosure > summary::-webkit-details-marker { display: none; }
-  .app .outreach-submission-disclosure > summary::after { content: "+"; flex: none; }
-  .app .outreach-submission-disclosure[open] > summary::after { content: "\2212"; }
 
   /* Kiosk management: a lone device card spans the page and its sections are separated plus-or-minus rows. */
   .app .kiosk-grid:has(> :only-child) { grid-template-columns: minmax(0,1fr); }

@@ -11,7 +11,9 @@ import { AdaptiveBrandLogo } from "./adaptive-brand-logo";
 import { brandTheme } from "./theme";
 import { loadDashboardSession, startDashboardEntry, type DashboardSession } from "./dashboard-startup";
 import type { ModuleNavigationResult } from "./module-navigation";
-import { PublicOutreachForm } from "./public-outreach-form";
+import { installedDashboardModules } from "./installed-dashboard-modules";
+import { resolveDashboardPublicPage } from "./module-contributions.ts";
+import { ModuleRoot } from "./module-slots";
 import { WalkthroughSessionProvider } from "./page-walkthrough";
 import { clearWalkthroughSession } from "./walkthrough-session";
 // Loaded last so desktop consistency rules follow every page and mobile stylesheet.
@@ -139,7 +141,9 @@ function ProvisionedEntry({ startup, status, onConfigured, theme, onTheme }: { s
   if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
   const branding = status.configured ? status.settings : undefined;
   const style = branding ? brandTheme(branding.primaryColor, branding.secondaryColor) : undefined;
-  if (status.configured && window.location.pathname === "/submit-hours") return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to submission form</a><div className="provisioned-main"><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><PublicOutreachForm /></div></div>;
+  // A module's public page (such as Outreach's submission form) renders without signing in, inside its module root.
+  const publicPage = status.configured ? resolveDashboardPublicPage(installedDashboardModules, window.location.pathname) : undefined;
+  if (publicPage) return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">{publicPage.page.skipLinkLabel}</a><div className="provisioned-main"><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><ModuleRoot moduleId={publicPage.moduleId}>{publicPage.page.render()}</ModuleRoot></div></div>;
   return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to main content</a><div className="provisioned-main">{status.configured ? <ConfiguredInstallation initialSession={startup?.session} initialModules={startup?.modules} status={status} onStatusChange={onConfigured} theme={theme} onTheme={onTheme} /> : <><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><FirstAdminSetup onConfigured={onConfigured} /></>}</div></div>;
 }
 

@@ -1,14 +1,18 @@
 {
   "schemaVersion": 1,
   "module": "carpool",
-  "label": "Carpool",
+  "label": "Carpool plugin",
+  "pluginSelection": "tests/fixtures/carpool.modules.json",
   "fast": {
     "javascript": [],
     "typescript": [
       "tests-ts/carpool-module.test.ts",
       "tests-ts/carpool-d1.test.ts",
       "tests-ts/carpool-meeting-links.test.ts",
+      "tests-ts/carpool-platform.test.ts",
+      "tests-ts/extracted-module-compatibility.test.ts",
       "tests-ts/module-platform.test.ts",
+      "tests-ts/module-contributions.test.ts",
       "tests-ts/module-lifecycle.test.ts"
     ],
     "browser": [],
@@ -23,7 +27,12 @@
       "tests-ts/carpool-module.test.ts",
       "tests-ts/carpool-d1.test.ts",
       "tests-ts/carpool-meeting-links.test.ts",
+      "tests-ts/carpool-platform.test.ts",
+      "tests-ts/carpool-worker.test.ts",
+      "tests-ts/extracted-module-compatibility.test.ts",
+      "tests-ts/module-composition.test.ts",
       "tests-ts/module-platform.test.ts",
+      "tests-ts/module-contributions.test.ts",
       "tests-ts/module-lifecycle.test.ts",
       "tests-ts/worker-runtime.test.ts"
     ],
@@ -36,7 +45,9 @@
       "tests-browser/carpool-navigation.spec.ts",
       "tests-browser/carpool-people.spec.ts",
       "tests-browser/carpool-groups.spec.ts",
-      "tests-browser/carpool-share.spec.ts"
+      "tests-browser/carpool-share.spec.ts",
+      "tests-browser/module-slots.spec.ts",
+      "tests-browser/carpool-locations.spec.ts"
     ],
     "typecheckWorkspaces": [
       "@lancerlogin/shared",

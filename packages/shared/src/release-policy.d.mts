@@ -7,3 +7,11 @@ export function completeOfficialRelease(value: unknown, channel?: UpdateChannel)
 export function newestOfficialRelease(values: unknown, channel?: UpdateChannel): OfficialRelease | undefined;
 
 export function kioskReleaseTransition(candidate: unknown, installed: unknown): "upgrade" | "current" | "replace-development" | "unavailable";
+
+export type PluginReleaseTrack = "stable" | "beta" | "nightly";
+export const pluginReleaseTracks: readonly PluginReleaseTrack[];
+export function pluginReleaseKind(tag: unknown): PluginReleaseTrack | undefined;
+export function pluginTrackOffers(track: unknown, tag: unknown, prerelease: unknown): boolean;
+export function newestPluginRelease<T extends { tag_name?: unknown }>(values: readonly T[] | unknown, track?: PluginReleaseTrack): T | undefined;
+export type PluginSelectionTrack = "stable" | "nightly";
+export const pluginSelectionTracks: readonly PluginSelectionTrack[];

@@ -1,5 +1,6 @@
 import type { D1Database, D1Statement } from "./d1-usage.ts";
-import { carpoolCleanupSteps } from "./carpool-lifecycle.ts";
+import { installedApiModule, installedApiModules } from "./installed-api-modules.ts";
+import { readRemovedModuleDefinitions } from "./module-catalog.ts";
 
 type DueState = {
   installationId: string;
@@ -14,86 +15,16 @@ export type ModuleCleanupResult = { status: "idle" | "progress" | "deleted" | "b
 type DeleteStep = { kind: "delete"; table: string; where?: string; bindings?: readonly unknown[] };
 type ResetStep = { kind: "reset"; table: string; pending: string; set: string; bindings: readonly unknown[] };
 type AssignmentStep = { kind: "assignments" };
-type CleanupStep = DeleteStep | ResetStep | AssignmentStep;
+export type CleanupStep = DeleteStep | ResetStep | AssignmentStep;
 
-const attendanceSteps: readonly CleanupStep[] = [
-  { kind: "delete", table: "kiosk_commands" },
-  { kind: "delete", table: "simulated_kiosk_sessions" },
-  { kind: "delete", table: "kiosks" },
-  { kind: "delete", table: "pairing_codes" },
-  { kind: "delete", table: "discord_attendance_recipients" },
-  { kind: "delete", table: "discord_attendance_contests" },
-  { kind: "delete", table: "discord_attendance_notifications" },
-  { kind: "delete", table: "discord_anomaly_reports" },
-  { kind: "delete", table: "discord_calendar_operations" },
-  { kind: "delete", table: "discord_calendar_event_mappings" },
-  { kind: "delete", table: "google_calendar_operations" },
-  { kind: "delete", table: "google_calendar_event_mappings" },
-  { kind: "delete", table: "attendance_corrections" },
-  { kind: "delete", table: "attendance_events" },
-  { kind: "delete", table: "meeting_audience_labels" },
-  { kind: "delete", table: "meetings" },
-  { kind: "delete", table: "meeting_templates" },
-  { kind: "delete", table: "label_attendance_rules" },
-  { kind: "delete", table: "meeting_weight_categories" },
-  { kind: "delete", table: "integration_deliveries", where: "provider='resend' AND (delivery_key LIKE 'missed:%' OR delivery_key LIKE 'report:%')" },
-  { kind: "delete", table: "platform_module_setup_progress", where: "module_id=?", bindings: ["attendance"] },
-  { kind: "delete", table: "setup_progress", where: "step IN ('pair-kiosk','fingerprint-test','confirm-attendance')" },
-  { kind: "assignments" },
-  { kind: "reset", table: "members", pending: "attendance_required_from IS NOT NULL", set: "attendance_required_from=NULL", bindings: [] },
-  { kind: "reset", table: "organization_settings", pending: `late_scan_minutes<>30 OR discord_block_recontests_after_rejection<>0 OR discord_contest_window_hours<>24 OR discord_channel_manager_enabled<>0
-      OR attendance_reporting_starts_on IS NOT NULL OR anomaly_late_threshold_minutes<>10 OR anomaly_early_threshold_minutes<>10
-      OR discord_anomaly_reports_enabled<>0 OR discord_anomaly_report_channel_id IS NOT NULL OR discord_anomaly_reports_enabled_at IS NOT NULL
-      OR attendance_recent_days<>30 OR attendance_policy_activated_on IS NOT NULL OR kiosk_authentication_method<>'fingerprint'`, set: `late_scan_minutes=30,discord_block_recontests_after_rejection=0,discord_contest_window_hours=24,
-      discord_channel_manager_enabled=0,attendance_reporting_starts_on=NULL,anomaly_late_threshold_minutes=10,anomaly_early_threshold_minutes=10,
-      discord_anomaly_reports_enabled=0,discord_anomaly_report_channel_id=NULL,discord_anomaly_reports_enabled_at=NULL,
-      attendance_recent_days=30,attendance_policy_activated_on=NULL,kiosk_authentication_method='fingerprint'`, bindings: [] },
-  // Appended so an in-progress retained-data cursor keeps its historical meaning.
-  { kind: "delete", table: "label_weekly_targets" },
-  { kind: "delete", table: "kiosk_fingerprint_deliveries" },
-  { kind: "delete", table: "kiosk_fingerprint_keys" },
-  { kind: "delete", table: "kiosk_fingerprint_sync" },
-  { kind: "delete", table: "kiosk_fingerprint_vault_templates" },
-  { kind: "delete", table: "kiosk_fingerprint_vault_settings" },
-  // Slots have no installation_id. Delete scoped parents and cascade children,
-  // retaining both appended cursor positions for interrupted cleanup retries.
-  { kind: "delete", table: "kiosk_fingerprint_review_manifests" },
-  { kind: "delete", table: "kiosk_fingerprint_review_manifests" },
-  { kind: "delete", table: "kiosk_fingerprint_review_requests" },
-  { kind: "delete", table: "kiosk_fingerprint_reset_commands" },
-  { kind: "delete", table: "kiosk_fingerprint_reset_batches" },
-  { kind: "delete", table: "kiosk_fingerprint_retired_review_grants" },
-  { kind: "delete", table: "kiosk_enrollment_sessions" },
-  { kind: "delete", table: "kiosk_fingerprint_vault_enrollments" },
-  { kind: "delete", table: "kiosk_fingerprint_vault_retirements" },
-  { kind: "delete", table: "kiosk_scan_reviews" },
-];
+type ModuleCleanup = { readonly steps: readonly CleanupStep[]; readonly blocker?: { readonly sql: string; readonly bindings: (installationId: string) => readonly unknown[]; readonly recordFailure?: boolean } };
 
-const outreachSteps: readonly CleanupStep[] = [
-  { kind: "delete", table: "hours_publication_operations" },
-  { kind: "delete", table: "hours_activity_publications" },
-  { kind: "delete", table: "hours_correction_resolutions" },
-  { kind: "delete", table: "hours_correction_requests" },
-  { kind: "delete", table: "hours_reopen_windows" },
-  { kind: "delete", table: "hours_submission_keys" },
-  { kind: "delete", table: "hours_entry_revisions" },
-  { kind: "delete", table: "hours_entries" },
-  { kind: "delete", table: "hours_activities" },
-  { kind: "delete", table: "hours_teams" },
-  { kind: "delete", table: "hours_categories" },
-  { kind: "delete", table: "hours_entry_settings" },
-  { kind: "delete", table: "platform_module_setup_progress", where: "module_id=?", bindings: ["hour-tracking"] },
-  { kind: "assignments" },
-  // Appended so an in-progress retained-data cursor keeps its historical meaning.
-  { kind: "delete", table: "hours_activity_labels" },
-  { kind: "delete", table: "hours_labels" },
-  { kind: "delete", table: "hours_public_form_settings" },
-  { kind: "delete", table: "hours_public_lookup_limits" },
-];
-
-function stepsFor(moduleId: string) {
-  const bindings: Readonly<Record<string, readonly CleanupStep[]>> = { attendance: attendanceSteps, "hour-tracking": outreachSteps, carpool: carpoolCleanupSteps };
-  const steps = bindings[moduleId]; if (!steps) throw new Error("Unknown module cleanup binding"); return steps;
+/** Installed modules clean up with their own steps; removed modules use the definition recorded while installed. */
+async function cleanupFor(db: D1Database, moduleId: string): Promise<ModuleCleanup> {
+  const installed = installedApiModule(moduleId)?.cleanup; if (installed) return installed;
+  const recorded = (await readRemovedModuleDefinitions(db, [moduleId])).get(moduleId);
+  if (!recorded) throw new Error("Unknown module cleanup binding");
+  return { steps: recorded.cleanup };
 }
 
 const safeName = /^[a-z][a-z0-9_]*$/;
@@ -112,12 +43,8 @@ function guard(state: DueState, token: string, cursor = state.deletionCursor) {
   };
 }
 
-const moduleBlockers = `EXISTS(SELECT 1 FROM integration_deliveries WHERE installation_id=? AND status='pending')
-  OR EXISTS(SELECT 1 FROM google_calendar_operations WHERE installation_id=? AND status='pending')
-  OR EXISTS(SELECT 1 FROM discord_calendar_operations WHERE installation_id=? AND (status='processing' OR julianday(lease_expires_at)>julianday('now')))`;
-const outreachBlockers = "EXISTS(SELECT 1 FROM hours_publication_operations WHERE installation_id=? AND status='processing' AND julianday(lease_expires_at)>julianday('now'))";
-
-async function start(db: D1Database, state: DueState, token: string, now: Date) {
+async function start(db: D1Database, state: DueState, cleanup: ModuleCleanup, token: string, now: Date) {
+  const blocker = cleanup.blocker;
   const expiresAt = new Date(now.getTime() + 60_000).toISOString();
   const lease = await db.prepare(`INSERT INTO platform_module_cleanup_leases(installation_id,module_id,generation,token,expires_at)
     SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM platform_modules m
@@ -125,12 +52,12 @@ async function start(db: D1Database, state: DueState, token: string, now: Date) 
       JOIN platform_module_administration a ON a.installation_id=m.installation_id
       JOIN platform_module_administration_epochs ae ON ae.installation_id=a.installation_id AND ae.revision=a.revision
       WHERE m.installation_id=? AND m.module_id=? AND m.generation=? AND m.phase IN ('retained','deleting')
-      AND julianday(m.delete_after)<=julianday(?) ${state.moduleId === "attendance" ? `AND NOT (${moduleBlockers})` : state.moduleId === "hour-tracking" ? `AND NOT (${outreachBlockers})` : ""})
+      AND julianday(m.delete_after)<=julianday(?) ${blocker ? `AND NOT (${blocker.sql})` : ""})
     ON CONFLICT(installation_id,module_id) DO UPDATE SET generation=excluded.generation,token=excluded.token,expires_at=excluded.expires_at
     WHERE julianday(platform_module_cleanup_leases.expires_at)<=julianday(?)`)
     .bind(state.installationId, state.moduleId, state.generation, token, expiresAt,
       state.installationId, state.moduleId, state.generation, now.toISOString(),
-      ...(state.moduleId === "attendance" ? [state.installationId, state.installationId, state.installationId] : state.moduleId === "hour-tracking" ? [state.installationId] : []), now.toISOString()).run();
+      ...(blocker?.bindings(state.installationId) ?? []), now.toISOString()).run();
   if (lease.meta?.changes !== 1) return false;
   if (state.phase === "retained") {
     const nextRevisionId = crypto.randomUUID();
@@ -234,19 +161,29 @@ async function finish(db: D1Database, state: DueState, token: string, now: Date,
 export async function runModuleCleanup(db: D1Database, now = new Date(), limit = 100): Promise<ModuleCleanupResult> {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error("Cleanup limit must be between 1 and 500");
   const state = await db.prepare(`SELECT installation_id AS installationId,module_id AS moduleId,generation,phase,deletion_cursor AS deletionCursor
-    FROM platform_modules WHERE module_id IN ('attendance','hour-tracking','carpool') AND phase IN ('retained','deleting') AND julianday(delete_after)<=julianday(?)
-    ORDER BY delete_after,installation_id LIMIT 1`).bind(now.toISOString()).first<DueState>();
+    FROM platform_modules WHERE (module_id IN (${installedApiModules.map(() => "?").join(",")}) OR EXISTS(SELECT 1 FROM platform_module_catalog c
+      WHERE c.installation_id=platform_modules.installation_id AND c.module_id=platform_modules.module_id AND c.installed=0))
+    AND phase IN ('retained','deleting') AND julianday(delete_after)<=julianday(?)
+    ORDER BY delete_after,installation_id LIMIT 1`).bind(...installedApiModules.map((module) => module.moduleId), now.toISOString()).first<DueState>();
   if (!state) return { status: "idle" };
-  const blocker = state.moduleId === "attendance" ? await db.prepare(`SELECT 1 AS blocked WHERE ${moduleBlockers}`).bind(state.installationId, state.installationId, state.installationId).first() : null;
-  if (blocker) {
+  let cleanup: ModuleCleanup;
+  try { cleanup = await cleanupFor(db, state.moduleId); }
+  catch {
+    await db.prepare("UPDATE platform_modules SET cleanup_failure='retry-required' WHERE installation_id=? AND module_id=? AND generation=? AND phase IN ('retained','deleting')")
+      .bind(state.installationId, state.moduleId, state.generation).run();
+    return { status: "retry-required" };
+  }
+  const reportedBlocker = cleanup.blocker;
+  const blocked = reportedBlocker?.recordFailure ? await db.prepare(`SELECT 1 AS blocked WHERE ${reportedBlocker.sql}`).bind(...reportedBlocker.bindings(state.installationId)).first() : null;
+  if (blocked) {
     await db.prepare("UPDATE platform_modules SET cleanup_failure='retry-required' WHERE installation_id=? AND module_id=? AND generation=? AND phase IN ('retained','deleting')")
       .bind(state.installationId, state.moduleId, state.generation).run();
     return { status: "blocked" };
   }
   const token = crypto.randomUUID();
   try {
-    if (!await start(db, state, token, now)) return { status: "idle" };
-    const steps = stepsFor(state.moduleId);
+    if (!await start(db, state, cleanup, token, now)) return { status: "idle" };
+    const steps = cleanup.steps;
     if (state.deletionCursor >= steps.length) return await finish(db, state, token, now, steps.length);
     const step = steps[state.deletionCursor]!;
     const statements = step.kind === "delete" ? deleteStep(db, state, token, step, limit)

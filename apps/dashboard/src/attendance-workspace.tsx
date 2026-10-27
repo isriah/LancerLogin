@@ -8,7 +8,7 @@ import { MeetingDeleteDialog, MeetingDuplicateDialog, MeetingEditDialog, type Me
 import { handoffMeetingDeletion } from "./meeting-deletion-undo";
 import { RouteLink, usePath } from "./router";
 import { InfoHeading } from "./info-tip";
-import { MeetingCarpoolLinks, useCarpoolMeetingLinks } from "./carpool-meeting-links";
+import { ModuleSlot, ModuleSlotData } from "./module-slots";
 
 type Frequency = NonNullable<Meeting["recurrenceFrequency"]>;
 type AttendanceRow = {
@@ -40,7 +40,6 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const meeting = loadedMeeting?.id === meetingId ? loadedMeeting : undefined;
   const [loadState, setLoadState] = useState({ meetingId, loading: true });
   const loading = loadState.meetingId !== meetingId || loadState.loading;
-  const carpoolLinks = useCarpoolMeetingLinks(meeting);
   const [expandedAttendance, setExpandedAttendance] = useState<string[]>([]);
   const [rows, setRows] = useState<AttendanceRow[]>([]);
   const [audience, setAudience] = useState("All");
@@ -174,14 +173,14 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
   const absenceEligible = Boolean(meeting?.required && clock >= Date.parse(meeting.startsAt));
   const integrationActions = (calendarProviders.length > 0 || discordConfigured) && <span className="meeting-actions-buttons" role="group" aria-label="Meeting actions" data-walkthrough="meeting-integrations">{calendarProviders.length > 0 && <button className="primary-button" type="button" disabled={calendarBusy} onClick={() => void syncCalendars()}>{calendarBusy ? "Syncing calendars…" : "Sync configured calendars"}</button>}{discordConfigured && <button className="ui-button" type="button" disabled={!absenceEligible || Boolean(discordBusy)} onClick={() => void notifyDiscordAbsences()}>{discordBusy === "absence" ? "Sending…" : "Send Discord absence notice"}</button>}</span>;
 
-  return <section className="attendance-workspace meeting-detail-workspace" aria-labelledby="meeting-detail-title" data-walkthrough-page="meeting" data-walkthrough-ready={meeting ? "true" : undefined} tabIndex={-1}>
+  return <ModuleSlotData id="attendance.meeting-workspace" props={{ meeting }}><section className="attendance-workspace meeting-detail-workspace" aria-labelledby="meeting-detail-title" data-walkthrough-page="meeting" data-walkthrough-ready={meeting ? "true" : undefined} tabIndex={-1}>
     <nav className="meeting-detail-navigation" aria-label="Meeting detail navigation" data-walkthrough="meeting-navigation">
       <button type="button" onClick={() => navigate("/dashboard")}>Back to Dashboard</button>
 
     </nav>
     {loading ? <section className="empty-page ui-card" aria-busy="true"><h1 id="meeting-detail-title">Loading meeting</h1><p className="ui-status" role="status">Loading meeting…</p></section> : meeting ? <>
       <header className="meeting-detail-heading" data-walkthrough="meeting-management"><div><span className={`meeting-lifecycle ${lifecycle}`}>{lifecycleLabel(lifecycle!)}</span><h1 id="meeting-detail-title">{meeting.title}</h1></div><div className="meeting-detail-actions"><button type="button" onClick={() => setManagementAction("edit")}>Edit</button><button type="button" onClick={() => setManagementAction("duplicate")}>Duplicate</button><details className="meeting-more-actions"><summary>More</summary><div className="meeting-more-panel"><button className="danger-button" type="button" onClick={() => setManagementAction("delete")}>Delete meeting</button>{integrationActions}</div></details></div></header>
-      <MeetingCarpoolLinks links={carpoolLinks.filter((link) => link.meetingId === meeting.id)} navigate={navigate} />
+      <ModuleSlot id="attendance.meeting-detail-panel" props={{ meetingId: meeting.id, navigate }} />
       <dl className="meeting-summary ui-card" aria-label="Meeting summary" data-walkthrough="meeting-summary">
         <div><dt>Date</dt><dd>{new Date(meeting.startsAt).toLocaleDateString()}</dd></div>
         <div><dt>Time</dt><dd>{new Date(meeting.startsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}–{new Date(meeting.endsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</dd></div>
@@ -198,5 +197,5 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
       {managementAction === "duplicate" && <MeetingDuplicateDialog meeting={meeting} onClose={() => setManagementAction(undefined)} onCreated={managementComplete} />}
       {managementAction === "delete" && <MeetingDeleteDialog meeting={meeting} meetings={meetings} onClose={() => setManagementAction(undefined)} onDeleted={deleted} />}
     </> : <section className="empty-page ui-card"><h1 id="meeting-detail-title">Meeting unavailable</h1><p className="ui-status" data-tone="error" role="status">{notice}</p><p>The meeting may have been removed, or the link may be incorrect. Choose another meeting or return to Dashboard.</p></section>}
-  </section>;
+  </section></ModuleSlotData>;
 }

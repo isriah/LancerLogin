@@ -1,4 +1,5 @@
 import { readFile, readdir, mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -34,8 +35,12 @@ export async function validateOfficialSource(context, get) {
   const commit = await get(`https://api.github.com/repos/isriah/LancerLogin/commits/${context.tag}`);
   if (commit.sha !== context.sha) throw new Error("release_commit_mismatch");
 }
-export async function validateMigrationPolicy(policy, files, applied, previousVersion, targetTag) {
-  if (policy.format !== 1 || policy.automaticCodeRollback !== false || !parseReleaseVersion(previousVersion) || !parseReleaseVersion(policy.minimumInstalledVersion) || !targetTag.startsWith("v") || compareReleaseVersions(previousVersion, policy.minimumInstalledVersion) === undefined || compareReleaseVersions(previousVersion, policy.minimumInstalledVersion) < 0 || compareReleaseVersions(targetTag, previousVersion) !== 1) throw new Error("migration_compatibility_review_required");
+/**
+ * sameRelease: a plugin-changes request redeploys the installed release, so the target equals the installed version.
+ * Every other request must move forward.
+ */
+export async function validateMigrationPolicy(policy, files, applied, previousVersion, targetTag, { sameRelease = false } = {}) {
+  if (policy.format !== 1 || policy.automaticCodeRollback !== false || !parseReleaseVersion(previousVersion) || !parseReleaseVersion(policy.minimumInstalledVersion) || !targetTag.startsWith("v") || compareReleaseVersions(previousVersion, policy.minimumInstalledVersion) === undefined || compareReleaseVersions(previousVersion, policy.minimumInstalledVersion) < 0 || compareReleaseVersions(targetTag, previousVersion) !== (sameRelease ? 0 : 1)) throw new Error("migration_compatibility_review_required");
   const reviewed = policy.reviewedMigrations;
   // Only an explicitly reviewed, independent bridge can have been applied before
   // Modular's existing sequence. All other migrations retain exact-prefix order.
@@ -47,6 +52,62 @@ export async function validateMigrationPolicy(policy, files, applied, previousVe
   for (const [index, file] of files.entries()) {
     if (reviewed[index]?.name !== file.name || reviewed[index]?.sha256 !== createHash("sha256").update(file.content.replaceAll("\r\n", "\n")).digest("hex") || reviewed[index]?.forwardCompatible !== true) throw new Error("migration_hash_review_required");
   }
+}
+
+/** Git's blob SHA-1 for file content, as GitHub reports it for lancerlogin.modules.json. */
+export function gitBlobSha(content) {
+  const bytes = Buffer.from(content);
+  return createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+}
+export const absentSelectionSha = "0".repeat(40);
+/**
+ * A request records the selection blob it was prepared with (forty zeros when the file was absent). The checked-out
+ * controller must hold exactly that selection; any other selection is refused before claim or maintenance.
+ */
+export async function verifyPinnedSelection(expected, selectionPath, read = readFile) {
+  if (expected === null || expected === undefined) return;
+  if (!/^[0-9a-f]{40}$/.test(expected)) throw new Error("module_selection_invalid");
+  let content;
+  try { content = await read(selectionPath); } catch (error) { if (error?.code !== "ENOENT") throw new Error("module_selection_unreadable"); }
+  const actual = content === undefined ? absentSelectionSha : gitBlobSha(content);
+  if (actual !== expected) throw new Error("module_selection_changed");
+}
+
+/**
+ * Stop before claim when this build would drop a module that moved out of LancerLogin into a plugin while the installation
+ * still uses it. The sanitized code names only fixed module IDs, so the dashboard can explain how to keep or remove it.
+ */
+export async function preflightModuleGuard({ query, composed, record }) {
+  const { extractedModulesInUse } = await import("../apps/api/src/extracted-modules.ts");
+  const inUse = await extractedModulesInUse(query, new Set(composed));
+  if (!inUse.length) return;
+  await record(`module_migration_required:${inUse.map((module) => module.id).join(",")}`);
+  throw new Error("module_migration_required");
+}
+
+/**
+ * A refusal before claim that names its reason fails the unclaimed request with that code. An installed Worker from an
+ * older release replaces the code of a request it fails itself with a generic one, but it never touches a failed request.
+ * Only a request this run could still claim is affected: never one that is claimed, finished or bound to another run.
+ */
+export const preflightRefusalSql = "UPDATE web_update_requests SET state = 'failed', stage = 'preflight', error_code = ?, run_id = COALESCE(run_id, ?), updated_at = ? WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ? AND executor_run_id IS NULL AND state IN ('dispatching','queued','awaiting_approval','running') AND (run_id IS NULL OR run_id = ?)";
+export async function refuseUnclaimedRequest(sql, context, code) {
+  await sql(preflightRefusalSql, [code, context.runId, new Date().toISOString(), context.requestId, context.tag, context.sha, context.runId]);
+  // Fixed codes and module IDs only, so the diagnostic run explains the refusal to dashboards that cannot.
+  console.error(`Web update refused before claim: ${code}. Nothing changed.`);
+  if (code.startsWith("module_migration_required:")) console.error("Add the module's plugin to lancerlogin.modules.json in the private deployment repository, or disable the module, then prepare the update again.");
+}
+
+/**
+ * The selection and module checks that end preflight. Only the two refusals the dashboard can explain fail the request
+ * here; every other error leaves it for the Worker to reconcile, as before.
+ */
+export async function preflightModules({ pinnedSelectionSha, selectionPath, compose, query, refuse }) {
+  try { await verifyPinnedSelection(pinnedSelectionSha, selectionPath); }
+  catch (error) { if (error.message === "module_selection_changed") await refuse("module_selection_preflight"); throw error; }
+  const composed = await compose();
+  await preflightModuleGuard({ query, composed, record: refuse });
+  return composed;
 }
 
 /** IO abstraction is also used by the no-cloud synthetic failure/recovery rehearsal. */
@@ -112,7 +173,24 @@ export function retainedDashboardOrigin(settings, pages) {
   return value;
 }
 
-export async function createLiveUpgradeIO(context, environment, sourceDirectory) {
+/** Plugin fetching and installation never see deployment or update credentials; only the optional plugin token passes. */
+export function pluginCompositionEnvironment(environment) {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => name === "LANCERLOGIN_PLUGIN_TOKEN" || !/(CLOUDFLARE|TOKEN|SECRET|PASSWORD|_KEY$|_CODE$|^GITHUB_)/i.test(name)));
+}
+
+/**
+ * Compose the official modules and the controller's plugin selection into this release checkout, as installation does.
+ * Returns the composed module IDs, which post-deployment health must report. Any incompatible plugin throws before claim.
+ */
+export async function composeUpdateModules({ selectionPath, environment, compose }) {
+  const composeModules = compose ?? (await import("./compose-modules.mjs")).composeModules;
+  // Without a selection file (null), only the official modules are composed.
+  const result = await composeModules({ selectionPath: selectionPath ?? null, officialModules: true, env: pluginCompositionEnvironment(environment), log: () => {} });
+  return result.modules ?? [];
+}
+
+export async function createLiveUpgradeIO(context, environment, sourceDirectory, controllerDirectory = "deployment-control") {
+  let composedModules = [];
   const source = resolve(sourceDirectory); const configPath = resolve(source, ".provision/wrangler.json");
   const databaseName = resolveDatabaseName(context.slug, context.databaseName);
   const config = buildProvisionConfig(context.slug, [{ name: databaseName, uuid: context.databaseId }], context.tag.slice(1), databaseName).config;
@@ -162,8 +240,13 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
       dashboardOrigin = retainedDashboardOrigin(settings, pages);
       config.vars.ALLOWED_ORIGIN = dashboardOrigin;
       await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
-      channelPolicyInstalled = (await sql("PRAGMA table_info(web_update_requests)"))[0]?.results?.some((column) => column.name === "update_channel") ?? false;
-      const request = (await sql(`SELECT previous_version${channelPolicyInstalled ? ", update_channel" : ""} FROM web_update_requests WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ?`, [context.requestId, context.tag, context.sha]))[0]?.results?.[0];
+      const columns = (await sql("PRAGMA table_info(web_update_requests)"))[0]?.results ?? [];
+      channelPolicyInstalled = columns.some((column) => column.name === "update_channel");
+      const modesInstalled = columns.some((column) => column.name === "mode");
+      const request = (await sql(`SELECT previous_version${channelPolicyInstalled ? ", update_channel" : ""}${modesInstalled ? ", mode, module_selection_sha" : ""} FROM web_update_requests WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ?`, [context.requestId, context.tag, context.sha]))[0]?.results?.[0];
+      // A plugin-changes request redeploys exactly the installed release.
+      const sameRelease = request?.mode === "modules";
+      if (sameRelease && context.tag !== `v${request.previous_version}`) throw new Error("installed_release_mismatch");
       const setting = channelPolicyInstalled ? (await sql("SELECT update_channel FROM installation_update_settings WHERE installation_id = 'primary'"))[0]?.results?.[0] : { update_channel: "stable" };
       const channel = channelPolicyInstalled ? request?.update_channel : "stable";
       if (!request || channel !== setting?.update_channel || !releaseAllowed(context.tag, channel, parseReleaseVersion(context.tag)?.beta !== undefined)) throw new Error("update_channel_consent_required");
@@ -177,7 +260,16 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
       const directory = resolve(source, "apps/api/migrations");
       const names = (await readdir(directory)).filter((name) => /^\d+_.+\.sql$/.test(name)).sort();
       const files = await Promise.all(names.map(async (name) => ({ name, content: await readFile(resolve(directory, name), "utf8") })));
-      await validateMigrationPolicy(policy, files, applied, health.releaseVersion, context.tag);
+      await validateMigrationPolicy(policy, files, applied, health.releaseVersion, context.tag, { sameRelease });
+      // The release's official modules and the plugins selected in the private controller are fetched, checked and composed
+      // before claim or maintenance. Without a selection file, the official modules alone are composed; a selection can opt
+      // out of them with "officialModules": false. lancerlogin.plugin-sources.json beside the selection in the controller
+      // checkout limits the selected sources; a forbidden source or an invalid file refuses the update here.
+      const selection = resolve(controllerDirectory, "lancerlogin.modules.json");
+      composedModules = await preflightModules({ pinnedSelectionSha: request.module_selection_sha, selectionPath: selection,
+        compose: () => composeUpdateModules({ selectionPath: existsSync(selection) ? selection : undefined, environment }),
+        query: async (query, params = []) => (await sql(query, params))[0]?.results ?? [],
+        refuse: (code) => refuseUnclaimedRequest(sql, context, code) });
     },
     async claim() {
       const result = await sql(`UPDATE web_update_requests SET executor_run_id = ?, run_id = ?, state = 'running', stage = 'preflight', updated_at = ? WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ? AND backup_exported_at IS NOT NULL AND executor_run_id IS NULL AND state IN ('dispatching','queued','awaiting_approval','running') AND (run_id IS NULL OR run_id = ?)${channelPolicyInstalled ? " AND update_channel = (SELECT update_channel FROM installation_update_settings WHERE installation_id = 'primary')" : ""}`, [context.runId, context.runId, new Date().toISOString(), context.requestId, context.tag, context.sha, context.runId]);
@@ -224,7 +316,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory)
           const api = await jsonGet(`${context.apiUrl}/health?update=${context.requestId}`);
           const pages = await jsonGet(`${context.dashboardUrl}/__lancerlogin-release?update=${context.requestId}`);
           const proxy = await jsonGet(`${context.dashboardUrl}/api/health?update=${context.requestId}`);
-          if (api.ok === true && api.mode === "ready" && api.releaseVersion === context.tag.slice(1) && pages.releaseVersion === context.tag.slice(1) && proxy.ok === true && proxy.releaseVersion === context.tag.slice(1)) { healthy = true; break; }
+          if (api.ok === true && api.mode === "ready" && api.releaseVersion === context.tag.slice(1) && composedModules.every((id) => api.modules?.includes(id)) && pages.releaseVersion === context.tag.slice(1) && proxy.ok === true && proxy.releaseVersion === context.tag.slice(1)) { healthy = true; break; }
         } catch { /* Bounded propagation retry. Never finalizes from dispatch/run success. */ }
         await new Promise((done) => setTimeout(done, 5_000));
       }

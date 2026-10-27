@@ -1,4 +1,4 @@
-.settings-section-picker,.settings-navigation-toggle,.outreach-team-records { display: none; }
+.settings-section-picker,.settings-navigation-toggle { display: none; }
 .settings-navigation-content { display: contents; }
 .settings-disclosure > summary,.scheduler-job > summary { min-height: var(--control-min-block-size); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); cursor: pointer; font-family: var(--font-body); font-size: var(--text-body); font-weight: 700; }
 .settings-disclosure > summary::after { content: "+"; flex: none; }
@@ -110,17 +110,6 @@
   .settings-attendance .member-labels-panel > details > .discord-label-role-settings { padding: 0; border: 0; }
   .settings-attendance form.form-grid { grid-template-columns: minmax(0,1fr); gap: var(--space-4); }
   .settings-guided-setup .settings-callout { display: grid; grid-template-columns: minmax(0,1fr); gap: var(--space-4); }
-  .settings-guided-setup .outreach-stack { gap: var(--space-4); }
-  .outreach-catalog-heading { display: grid; grid-template-columns: minmax(0,1fr); }
-  .outreach-catalog-heading > button { width: 100%; }
-  .outreach-catalog-panel .form-grid { grid-template-columns: minmax(0,1fr); }
-  .outreach-catalog-panel .empty-state { padding: var(--space-4) 0; margin: 0; }
-  .outreach-catalog-panel[data-kind="teams"] > .responsive-table { display: none; }
-  .outreach-team-records { display: grid; gap: var(--space-3); }
-  .outreach-team-record { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); border-top: 1px solid var(--ui-border); padding-top: var(--space-4); min-width: 0; }
-  .outreach-team-record > div { min-width: 0; overflow-wrap: anywhere; }
-  .outreach-team-record p { margin-block: var(--space-2); font-size: var(--text-small); color: var(--ui-text-muted); }
-  .team-dialog-archive { width: 100%; }
   .scheduler-controls { padding: var(--space-4); }
   .scheduler-actions { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
   .scheduler-actions button { min-width: 0; }

@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "description": "Modules that were part of LancerLogin before they moved into plugins, with the plugin repository and released commit an installation adds to keep using one. Official modules must use the commit pinned in official-modules.json.",
+  "modules": [
+    {
+      "id": "carpool",
+      "label": "Carpool",
+      "source": "https://github.com/isriah/lancerlogin-carpool.git",
+      "commit": "4471b8c118ac392376e9b2c30a876c16a4eab48a"
+    },
+    {
+      "id": "hour-tracking",
+      "label": "Outreach Participation",
+      "source": "https://github.com/isriah/lancerlogin-outreach.git",
+      "commit": "fb271aece05aad8e13d52720f3c1ab340df79c5b"
+    }
+  ]
+}

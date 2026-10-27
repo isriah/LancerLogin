@@ -17,7 +17,7 @@ Update the web software first, then each kiosk. Do not create a replacement data
 | Provider settings and encrypted grants | Retained with the existing encryption key and installation configuration. Verify provider health afterward. |
 | Existing kiosk identities, names and pairing credentials | Retained. Each additional kiosk needs its own pairing. |
 | Kiosk-local mappings, reader templates, PIN and pending scans | Preserved by an in-place kiosk update. These are not contained in a dashboard backup. |
-| Module availability | Attendance stays enabled and ready. Outreach and Carpool start disabled, with no retention countdown. Peer fingerprint sync and separate cloud storage start off. |
+| Module availability | Attendance stays enabled and ready. Outreach starts disabled, with no retention countdown; it is an official plugin included by default. Carpool is a separately selected plugin and is available only in builds that include it, where it also starts disabled. Peer fingerprint sync and separate cloud storage start off. |
 
 A roster export alone cannot identify fingerprints in reader slots. Keep the original slot-to-member mappings with the original reader. Do not guess missing mappings or overwrite occupied slots.
 
@@ -55,7 +55,7 @@ Cloud disablement deletes live cloud templates but not reader copies. Member dea
 
 ## Optional modules and recovery
 
-Enable Outreach or Carpool deliberately through **Modules**, complete its setup, and assign its Operator permissions. Attendance workflows remain separate. Verify optional integrations before enabling their live operations.
+Enable Outreach, or Carpool when its plugin is included, deliberately through **Modules**, complete its setup, and assign its Operator permissions. Attendance workflows remain separate. Verify optional integrations before enabling their live operations.
 
 A portable installation restore is a recovery or replacement workflow, not the in-place upgrade path. It intentionally revokes kiosk and pairing authority and disables peer fingerprint sync and cloud storage. Vault templates and authority are not portable and are cleared by restore. It does not restore Pi-local mappings, secrets, queues or reader contents. See [Backup and restore](BACKUP-RESTORE.md) before choosing that path.
 

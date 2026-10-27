@@ -16,6 +16,22 @@ export async function encryptIntegration(value: Record<string, string>, secret: 
   return { ciphertext: encode(ciphertext), iv: encode(iv) };
 }
 
+export type ModuleCredentials = {
+  readonly available: boolean;
+  encrypt(value: Record<string, string>): Promise<{ ciphertext: string; iv: string }>;
+  decrypt(ciphertext: string, iv: string): Promise<Record<string, string>>;
+};
+
+/** Credential encryption with Core's integration key, without handing the key to module code. */
+export function moduleCredentials(secret?: string): ModuleCredentials {
+  const key = () => { if (!secret) throw new Error("Integration encryption is not configured"); return secret; };
+  return Object.freeze({
+    available: Boolean(secret),
+    encrypt: async (value: Record<string, string>) => encryptIntegration(value, key()),
+    decrypt: async (ciphertext: string, iv: string) => decryptIntegration(ciphertext, iv, key()),
+  });
+}
+
 export async function decryptIntegration(ciphertext: string, iv: string, secret: string): Promise<Record<string, string>> {
   const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: decode(iv) }, await keyFrom(secret), buffer(decode(ciphertext)));
   return JSON.parse(decoder.decode(plaintext)) as Record<string, string>;

@@ -16,6 +16,10 @@ Changing tracks expires unstarted prepared web updates. Download a new associate
 
 Track consent is operational state, deliberately excluded from application backups/restores just like active deployment locks. A full provider database export retains it. A newly provisioned installation defaults to Stable.
 
+## Module plugin tracks
+
+Module plugins, such as the official Outreach plugin and the opt-in Carpool plugin, publish their own stable and beta releases under the same version rules, plus testing-only nightly prereleases (`X.Y.Z-nightly.YYYYMMDD`). A nightly is lower than any beta of the same version and is never offered to Stable or Beta. The installation's track setting above does not change plugin pins; a maintainer chooses plugin releases in the private deployment repository with `npm run plugins:resolve`. Use nightly plugin builds only on test installations. See [module plugins](MODULE-PLUGINS.md#plugin-releases-and-tracks).
+
 ## Upgrade an existing Community installation
 
 1. Preserve an entire-installation backup and the existing provider secrets, database identity and private deployment configuration.

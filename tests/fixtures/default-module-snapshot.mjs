@@ -1,3 +1,4 @@
+import { externalModuleManifests } from "../../packages/shared/src/generated/external-manifests.ts";
 const attendance = {
   id: "attendance",
   label: "Attendance",
@@ -37,62 +38,29 @@ const attendance = {
   },
 };
 
-const outreach = {
-  id: "hour-tracking",
-  label: "Outreach Participation",
-  description: "Outreach labels, supported teams, dated activities, member submissions, staff exceptions, and participation totals.",
-  contractVersion: 1,
+// Composed plugins (none in a plugin-free build; official Outreach in an installation build) start disabled, so the preview
+// matches the dashboard's registry.
+const plugins = externalModuleManifests.map((definition) => ({
+  id: definition.id,
+  label: definition.label,
+  description: definition.description,
+  contractVersion: definition.contractVersion,
   enabled: false,
   phase: "disabled",
   generation: 1,
-  dependencies: [],
-  permissions: [{ id: "hours.manage", label: "Manage Outreach Participation", operator: true }],
+  dependencies: definition.dependencies,
+  permissions: definition.capabilities,
   effectiveCapabilities: [],
   workspaceReady: false,
-  navigation: [{ label: "Outreach", path: "/hours" }],
-  settings: [{ label: "Outreach", path: "/settings/outreach-setup" }],
-  setup: {
-    version: 1,
-    ready: false,
-    steps: [
-      { id: "rules", label: "Entry rules", required: true },
-      { id: "catalog", label: "Labels and supported teams", required: true },
-    ],
-  },
-  deletion: {
-    disabledAt: null,
-    deleteAfter: null,
-    contentStillPresent: false,
-    cleanupFailure: null,
-    data: [
-      "Outreach labels, supported teams, and activities",
-      "Member submissions, staff exceptions, integer-minute totals, and immutable entry history",
-      "Outreach setup and assignment records",
-    ],
-  },
-};
-
-const carpool = {
-  id: "carpool",
-  label: "Carpool",
-  description: "Independent outbound and return ride planning with optional roster and event references.",
-  contractVersion: 1,
-  enabled: false,
-  phase: "disabled",
-  generation: 1,
-  dependencies: [],
-  permissions: [{ id: "carpool.manage", label: "Manage Carpool", operator: true }],
-  effectiveCapabilities: [],
-  workspaceReady: false,
-  navigation: [{ label: "Carpool", path: "/carpool" }],
-  settings: [{ label: "Carpool", path: "/settings/carpool" }],
-  setup: { version: 1, ready: false, steps: [{ id: "workspace", label: "First Carpool plan", required: true }] },
-  deletion: { disabledAt: null, deleteAfter: null, contentStillPresent: false, cleanupFailure: null, data: ["Carpool plans and optional event snapshots", "Participants, locations, vehicles, assignments, imports, and unresolved ride reasons"] },
-};
+  navigation: definition.navigation,
+  settings: definition.settings,
+  setup: { ...definition.setup, ready: false },
+  deletion: { disabledAt: null, deleteAfter: null, contentStillPresent: false, cleanupFailure: null, data: definition.deletedData },
+}));
 
 export const defaultModuleSnapshot = {
   revision: 0,
   selectionCompleted: true,
   capabilities: ["attendance.manage"],
-  modules: [attendance, outreach, carpool],
+  modules: [attendance, ...plugins],
 };

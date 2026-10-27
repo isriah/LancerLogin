@@ -2,6 +2,8 @@
 
 Outreach keeps staff-created activities separate from the hours members actually submit. Members do not need dashboard accounts. They normally submit through the public participation form or a linked Discord account. Staff can add a manual entry when needed, with a reason retained alongside the entry.
 
+Outreach is LancerLogin's first official plugin. It is maintained in its own repository and every installation build includes it by default, at the commit LancerLogin pins; an installation can opt out. Existing installations keep their Outreach data, settings, permissions, saved reports and walkthrough progress unchanged. See [module plugins](MODULE-PLUGINS.md#official-modules).
+
 ## Configure Outreach
 
 1. Enable Outreach in **Settings > Modules** and complete its setup before inviting members to submit.

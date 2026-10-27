@@ -1,8 +1,10 @@
 import { mockCarpoolShare } from "./carpool-share-fixture";
 import { expect, test } from "@playwright/test";
-import { carpoolSnapshot } from "./module-fixtures";
+import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
 import { pairedViews } from "./paired-views";
+
+requireCarpoolPlugin();
 
 for (const { theme, width } of pairedViews) test(`Carpool work areas retain URLs, settings and direction at ${width} ${theme}`, async ({ page }, info) => {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });

@@ -1,7 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { attendanceSnapshot, carpoolSnapshot } from "./module-fixtures";
+import { attendanceSnapshot } from "./module-fixtures";
+import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
 import { openActiveMeetingCalendar } from "./meeting-calendar-fixture";
+
+requireCarpoolPlugin();
 
 const meeting = { id: "active-meeting", title: "Build session", startsAt: "2026-10-10T15:00:00Z", endsAt: "2026-10-10T17:00:00Z" };
 function plan(id: string, title: string) { return { id, title, meetingId: meeting.id as string | null, destination: "Synthetic venue", eventReference: null, eventTitleSnapshot: null, eventStartsAtSnapshot: null, radiusMiles: 12, preferredRadiusMiles: 4, notes: "", archived: false, revision: 0, createdAt: "2026-10-10", updatedAt: "2026-10-10" }; }

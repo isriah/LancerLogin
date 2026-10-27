@@ -86,6 +86,8 @@ The `.app` foundation supplies a low-specificity fallback for native buttons, te
 
 `tests-ts/ui-control-inventory.test.ts` records every dashboard source file that contains raw native controls. A control-count change is a review event: prefer a shared control pattern, or deliberately update the inventory with the surface's focused browser coverage. `tests-browser/ui-foundations.spec.ts` proves that an otherwise unclassified native control and both scrollbar axes inherit tokens in light and dark themes.
 
+Module stylesheets load through their module's dashboard contribution, for example the Carpool plugin's `src/carpool.css`. Core renders a `module-root` element with a `data-module` attribute around each module page and slot contribution; it generates no layout box. Every selector in a module stylesheet sits beneath `:where([data-module="<module ID>"])`, which scopes the rule without changing its specificity, and Core stylesheets do not style module-owned classes. `dashboardModuleStylesheets` in `design-conformance.ts` lists each module stylesheet and its browser coverage, and `tests-ts/dashboard-conformance.test.ts` enforces the scope.
+
 The focused gate for presentation foundations is:
 
 ```powershell

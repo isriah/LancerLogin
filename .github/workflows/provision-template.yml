@@ -50,6 +50,9 @@ jobs:
       LANCERLOGIN_UPDATE_REPOSITORY: ${{ github.repository }}
       LANCERLOGIN_WEB_UPDATE_TOKEN: ${{ secrets.LANCERLOGIN_WEB_UPDATE_TOKEN }}
       WEB_UPDATE_TOKEN_EXPIRES_AT: ${{ vars.WEB_UPDATE_TOKEN_EXPIRES_AT }}
+      # Optional: separate Contents-write token for dashboard plugin management (lancerlogin.modules.json only).
+      LANCERLOGIN_MODULE_SELECTION_TOKEN: ${{ secrets.LANCERLOGIN_MODULE_SELECTION_TOKEN }}
+      MODULE_SELECTION_TOKEN_EXPIRES_AT: ${{ vars.MODULE_SELECTION_TOKEN_EXPIRES_AT }}
       WEB_UPDATE_CONFIG: .provision/wrangler.json
       WRANGLER_SEND_METRICS: "false"
       WRANGLER_WRITE_LOGS: "false"
@@ -202,6 +205,34 @@ jobs:
           npx wrangler d1 create "${DATABASE_NAME:-$INSTALLATION_SLUG-data}" --binding DB --update-config --config .provision/wrangler.json
           npx wrangler d1 list --json > .provision/d1-list.json
           test "$(node scripts/prepare-cloudflare-provision.mjs "$INSTALLATION_SLUG" .provision/d1-list.json)" = "exists"
+      - name: Check out the plugin selection from this private repository
+        uses: actions/checkout@v7
+        with:
+          path: deployment-control
+          persist-credentials: false
+          sparse-checkout: |
+            lancerlogin.modules.json
+            lancerlogin.plugin-sources.json
+          sparse-checkout-cone-mode: false
+      - name: Compose official modules and selected plugins before building
+        shell: bash
+        env:
+          # Optional read-only token for private plugin repositories in lancerlogin.modules.json.
+          LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}
+        run: |
+          # Official modules (scripts/official-modules.json) are always composed unless the selection sets "officialModules": false.
+          # Composition enforces lancerlogin.plugin-sources.json beside the selection, when present.
+          # Releases before plugin support have no composer and build their built-in modules unchanged.
+          if [ -f scripts/compose-modules.mjs ]; then
+            if [ -f ../deployment-control/lancerlogin.modules.json ]; then
+              node scripts/compose-modules.mjs --selection ../deployment-control/lancerlogin.modules.json
+            else
+              node scripts/compose-modules.mjs
+            fi
+          else
+            echo "This release predates module plugins; building its built-in modules without composition."
+            if [ -f ../deployment-control/lancerlogin.modules.json ]; then echo "::warning::lancerlogin.modules.json is ignored by this release, which predates module plugins."; fi
+          fi
       - name: Build dashboard before migration or deployment
         env:
           VITE_API_BASE_URL: /api
@@ -254,7 +285,14 @@ jobs:
           workingDirectory: lancerlogin-source
           command: deploy --config .provision/wrangler.json
       - name: Prepare or retain the separate fingerprint storage key
-        run: node scripts/ensure-fingerprint-vault-key.mjs
+        shell: bash
+        run: |
+          # Stable releases before the separate fingerprint storage key do not include this script or use the key.
+          if [ -f scripts/ensure-fingerprint-vault-key.mjs ]; then
+            node scripts/ensure-fingerprint-vault-key.mjs
+          else
+            echo "LancerLogin $RELEASE_TAG does not use a separate fingerprint storage key."
+          fi
       - name: Install or refresh the private dispatch credential without rotating installation secrets
         run: node scripts/refresh-web-update-credential.mjs
       - name: Select Worker deployment URL

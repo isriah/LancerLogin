@@ -26,8 +26,8 @@ class Database {
       INSERT INTO platform_module_administration_epochs(installation_id,revision) VALUES('primary',0);
       INSERT INTO platform_module_assignment_epochs(installation_id,user_id,revision) VALUES('primary','admin',0),('primary','operator',0);
       INSERT INTO platform_module_assignment_revisions(installation_id,user_id,revision) VALUES('primary','admin',0),('primary','operator',0);
-      INSERT INTO platform_module_epochs(installation_id,module_id,generation) VALUES('primary','attendance',1),('primary','hour-tracking',1),('primary','carpool',1);
-      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete) VALUES('primary','attendance',1,1,'enabled',2,1),('primary','hour-tracking',1,1,'disabled',1,0),('primary','carpool',1,1,'disabled',1,0);
+      INSERT INTO platform_module_epochs(installation_id,module_id,generation) VALUES('primary','attendance',1),('primary','hour-tracking',1);
+      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete) VALUES('primary','attendance',1,1,'enabled',2,1),('primary','hour-tracking',1,1,'disabled',1,0);
       INSERT INTO members(id,installation_id,external_id,first_name,last_name,created_at) VALUES('member','primary','SYN-001','Synthetic','Member','2026-01-01'),('other','primary','SYN-002','Other','Member','2026-01-01');
       INSERT INTO pairing_codes(id,installation_id,code_hash,purpose,expires_at,created_by,created_at) VALUES('pair-a','primary','a','hardware','2099-01-01','admin','2026-01-01'),('pair-b','primary','b','hardware','2099-01-01','admin','2026-01-01');
       INSERT INTO kiosks(id,installation_id,name,token_hash,pairing_code_id,pairing_bound,created_at) VALUES('source','primary','Source','${hash("source-token")}','pair-a',1,'2026-01-01'),('destination','primary','Destination','${hash("destination-token")}','pair-b',1,'2026-01-01');`);

@@ -80,7 +80,8 @@ test("CLI recovery and resource mismatches never upload a replacement key", asyn
 
 test("install and update controller prepare the separate key after migrations and before completion", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
-  const preparation = workflow.indexOf("run: node scripts/ensure-fingerprint-vault-key.mjs");
+  const preparation = workflow.indexOf("            node scripts/ensure-fingerprint-vault-key.mjs");
+  assert.ok(preparation > workflow.indexOf("if [ -f scripts/ensure-fingerprint-vault-key.mjs ]; then"));
   assert.ok(preparation > workflow.indexOf("name: Apply D1 migrations"));
   assert.ok(preparation > workflow.indexOf("name: Deploy existing Worker API"));
   assert.ok(preparation < workflow.indexOf("name: Publish setup links"));

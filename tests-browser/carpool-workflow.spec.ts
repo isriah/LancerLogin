@@ -1,7 +1,9 @@
 import { mockCarpoolShare } from "./carpool-share-fixture";
 import { expect, test, type Page } from "@playwright/test";
-import { carpoolSnapshot } from "./module-fixtures";
+import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
+
+requireCarpoolPlugin();
 
 async function expectStandardCarpoolButtonHeights(page: Page) {
   const measurements = await page.locator(".carpool-workspace button.ui-button:visible").evaluateAll((buttons) => buttons.map((button) => ({ label: button.textContent?.trim(), height: Math.round(button.getBoundingClientRect().height) })));

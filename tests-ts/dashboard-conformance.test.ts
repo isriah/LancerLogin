@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
-import { dashboardConformanceMatrix, dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance.ts";
+import { access, readdir, readFile } from "node:fs/promises";
+import { stylesheetRules } from "./fixtures/stylesheet-rules.ts";
+import { dashboardConformanceMatrix, dashboardConformanceReferences, dashboardModuleScope, dashboardModuleStylesheets } from "../apps/dashboard/src/design-conformance.ts";
 
 test("dashboard conformance inventory assigns every governed surface to 01-authentication through 06-convergence", () => {
   const owners = new Set(dashboardConformanceMatrix.map(({ owner }) => owner));
@@ -33,4 +34,29 @@ test("dashboard conformance inventory pins the required reference combinations",
   assert.deepEqual(dashboardConformanceReferences.input, ["pointer", "keyboard"]);
   assert.deepEqual(dashboardConformanceReferences.motion, ["no-preference", "reduce"]);
   assert.deepEqual(dashboardConformanceReferences.roles, ["admin", "operator"]);
+});
+
+test("module stylesheets stay beneath their module root and Core stylesheets leave module classes alone", async () => {
+  const folder = "apps/dashboard/src";
+  const files = (await readdir(folder, { recursive: true })).map((file) => String(file).replaceAll("\\", "/"));
+  const sources = new Map(await Promise.all(files.filter((file) => /\.(css|tsx?)$/.test(file)).map(async (file) => [file, await readFile(`${folder}/${file}`, "utf8")] as const)));
+  const moduleSheets = new Set<string>(dashboardModuleStylesheets.map(({ stylesheet }) => stylesheet));
+  for (const sheet of dashboardModuleStylesheets) {
+    const css = sources.get(sheet.stylesheet);
+    assert.ok(css, `${sheet.stylesheet} must exist`);
+    const scope = dashboardModuleScope(sheet.moduleId);
+    const rules = stylesheetRules(css);
+    assert.ok(rules.length > 0);
+    for (const rule of rules) {
+      if (rule.keyframes) { assert.ok(rule.keyframes.startsWith(sheet.classPrefix), `${sheet.stylesheet} keyframes ${rule.keyframes} must use the module prefix`); continue; }
+      for (const selector of rule.selectors) {
+        const scoped = selector.indexOf(scope); const moduleClass = selector.indexOf(`.${sheet.classPrefix}`);
+        assert.ok(scoped >= 0 && (moduleClass < 0 || moduleClass > scoped), `${sheet.stylesheet}: ${selector} must sit beneath ${scope}`);
+      }
+    }
+    const importers = [...sources].filter(([file, source]) => /\.tsx?$/.test(file) && source.includes(`import "./${sheet.stylesheet}";`)).map(([file]) => file);
+    assert.deepEqual(importers, [sheet.contribution], `${sheet.stylesheet} loads only through its dashboard contribution`);
+    for (const spec of sheet.browserSpecs) await access(`tests-browser/${spec}`);
+    for (const [file, source] of sources) if (file.endsWith(".css") && !moduleSheets.has(file)) assert.doesNotMatch(source, new RegExp(`\\.${sheet.classPrefix}`), `${file} must not style ${sheet.moduleId} classes`);
+  }
 });

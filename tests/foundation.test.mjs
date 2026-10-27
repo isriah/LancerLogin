@@ -105,7 +105,7 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /const backupSchemaVersion = 41;/);
+  assert.match(source, /const backupSchemaVersion = 44;/);
   assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -13\)/);
   for (const [version, omitted] of [[8, 11], [9, 9], [10, 7], [15, 4], [31, 2], [41, 1]]) assert.match(source, new RegExp(`schemaVersion < ${version} && table === "organization_settings" \\? tableColumns\\.organization_settings\\.slice\\(0, -${omitted}\\)`));
   assert.match(source, /table === "discord_attendance_contests" && schemaVersion < 41 \? tableColumns\.discord_attendance_contests\.slice\(0, schemaVersion === 1 \? -3 : -1\)/);

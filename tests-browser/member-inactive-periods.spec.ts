@@ -14,8 +14,8 @@ test('reactivating a member keeps inactive meetings out of attendance totals', a
       INSERT INTO organization_settings(installation_id,time_zone) VALUES ('primary','UTC');
       INSERT INTO platform_module_administration(installation_id,revision,selection_completed) VALUES ('primary',0,1);
       INSERT INTO platform_module_administration_epochs(installation_id,revision) VALUES ('primary',0);
-      INSERT INTO platform_module_epochs(installation_id,module_id,generation) VALUES ('primary','attendance',1),('primary','hour-tracking',1),('primary','carpool',1);
-      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete) VALUES ('primary','attendance',1,1,'enabled',2,1),('primary','hour-tracking',1,1,'disabled',1,0),('primary','carpool',1,1,'disabled',1,0);
+      INSERT INTO platform_module_epochs(installation_id,module_id,generation) VALUES ('primary','attendance',1),('primary','hour-tracking',1);
+      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete) VALUES ('primary','attendance',1,1,'enabled',2,1),('primary','hour-tracking',1,1,'disabled',1,0);
       INSERT INTO platform_module_setup_progress(installation_id,module_id,step_id,setup_version,outcome,completed_at,completed_by) SELECT 'primary','attendance',value,2,'completed','2026-01-01T00:00:00.000Z','admin' FROM json_each('["rules","meeting","input"]');
       INSERT INTO members(id,installation_id,external_id,first_name,last_name,created_at) VALUES ('member','primary','GAP001','Synthetic','Member','2026-01-01');`.replace(/\n/g, ' '));
     const secret = 'A'.repeat(43);

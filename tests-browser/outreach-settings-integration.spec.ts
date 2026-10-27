@@ -1,5 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
+import { requireOutreachPlugin } from "./outreach-fixtures";
+
+requireOutreachPlugin();
 
 async function settingsFixture(page: Page, role: "admin" | "operator" = "admin") {
   let settings = { memberValidation: "off", revision: 0 }; const writes: unknown[] = []; let reads = 0;

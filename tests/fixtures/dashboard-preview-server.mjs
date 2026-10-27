@@ -57,7 +57,7 @@ const server = createServer((request, response) => {
     : path === "/integrations/capabilities" ? { integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: true } } }
     : path === "/meetings" ? { meetings, lateScanMinutes: 30 }
     : path === "/labels" ? labelData
-    : path === "/reports/catalog" ? { datasets: [attendanceDataset], columns: reportColumns, labels, outreachLabels: [], baseline: null, timeZone: "UTC", defaultDefinition: defaultReportDefinition, role: "admin", attendanceAvailable: true }
+    : path === "/reports/catalog" ? { datasets: [attendanceDataset], columns: reportColumns, labels, reportFilters: [], baseline: null, timeZone: "UTC", defaultDefinition: defaultReportDefinition, role: "admin", attendanceAvailable: true }
     : path === "/reports/views" ? { reports: [] }
     : path === "/reports/tabs" ? { reportIds: [] }
     : path === "/reports/leaderboard" ? leaderboardReport

@@ -1,16 +1,22 @@
 import { expect, test, type Page } from "@playwright/test";
 import { filterAndSortReportRows, combinedMemberDataset, reportFieldSourceDataset } from "../apps/api/src/report-builder.ts";
 import { reportColumnLabel } from "../apps/dashboard/src/saved-reports.ts";
-import { attendanceModule, coreReportDatasets, outreachModule, type ReportDatasetDefinition } from "../packages/shared/src/module-platform.ts";
+import { attendanceModule, bundledModuleRegistry, coreReportDatasets, type ReportDatasetDefinition } from "../packages/shared/src/module-platform.ts";
 import { outreachSnapshot } from "./module-fixtures";
+import { requireOutreachPlugin } from "./outreach-fixtures";
+
+// These reports cover Outreach datasets and the Outreach label filter, contributed by the official Outreach plugin.
+requireOutreachPlugin();
+const outreachModule = bundledModuleRegistry.get("hour-tracking");
+const outreachLabelFilter = bundledModuleRegistry.reportFilters.find((filter) => filter.id === "outreach-labels");
 
 const definitions = [
   ...coreReportDatasets,
   combinedMemberDataset,
   ...(attendanceModule.reportDatasets ?? []),
-  ...(outreachModule.reportDatasets ?? []),
+  ...(outreachModule?.reportDatasets ?? []),
 ];
-const accessible = new Set(["core.members", combinedMemberDataset.id, ...(outreachModule.reportDatasets ?? []).map((dataset) => dataset.id)]);
+const accessible = new Set(["core.members", combinedMemberDataset.id, ...(outreachModule?.reportDatasets ?? []).map((dataset) => dataset.id)]);
 const datasets = definitions.map((dataset) => ({ ...dataset, available: accessible.has(dataset.id), fields: dataset.fields.map((field) => { const sourceDataset = reportFieldSourceDataset(dataset.id, field.id) ?? dataset.id; const available = accessible.has(sourceDataset); return { ...field, sourceDataset, available, explanation: available ? undefined : "Attendance is unavailable for your current module access. It will return when access is restored." }; }) }));
 const fieldCatalog = new Map<string, { field: ReportDatasetDefinition["fields"][number]; datasets: string[] }>();
 for (const dataset of definitions) for (const field of dataset.fields) {
@@ -127,7 +133,7 @@ function reportResult(definition: Definition, pageSize: number | "all" = 25, sou
 
 async function routeOutreachReports(page: Page, seen: Definition[]) {
   await page.route("**/platform/modules", (route) => route.fulfill({ json: outreachSnapshot() }));
-  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets, columns, labels: [{ id: "mentor", name: "Mentor", active: 1 }], outreachLabels: [{ id: "community", name: "Community", archived: false }], baseline: null, timeZone: "America/New_York", defaultDefinition: definitionFor("outreach.members"), role: "admin", attendanceAvailable: false } }));
+  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets, columns, labels: [{ id: "mentor", name: "Mentor", active: 1 }], reportFilters: outreachLabelFilter ? [{ ...outreachLabelFilter, options: [{ id: "community", name: "Community", archived: false }] }] : [], baseline: null, timeZone: "America/New_York", defaultDefinition: definitionFor("outreach.members"), role: "admin", attendanceAvailable: false } }));
   await page.route("**/reports/views", (route) => route.fulfill({ json: { reports: [] } }));
   await page.route("**/reports/query", async (route) => {
     const body = route.request().postDataJSON() as { definition: Definition; pageSize?: number | "all" };
@@ -270,7 +276,7 @@ test("saved Outreach member reports can add Roster and Attendance columns from t
   await routeOutreachReports(page, seen);
   const sources = datasets.map((dataset) => ({ ...dataset, available: true, fields: dataset.fields.map((field) => ({ ...field, available: true, explanation: undefined })) }));
   const definition = definitionFor("outreach.members");
-  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets: sources, columns, labels: [], outreachLabels: [], baseline: null, timeZone: "America/New_York", defaultDefinition: definition, role: "admin", attendanceAvailable: true } }));
+  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets: sources, columns, labels: [], reportFilters: outreachLabelFilter ? [{ ...outreachLabelFilter, options: [] }] : [], baseline: null, timeZone: "America/New_York", defaultDefinition: definition, role: "admin", attendanceAvailable: true } }));
   await page.route("**/reports/views", (route) => route.fulfill({ json: { reports: [{ id: "outreach", ownerUserId: "admin-1", scope: "shared", name: "Outreach members", definition, revision: 1, createdAt: "2026-09-20T00:00:00Z", updatedAt: "2026-09-28T00:00:00Z", pinnedPosition: 0, warnings: [], errors: [] }] } }));
   await page.route("**/reports/query", async (route) => {
     const body = route.request().postDataJSON(); seen.push(structuredClone(body.definition));

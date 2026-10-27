@@ -8,6 +8,7 @@
     ],
     "typescript": [
       "tests-ts/module-platform.test.ts",
+      "tests-ts/module-contributions.test.ts",
       "tests-ts/dashboard-module-fixture.test.ts",
       "tests-ts/module-lifecycle.test.ts",
       "tests-ts/attendance-lifecycle.test.ts",
@@ -30,6 +31,7 @@
     ],
     "typescript": [
       "tests-ts/module-platform.test.ts",
+      "tests-ts/module-contributions.test.ts",
       "tests-ts/dashboard-module-fixture.test.ts",
       "tests-ts/module-lifecycle.test.ts",
       "tests-ts/attendance-lifecycle.test.ts",

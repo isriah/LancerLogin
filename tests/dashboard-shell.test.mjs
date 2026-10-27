@@ -1,4 +1,5 @@
 import test from "node:test";
+import { officialPluginSource } from "./fixtures/official-plugin-source.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { checklistFor, navigationFor, renderDashboard } from "../apps/dashboard/src/shell.mjs";
@@ -185,6 +186,8 @@ test("data controls expose separate backup, restore, and deletion per category",
 test("dashboard consolidates meeting navigation and keeps roster accounts together", async () => {
   const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
   const modules = await readFile("apps/dashboard/src/settings-module-navigation.tsx", "utf8");
+  // Outreach is the official plugin; its contribution is read at the commit Core pins (skipped only when unavailable locally).
+  const outreachModule = officialPluginSource("hour-tracking", ["src/dashboard.tsx"])?.["src/dashboard.tsx"];
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
   const importer = await readFile("apps/dashboard/src/roster-import-panel.tsx", "utf8");
   const users = await readFile("apps/dashboard/src/user-settings.tsx", "utf8");
@@ -217,8 +220,13 @@ test("dashboard consolidates meeting navigation and keeps roster accounts togeth
   assert.match(users, /Non-rostered Admin or Operator/);
   assert.doesNotMatch(shell, /\["\/setup", "Setup"\]/);
   assert.match(shell, /ModuleSetupWorkspace/);
-  assert.match(shell, /modules\.find\(\(item\) => item\.enabled && !item\.setup\.ready\)/);
-  assert.match(shell, /outreachReady && \(path === "\/hours" \|\| path.startsWith\("\/hours\/activities\/"\)/);
+  assert.match(shell, /modules\.filter\(\(item\) => item\.enabled && !item\.setup\.ready && !item\.unavailable\)/);
+  assert.match(shell, /requiredSetup = unfinishedSetups\.find\(\(item\) => !deferredSetups\.has\(setupDeferralId\(item\)\)\)/);
+  assert.match(shell, /const modulePage = resolveDashboardModulePage\(installedDashboardModules, path, role, moduleReady\)/);
+  if (outreachModule) {
+    assert.match(outreachModule, /\{ path: "\/hours", render: workspace, wide: true \}/);
+    assert.match(outreachModule, /\{ path: "\/hours\/activities\/:activityId\+", render: workspace, wide: true \}/);
+  }
 });
 
 test("dashboard access sign-in method is a compact, accessible radio toggle group", async () => {
@@ -354,9 +362,10 @@ test("reports are a routed workspace with a paginated leaderboard and saved repo
   assert.match(reports, /\/reports\/query/);
   assert.match(reports, /reportQuery\(filters\)/);
   assert.match(reports, /Historical membership/);
-  assert.match(reports, /Outreach label matching/);
-  assert.match(reports, /Search Outreach labels/);
-  assert.match(reports, /definition\.outreachLabelIds/);
+  // Module filters such as Outreach labels render from the filter definitions their modules contribute.
+  assert.match(reports, /\{filter\.optionLabel\} matching/);
+  assert.match(reports, /searchLabel=\{`Search \$\{filter\.label\}`\}/);
+  assert.match(reports, /moduleFilterSelection\(definition, filter\)/);
   assert.match(reports, /From<input type="date"/);
   assert.match(reports, /Meeting type<select/);
   assert.match(reports, /Active roster/);

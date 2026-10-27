@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import { carpoolSnapshot } from "./module-fixtures";
+import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
+
+requireCarpoolPlugin();
 
 async function setup(page: Page, fail = false, configured = true, running = false) {
   const plan = { id: "locations", title: "Synthetic automatic locations", destination: "Synthetic venue", tripScope: "both", meetingId: null, eventReference: null, eventTitleSnapshot: null, eventStartsAtSnapshot: null, radiusMiles: 12, preferredRadiusMiles: 4, notes: "", archived: false, revision: 0 };

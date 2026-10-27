@@ -16,7 +16,7 @@ test("Worker sessions reject tampering and expiration", async () => {
   const secret = Buffer.alloc(32, 7).toString("base64url");
   const codec = createSessionCodec(secret, () => clock);
   const token = await codec.issue({ userId: "admin-1", role: "admin" }, 100);
-  assert.deepEqual(await codec.verify(token), { userId: "admin-1", role: "admin", expiresAt: 100 });
+  assert.deepEqual(await codec.verify(token), { userId: "admin-1", role: "admin", expiresAt: 100, authenticatedAt: 0 });
   assert.equal(await codec.verify(`${token}x`), undefined);
   clock = 101;
   assert.equal(await codec.verify(token), undefined);

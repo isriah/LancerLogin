@@ -1,5 +1,5 @@
 /** Only fixed server configuration reaches GitHub. Operational D1 state contains no token. */
-import { completeOfficialRelease, compareReleaseVersions, type UpdateChannel } from "../../../packages/shared/src/release-policy.mjs";
+import { completeOfficialRelease, compareReleaseVersions, parseReleaseVersion, type UpdateChannel } from "../../../packages/shared/src/release-policy.mjs";
 import { readUpdateChannel } from "./update-channel.ts";
 import { resolveOfficialRelease } from "./release-discovery.ts";
 type Result<T = unknown> = { results?: T[]; meta?: { changes?: number } };
@@ -19,6 +19,18 @@ export type UpdateRow = {
   state: string; stage: string; created_at: string; expires_at: string; updated_at: string;
   backup_exported_at?: string; started_at?: string; last_poll_at?: string; run_id?: string;
   executor_run_id?: string; maintenance: number; error_code?: string; recovery_json?: string; update_channel?: UpdateChannel;
+  mode?: WebUpdateMode; module_selection_sha?: string | null;
+};
+/** release: install a newer official release. modules: redeploy the installed release with the changed plugin selection. */
+export type WebUpdateMode = "release" | "modules";
+/** Recorded selection blob for an installation without lancerlogin.modules.json. */
+export const absentSelectionSha = "0".repeat(40);
+export type PrepareOptions = {
+  mode?: WebUpdateMode;
+  /** Current git blob SHA of lancerlogin.modules.json (absentSelectionSha when missing), or undefined without a selection credential. */
+  selectionSha?: () => Promise<string | undefined>;
+  /** Refuses preparation when the build would drop a module the installation still uses. */
+  guard?: () => Promise<void>;
 };
 export const WEB_UPDATE_WORKFLOW = "upgrade-web.yml";
 export function fixedWorkflowPath(path: unknown): boolean { return path === `.github/workflows/${WEB_UPDATE_WORKFLOW}` || path === `.github/workflows/${WEB_UPDATE_WORKFLOW}@main`; }
@@ -65,7 +77,7 @@ async function requestRow(env: WebUpdateEnv, id: unknown): Promise<UpdateRow> {
   return await db(env).prepare("SELECT * FROM web_update_requests WHERE installation_id = 'primary' AND id = ?").bind(id).first<UpdateRow>() ?? fail(404, "request_missing", "The update request is unavailable.");
 }
 export function updateView(row: UpdateRow | null, env: WebUpdateEnv) {
-  const request = row ? { requestId: row.id, targetTag: row.release_tag, targetCommit: row.release_sha, releaseNotes: row.release_notes, channel: row.update_channel ?? "stable",
+  const request = row ? { requestId: row.id, mode: row.mode ?? "release", targetTag: row.release_tag, targetCommit: row.release_sha, releaseNotes: row.release_notes, channel: row.update_channel ?? "stable",
     releaseUrl: `https://github.com/isriah/LancerLogin/releases/tag/${row.release_tag}`, previousVersion: row.previous_version,
     state: row.state, stage: row.stage, createdAt: row.created_at, expiresAt: row.expires_at, updatedAt: row.updated_at,
     backupExported: Boolean(row.backup_exported_at), maintenance: Boolean(row.maintenance), errorCode: row.error_code ?? null,
@@ -79,32 +91,52 @@ export function updateView(row: UpdateRow | null, env: WebUpdateEnv) {
     latestCompletedRequest: request && terminal.has(row!.state) ? request : null,
   };
 }
-export async function prepareWebUpdate(env: WebUpdateEnv, actorId?: string) {
+export const moduleUpdateNotes = "Apply the plugin selection committed in the private deployment repository. The installed LancerLogin release is redeployed unchanged.";
+export async function prepareWebUpdate(env: WebUpdateEnv, actorId?: string, options: PrepareOptions = {}) {
+  const mode = options.mode ?? "release";
   const repo = repository(env); credential(env, updateCredentialMinimumValidityMs); const now = new Date().toISOString();
   await db(env).prepare("UPDATE web_update_requests SET state = 'expired', updated_at = ? WHERE installation_id = 'primary' AND state = 'prepared' AND expires_at <= ?").bind(now, now).run();
   const prior = await latestUpdate(env);
   if (prior && !terminal.has(prior.state)) return updateView(prior, env);
   if (prior?.started_at && Date.now() - Date.parse(prior.started_at) < 120_000) fail(429, "cooldown", "Wait two minutes before preparing another update.");
+  await options.guard?.();
   const metadata = await github(`/repos/${repo}`, env, {}, "private");
   if (!metadata.ok || (await metadata.json() as { private?: boolean }).private !== true) fail(503, "not_private", "Web updates require the configured private deployment repository.");
   const workflow = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}`, env, {}, "private");
   const info = workflow.ok ? await workflow.json() as { state?: string; path?: string; name?: string } : undefined;
   if (info?.state !== "active" || info.path !== `.github/workflows/${WEB_UPDATE_WORKFLOW}`) fail(503, "workflow_required", "Install the reviewed private web upgrade workflow before updating.");
   const setting = await readUpdateChannel(env);
-  const target = await resolveOfficialRelease(setting.channel, (path) => github(path, env));
-  if (!target) fail(503, "release_unavailable", "A complete official release on this track is unavailable.");
+  let target: { tag: string; notes: string; prerelease: boolean };
+  if (mode === "modules") {
+    // The installed official release is redeployed; only the plugin selection changes.
+    const installed = env.RELEASE_VERSION ?? "";
+    if (!parseReleaseVersion(installed)) fail(503, "release_unavailable", "Plugin changes need an installed official release.");
+    target = { tag: `v${installed}`, notes: moduleUpdateNotes, prerelease: parseReleaseVersion(installed)?.beta !== undefined };
+  } else {
+    const release = await resolveOfficialRelease(setting.channel, (path) => github(path, env));
+    if (!release) fail(503, "release_unavailable", "A complete official release on this track is unavailable.");
+    target = release!;
+  }
   if (target.prerelease && info?.name !== "Upgrade LancerLogin web (update channels v2)") fail(503, "controller_upgrade_required", "The maintainer must install the reviewed update-channel controller in the private deployment repository before this beta can be prepared.");
-  if (!newerRelease(target.tag, env.RELEASE_VERSION ?? "")) fail(409, "already_current", "No newer release is available on this track. Switching tracks never downgrades an installation.");
+  if (mode === "release" && !newerRelease(target.tag, env.RELEASE_VERSION ?? "")) fail(409, "already_current", "No newer release is available on this track. Switching tracks never downgrades an installation.");
   const commitResponse = await github(`/repos/isriah/LancerLogin/commits/${target.tag}`, env);
   const commit = commitResponse.ok ? await commitResponse.json() as { sha?: string } : undefined;
   if (!commit?.sha || !/^[0-9a-f]{40}$/.test(commit.sha)) fail(503, "release_unavailable", "The official release commit could not be pinned.");
+  // Pin the plugin selection this request deploys, so a later selection change cannot reach an already prepared update.
+  const selectionSha = await options.selectionSha?.();
+  if (selectionSha !== undefined && !/^[0-9a-f]{40}$/.test(selectionSha)) fail(503, "selection_unavailable", "The plugin selection could not be read.");
+  if (mode === "modules" && selectionSha === undefined) fail(503, "selection_credential_required", "Plugin changes need the plugin selection credential.");
   const id = crypto.randomUUID(); const expires = new Date(Date.now() + 30 * 60_000).toISOString();
   // INSERT OR IGNORE respects the partial unique index under simultaneous Admin requests.
-  await db(env).prepare("INSERT OR IGNORE INTO web_update_requests (id, installation_id, release_tag, release_sha, release_notes, previous_version, prepared_by, state, created_at, expires_at, updated_at, update_channel) SELECT ?, 'primary', ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM installation_update_settings WHERE installation_id = 'primary' AND update_channel = ? AND update_channel_revision = ?)")
-    .bind(id, target.tag, commit.sha, target.notes, env.RELEASE_VERSION, actorId ?? null, now, expires, now, setting.channel, setting.channel, setting.revision).run();
+  await db(env).prepare("INSERT OR IGNORE INTO web_update_requests (id, installation_id, release_tag, release_sha, release_notes, previous_version, prepared_by, state, created_at, expires_at, updated_at, update_channel, mode, module_selection_sha) SELECT ?, 'primary', ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM installation_update_settings WHERE installation_id = 'primary' AND update_channel = ? AND update_channel_revision = ?)")
+    .bind(id, target.tag, commit!.sha, target.notes, env.RELEASE_VERSION, actorId ?? null, now, expires, now, setting.channel, mode, selectionSha ?? null, setting.channel, setting.revision).run();
   const prepared = await latestUpdate(env);
   if (!prepared || terminal.has(prepared.state)) fail(409, "channel_changed", "The update track changed during release preparation. Prepare again.");
   return updateView(prepared, env);
+}
+/** Active requests that are past preparation: plugin selection changes are refused until they finish. */
+export async function startedUpdate(env: WebUpdateEnv): Promise<UpdateRow | null> {
+  return db(env).prepare("SELECT * FROM web_update_requests WHERE installation_id = 'primary' AND state NOT IN ('prepared','succeeded','failed','expired') LIMIT 1").first<UpdateRow>();
 }
 export async function recordUpdateBackup(env: WebUpdateEnv, id: string): Promise<void> {
   const row = await requestRow(env, id);
@@ -177,8 +209,11 @@ export async function webUpdateStatus(env: WebUpdateEnv) {
     if (!terminal.has(latest.state) && latest.state !== "recovery_required") {
       const state = run.status === "completed" ? !latest.executor_run_id && run.conclusion !== "success" ? "failed" : "recovery_required" : run.status === "waiting" ? "awaiting_approval" : run.status === "in_progress" ? "running" : "queued";
       // Workflow success alone never proves app health. Only its verified D1 finalization succeeds.
-      await db(env).prepare("UPDATE web_update_requests SET state = ?, error_code = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state NOT IN ('succeeded','failed','expired','recovery_required')" + (run.status === "completed" ? "" : " AND state != 'verifying'"))
-        .bind(state, state === "recovery_required" ? "workflow_incomplete" : state === "failed" ? "preflight_failed" : null, now, row.id).run();
+      // A current controller fails the request itself when it refuses before claim. An earlier one only recorded the
+      // specific diagnostic; keep it in place of the generic code.
+      const code = state === "recovery_required" ? "workflow_incomplete" : state === "failed" ? "preflight_failed" : null;
+      await db(env).prepare("UPDATE web_update_requests SET state = ?, error_code = CASE WHEN ? = 'preflight_failed' AND executor_run_id IS NULL AND (error_code LIKE 'module_migration_required:%' OR error_code = 'module_selection_preflight') THEN error_code ELSE ? END, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state NOT IN ('succeeded','failed','expired','recovery_required')" + (run.status === "completed" ? "" : " AND state != 'verifying'"))
+        .bind(state, code, code, now, row.id).run();
     }
   }
   return updateView(await requestRow(env, row.id), env);

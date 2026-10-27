@@ -1,0 +1,18 @@
+{
+  "name": "@lancerlogin/module-sdk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Supported interfaces for LancerLogin module plugins. The major version is the module contract version.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api.ts",
+    "./dashboard": "./src/dashboard.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "react": "^19.1.1"
+  }
+}

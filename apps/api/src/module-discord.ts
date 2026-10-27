@@ -3,7 +3,7 @@ import { bundledModuleRegistry } from "../../../packages/shared/src/module-platf
 import type { D1Database } from "./d1-usage.ts";
 import { captureModuleServiceDatabase } from "./module-database-scope.ts";
 import { requireModuleService } from "./module-platform.ts";
-import { outreachDiscordHandlers } from "./outreach-discord.ts";
+import { installedApiModules } from "./installed-api-modules.ts";
 
 export type DiscordModuleInteraction = {
   id?: string;
@@ -39,6 +39,5 @@ export function createModuleDiscordDispatcher(registry: DiscordCommandRegistry, 
   };
 }
 
-export const dispatchModuleDiscordCommand = createModuleDiscordDispatcher(bundledModuleRegistry, [
-  { moduleId: "hour-tracking", handlers: outreachDiscordHandlers },
-]);
+export const dispatchModuleDiscordCommand = createModuleDiscordDispatcher(bundledModuleRegistry, installedApiModules
+  .flatMap((module) => module.discord ? [{ moduleId: module.moduleId, handlers: module.discord }] : []));

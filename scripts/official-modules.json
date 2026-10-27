@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "status": "active",
+  "modules": [
+    {
+      "id": "hour-tracking",
+      "source": "https://github.com/isriah/lancerlogin-outreach.git",
+      "commit": "fb271aece05aad8e13d52720f3c1ab340df79c5b"
+    }
+  ]
+}

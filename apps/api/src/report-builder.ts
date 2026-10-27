@@ -1,5 +1,5 @@
 import { localDate, type AttendanceRule, type PolicyCompliance, type PolicyHistory, type PolicyLabel, type PolicyMeeting, type PolicyMemberResult } from "./attendance-policy.ts";
-import { bundledModuleRegistry, coreReportDatasets, type ReportDatasetDefinition, type ReportDurationUnit, type ReportFieldDefinition, type ReportFilterOperator } from "../../../packages/shared/src/module-platform.ts";
+import { bundledModuleRegistry, coreReportDatasets, coreReportFilterIds, type ReportDatasetDefinition, type ReportDurationUnit, type ReportFieldDefinition, type ReportFilterOperator, type ReportModuleFilterDefinition } from "../../../packages/shared/src/module-platform.ts";
 
 export type ReportScope = "personal" | "shared";
 export type ReportPeriod =
@@ -23,11 +23,11 @@ type ReportDefinitionBase = {
   meetingType: "all" | "required" | "optional";
   labelIds: string[];
   labelMatch: "any" | "all";
-  outreachLabelIds: string[];
-  outreachLabelMatch: "any" | "all";
   membership: "current" | "historical";
   columns: ReportColumn[];
   columnFilters?: ReportColumnFilter[];
+  /** Module filter selections, stored under each installed module filter's `selectionKey` and `matchKey`. */
+  [moduleFilterKey: string]: unknown;
   sort: { column: ReportColumn; direction: "asc" | "desc" };
 };
 export type ReportDefinitionV1 = ReportDefinitionBase & {
@@ -51,6 +51,8 @@ const combinedMemberMeasures = memberReportDatasets.filter((dataset) => dataset.
   const preferred = dataset.defaultColumns.find((id) => dataset.fields.find((field) => field.id === id)?.kind === "measure");
   return preferred ? [preferred] : [];
 });
+/** Filters that installed modules contribute, in registry order. */
+export const reportModuleFilters: readonly ReportModuleFilterDefinition[] = bundledModuleRegistry.reportFilters;
 export const combinedMemberDataset: ReportDatasetDefinition = Object.freeze({
   id: "core.combined-members",
   label: "Members - combined",
@@ -58,7 +60,7 @@ export const combinedMemberDataset: ReportDatasetDefinition = Object.freeze({
   rowIdentity: "core.member.identity",
   capability: "core.roster",
   fields: Object.freeze(combinedMemberFields),
-  filters: Object.freeze(["period", "roster", "meeting-type", "labels", "membership", "outreach-labels"] as const),
+  filters: Object.freeze([...coreReportFilterIds, ...reportModuleFilters.map((filter) => filter.id).filter((id) => memberReportDatasets.some((dataset) => dataset.filters.includes(id)))]),
   groupBy: Object.freeze(["core.member.identity"]),
   defaultColumns: Object.freeze(["core.member.name", ...combinedMemberMeasures]),
   defaultSort: Object.freeze({ field: "core.member.name", direction: "asc" }),
@@ -98,12 +100,21 @@ const legacyFields: Record<LegacyReportColumnKey, string> = {
   report_policy_summary: "attendance.policy.report-summary", report_policy_result: "attendance.policy.report-result", report_policy_status: "attendance.policy.report-status", report_policy_target: "attendance.policy.report-target", report_policy_period: "attendance.policy.report-period", policy_history: "attendance.policy.history",
   present_count: "attendance.detail.present-count", present_dates: "attendance.detail.present-dates", absent_count: "attendance.detail.absent-count", absent_dates: "attendance.detail.absent-dates", excused_count: "attendance.detail.excused-count", excused_dates: "attendance.detail.excused-dates",
 };
-const canonicalField = (key: string) => legacyFields[key as LegacyReportColumnKey] ?? (key === "outreach.activity.category" ? "outreach.activity.labels" : key);
+const canonicalField = (key: string) => legacyFields[key as LegacyReportColumnKey] ?? bundledModuleRegistry.reportFieldAliases[key] ?? key;
+/** Empty selections for every installed module filter, keyed as saved definitions store them. */
+const emptyModuleFilterSelections = () => Object.fromEntries(reportModuleFilters.flatMap((filter) => [[filter.selectionKey, []], [filter.matchKey, "any"]]));
+/** The selection of a module filter in a validated definition: option IDs and whether any or all must match. */
+export function reportFilterSelection(definition: ReportDefinition, filterId: string): { readonly ids: readonly string[]; readonly match: "any" | "all" } {
+  const filter = reportModuleFilters.find((item) => item.id === filterId);
+  const ids = filter ? definition[filter.selectionKey] : undefined;
+  return { ids: Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [], match: filter && definition[filter.matchKey] === "all" ? "all" : "any" };
+}
+const article = (noun: string) => /^[aeiou]/i.test(noun) ? "an" : "a";
 
 export function defaultReportDefinition(hasBaseline: boolean, datasetId = "attendance.members"): NormalizedReportDefinition {
   const dataset = datasets.get(datasetId) ?? datasets.get("core.members")!;
   const column = (key: string): ReportColumn => { const unit = fields.get(key)?.defaultDurationUnit; return unit ? { key, unit } : { key }; };
-  return { version: 2, dataset: dataset.id, groupBy: [...dataset.groupBy], period: dataset.filters.includes("period") && hasBaseline ? { type: "baseline" } : { type: "all" }, roster: "active", meetingType: "all", labelIds: [], labelMatch: "any", outreachLabelIds: [], outreachLabelMatch: "any", membership: "current", columns: dataset.defaultColumns.map(column), columnFilters: [], sort: { column: column(dataset.defaultSort.field), direction: dataset.defaultSort.direction } };
+  return { version: 2, dataset: dataset.id, groupBy: [...dataset.groupBy], period: dataset.filters.includes("period") && hasBaseline ? { type: "baseline" } : { type: "all" }, roster: "active", meetingType: "all", labelIds: [], labelMatch: "any", ...emptyModuleFilterSelections(), membership: "current", columns: dataset.defaultColumns.map(column), columnFilters: [], sort: { column: column(dataset.defaultSort.field), direction: dataset.defaultSort.direction } };
 }
 
 const isDate = (value: unknown): value is string => typeof value === "string" && datePattern.test(value) && new Date(value + "T00:00:00.000Z").toISOString().slice(0, 10) === value;
@@ -130,7 +141,11 @@ function parseColumn(value: unknown, dataset: ReportDatasetDefinition, legacy: b
   return { key, ...(unit ? { unit } : {}) };
 }
 
-export function validateReportDefinition(value: unknown, labels: PolicyLabel[], { allowMissingLabels = false, outreachLabels = [] }: { allowMissingLabels?: boolean; outreachLabels?: Array<{ id: string }> } = {}): { definition?: NormalizedReportDefinition; warnings: string[]; errors: string[] } {
+/**
+ * Validate a saved or submitted report definition. `moduleFilterOptions` lists the known option IDs of each module filter;
+ * with `allowMissingLabels`, unknown label or option IDs are kept with a warning instead of an error.
+ */
+export function validateReportDefinition(value: unknown, labels: PolicyLabel[], { allowMissingLabels = false, moduleFilterOptions = {} }: { allowMissingLabels?: boolean; moduleFilterOptions?: Readonly<Record<string, readonly { id: string }[]>> } = {}): { definition?: NormalizedReportDefinition; warnings: string[]; errors: string[] } {
   const warnings: string[] = [], errors: string[] = [];
   if (!value || typeof value !== "object") return { warnings, errors: ["Report definition is required."] };
   const input = value as Partial<ReportDefinition> & Record<string, unknown>; const knownLabels = new Set(labels.map((label) => label.id));
@@ -149,12 +164,17 @@ export function validateReportDefinition(value: unknown, labels: PolicyLabel[], 
   const labelIds = Array.isArray(input.labelIds) && input.labelIds.length <= 25 && input.labelIds.every((id) => typeof id === "string") ? [...new Set(input.labelIds)] : [];
   if (!Array.isArray(input.labelIds) || labelIds.length !== input.labelIds.length) errors.push("Report label filters are invalid.");
   for (const id of labelIds) if (!knownLabels.has(id)) { if (allowMissingLabels) warnings.push("A report filter references a label that is no longer available."); else errors.push("A report filter references an unknown label."); }
-  const knownOutreachLabels = new Set(outreachLabels.map((label) => label.id));
-  const rawOutreachLabelIds = input.outreachLabelIds ?? [];
-  const outreachLabelIds = Array.isArray(rawOutreachLabelIds) && rawOutreachLabelIds.length <= 25 && rawOutreachLabelIds.every((id) => typeof id === "string") ? [...new Set(rawOutreachLabelIds)] : [];
-  const outreachLabelMatch = input.outreachLabelMatch === undefined ? "any" : input.outreachLabelMatch === "all" || input.outreachLabelMatch === "any" ? input.outreachLabelMatch : undefined;
-  if (!Array.isArray(rawOutreachLabelIds) || outreachLabelIds.length !== rawOutreachLabelIds.length || !outreachLabelMatch || outreachLabelIds.length && !dataset?.filters.includes("outreach-labels")) errors.push("Report Outreach label filters are invalid.");
-  for (const id of outreachLabelIds) if (!knownOutreachLabels.has(id)) { if (allowMissingLabels) warnings.push("A report filter references an Outreach label that is no longer available."); else errors.push("A report filter references an unknown Outreach label."); }
+  // Each installed module filter: at most 25 option IDs, matched any or all, only on datasets that offer the filter.
+  const moduleFilterSelections: Record<string, unknown> = {}; let moduleFiltersValid = true;
+  for (const filter of reportModuleFilters) {
+    const known = new Set((moduleFilterOptions[filter.id] ?? []).map((option) => option.id));
+    const raw = input[filter.selectionKey] ?? []; const rawMatch = input[filter.matchKey];
+    const ids = Array.isArray(raw) && raw.length <= 25 && raw.every((id) => typeof id === "string") ? [...new Set(raw as string[])] : [];
+    const match = rawMatch === undefined ? "any" : rawMatch === "all" || rawMatch === "any" ? rawMatch : undefined;
+    if (!Array.isArray(raw) || ids.length !== raw.length || !match || ids.length && !dataset?.filters.includes(filter.id)) { errors.push(`Report ${filter.optionLabel} filters are invalid.`); moduleFiltersValid = false; }
+    for (const id of ids) if (!known.has(id)) { if (allowMissingLabels) warnings.push(`A report filter references ${article(filter.optionLabel)} ${filter.optionLabel} that is no longer available.`); else errors.push(`A report filter references an unknown ${filter.optionLabel}.`); }
+    moduleFilterSelections[filter.selectionKey] = ids; moduleFilterSelections[filter.matchKey] = match;
+  }
   const columns = dataset && Array.isArray(input.columns) ? input.columns.map((item) => parseColumn(item, dataset, legacy, knownLabels, allowMissingLabels, warnings)).filter((item): item is ReportColumn => Boolean(item)) : [];
   if (!dataset || !Array.isArray(input.columns) || columns.length !== input.columns.length || columns.length < 1 || columns.length > 32 || columns[0]?.key !== dataset.defaultColumns[0] || columns.slice(1).some((column) => column.key === dataset.defaultColumns[0]) || new Set(columns.map(columnId)).size !== columns.length) errors.push(`Report columns are invalid and must begin with ${dataset?.fields.find((field) => field.id === dataset.defaultColumns[0])?.label ?? "the dataset identity"}.`);
   const requestedSortColumn = dataset ? parseColumn(input.sort?.column, dataset, legacy, knownLabels, allowMissingLabels, warnings) : undefined; const sortColumn = requestedSortColumn ? columns.find((column) => columnId(column) === columnId(requestedSortColumn)) : undefined; const direction = input.sort?.direction;
@@ -180,8 +200,8 @@ export function validateReportDefinition(value: unknown, labels: PolicyLabel[], 
   const requestedGroupBy = legacy ? dataset?.groupBy : Array.isArray(input.groupBy) ? input.groupBy.map((field) => typeof field === "string" ? canonicalField(field) : field) : input.groupBy;
   const groupBy = dataset && Array.isArray(requestedGroupBy) && requestedGroupBy.every((field) => typeof field === "string" && dataset.groupBy.includes(field)) ? [...new Set(requestedGroupBy as string[])] : [];
   if (!dataset || !groupBy.length || groupBy.length !== (requestedGroupBy as unknown[] | undefined)?.length) errors.push("Report grouping is invalid.");
-  if (errors.length || !dataset || !period || !roster || !meetingType || !labelMatch || !outreachLabelMatch || !membership || !sortColumn) return { warnings: [...new Set(warnings)], errors };
-  return { definition: { version: 2, dataset: dataset.id, groupBy, period, roster, meetingType, labelIds, labelMatch, outreachLabelIds, outreachLabelMatch, membership, columns, columnFilters, sort: { column: sortColumn, direction: direction as "asc" | "desc" } }, warnings: [...new Set(warnings)], errors };
+  if (errors.length || !dataset || !period || !roster || !meetingType || !labelMatch || !moduleFiltersValid || !membership || !sortColumn) return { warnings: [...new Set(warnings)], errors };
+  return { definition: { version: 2, dataset: dataset.id, groupBy, period, roster, meetingType, labelIds, labelMatch, ...moduleFilterSelections, membership, columns, columnFilters, sort: { column: sortColumn, direction: direction as "asc" | "desc" } }, warnings: [...new Set(warnings)], errors };
 }
 
 function shiftDate(date: string, days: number): string { const value = new Date(date + "T12:00:00.000Z"); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); }

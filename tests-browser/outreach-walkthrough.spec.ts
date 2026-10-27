@@ -1,5 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
+import { requireOutreachPlugin } from "./outreach-fixtures";
+
+requireOutreachPlugin();
 
 type Progress = { pageId: "outreach"; version: number; status: string; stepId: string | null };
 

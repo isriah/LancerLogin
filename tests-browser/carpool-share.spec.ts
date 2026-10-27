@@ -1,8 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
-import { carpoolSnapshot } from "./module-fixtures";
+import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { mockCarpoolShare } from "./carpool-share-fixture";
 import { setDashboardTheme } from "./dashboard-theme";
+
+requireCarpoolPlugin();
 
 async function setup(page: Page) {
   const plan: any = { id: "share", title: "Synthetic sharing event", destination: "Synthetic venue", notes: "Meet at the entrance", tripScope: "both", timeZone: "America/New_York", outboundDepartureAt: "2026-10-14T12:00:00.000Z", returnDepartureAt: "2026-10-14T22:00:00.000Z", eventStartsAtSnapshot: "2026-10-14T13:00:00.000Z", meetingId: null, eventReference: null, eventTitleSnapshot: null, groupSettings: [{ direction: "outbound", vehiclePersonId: "driver-1", label: "East gate", color: "teal" }], radiusMiles: 12, preferredRadiusMiles: 4, archived: false, revision: 0 };

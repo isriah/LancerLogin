@@ -1,0 +1,59 @@
+{
+  "note": "Saved report definitions and their normalized form, produced by Core at 75de3f2e while Outreach was first-party.",
+  "labels": [
+    {
+      "id": "mentor",
+      "name": "Mentor",
+      "active": true,
+      "formulaEnabled": false
+    }
+  ],
+  "outreachLabels": [
+    {
+      "id": "community"
+    },
+    {
+      "id": "stem"
+    }
+  ],
+  "cases": [
+    {
+      "stored": "{\"version\":2,\"dataset\":\"outreach.members\",\"groupBy\":[\"core.member.identity\"],\"period\":{\"type\":\"all\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[],\"labelMatch\":\"any\",\"outreachLabelIds\":[\"community\",\"stem\"],\"outreachLabelMatch\":\"all\",\"membership\":\"current\",\"columns\":[{\"key\":\"core.member.name\"},{\"key\":\"outreach.member.minutes\",\"unit\":\"hours\"},{\"key\":\"outreach.member.entries\"},{\"key\":\"outreach.member.activities\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"core.member.name\"},\"direction\":\"asc\"}}",
+      "normalized": "{\"version\":2,\"dataset\":\"outreach.members\",\"groupBy\":[\"core.member.identity\"],\"period\":{\"type\":\"all\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[],\"labelMatch\":\"any\",\"outreachLabelIds\":[\"community\",\"stem\"],\"outreachLabelMatch\":\"all\",\"membership\":\"current\",\"columns\":[{\"key\":\"core.member.name\"},{\"key\":\"outreach.member.minutes\",\"unit\":\"hours\"},{\"key\":\"outreach.member.entries\"},{\"key\":\"outreach.member.activities\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"core.member.name\"},\"direction\":\"asc\"}}",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "stored": "{\"version\":2,\"dataset\":\"outreach.activities\",\"groupBy\":[\"outreach.activity.id\",\"outreach.activity.title\",\"outreach.activity.date\",\"outreach.activity.category\",\"outreach.activity.mode\",\"outreach.activity.team\"],\"period\":{\"type\":\"all\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[],\"labelMatch\":\"any\",\"membership\":\"current\",\"columns\":[{\"key\":\"outreach.activity.title\"},{\"key\":\"outreach.activity.date\"},{\"key\":\"outreach.activity.category\"},{\"key\":\"outreach.activity.participants\"},{\"key\":\"outreach.activity.minutes\",\"unit\":\"minutes\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"outreach.activity.date\"},\"direction\":\"desc\"}}",
+      "normalized": "{\"version\":2,\"dataset\":\"outreach.activities\",\"groupBy\":[\"outreach.activity.id\",\"outreach.activity.title\",\"outreach.activity.date\",\"outreach.activity.labels\",\"outreach.activity.mode\",\"outreach.activity.team\"],\"period\":{\"type\":\"all\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[],\"labelMatch\":\"any\",\"outreachLabelIds\":[],\"outreachLabelMatch\":\"any\",\"membership\":\"current\",\"columns\":[{\"key\":\"outreach.activity.title\"},{\"key\":\"outreach.activity.date\"},{\"key\":\"outreach.activity.labels\"},{\"key\":\"outreach.activity.participants\"},{\"key\":\"outreach.activity.minutes\",\"unit\":\"minutes\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"outreach.activity.date\"},\"direction\":\"desc\"}}",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "stored": "{\"version\":2,\"dataset\":\"outreach.entries\",\"groupBy\":[\"outreach.entry.id\",\"outreach.entry.member\",\"outreach.entry.activity\",\"outreach.entry.date\",\"outreach.entry.channel\",\"outreach.entry.status\"],\"period\":{\"type\":\"all\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[],\"labelMatch\":\"any\",\"outreachLabelIds\":[\"removed-label\"],\"outreachLabelMatch\":\"any\",\"membership\":\"current\",\"columns\":[{\"key\":\"outreach.entry.member\"},{\"key\":\"outreach.entry.activity\"},{\"key\":\"outreach.entry.date\"},{\"key\":\"outreach.entry.minutes\",\"unit\":\"minutes\"},{\"key\":\"outreach.entry.channel\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"outreach.entry.date\"},\"direction\":\"desc\"}}",
+      "normalized": "{\"version\":2,\"dataset\":\"outreach.entries\",\"groupBy\":[\"outreach.entry.id\",\"outreach.entry.member\",\"outreach.entry.activity\",\"outreach.entry.date\",\"outreach.entry.channel\",\"outreach.entry.status\"],\"period\":{\"type\":\"all\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[],\"labelMatch\":\"any\",\"outreachLabelIds\":[\"removed-label\"],\"outreachLabelMatch\":\"any\",\"membership\":\"current\",\"columns\":[{\"key\":\"outreach.entry.member\"},{\"key\":\"outreach.entry.activity\"},{\"key\":\"outreach.entry.date\"},{\"key\":\"outreach.entry.minutes\",\"unit\":\"minutes\"},{\"key\":\"outreach.entry.channel\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"outreach.entry.date\"},\"direction\":\"desc\"}}",
+      "warnings": [
+        "A report filter references an Outreach label that is no longer available."
+      ],
+      "errors": []
+    },
+    {
+      "stored": "{\"version\":2,\"dataset\":\"core.combined-members\",\"groupBy\":[\"core.member.identity\"],\"period\":{\"type\":\"all\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[\"mentor\"],\"labelMatch\":\"any\",\"outreachLabelIds\":[\"community\"],\"outreachLabelMatch\":\"any\",\"membership\":\"current\",\"columns\":[{\"key\":\"core.member.name\"},{\"key\":\"attendance.member.regular-rate\"},{\"key\":\"outreach.member.minutes\",\"unit\":\"hours\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"core.member.name\"},\"direction\":\"asc\"}}",
+      "normalized": "{\"version\":2,\"dataset\":\"core.combined-members\",\"groupBy\":[\"core.member.identity\"],\"period\":{\"type\":\"all\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[\"mentor\"],\"labelMatch\":\"any\",\"outreachLabelIds\":[\"community\"],\"outreachLabelMatch\":\"any\",\"membership\":\"current\",\"columns\":[{\"key\":\"core.member.name\"},{\"key\":\"attendance.member.regular-rate\"},{\"key\":\"outreach.member.minutes\",\"unit\":\"hours\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"core.member.name\"},\"direction\":\"asc\"}}",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "stored": "{\"version\":2,\"dataset\":\"attendance.members\",\"groupBy\":[\"core.member.identity\"],\"period\":{\"type\":\"baseline\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[],\"labelMatch\":\"any\",\"outreachLabelIds\":[],\"outreachLabelMatch\":\"any\",\"membership\":\"current\",\"columns\":[{\"key\":\"core.member.name\"},{\"key\":\"attendance.member.regular-rate\"},{\"key\":\"attendance.member.assigned-policies\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"core.member.name\"},\"direction\":\"asc\"}}",
+      "normalized": "{\"version\":2,\"dataset\":\"attendance.members\",\"groupBy\":[\"core.member.identity\"],\"period\":{\"type\":\"baseline\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[],\"labelMatch\":\"any\",\"outreachLabelIds\":[],\"outreachLabelMatch\":\"any\",\"membership\":\"current\",\"columns\":[{\"key\":\"core.member.name\"},{\"key\":\"attendance.member.regular-rate\"},{\"key\":\"attendance.member.assigned-policies\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"core.member.name\"},\"direction\":\"asc\"}}",
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "stored": "{\"version\":2,\"dataset\":\"outreach.teams\",\"groupBy\":[\"outreach.team.id\",\"outreach.team.name\",\"outreach.team.number\",\"outreach.team.program\"],\"period\":{\"type\":\"all\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[],\"labelMatch\":\"any\",\"outreachLabelIds\":[],\"outreachLabelMatch\":\"any\",\"membership\":\"current\",\"columns\":[{\"key\":\"outreach.team.name\"},{\"key\":\"outreach.team.number\"},{\"key\":\"outreach.team.program\"},{\"key\":\"outreach.team.participants\"},{\"key\":\"outreach.team.minutes\",\"unit\":\"minutes\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"outreach.team.name\"},\"direction\":\"asc\"}}",
+      "normalized": "{\"version\":2,\"dataset\":\"outreach.teams\",\"groupBy\":[\"outreach.team.id\",\"outreach.team.name\",\"outreach.team.number\",\"outreach.team.program\"],\"period\":{\"type\":\"all\"},\"roster\":\"active\",\"meetingType\":\"all\",\"labelIds\":[],\"labelMatch\":\"any\",\"outreachLabelIds\":[],\"outreachLabelMatch\":\"any\",\"membership\":\"current\",\"columns\":[{\"key\":\"outreach.team.name\"},{\"key\":\"outreach.team.number\"},{\"key\":\"outreach.team.program\"},{\"key\":\"outreach.team.participants\"},{\"key\":\"outreach.team.minutes\",\"unit\":\"minutes\"}],\"columnFilters\":[],\"sort\":{\"column\":{\"key\":\"outreach.team.name\"},\"direction\":\"asc\"}}",
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}

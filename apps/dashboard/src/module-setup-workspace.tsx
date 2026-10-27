@@ -2,8 +2,8 @@ import { attendanceSetupInterval } from "./attendance-setup-interval";
 import { useEffect, useState } from "react";
 import type { ModuleSnapshotItem } from "../../../packages/shared/src/module-platform.ts";
 import { api } from "./dashboard-api";
-import { OutreachSetupWorkspace } from "./outreach-setup-workspace";
-import { CarpoolSetupWorkspace } from "./carpool-setup-workspace";
+import type { DashboardSetupProps } from "./module-contributions.ts";
+import { ModuleRoot } from "./module-slots";
 
 type SetupStep = ModuleSnapshotItem["setup"]["steps"][number] & { valid: boolean; outcome: "completed" | "skipped" | null; completedAt: string | null };
 type SetupState = { moduleId: string; generation: number; ready: boolean; phase: string; version: number; steps: SetupStep[] };
@@ -35,18 +35,16 @@ function defaultMeeting(timeZone: string) {
   return { timeZone, originalStartsAt: interval.startsAt, originalEndsAt: interval.endsAt, title: "First Attendance meeting", startsAt: localInput(new Date(interval.startsAt)), endsAt: localInput(new Date(interval.endsAt)), required: true };
 }
 
-type ModuleSetupWorkspaceProps = { module: ModuleSnapshotItem; navigate: (path: string) => void; onReady: () => Promise<void> | void };
+type ModuleSetupWorkspaceProps = DashboardSetupProps;
 
-export function ModuleSetupWorkspace(props: ModuleSetupWorkspaceProps) {
-  const renderers: Record<string, (input: ModuleSetupWorkspaceProps) => React.ReactNode> = {
-    attendance: (input) => <AttendanceSetupWorkspace {...input} />,
-    "hour-tracking": (input) => <OutreachSetupWorkspace {...input} />,
-    carpool: (input) => <CarpoolSetupWorkspace {...input} />,
-  };
-  return renderers[props.module.id]?.(props) ?? <p className="ui-status" data-tone="error" role="alert">Module setup is unavailable.</p>;
+/** Render the guided setup contributed by the module being set up, inside its module root unless the Core shell owns it. Offer Finish setup later when the shell allows deferring it. */
+export function ModuleSetupWorkspace({ setup: Setup, moduleRoot = false, onFinishLater, ...props }: ModuleSetupWorkspaceProps & { setup?: React.ComponentType<DashboardSetupProps>; moduleRoot?: boolean; onFinishLater?: () => void }) {
+  const workspace = !Setup ? <p className="ui-status" data-tone="error" role="alert">Module setup is unavailable.</p> : moduleRoot ? <ModuleRoot moduleId={props.module.id}><Setup {...props} /></ModuleRoot> : <Setup {...props} />;
+  if (!onFinishLater) return workspace;
+  return <>{workspace}<div className="module-setup-later"><button type="button" onClick={onFinishLater} aria-describedby="module-setup-later-help">Finish setup later</button><p id="module-setup-later-help" className="field-help">{props.module.label} stays unavailable until its required steps are complete. Continue setup from the notice at the top of any page.</p></div></>;
 }
 
-function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSetupWorkspaceProps) {
+export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSetupWorkspaceProps) {
   const [state, setState] = useState<SetupState>();
   const [current, setCurrent] = useState(0);
   const [busy, setBusy] = useState(false);

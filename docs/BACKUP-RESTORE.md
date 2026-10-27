@@ -62,6 +62,58 @@ Portable restore preserves encrypted Google and other integration records only w
 
 This portable-restore boundary differs from an ordinary in-place web update. A normal compatible update preserves the active Community kiosk credential, pairing, mappings, and queued scans. Existing Community kiosk credentials remain compatible with their pre-upgrade unbound queue. Every new or replacement pairing is pairing-bound: each new scan captures that pairing, and a queued scan from an older pairing is rejected and retained in the kiosk's local review record instead of being attached to the replacement kiosk.
 
+### Plugin modules
+
+Backup schema 42 adds an `externalModules` section to entire-installation backups. Meetings and roster backups are unchanged and must not contain it. Core tables, column lists, ownership metadata and historical normalization describe only Core and the first-party modules, so the rest of the file is identical whether or not plugins are installed. Every installed plugin has one entry:
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `label` | The plugin's module ID and display name. |
+| `contractVersion` | The module contract the plugin was built against. |
+| `backupVersion` | The plugin's own backup format version. |
+| `source`, `commit` | The plugin's git source and pinned commit, or `null` until the installed-module catalog records them. |
+| `tables` | Rows of the plugin's declared portable tables for this installation, using only its declared columns. |
+
+Plugin lifecycle, Operator assignment and setup rows stay in the Core module tables. A plugin's non-portable tables, such as stored credentials or leases, are never exported.
+
+Restore validates the section strictly before any write: no unknown fields, only scalar values, only declared tables and columns, rows scoped to this installation, and plugin rows counted toward the same 150,000-record dashboard limit. An installed plugin then converts an older backup version, validates its rows, and neutralizes transient authority so credentials, leases and pending work do not revive. Restore clears every installed plugin's declared tables, including plugins that the backup does not contain, and writes plugin rows in the same atomic batch as Core data. An installed plugin absent from the backup starts disabled with a new generation and its default rows, as on a new installation.
+
+Restore refuses, without changing anything, when the backup contains a plugin that is not installed, is newer than the installed plugin, or was exported under a different module contract. The response is HTTP 409 with `code: "module-restore-refused"` and lists each module with its ID, name, required backup and contract versions, installed versions, recorded source and commit, and record count. Install the listed plugin version and retry, or confirm a restore that discards those modules' data. In **Settings → Data**, the restore dialog names each module and its record count and requires a separate **Discard** checkbox before **Restore without these modules** becomes available. API clients send `excludeModules` with exactly the refused module IDs; any other list is refused.
+
+The opt-out is unavailable while a restored module depends on a refused one. Install the missing dependency instead. Discarded modules restore as absent: they have no lifecycle, generation, Operator assignment or setup rows, and their data is not written. If a discarded module is still installed in an older version, it starts disabled and empty. The restore audit entry and the response record each discarded module with its record count.
+
+Backups from schema 41 and earlier have no plugin section. They restore exactly as before; any plugins installed now are cleared and start fresh.
+
+Lifecycle, assignment and setup rows of a module whose code is not in the build making the backup, such as a removed plugin, are left out of the file: it carries none of that module's data, and the build could not restore them.
+
+### Carpool moved into a plugin
+
+Backup schema 43 moves Carpool out of Core's section. Carpool's rows now travel in its plugin section (module backup version 2), and Core's ownership metadata lists only Attendance and Outreach. The columns are unchanged. Meetings and roster backups change only in their ownership metadata.
+
+Backups from schema 30 through 42 were made while Carpool was first-party, and carry its tables in Core's section. Core still checks their ownership metadata exactly and then treats those rows as a Carpool module entry, backup version 1:
+
+- With the Carpool plugin installed, the rows restore through its adapter, which applies the same historical defaults Core did (meeting links, trip scope and pin provenance, groups and rebuild recovery, trip timing, settings) and the same validation. Lifecycle, Operator assignments and setup progress restore as before, and kiosk handling is unchanged.
+- Without the plugin, a backup that holds Carpool data or state (any Carpool row, Operator assignment or setup progress, or Carpool enabled, retained or deleting) is refused like any unavailable plugin. The refusal names Carpool, backup version 1 and its record count. Install the plugin and retry, or confirm a restore that discards Carpool with `excludeModules: ["carpool"]`; the discard is audited and Carpool restores as absent.
+- Without the plugin, a backup in which Carpool was never used restores without a confirmation. Its disabled Carpool registration is left out, as there is nothing to discard.
+
+A backup from schema 43 or later made without the Carpool plugin contains no Carpool data, even if Carpool data is still retained in the database. Compose the plugin before taking a backup that must include it.
+
+### Outreach moved into a plugin
+
+Backup schema 44 moves Outreach out of Core's section. Outreach is now the official Outreach plugin, included in installation builds by default. Its rows travel in its plugin section (module backup version 3), and Core's ownership metadata lists only Attendance. The columns are unchanged. Meetings and roster backups change only in their ownership metadata.
+
+Backups from schema 25 through 43 were made while Outreach was first-party, and carry its tables in Core's section. Core still checks their ownership metadata exactly and then treats those rows as an Outreach module entry, backup version 2:
+
+- With the Outreach plugin installed, the rows restore through its adapter, which applies the same historical defaults Core did (correction activities and public form privacy before schema 33, event times, publication settings and labels before schema 29, publication snapshots before schema 36) and the same validation. Pending and leased publication operations are paused for explicit retry and counted with the other paused provider operations. Lifecycle, Operator assignments, setup progress and walkthrough progress restore as before.
+- Without the plugin, a backup that holds Outreach data or state (any Outreach row other than the default settings and labels every installation received, an Operator assignment or setup progress, or Outreach enabled, retained or deleting) is refused like any unavailable plugin. The refusal names Outreach Participation, backup version 2 and its record count. Install the plugin and retry, or confirm a restore that discards Outreach with `excludeModules: ["hour-tracking"]`; the discard is audited, Outreach restores as absent, and progress on its walkthrough is not restored. Saved reports on Outreach datasets are kept as saved.
+- Without the plugin, a backup in which Outreach was never used restores without a confirmation. Its disabled registration and default rows are left out.
+
+Backups before schema 25 contain no Outreach data. With the plugin installed, Outreach starts disabled, and its default settings and labels are created when it is first enabled, as on a new installation.
+
+A backup from schema 44 or later made without the Outreach plugin contains no Outreach data, even if Outreach data is still retained in the database.
+
+Plugin authors provide a backup adapter on their API contribution (`backup` in `apps/api/src/module-contributions.ts`). Its version must equal the manifest's `backup.version`, and its tables must be exactly the manifest's portable tables, in parent-first restore order, each with an `installation_id` column. A plugin that declares transient authority on a portable table must provide `neutralize`. Core clears non-portable tables first, then portable tables in reverse order, before Core rows are removed.
+
 ## D1 export and restore
 
 The physical kiosk's **Authentication maintenance → Unpair kiosk** control creates a protected local archive before returning to setup. This archive contains the old installation's credential, local attendance history, mappings, roster cache and sharing state, not reader templates. It is not portable into another installation and is never restored automatically. It preserves the local PIN and Wi-Fi connections. Retire the original dashboard device separately, since local unpairing alone does not revoke the archived credential. See [KIOSK.md](KIOSK.md) for the confirmed transition and interrupted-archive recovery procedure.

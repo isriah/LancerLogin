@@ -385,6 +385,21 @@
       "name": "0077_kiosk_scan_reviews.sql",
       "sha256": "4ec4889bba8c9439290910f4ee04972a025de6aec28c66ed73463d28d897e789",
       "forwardCompatible": true
+    },
+    {
+      "name": "0078_module_catalog.sql",
+      "sha256": "4ce881275a21a0af78569c695fdc0ad354615ac037c966ad2d6001557205b53a",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0079_module_migration_ledger.sql",
+      "sha256": "780586665ba7178ea4a074e595194ca90b4b36f2a81089e5acfe34fc628a3dd0",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0080_plugin_selection_updates.sql",
+      "sha256": "81f3612fb1863bd6ddefac697dca040de51f2b4e6a62dbec2180044b5e167060",
+      "forwardCompatible": true
     }
   ]
 }

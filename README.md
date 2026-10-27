@@ -4,7 +4,7 @@ LancerLogin is standalone, open-source, self-hosted attendance software for club
 
 The current stable public release is **1.2.6**. The public repository contains source, reviewed releases, and public documentation. Create a separate **private** repository from the template for an installation. That private repository holds deployment history and secrets.
 
-This source is **2.0.0-beta.11**, an opt-in Modular beta. Stable remains the default update track. Follow the Community bridge prerequisites below before opting in.
+This source is **2.0.0-beta.12**, an opt-in Modular beta. Stable remains the default update track. Follow the Community bridge prerequisites below before opting in.
 
 ## What it does
 
@@ -37,13 +37,14 @@ Stable is the default update track. Admins can explicitly opt in to Beta without
 - [Kiosk setup and operations](docs/KIOSK.md)
 - [Data backup and restore](docs/BACKUP-RESTORE.md)
 - [Community-to-Modular upgrade](docs/COMMUNITY-UPGRADE.md)
-- [Outreach module](docs/OUTREACH.md)
-- [Carpool module](docs/CARPOOL.md)
+- [Outreach plugin](docs/OUTREACH.md)
+- [Carpool plugin](docs/CARPOOL.md)
 - [Integrations](docs/INTEGRATIONS.md)
 - [Privacy](docs/PRIVACY.md) and [security](docs/SECURITY.md)
 - [Release notes](docs/releases/README.md)
 - [Local development and verification](docs/DEVELOPMENT.md)
-- [Authoring bundled modules](docs/MODULE-AUTHORING.md)
+- [Authoring modules and plugins](docs/MODULE-AUTHORING.md)
+- [Module plugins for Administrators](docs/MODULE-PLUGINS.md)
 
 ## Support
 

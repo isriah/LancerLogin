@@ -1,6 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
 import { pairedViews } from "./paired-views";
+import { requireOutreachPlugin } from "./outreach-fixtures";
+
+requireOutreachPlugin();
 
 const activity = { id: "synthetic-event", mode: "event", labelIds: [], labels: [], serviceDate: "2026-10-09", teamId: null, title: "Synthetic Outreach event", description: "Service at the library", location: "Library", impactRelevant: true, archived: false, revision: 0, eventStartLocal: "09:00", eventEndLocal: "12:00", eventStartOccurrence: null, eventEndOccurrence: null };
 const entry = (id: string, durationMinutes: number, status = "counted") => ({ id, memberId: "member-1", activityId: activity.id, revision: 2, status, memberName: "Avery Synthetic", externalId: "SYN-001", activityTitle: activity.title, teamName: null, serviceDate: activity.serviceDate, startLocal: "09:00", endLocal: "10:00", timeZone: "America/Los_Angeles", durationMinutes, taskNotes: "Sorted donated supplies", staffReason: null, attribution: "self_asserted" });

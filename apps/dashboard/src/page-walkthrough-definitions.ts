@@ -1,7 +1,8 @@
-import type { WalkthroughPage } from "../../../packages/shared/src/walkthrough";
 import type { WalkthroughExperienceDefinition } from "./page-walkthrough";
+import { matchDashboardPath, type DashboardModuleWalkthrough } from "./module-contributions.ts";
 
-const definitions: Record<Exclude<WalkthroughPage, "dashboard">, WalkthroughExperienceDefinition> = {
+/** Core page walkthroughs. Module walkthroughs are contributed with their workspace routes. */
+const definitions = {
   roster: {
     pageId: "roster",
     readySelector: '[data-walkthrough-page="roster"][data-walkthrough-ready="true"]',
@@ -32,23 +33,6 @@ const definitions: Record<Exclude<WalkthroughPage, "dashboard">, WalkthroughExpe
       { id: "attendance-policy", title: "Read attendance results", description: "Regular attendance covers required meetings in the standard calculation. Assigned policies show label-specific targets, windows, and whether the member currently meets them.", targets: '[data-walkthrough="member-policies"]' },
       { id: "history", title: "Review meeting evidence", description: "Complete attendance history lists scan times, outcome, eligibility, and correction reasons. Present, Excuse, and Absent record a reviewed outcome; Admin Clear removes the meeting's recorded attendance after confirmation.", targets: '[data-walkthrough="member-history"]' },
       { id: "member-actions", title: "Know which changes are available", description: "Admins can edit details, activate or deactivate the member, or delete an unused record. Operators can review the profile and history without those controls.", targets: '[data-walkthrough="member-actions"], [data-walkthrough="member-profile"]' },
-    ],
-  },
-  outreach: {
-    pageId: "outreach",
-    readySelector: '[data-walkthrough-page="outreach"][data-walkthrough-ready="true"]',
-    returnFocusSelector: '[data-walkthrough-page="outreach"]',
-    welcomeTitle: "Follow the Outreach workflow",
-    welcomeDescription: "Learn how staff plan activities, receive member participation, review exceptions, and continue into Reports. This tour will not change Outreach records.",
-    finishTitle: "You're ready to manage Outreach",
-    finishDescription: "Start with a dated activity, review the Submission Log and corrections in context, use staff entry only for an exception, and open Reports for totals and analysis.",
-    steps: [
-      { id: "activities", title: "Start with a dated activity", description: "Create a dated activity with a title, labels, and optional team or event times. Open an activity to review each member's counted hours and expand their individual submissions. Planned event times do not set a member's actual hours.", targets: '[data-walkthrough="outreach-activities"]' },
-      { id: "member-submissions", title: "Let members submit their participation", description: "Members normally record completed participation through the public form using their roster ID, or through a linked Discord account. Admins choose whether the public form checks IDs or reveals a matching name; public ID entry is not a login.", targets: '[data-walkthrough="outreach-submission-sources"]' },
-      { id: "submission-log", title: "Review the Submission Log", description: "Expand Submission Log below the activity browser to review counted and void entries together with their member, activity, time, source, notes, and staff attribution when applicable.", targets: '[data-walkthrough="outreach-submission-log"]' },
-      { id: "corrections", title: "Review corrections inside the activity", description: "Corrections appears when a request needs review. Choose Review in activity so staff can compare the request with that activity and preserve the decision as immutable history.", targets: '[data-walkthrough="outreach-corrections"]' },
-      { id: "manual-entry", title: "Use staff entry only for an exception", description: "In Calendar, choose the activity date, or switch to Table and choose an activity. Open the dated activity and choose Add member participation when staff must record an exception. The entry requires a staff reason and remains attributed to Staff.", targets: '[data-walkthrough="outreach-staff-exception"], [data-walkthrough="outreach-activities"]' },
-      { id: "reports-handoff", title: "Continue into Reports", description: "Open Reports for member, activity, entry, and supported-team totals. Keeping analysis there leaves Outreach focused on operational records and review.", targets: '#primary-dashboard-navigation a[href="/reports"]', navigation: true },
     ],
   },
   reports: {
@@ -124,15 +108,14 @@ const definitions: Record<Exclude<WalkthroughPage, "dashboard">, WalkthroughExpe
       { id: "simulate", title: "Submit an audited simulated read", description: "Simulate member read sends an explicitly simulated attendance event. It can affect test attendance data, but never counts as physical kiosk activity.", targets: '[data-walkthrough="simulator-submit"], [data-walkthrough="simulator-inputs"]' },
     ],
   },
-};
+} satisfies Record<string, WalkthroughExperienceDefinition>;
 
-export function pageWalkthroughForPath(path: string, role: "admin" | "operator") {
+export function pageWalkthroughForPath(path: string, role: "admin" | "operator", moduleWalkthroughs: readonly DashboardModuleWalkthrough[] = []) {
   if (path === "/roster") return definitions.roster;
   if (path.startsWith("/roster/") && path.slice("/roster/".length)) return definitions.member;
-  if (path === "/hours") return definitions.outreach;
   if (path === "/reports" || path === "/reports/new" || path.startsWith("/reports/view/")) return definitions.reports;
   if (path.startsWith("/meetings/") && path.slice("/meetings/".length)) return definitions.meeting;
   if (path === "/kiosks") return definitions.kiosks;
   if (role === "admin" && path === "/simulator") return definitions.simulator;
-  return undefined;
+  return moduleWalkthroughs.find((walkthrough) => matchDashboardPath(walkthrough.path, path))?.definition;
 }

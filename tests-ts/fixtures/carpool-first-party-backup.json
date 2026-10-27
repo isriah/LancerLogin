@@ -1,0 +1,803 @@
+{
+  "product": "LancerLogin",
+  "format": "lancerlogin-community-modular",
+  "formatVersion": 1,
+  "schemaVersion": 42,
+  "scope": "installation",
+  "exportedAt": "2026-10-26T19:32:53.437Z",
+  "ownership": {
+    "core": {
+      "version": 1,
+      "tables": [
+        "installations",
+        "platform_module_administration",
+        "platform_module_administration_epochs",
+        "platform_module_epochs",
+        "platform_modules",
+        "organization_settings",
+        "members",
+        "users",
+        "user_preferences",
+        "platform_module_assignment_epochs",
+        "platform_module_assignment_revisions",
+        "platform_module_assignments",
+        "platform_module_setup_progress",
+        "user_walkthroughs",
+        "member_labels",
+        "member_label_changes",
+        "discord_label_role_mappings",
+        "saved_report_views",
+        "saved_report_tabs",
+        "setup_progress",
+        "encrypted_integrations",
+        "google_calendar_authorizations",
+        "integration_deliveries",
+        "integration_state",
+        "audit_log",
+        "telemetry_diagnostics"
+      ]
+    },
+    "modules": [
+      {
+        "id": "attendance",
+        "contractVersion": 1,
+        "backupVersion": 2,
+        "tables": [
+          "label_weekly_targets",
+          "label_attendance_rules",
+          "meeting_weight_categories",
+          "meetings",
+          "meeting_audience_labels",
+          "meeting_templates",
+          "attendance_events",
+          "attendance_corrections",
+          "pairing_codes",
+          "kiosks",
+          "simulated_kiosk_sessions",
+          "discord_attendance_notifications",
+          "discord_attendance_recipients",
+          "discord_attendance_contests",
+          "discord_anomaly_reports",
+          "google_calendar_event_mappings",
+          "google_calendar_operations",
+          "discord_calendar_event_mappings",
+          "discord_calendar_operations"
+        ],
+        "sharedFields": [
+          {
+            "table": "members",
+            "columns": [
+              "attendance_required_from"
+            ]
+          },
+          {
+            "table": "organization_settings",
+            "columns": [
+              "late_scan_minutes",
+              "discord_contest_window_hours",
+              "discord_block_recontests_after_rejection",
+              "discord_channel_manager_enabled",
+              "attendance_reporting_starts_on",
+              "anomaly_late_threshold_minutes",
+              "anomaly_early_threshold_minutes",
+              "discord_anomaly_reports_enabled",
+              "discord_anomaly_report_channel_id",
+              "discord_anomaly_reports_enabled_at",
+              "attendance_recent_days",
+              "attendance_policy_activated_on",
+              "kiosk_authentication_method"
+            ]
+          }
+        ],
+        "transientAuthority": [
+          {
+            "table": "pairing_codes",
+            "columns": [
+              "code_hash",
+              "expires_at",
+              "redeemed_at"
+            ]
+          },
+          {
+            "table": "kiosks",
+            "columns": [
+              "token_hash",
+              "active"
+            ]
+          },
+          {
+            "table": "google_calendar_operations",
+            "columns": [
+              "status",
+              "next_attempt_at"
+            ]
+          },
+          {
+            "table": "discord_calendar_operations",
+            "columns": [
+              "status",
+              "next_attempt_at",
+              "lease_token",
+              "lease_expires_at"
+            ]
+          },
+          {
+            "table": "discord_attendance_notifications",
+            "columns": [
+              "status",
+              "processed_at"
+            ]
+          },
+          {
+            "table": "discord_anomaly_reports",
+            "columns": [
+              "status",
+              "processed_at"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "hour-tracking",
+        "contractVersion": 1,
+        "backupVersion": 2,
+        "tables": [
+          "hours_categories",
+          "hours_labels",
+          "hours_teams",
+          "hours_entry_settings",
+          "hours_public_form_settings",
+          "hours_publication_settings",
+          "hours_activities",
+          "hours_activity_labels",
+          "hours_entries",
+          "hours_entry_revisions",
+          "hours_submission_keys",
+          "hours_reopen_windows",
+          "hours_correction_requests",
+          "hours_correction_resolutions",
+          "hours_activity_publications",
+          "hours_publication_operations"
+        ],
+        "sharedFields": [],
+        "transientAuthority": [
+          {
+            "table": "hours_publication_operations",
+            "columns": [
+              "status",
+              "next_attempt_at",
+              "lease_token",
+              "lease_expires_at"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "carpool",
+        "contractVersion": 1,
+        "backupVersion": 1,
+        "tables": [
+          "carpool_settings",
+          "carpool_plans",
+          "carpool_people",
+          "carpool_assignments",
+          "carpool_unresolved",
+          "carpool_import_profiles",
+          "carpool_location_cache"
+        ],
+        "sharedFields": [],
+        "transientAuthority": []
+      }
+    ]
+  },
+  "tables": {
+    "installations": [
+      {
+        "id": "primary",
+        "created_at": "2026-01-01T00:00:00.000Z",
+        "auth_mode": "local",
+        "telemetry_accepted_at": null,
+        "telemetry_install_id": null,
+        "google_enabled": 0,
+        "resend_enabled": 0,
+        "discord_enabled": 0,
+        "google_calendar_enabled": 0
+      }
+    ],
+    "platform_module_administration": [
+      {
+        "installation_id": "primary",
+        "revision": 0,
+        "selection_completed": 1
+      }
+    ],
+    "platform_module_administration_epochs": [
+      {
+        "installation_id": "primary",
+        "revision": 0
+      }
+    ],
+    "platform_module_epochs": [
+      {
+        "installation_id": "primary",
+        "module_id": "attendance",
+        "generation": 1
+      },
+      {
+        "installation_id": "primary",
+        "module_id": "carpool",
+        "generation": 1
+      },
+      {
+        "installation_id": "primary",
+        "module_id": "hour-tracking",
+        "generation": 1
+      }
+    ],
+    "platform_modules": [
+      {
+        "installation_id": "primary",
+        "module_id": "attendance",
+        "contract_version": 1,
+        "generation": 1,
+        "phase": "enabled",
+        "setup_version": 2,
+        "setup_complete": 1,
+        "disabled_at": null,
+        "delete_after": null,
+        "deletion_cursor": 0,
+        "cleanup_failure": null
+      },
+      {
+        "installation_id": "primary",
+        "module_id": "carpool",
+        "contract_version": 1,
+        "generation": 1,
+        "phase": "enabled",
+        "setup_version": 1,
+        "setup_complete": 1,
+        "disabled_at": null,
+        "delete_after": null,
+        "deletion_cursor": 0,
+        "cleanup_failure": null
+      },
+      {
+        "installation_id": "primary",
+        "module_id": "hour-tracking",
+        "contract_version": 1,
+        "generation": 1,
+        "phase": "disabled",
+        "setup_version": 1,
+        "setup_complete": 0,
+        "disabled_at": null,
+        "delete_after": null,
+        "deletion_cursor": 0,
+        "cleanup_failure": null
+      }
+    ],
+    "organization_settings": [
+      {
+        "installation_id": "primary",
+        "organization_name": "LancerLogin",
+        "subtitle": null,
+        "logo_data": null,
+        "primary_color": "#7c3aed",
+        "secondary_color": "#0f766e",
+        "appearance": "system",
+        "time_zone": "UTC",
+        "late_scan_minutes": 30,
+        "logo_backdrop": "auto",
+        "discord_contest_window_hours": 24,
+        "discord_channel_manager_enabled": 0,
+        "attendance_reporting_starts_on": null,
+        "anomaly_late_threshold_minutes": 10,
+        "anomaly_early_threshold_minutes": 10,
+        "discord_anomaly_reports_enabled": 0,
+        "discord_anomaly_report_channel_id": null,
+        "discord_anomaly_reports_enabled_at": null,
+        "attendance_recent_days": 30,
+        "attendance_policy_activated_on": null,
+        "kiosk_authentication_method": "fingerprint",
+        "discord_block_recontests_after_rejection": 0
+      }
+    ],
+    "members": [
+      {
+        "id": "member",
+        "installation_id": "primary",
+        "external_id": "001",
+        "first_name": "Synthetic",
+        "last_name": "Member",
+        "email": null,
+        "discord_user_id": null,
+        "active": 1,
+        "created_at": "2026-01-01",
+        "attendance_required_from": "2026-01-01",
+        "inactive_periods_json": "[]"
+      },
+      {
+        "id": "member-2",
+        "installation_id": "primary",
+        "external_id": "002",
+        "first_name": "Synthetic",
+        "last_name": "Driver",
+        "email": null,
+        "discord_user_id": null,
+        "active": 1,
+        "created_at": "2026-01-01",
+        "attendance_required_from": "2026-01-01",
+        "inactive_periods_json": "[]"
+      }
+    ],
+    "users": [
+      {
+        "id": "admin",
+        "installation_id": "primary",
+        "email": null,
+        "local_username": "admin",
+        "password_hash": null,
+        "failed_login_count": 0,
+        "locked_until": null,
+        "role": "admin",
+        "active": 1,
+        "created_at": "2026-01-01",
+        "member_id": null,
+        "debug_mode": 0
+      },
+      {
+        "id": "operator",
+        "installation_id": "primary",
+        "email": null,
+        "local_username": "operator",
+        "password_hash": null,
+        "failed_login_count": 0,
+        "locked_until": null,
+        "role": "operator",
+        "active": 1,
+        "created_at": "2026-01-01",
+        "member_id": null,
+        "debug_mode": 0
+      }
+    ],
+    "user_preferences": [],
+    "platform_module_assignment_epochs": [
+      {
+        "installation_id": "primary",
+        "user_id": "admin",
+        "revision": 0
+      },
+      {
+        "installation_id": "primary",
+        "user_id": "operator",
+        "revision": 0
+      }
+    ],
+    "platform_module_assignment_revisions": [
+      {
+        "installation_id": "primary",
+        "user_id": "admin",
+        "revision": 0
+      },
+      {
+        "installation_id": "primary",
+        "user_id": "operator",
+        "revision": 0
+      }
+    ],
+    "platform_module_assignments": [
+      {
+        "installation_id": "primary",
+        "user_id": "operator",
+        "module_id": "attendance",
+        "capabilities_json": "[\"attendance.manage\"]"
+      },
+      {
+        "installation_id": "primary",
+        "user_id": "operator",
+        "module_id": "carpool",
+        "capabilities_json": "[\"carpool.manage\"]"
+      }
+    ],
+    "platform_module_setup_progress": [
+      {
+        "installation_id": "primary",
+        "module_id": "attendance",
+        "step_id": "input",
+        "setup_version": 2,
+        "outcome": "completed",
+        "completed_at": "2026-01-01T00:00:00.000Z",
+        "completed_by": "admin"
+      },
+      {
+        "installation_id": "primary",
+        "module_id": "attendance",
+        "step_id": "meeting",
+        "setup_version": 2,
+        "outcome": "completed",
+        "completed_at": "2026-01-01T00:00:00.000Z",
+        "completed_by": "admin"
+      },
+      {
+        "installation_id": "primary",
+        "module_id": "attendance",
+        "step_id": "rules",
+        "setup_version": 2,
+        "outcome": "completed",
+        "completed_at": "2026-01-01T00:00:00.000Z",
+        "completed_by": "admin"
+      },
+      {
+        "installation_id": "primary",
+        "module_id": "carpool",
+        "step_id": "workspace",
+        "setup_version": 1,
+        "outcome": "completed",
+        "completed_at": "2026-03-01T12:00:00.000Z",
+        "completed_by": "admin"
+      }
+    ],
+    "user_walkthroughs": [],
+    "member_labels": [],
+    "member_label_changes": [],
+    "discord_label_role_mappings": [],
+    "label_weekly_targets": [],
+    "label_attendance_rules": [],
+    "saved_report_views": [],
+    "saved_report_tabs": [],
+    "meeting_weight_categories": [],
+    "meetings": [
+      {
+        "id": "meeting-1",
+        "installation_id": "primary",
+        "title": "Synthetic build session",
+        "starts_at": "2026-03-10T22:00:00.000Z",
+        "ends_at": "2026-03-11T01:00:00.000Z",
+        "required": 1,
+        "notes": null,
+        "created_by": "admin",
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "is_test": 0,
+        "series_id": null,
+        "recurrence_frequency": null,
+        "recurrence_until": null,
+        "recurrence_sequence": null,
+        "deleted_at": null,
+        "weight_category_id": null,
+        "weight_category_name": null,
+        "attendance_weight": 1,
+        "audience_mode": "all"
+      }
+    ],
+    "meeting_audience_labels": [],
+    "meeting_templates": [],
+    "hours_categories": [],
+    "hours_labels": [],
+    "hours_teams": [],
+    "hours_entry_settings": [
+      {
+        "installation_id": "primary",
+        "reporting_days": 30,
+        "reopen_hours": 24,
+        "revision": 0
+      }
+    ],
+    "hours_public_form_settings": [],
+    "hours_publication_settings": [],
+    "hours_activities": [],
+    "hours_activity_labels": [],
+    "hours_entries": [],
+    "hours_entry_revisions": [],
+    "hours_submission_keys": [],
+    "hours_reopen_windows": [],
+    "hours_correction_requests": [],
+    "hours_correction_resolutions": [],
+    "hours_activity_publications": [],
+    "hours_publication_operations": [],
+    "carpool_settings": [
+      {
+        "installation_id": "primary",
+        "radius_miles": 15,
+        "preferred_radius_miles": 5,
+        "revision": 2,
+        "updated_at": "2026-03-01T12:00:00.000Z"
+      }
+    ],
+    "carpool_plans": [
+      {
+        "installation_id": "primary",
+        "id": "plan-2",
+        "title": "Synthetic archived outing",
+        "destination": "",
+        "event_reference": null,
+        "event_title_snapshot": null,
+        "event_starts_at_snapshot": null,
+        "radius_miles": 10,
+        "preferred_radius_miles": 3,
+        "notes": "",
+        "archived": 1,
+        "revision": 1,
+        "created_by": null,
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "updated_at": "2026-03-01T12:00:00.000Z",
+        "meeting_id": null,
+        "trip_scope": "outbound",
+        "group_settings_json": "[]",
+        "last_rebuild_json": null,
+        "time_zone": "UTC",
+        "outbound_departure_at": null,
+        "return_departure_at": null
+      },
+      {
+        "installation_id": "primary",
+        "id": "plan-1",
+        "title": "Synthetic competition",
+        "destination": "Synthetic arena, 1 Example Way",
+        "event_reference": null,
+        "event_title_snapshot": null,
+        "event_starts_at_snapshot": null,
+        "radius_miles": 12,
+        "preferred_radius_miles": 4,
+        "notes": "Bring water",
+        "archived": 0,
+        "revision": 3,
+        "created_by": "admin",
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "updated_at": "2026-03-01T12:00:00.000Z",
+        "meeting_id": "meeting-1",
+        "trip_scope": "both",
+        "group_settings_json": "[{\"direction\":\"outbound\",\"vehiclePersonId\":\"driver\",\"label\":\"Blue car\",\"color\":\"blue\"}]",
+        "last_rebuild_json": "{\"version\":1,\"revision\":3,\"directions\":[\"outbound\",\"return\"],\"radiusMiles\":12,\"preferredRadiusMiles\":4,\"assignments\":[{\"direction\":\"outbound\",\"riderId\":\"rider\",\"vehiclePersonId\":\"driver\",\"distanceMiles\":1.5,\"locked\":false,\"manual\":false}],\"unresolved\":[]}",
+        "time_zone": "America/New_York",
+        "outbound_departure_at": "2026-03-10T21:00:00.000Z",
+        "return_departure_at": "2026-03-11T01:30:00.000Z"
+      }
+    ],
+    "carpool_people": [
+      {
+        "installation_id": "primary",
+        "plan_id": "plan-1",
+        "id": "walker",
+        "member_id": null,
+        "display_name": "Synthetic Walker",
+        "contact": "",
+        "source_row": null,
+        "import_identity": null,
+        "import_snapshot_json": null,
+        "outbound_status": "needs-ride",
+        "outbound_address": "Unknown place",
+        "outbound_lat": null,
+        "outbound_lon": null,
+        "outbound_seats": null,
+        "return_status": "transit",
+        "return_address": "",
+        "return_lat": null,
+        "return_lon": null,
+        "return_seats": null,
+        "return_same_as_outbound": 0,
+        "notes": "",
+        "revision": 0,
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "updated_at": "2026-03-01T12:00:00.000Z",
+        "outbound_location_source": "no-match",
+        "outbound_location_label": null,
+        "return_location_source": null,
+        "return_location_label": null
+      },
+      {
+        "installation_id": "primary",
+        "plan_id": "plan-2",
+        "id": "solo",
+        "member_id": null,
+        "display_name": "Synthetic Solo",
+        "contact": "",
+        "source_row": null,
+        "import_identity": null,
+        "import_snapshot_json": null,
+        "outbound_status": "arranged",
+        "outbound_address": "",
+        "outbound_lat": null,
+        "outbound_lon": null,
+        "outbound_seats": null,
+        "return_status": "arranged",
+        "return_address": "",
+        "return_lat": null,
+        "return_lon": null,
+        "return_seats": null,
+        "return_same_as_outbound": 1,
+        "notes": "",
+        "revision": 0,
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "updated_at": "2026-03-01T12:00:00.000Z",
+        "outbound_location_source": null,
+        "outbound_location_label": null,
+        "return_location_source": null,
+        "return_location_label": null
+      },
+      {
+        "installation_id": "primary",
+        "plan_id": "plan-1",
+        "id": "rider",
+        "member_id": "member",
+        "display_name": "Synthetic Member",
+        "contact": "",
+        "source_row": 2,
+        "import_identity": "synthetic-rider",
+        "import_snapshot_json": "{\"Name\":\"Synthetic Member\"}",
+        "outbound_status": "needs-ride",
+        "outbound_address": "12 Example Street, Exampleton, PA 19000",
+        "outbound_lat": 39.96,
+        "outbound_lon": -75.17,
+        "outbound_seats": null,
+        "return_status": "needs-ride",
+        "return_address": "12 Example Street, Exampleton, PA 19000",
+        "return_lat": 39.96,
+        "return_lon": -75.17,
+        "return_seats": null,
+        "return_same_as_outbound": 1,
+        "notes": "Needs a booster seat",
+        "revision": 1,
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "updated_at": "2026-03-01T12:00:00.000Z",
+        "outbound_location_source": "manual",
+        "outbound_location_label": null,
+        "return_location_source": "manual",
+        "return_location_label": null
+      },
+      {
+        "installation_id": "primary",
+        "plan_id": "plan-1",
+        "id": "driver",
+        "member_id": "member-2",
+        "display_name": "Synthetic Driver",
+        "contact": "driver@example.invalid",
+        "source_row": 1,
+        "import_identity": "synthetic-driver",
+        "import_snapshot_json": "{\"Name\":\"Synthetic Driver\"}",
+        "outbound_status": "offer",
+        "outbound_address": "10 Example Street, Exampleton, PA 19000",
+        "outbound_lat": 39.95,
+        "outbound_lon": -75.16,
+        "outbound_seats": 3,
+        "return_status": "offer",
+        "return_address": "10 Example Street, Exampleton, PA 19000",
+        "return_lat": 39.95,
+        "return_lon": -75.16,
+        "return_seats": 3,
+        "return_same_as_outbound": 1,
+        "notes": "",
+        "revision": 1,
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "updated_at": "2026-03-01T12:00:00.000Z",
+        "outbound_location_source": "lookup",
+        "outbound_location_label": "10 Example St, Exampleton, PA",
+        "return_location_source": "lookup",
+        "return_location_label": "10 Example St, Exampleton, PA"
+      }
+    ],
+    "carpool_assignments": [
+      {
+        "installation_id": "primary",
+        "plan_id": "plan-1",
+        "direction": "outbound",
+        "rider_id": "rider",
+        "vehicle_person_id": "driver",
+        "distance_miles": 1.5,
+        "locked": 1,
+        "manual": 0,
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "updated_at": "2026-03-01T12:00:00.000Z"
+      },
+      {
+        "installation_id": "primary",
+        "plan_id": "plan-1",
+        "direction": "return",
+        "rider_id": "rider",
+        "vehicle_person_id": "driver",
+        "distance_miles": 1.5,
+        "locked": 0,
+        "manual": 1,
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "updated_at": "2026-03-01T12:00:00.000Z"
+      }
+    ],
+    "carpool_unresolved": [
+      {
+        "installation_id": "primary",
+        "plan_id": "plan-1",
+        "direction": "outbound",
+        "rider_id": "walker",
+        "reason": "needs-review",
+        "detail": "No clear address match was found.",
+        "created_at": "2026-03-01T12:00:00.000Z"
+      }
+    ],
+    "carpool_import_profiles": [
+      {
+        "installation_id": "primary",
+        "header_key": "name|address|seats",
+        "mapping_json": "{\"displayName\":\"Name\",\"outboundAddress\":\"Address\",\"outboundSeats\":\"Seats\"}",
+        "updated_by": "admin",
+        "updated_at": "2026-03-01T12:00:00.000Z"
+      }
+    ],
+    "carpool_location_cache": [
+      {
+        "installation_id": "primary",
+        "cache_key": "geoapify:v1:country=us:10 example street, exampleton, pa 19000",
+        "provider": "geoapify",
+        "normalized_address": "10 example street, exampleton, pa 19000",
+        "original_address": "10 Example Street, Exampleton, PA 19000",
+        "status": "success",
+        "latitude": 39.95,
+        "longitude": -75.16,
+        "label": "10 Example St, Exampleton, PA",
+        "saved_at": "2026-03-01T12:00:00.000Z",
+        "expires_at": null
+      },
+      {
+        "installation_id": "primary",
+        "cache_key": "geoapify:v1:country=us:unknown place",
+        "provider": "geoapify",
+        "normalized_address": "unknown place",
+        "original_address": "Unknown place",
+        "status": "no-match",
+        "latitude": null,
+        "longitude": null,
+        "label": null,
+        "saved_at": "2026-03-01T12:00:00.000Z",
+        "expires_at": "2026-03-02T12:00:00.000Z"
+      }
+    ],
+    "attendance_events": [],
+    "attendance_corrections": [],
+    "setup_progress": [],
+    "pairing_codes": [
+      {
+        "id": "pair-a",
+        "installation_id": "primary",
+        "code_hash": "synthetic-hash-a",
+        "expires_at": "2099-01-01T00:00:00.000Z",
+        "redeemed_at": null,
+        "created_by": "admin",
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "purpose": "hardware"
+      }
+    ],
+    "kiosks": [
+      {
+        "id": "kiosk-a",
+        "installation_id": "primary",
+        "pairing_code_id": "pair-a",
+        "name": "Synthetic kiosk",
+        "token_hash": "synthetic-token-a",
+        "active": 1,
+        "last_seen_at": null,
+        "created_at": "2026-03-01T12:00:00.000Z",
+        "reader_online": null,
+        "release_version": null,
+        "pending_events": 0,
+        "last_sync_at": null,
+        "error_category": null,
+        "pairing_bound": 0,
+        "authentication_method": "fingerprint",
+        "configured_authentication_method": "fingerprint"
+      }
+    ],
+    "simulated_kiosk_sessions": [],
+    "encrypted_integrations": [],
+    "google_calendar_authorizations": [],
+    "integration_deliveries": [],
+    "integration_state": [],
+    "discord_attendance_notifications": [],
+    "discord_attendance_recipients": [],
+    "discord_attendance_contests": [],
+    "discord_anomaly_reports": [],
+    "audit_log": [],
+    "telemetry_diagnostics": [],
+    "google_calendar_event_mappings": [],
+    "google_calendar_operations": [],
+    "discord_calendar_event_mappings": [],
+    "discord_calendar_operations": []
+  },
+  "externalModules": []
+}

@@ -1,7 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
-import { carpoolSnapshot } from "./module-fixtures";
+import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
 import { pairedViews } from "./paired-views";
+
+requireCarpoolPlugin();
 
 function fixture() {
   const plan = { id: "trust", title: "Synthetic competition", destination: "Synthetic venue", meetingId: null, eventReference: null, eventTitleSnapshot: null, eventStartsAtSnapshot: null, radiusMiles: 12, preferredRadiusMiles: 4, notes: "", archived: false, revision: 0 };

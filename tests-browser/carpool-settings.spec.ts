@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
-import { carpoolSnapshot } from "./module-fixtures";
+import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { pairedViews } from "./paired-views";
+
+requireCarpoolPlugin();
 
 for (const view of pairedViews) test(`Carpool settings securely save defaults and seed editable plans at ${view.width} in ${view.theme}`, async ({ page }) => {
   await page.setViewportSize(view); await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), view.theme);

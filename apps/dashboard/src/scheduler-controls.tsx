@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { api } from "./dashboard-api";
+import { bundledModuleRegistry } from "../../../packages/shared/src/module-platform.ts";
 
 type Job = { next: number; last: number | null; outcome: "waiting" | "running" | "ok" | "failed" | "paused" };
 type Snapshot = { enabled: boolean; jobs: Record<string, Job> };
@@ -11,7 +12,8 @@ const labels: Record<string, string> = {
   "attendance.discord-notices": "Attendance notices",
   "attendance.discord-anomalies": "Attendance anomaly reports",
   "attendance.discord-label-roles": "Discord label role sync",
-  "hour-tracking.publication": "Outreach event publication",
+  // Installed modules name their own jobs in their manifests.
+  ...Object.fromEntries(bundledModuleRegistry.modules.flatMap((module) => module.jobs.flatMap((job) => job.label ? [[job.id, job.label]] : []))),
 };
 const outcomes: Record<Job["outcome"], string> = { waiting: "Waiting", running: "Pass in progress", ok: "Pass completed", failed: "Pass failed", paused: "Paused" };
 const timestamp = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 8_640_000_000_000_000;

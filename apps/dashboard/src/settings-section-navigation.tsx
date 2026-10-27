@@ -2,9 +2,10 @@ import { useId } from "react";
 import { RouteLink, usePath } from "./router";
 import "./mobile-settings.css";
 
-export function SettingsSectionNavigation({ label, sections, currentHref, navigate }: { label: string; sections: [string, string][]; currentHref: string; navigate: (path: string) => void }) {
+/** Section links for a settings page with several sections. `pickerLabel` names the narrow-screen section picker; it defaults to `label`. */
+export function SettingsSectionNavigation({ label, pickerLabel, sections, currentHref, navigate }: { label: string; pickerLabel?: string; sections: [string, string][]; currentHref: string; navigate: (path: string) => void }) {
   const id = useId();
-  return <><label className="settings-section-picker" htmlFor={id}><span>{label === "Attendance settings sections" ? "Attendance section" : label === "Outreach settings sections" ? "Outreach section" : label}</span><select id={id} value={currentHref} onChange={(event) => navigate(event.target.value)}>{sections.map(([href, title]) => <option key={href} value={href}>{title}</option>)}</select></label><nav className="ui-control-group settings-section-navigation" aria-label={label}>
+  return <><label className="settings-section-picker" htmlFor={id}><span>{pickerLabel ?? (label === "Attendance settings sections" ? "Attendance section" : label)}</span><select id={id} value={currentHref} onChange={(event) => navigate(event.target.value)}>{sections.map(([href, title]) => <option key={href} value={href}>{title}</option>)}</select></label><nav className="ui-control-group settings-section-navigation" aria-label={label}>
     {sections.map(([href, title]) => <RouteLink key={href} href={href} currentPath={currentHref} navigate={navigate}>{title}</RouteLink>)}
   </nav></>;
 }

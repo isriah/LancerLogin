@@ -2,15 +2,16 @@ import { inactiveAt, inactivePeriodsUpdateSql, validateInactivePeriods } from ".
 import { meetingDeletion, restoreMeetingDeletion } from "./meeting-deletion.ts";
 import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough.ts";
 import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
-import { decryptIntegration, encryptIntegration } from "./integration-crypto.ts";
+import { decryptIntegration, encryptIntegration, moduleCredentials } from "./integration-crypto.ts";
 import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance } from "./web-updates.ts";
+import { commitPluginChange, currentSelectionSha, lookupPluginRelease, pluginManagementState, requiredModuleMigrations, requireNoModuleMigration, reviewPluginChange, selectionCredentialState } from "./plugin-selection.ts";
 import { discoveryForChannel, releaseRequestHeaders, resolveOfficialRelease } from "./release-discovery.ts";
 import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
 import { kioskReleaseTransition } from "../../../packages/shared/src/release-policy.mjs";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
-import { buildReportRows, combinedMemberDataset, defaultReportDefinition, filterAndSortReportRows, reportColumnCatalog, reportColumnId, reportColumnLabel, reportDatasetCatalog, reportDatasetDefinition, reportFieldSourceDataset, reportFilterSourceDataset, reportLabelsMatch, resolveReportPeriod, validateReportDefinition, type NormalizedReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
-import { createModuleReportDispatcher, outreachReportHandlers, projectCoreMembers, type ReportProjectionContext } from "./module-reporting.ts";
+import { buildReportRows, combinedMemberDataset, defaultReportDefinition, filterAndSortReportRows, reportColumnCatalog, reportColumnId, reportColumnLabel, reportDatasetCatalog, reportDatasetDefinition, reportFieldSourceDataset, reportFilterSourceDataset, reportLabelsMatch, reportModuleFilters, resolveReportPeriod, validateReportDefinition, type NormalizedReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
+import { createModuleReportDispatcher, projectCoreMembers, type ReportProjectionContext } from "./module-reporting.ts";
 
 import { databaseIdentity, measureD1, usageCategory, type D1Database, type D1Statement } from "./d1-usage.ts";
 import { acceptContestBatch, rejectContestBatch, resolveContestBatch, submitContest } from "./contest-review.ts";
@@ -22,32 +23,30 @@ import { syncKioskScanReviews, listKioskScanReviews, markKioskScanReviewed, mark
 import { readKioskEnrollment, startKioskEnrollment, selectEnrollmentMember, cancelKioskEnrollment, progressKioskEnrollment } from "./kiosk-enrollment.ts";
 import { fingerprintResetRoute } from "./fingerprint-reset.ts";
 import { bundledModuleRegistry } from "../../../packages/shared/src/module-platform.ts";
-import { configureModulePlatform, readModuleAssignments, readModulePlatformSnapshot, readModuleSetup, requireModuleService, requireModuleSetup, requireModuleWorkspace, setModuleAssignments, updateModuleSetup } from "./module-platform.ts";
+import { ModuleRegistrationIncomplete, configureModulePlatform, readModuleAssignments, readModulePlatformSnapshot, readModuleSetup, requireModuleService, requireModuleSetup, requireModuleWorkspace, setModuleAssignments, updateModuleSetup } from "./module-platform.ts";
 import { captureModuleServiceDatabase, captureModuleSetupDatabase, captureModuleWorkspaceDatabase } from "./module-database-scope.ts";
 import { attendanceSetupRoute } from "./attendance-module-setup.ts";
-import { outreachCatalogRoute, outreachSetupRoute } from "./outreach-catalogs.ts";
-import { outreachEntryRoute } from "./outreach-entries.ts";
-import { outreachPublicRoute } from "./outreach-public.ts";
-import { publicFormSettingsRoute } from "./outreach-public-settings.ts";
-import { outreachReviewRoute } from "./outreach-review.ts";
 import { dispatchModuleDiscordCommand } from "./module-discord.ts";
-import { outreachPublicationRoute, processOutreachPublicationOperations, parseOutreachPublicationEvent, outreachGoogleEventPayload, type OutreachPublicationEvent, type OutreachPublicationProvider, type OutreachPublicationProviders } from "./outreach-publication.ts";
+import { createApiModuleSet, type ApiModuleContribution, type CoreModuleServices, type ModuleReportFilterOption, type ModuleRouteContext } from "./module-contributions.ts";
+import { installedApiModules } from "./installed-api-modules.ts";
+import { attendanceApiModule } from "./attendance-api-module.ts";
+import { ensureModulesReconciled, reconcileInstalledModules } from "./module-catalog.ts";
+import { externalModuleManifests } from "../../../packages/shared/src/generated/external-manifests.ts";
 import { attendanceMemberSettings } from "./attendance-member-settings.ts";
 import { runModuleCleanup } from "./module-cleanup.ts";
-import { carpoolRoute, createCarpoolPlan } from "./carpool-api.ts";
-import { createMeetingReferenceAccess } from "./attendance-meeting-reference.ts";
-import { carpoolSettingsRoute, readCarpoolGeocoder } from "./carpool-settings.ts";
-import { validateCarpoolBackupTables } from "./carpool-backup.ts";
+import { extractedModuleOwnership, extractedModuleTables, extractedModules, liftExtractedModules, unavailableExtractedWalkthroughPages } from "./extracted-modules.ts";
+import type { ModuleDefinition } from "../../../packages/shared/src/module-platform.ts";
+import { clearExternalModuleStatements, exportExternalModules, externalBackupModules, externalModuleBackupSchema, firstPartyBackupRegistry, freshExternalModuleStatements, insertExternalModuleStatements, moduleKeyedTables, ModuleRestoreRefusal, parseExternalModuleSection, planExternalModuleRestore, prepareIncludedModule, removeExcludedModuleRows, requireConfirmedExclusions, type ExcludedModuleSummary, type PreparedExternalModule } from "./module-backup.ts";
 import { moduleSchedulerJobs, schedulerClass, type SchedulerJob, type SchedulerNamespace } from "./platform-scheduler.ts";
 type ModuleProviderAuthority = () => Promise<void>;
 const moduleProviderAuthority = Symbol("module-provider-authority");
 type ProviderConfiguration = Record<string, string> & { [moduleProviderAuthority]?: ModuleProviderAuthority };
-export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; FINGERPRINT_VAULT_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; CARPOOL_GEOAPIFY_KEY?: string; DB?: D1Database; PLATFORM_SCHEDULER_MODE?: string; PLATFORM_SCHEDULER?: SchedulerNamespace; moduleProviderAuthority?: ModuleProviderAuthority; }
+export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; FINGERPRINT_VAULT_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DB?: D1Database; PLATFORM_SCHEDULER_MODE?: string; PLATFORM_SCHEDULER?: SchedulerNamespace; moduleProviderAuthority?: ModuleProviderAuthority; }
 type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
 type ScheduledController = { cron?: string };
 
 type Role = "admin" | "operator";
-type Principal = { userId: string; role: Role; expiresAt: number };
+type Principal = { userId: string; role: Role; expiresAt: number; authenticatedAt?: number };
 type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "confirm-attendance";
 type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
@@ -205,17 +204,11 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), "primary", adminId, "installation.created", "installation", "primary", now),
     db.prepare("INSERT INTO platform_module_administration (installation_id, revision, selection_completed) VALUES ('primary', 0, 0)"),
     db.prepare("INSERT INTO platform_module_administration_epochs (installation_id, revision) VALUES ('primary', 0)"),
-    db.prepare("INSERT INTO platform_module_epochs (installation_id, module_id, generation) VALUES ('primary', 'attendance', 1)"),
-    db.prepare("INSERT INTO platform_modules (installation_id, module_id, contract_version, generation, phase, setup_version, setup_complete) VALUES ('primary', 'attendance', 1, 1, 'disabled', 2, 0)"),
-    db.prepare("INSERT INTO platform_module_epochs (installation_id, module_id, generation) VALUES ('primary', 'hour-tracking', 1)"),
-    db.prepare("INSERT INTO platform_modules (installation_id, module_id, contract_version, generation, phase, setup_version, setup_complete) VALUES ('primary', 'hour-tracking', 1, 1, 'disabled', 1, 0)"),
-    db.prepare("INSERT INTO platform_module_epochs (installation_id, module_id, generation) VALUES ('primary', 'carpool', 1)"),
-    db.prepare("INSERT INTO platform_modules (installation_id, module_id, contract_version, generation, phase, setup_version, setup_complete) VALUES ('primary', 'carpool', 1, 1, 'disabled', 1, 0)"),
-    db.prepare("INSERT INTO hours_entry_settings (installation_id) VALUES ('primary')"),
-    db.prepare("INSERT INTO hours_publication_settings (installation_id, automatic, revision, created_at, updated_at) VALUES ('primary', 0, 0, ?, ?)").bind(now, now),
-    db.prepare("INSERT INTO hours_categories(installation_id,id,name,mode,impact_default,created_at,updated_at) VALUES ('primary','event','Event','event',1,?,?)").bind(now, now),
-    db.prepare("INSERT INTO hours_categories(installation_id,id,name,mode,impact_default,created_at,updated_at) VALUES ('primary','team-support','Team Support','team',1,?,?)").bind(now, now),
-    db.prepare("INSERT INTO hours_categories(installation_id,id,name,mode,impact_default,created_at,updated_at) VALUES ('primary','other-service','Other Service','task',1,?,?)").bind(now, now),
+    ...bundledModuleRegistry.modules.flatMap((module) => [
+      db.prepare("INSERT INTO platform_module_epochs (installation_id, module_id, generation) VALUES ('primary', ?, 1)").bind(module.id),
+      db.prepare("INSERT INTO platform_modules (installation_id, module_id, contract_version, generation, phase, setup_version, setup_complete) VALUES ('primary', ?, ?, 1, 'disabled', ?, 0)").bind(module.id, module.contractVersion, module.setup.version),
+    ]),
+    ...apiModules.all.flatMap((module) => module.installationSeed?.(db, { installationId: "primary", now }) ?? []),
     db.prepare("INSERT INTO platform_module_assignment_epochs (installation_id, user_id, revision) VALUES ('primary', ?, 0)").bind(adminId),
     db.prepare("INSERT INTO platform_module_assignment_revisions (installation_id, user_id, revision) VALUES ('primary', ?, 0)").bind(adminId),
   ];
@@ -233,8 +226,16 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
 async function modulePlatform(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, request.method === "GET" ? ["admin", "operator"] : ["admin"]);
   const db = requireDatabase(env);
-  if (request.method === "GET") return response(await readModulePlatformSnapshot(db, principal.userId));
-  return response(await configureModulePlatform(db, principal.userId, await parseJson(request)));
+  if (request.method === "GET") {
+    try { return response(await readModulePlatformSnapshot(db, principal.userId)); }
+    catch (error) { if (!(error instanceof ModuleRegistrationIncomplete) || await webUpdateMaintenance(env)) throw error; }
+    await reconcileInstalledModules(db);
+    return response(await readModulePlatformSnapshot(db, principal.userId, { unregistered: "show" }));
+  }
+  const input = await parseJson(request);
+  // Record installed definitions before any module can be enabled, so retained data stays deletable without its code.
+  await reconcileInstalledModules(db);
+  return response(await configureModulePlatform(db, principal.userId, input));
 }
 
 async function moduleAssignments(request: Request, env: Env, userId: string): Promise<Response> {
@@ -278,10 +279,48 @@ async function webUpdates(request: Request, env: Env): Promise<Response> {
   const input = await parseJson<Record<string, unknown>>(request, 2_048);
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "Invalid web update request");
   if (new URL(request.url).pathname.endsWith("/prepare")) {
-    if (Object.keys(input).length) throw new HttpError(400, "Prepare accepts no release or deployment parameters");
-    return response(await prepareWebUpdate(env, principal.userId));
+    // The only accepted parameter chooses redeploying the installed release with the committed plugin selection.
+    const keys = Object.keys(input);
+    if (keys.length && (keys.length !== 1 || input.mode !== "modules")) throw new HttpError(400, "Prepare accepts no release or deployment parameters");
+    const mode = input.mode === "modules" ? "modules" : "release";
+    // Pin the plugin selection when the selection credential is available; plugin changes always require it.
+    const selectionSha = mode === "modules" || selectionCredentialState(env).state === "ready" ? () => currentSelectionSha(env) : undefined;
+    return response(await prepareWebUpdate(env, principal.userId, { mode, selectionSha, guard: () => requireNoModuleMigration(env) }));
   }
   return response(await startWebUpdate(env, input, principal.userId), 202);
+}
+const sessionCookie = (token: string) => `lancerlogin_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`;
+async function pluginManagement(request: Request, env: Env, action: "state" | "review" | "change" | "reauthenticate" | "release"): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (action === "state") {
+    const [user, installation] = await Promise.all([
+      db.prepare("SELECT password_hash IS NOT NULL AS password, email FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ password: number; email?: string | null }>(),
+      db.prepare("SELECT auth_mode AS authMode FROM installations WHERE id = 'primary'").first<{ authMode: AuthMode }>(),
+    ]);
+    return response(await pluginManagementState(env, { principal, passwordAvailable: Boolean(user?.password), googleAvailable: Boolean(user?.email) && ["google", "both"].includes(installation?.authMode ?? "") }));
+  }
+  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Plugin changes require the dashboard origin");
+  const input = await parseJson<Record<string, unknown>>(request, 4_096);
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "Invalid plugin request");
+  if (action === "review") return response(await reviewPluginChange(env, input));
+  if (action === "release") return response(await lookupPluginRelease(input));
+  if (action === "change") return response(await commitPluginChange(env, principal, input), 201);
+  // Fresh re-authentication with the Admin's own local password replaces the session with a newly authenticated one.
+  if (Object.keys(input).some((key) => key !== "password") || typeof input.password !== "string" || !input.password || input.password.length > 1_024) throw new HttpError(400, "Enter your password");
+  if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
+  const user = await db.prepare("SELECT id, role, password_hash AS passwordHash, failed_login_count AS failedLoginCount, locked_until AS lockedUntil FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; role: Role; passwordHash: string | null; failedLoginCount: number; lockedUntil?: string }>();
+  if (!user?.passwordHash) throw new WebUpdateError(409, "password_unavailable", "This account has no LancerLogin password. Sign in with Google again instead.");
+  const locked = Boolean(user.lockedUntil && Date.parse(user.lockedUntil) > Date.now());
+  const valid = await verifyPassword(input.password, user.passwordHash);
+  if (!valid || locked) {
+    if (!locked) { const failures = Number(user.failedLoginCount ?? 0) + 1; await db.prepare("UPDATE users SET failed_login_count = ?, locked_until = ? WHERE installation_id = 'primary' AND id = ?").bind(failures, failures >= 5 ? new Date(Date.now() + 15 * 60_000).toISOString() : null, user.id).run(); }
+    throw new WebUpdateError(401, "reauthentication_failed", locked ? "Too many attempts. Try again later." : "The password is incorrect.");
+  }
+  if (user.failedLoginCount || user.lockedUntil) await db.prepare("UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE installation_id = 'primary' AND id = ?").bind(user.id).run();
+  await writeAudit(db, principal, "auth.reauthenticated", "user", user.id, { method: "password", purpose: "plugin_management" });
+  const token = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role });
+  const fresh = await createSessionCodec(env.SESSION_KEY).verify(token);
+  return response({ ok: true, freshUntil: fresh?.authenticatedAt ? fresh.authenticatedAt + 10 * 60_000 : null }, 200, { "set-cookie": sessionCookie(token) });
 }
 async function localLogin(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); if (!env.SESSION_KEY) throw new HttpError(503, "Local authentication is not configured");
@@ -628,8 +667,9 @@ async function manageMember(request: Request, env: Env, memberId: string): Promi
   if (request.method === "DELETE") {
     const input = await parseJson<{ confirmation?: string }>(request);
     if (input.confirmation !== `DELETE MEMBER ${member.memberId}`) throw new HttpError(400, `Type DELETE MEMBER ${member.memberId} exactly to continue`);
-    const references = await db.prepare("SELECT (SELECT COUNT(*) FROM attendance_events WHERE member_id = ?) + (SELECT COUNT(*) FROM attendance_corrections WHERE member_id = ?) + (SELECT COUNT(*) FROM hours_entries WHERE installation_id='primary' AND member_id = ?) + (SELECT COUNT(*) FROM hours_correction_requests WHERE installation_id='primary' AND requester_member_id = ?) AS count").bind(member.id, member.id, member.id, member.id).first<{ count: number }>();
-    if (references?.count) throw new HttpError(409, "This member has Attendance or Outreach history. Deactivate them instead to preserve the record.");
+    const modules = moduleRosterReferences();
+    const references = await db.prepare(`SELECT (SELECT COUNT(*) FROM attendance_events WHERE member_id = ?) + (SELECT COUNT(*) FROM attendance_corrections WHERE member_id = ?)${modules.columns.map(({ table, column }) => ` + (SELECT COUNT(*) FROM ${table} WHERE installation_id='primary' AND ${column} = ?)`).join("")} AS count`).bind(member.id, member.id, ...modules.columns.map(() => member.id)).first<{ count: number }>();
+    if (references?.count) throw new HttpError(409, `This member has ${["Attendance", ...modules.labels].join(" or ")} history. Deactivate them instead to preserve the record.`);
     await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id = ?").bind(member.id), db.prepare("DELETE FROM members WHERE installation_id = 'primary' AND id = ?").bind(member.id)]);
     await writeAudit(db, principal, "roster.member_deleted", "member", member.id, { memberId: member.memberId }); return response({ deleted: true, memberId: member.id });
   }
@@ -1279,13 +1319,24 @@ async function accessibleReport(db: D1Database, principal: Principal, id: string
   if (!item) throw new HttpError(404, "Report not found");
   return item;
 }
-async function reportMetadata(db: D1Database): Promise<{ labels: PolicyLabel[]; outreachLabels: Array<{ id: string; name: string; archived: boolean }>; baseline: string | null; timeZone: string }> {
-  const [labels, outreachLabels, settings] = await Promise.all([
+/**
+ * Options of every installed module report filter, read through the owning module's handler. A module whose tables are
+ * unavailable contributes no options, so its saved selections read as no longer available instead of failing the request.
+ */
+async function moduleReportFilterOptions(db: D1Database): Promise<Record<string, readonly ModuleReportFilterOption[]>> {
+  const entries = await Promise.all(reportModuleFilters.map(async (filter) => {
+    const owner = bundledModuleRegistry.reportFilterOwner(filter.id); const handler = owner ? apiModules.get(owner.id)?.reportFilters?.[filter.id] : undefined;
+    try { return handler ? [[filter.id, await handler.options(db)] as const] : []; } catch { return []; }
+  }));
+  return Object.fromEntries(entries.flat());
+}
+async function reportMetadata(db: D1Database): Promise<{ labels: PolicyLabel[]; moduleFilterOptions: Record<string, readonly ModuleReportFilterOption[]>; baseline: string | null; timeZone: string }> {
+  const [labels, moduleFilterOptions, settings] = await Promise.all([
     db.prepare("SELECT id, name, active, formula_enabled AS formulaEnabled FROM member_labels WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE").all<PolicyLabel>(),
-    db.prepare("SELECT id,name,archived FROM hours_labels WHERE installation_id='primary' ORDER BY name COLLATE NOCASE,id").all<{ id: string; name: string; archived: number }>(),
+    moduleReportFilterOptions(db),
     db.prepare("SELECT attendance_reporting_starts_on AS baseline, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ baseline: string | null; timeZone: string }>(),
   ]);
-  return { labels: labels.results ?? [], outreachLabels: (outreachLabels.results ?? []).map((label) => ({ ...label, archived: Boolean(label.archived) })), baseline: settings?.baseline ?? null, timeZone: settings?.timeZone ?? "UTC" };
+  return { labels: labels.results ?? [], moduleFilterOptions, baseline: settings?.baseline ?? null, timeZone: settings?.timeZone ?? "UTC" };
 }
 async function accessibleReportDatasets(db: D1Database, principal: Principal): Promise<Set<string>> {
   const accessible = new Set(["core.members", combinedMemberDataset.id]);
@@ -1301,21 +1352,24 @@ function reportSourceExplanation(datasetId: string): string {
 }
 async function reportCatalog(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const [data, accessible] = await Promise.all([reportMetadata(db), accessibleReportDatasets(db, principal)]);
-  const datasets = reportDatasetCatalog.map((dataset) => ({ ...dataset, available: accessible.has(dataset.id), fields: dataset.fields.map((field) => { const sourceDataset = reportFieldSourceDataset(dataset.id, field.id) ?? dataset.id; const available = accessible.has(sourceDataset); return { ...field, sourceDataset, available, explanation: available ? undefined : reportSourceExplanation(sourceDataset) }; }) })); const defaultDataset = accessible.has("attendance.members") ? "attendance.members" : accessible.has("outreach.members") ? "outreach.members" : "core.members";
-  return response({ datasets, columns: reportColumnCatalog, labels: data.labels, outreachLabels: [...accessible].some((datasetId) => datasetId.startsWith("outreach.")) ? data.outreachLabels : [], baseline: data.baseline, timeZone: data.timeZone, defaultDefinition: defaultReportDefinition(Boolean(data.baseline), defaultDataset), role: principal.role, attendanceAvailable: accessible.has("attendance.members") });
+  const datasets = reportDatasetCatalog.map((dataset) => ({ ...dataset, available: accessible.has(dataset.id), fields: dataset.fields.map((field) => { const sourceDataset = reportFieldSourceDataset(dataset.id, field.id) ?? dataset.id; const available = accessible.has(sourceDataset); return { ...field, sourceDataset, available, explanation: available ? undefined : reportSourceExplanation(sourceDataset) }; }) })); // Attendance members first, then the first accessible member-level module dataset, then Core members.
+  const defaultDataset = accessible.has("attendance.members") ? "attendance.members" : reportDatasetCatalog.find((dataset) => dataset.rowIdentity === "core.member.identity" && bundledModuleRegistry.reportDatasetOwner(dataset.id) && accessible.has(dataset.id))?.id ?? "core.members";
+  // Module filter options are listed only for Users who can open one of the owning module's datasets.
+  const reportFilters = reportModuleFilters.map((filter) => { const owner = bundledModuleRegistry.reportFilterOwner(filter.id); const visible = Boolean(owner?.reportDatasets?.some((dataset) => accessible.has(dataset.id))); return { ...filter, options: visible ? data.moduleFilterOptions[filter.id] ?? [] : [] }; });
+  return response({ datasets, columns: reportColumnCatalog, labels: data.labels, reportFilters, baseline: data.baseline, timeZone: data.timeZone, defaultDefinition: defaultReportDefinition(Boolean(data.baseline), defaultDataset), role: principal.role, attendanceAvailable: accessible.has("attendance.members") });
 }
-function savedReportResponse(item: SavedReportRow, labels: PolicyLabel[], outreachLabels: Array<{ id: string }>) {
-  const validation = validateReportDefinition(parseStoredReportDefinition(item.definitionJson), labels, { allowMissingLabels: true, outreachLabels });
+function savedReportResponse(item: SavedReportRow, labels: PolicyLabel[], moduleFilterOptions: Readonly<Record<string, readonly { id: string }[]>>) {
+  const validation = validateReportDefinition(parseStoredReportDefinition(item.definitionJson), labels, { allowMissingLabels: true, moduleFilterOptions });
   return { id: item.id, ownerUserId: item.ownerUserId, scope: item.scope, name: item.name, definition: validation.definition ?? parseStoredReportDefinition(item.definitionJson), revision: Number(item.revision), createdBy: item.createdBy, updatedBy: item.updatedBy, createdAt: item.createdAt, updatedAt: item.updatedAt, pinnedPosition: item.pinnedPosition ?? null, warnings: validation.warnings, errors: validation.errors };
 }
 async function savedReports(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const data = await reportMetadata(db);
   if (request.method === "GET") {
     const result = await db.prepare("SELECT v.id, v.owner_user_id AS ownerUserId, v.scope, v.name, v.definition_json AS definitionJson, v.revision, v.created_by AS createdBy, v.updated_by AS updatedBy, v.created_at AS createdAt, v.updated_at AS updatedAt, t.position AS pinnedPosition FROM saved_report_views v LEFT JOIN saved_report_tabs t ON t.installation_id = v.installation_id AND t.report_view_id = v.id AND t.user_id = ? WHERE v.installation_id = 'primary' AND (v.scope = 'shared' OR v.owner_user_id = ?) ORDER BY CASE WHEN t.position IS NULL THEN 1 ELSE 0 END, t.position, v.name COLLATE NOCASE, v.id").bind(principal.userId, principal.userId).all<SavedReportRow>();
-    return response({ reports: (result.results ?? []).map((item) => savedReportResponse(item, data.labels, data.outreachLabels)) });
+    return response({ reports: (result.results ?? []).map((item) => savedReportResponse(item, data.labels, data.moduleFilterOptions)) });
   }
   const input = await parseJson<{ name?: unknown; scope?: unknown; definition?: unknown }>(request); const name = reportName(input.name); const scope = reportScope(input.scope);
-  const validation = validateReportDefinition(input.definition, data.labels, { outreachLabels: data.outreachLabels }); if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
+  const validation = validateReportDefinition(input.definition, data.labels, { moduleFilterOptions: data.moduleFilterOptions }); if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
   await ensureUniqueReportName(db, scope, name, principal.userId);
   const id = crypto.randomUUID(), now = new Date().toISOString();
   const position = await db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS position FROM saved_report_tabs WHERE installation_id = 'primary' AND user_id = ?").bind(principal.userId).first<{ position: number }>();
@@ -1324,7 +1378,7 @@ async function savedReports(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO saved_report_tabs (installation_id, user_id, report_view_id, position, pinned_at) VALUES ('primary', ?, ?, ?, ?)").bind(principal.userId, id, Number(position?.position ?? 0), now),
   ]);
   await writeAudit(db, principal, "report.created", "saved_report", id, { name, scope });
-  const created = await accessibleReport(db, principal, id); return response({ report: savedReportResponse({ ...created, pinnedPosition: Number(position?.position ?? 0) }, data.labels, data.outreachLabels) }, 201);
+  const created = await accessibleReport(db, principal, id); return response({ report: savedReportResponse({ ...created, pinnedPosition: Number(position?.position ?? 0) }, data.labels, data.moduleFilterOptions) }, 201);
 }
 async function manageSavedReport(request: Request, env: Env, id: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const current = await accessibleReport(db, principal, id);
@@ -1338,13 +1392,13 @@ async function manageSavedReport(request: Request, env: Env, id: string): Promis
   if (!Number.isInteger(revision) || revision !== Number(current.revision)) throw new HttpError(409, "This report changed after you opened it. Reload and reapply your changes.");
   const name = reportName(input.name); const scope = reportScope(input.scope);
   if (current.scope === "shared" && scope === "personal" && current.ownerUserId !== principal.userId) throw new HttpError(403, "Save a personal copy instead of converting another user's shared report");
-  const data = await reportMetadata(db); const validation = validateReportDefinition(input.definition, data.labels, { outreachLabels: data.outreachLabels });
+  const data = await reportMetadata(db); const validation = validateReportDefinition(input.definition, data.labels, { moduleFilterOptions: data.moduleFilterOptions });
   if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
   await ensureUniqueReportName(db, scope, name, current.ownerUserId, id); const now = new Date().toISOString();
   const result = await db.prepare("UPDATE saved_report_views SET scope = ?, name = ?, definition_json = ?, revision = revision + 1, updated_by = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND revision = ?").bind(scope, name, JSON.stringify(validation.definition), principal.userId, now, id, revision).run();
   if (!result.meta?.changes) throw new HttpError(409, "This report changed after you opened it. Reload and reapply your changes.");
   await writeAudit(db, principal, "report.updated", "saved_report", id, { name, scope, revision: revision + 1 }); const updated = await accessibleReport(db, principal, id);
-  return response({ report: savedReportResponse(updated, data.labels, data.outreachLabels) });
+  return response({ report: savedReportResponse(updated, data.labels, data.moduleFilterOptions) });
 }
 async function savedReportTabs(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ reportIds?: unknown }>(request);
@@ -1380,10 +1434,21 @@ async function attendanceReportProjection(db: D1Database, definition: Normalized
   return { rows, periodMembers: periodMembers.filter((member) => matchingMemberIds.has(member.member.id)), officialMembers, meetings, labels: data.labels, rules: data.rules, timeZone: data.timeZone };
 }
 
-const moduleReportDispatcher = createModuleReportDispatcher(bundledModuleRegistry, [
-  { moduleId: "attendance", handlers: { "attendance.members": async (db, definition, context) => (await attendanceReportProjection(db, definition, context)).rows } },
-  { moduleId: "hour-tracking", handlers: outreachReportHandlers },
-]);
+/** Attendance delivery jobs and its report projection are implemented in the Worker, so they are bound here. */
+const attendanceRuntime = {
+  jobs: {
+    // Google Calendar delivery retries safely on the next scheduled pass.
+    "attendance.google-calendar": ({ env }) => processGoogleCalendarOperations(env),
+    "attendance.discord-calendar": ({ env }) => processDiscordCalendarOperations(env),
+    "attendance.discord-channel": ({ env }) => syncDiscordManagedSurface(env),
+    "attendance.discord-notices": ({ env }) => processDiscordAttendanceNotifications(env),
+    "attendance.discord-anomalies": ({ env }) => processDiscordAnomalyReports(env),
+    "attendance.discord-label-roles": ({ env }) => processDiscordLabelRoleJobs(env),
+  },
+  reports: { "attendance.members": async (db, definition, context) => (await attendanceReportProjection(db, definition, context)).rows },
+} satisfies Pick<ApiModuleContribution<Env>, "jobs" | "reports">;
+const apiModules = createApiModuleSet<Env>(bundledModuleRegistry, installedApiModules.map((module) => module === attendanceApiModule ? { ...module, ...attendanceRuntime } : module));
+const moduleReportDispatcher = createModuleReportDispatcher(bundledModuleRegistry, apiModules.all.flatMap((module) => module.reports ? [{ moduleId: module.moduleId, handlers: module.reports }] : []));
 
 async function moduleReportDatabase(db: D1Database, principal: Principal, datasetId: string): Promise<D1Database | undefined> {
   const owner = moduleReportDispatcher.owner(datasetId); const dataset = reportDatasetDefinition(datasetId);
@@ -1395,6 +1460,19 @@ async function moduleReportDatabase(db: D1Database, principal: Principal, datase
     if (error instanceof HttpError && [403, 409, 503].includes(error.status)) return;
     throw error;
   }
+}
+
+/** Report sources that apply each module filter with a selection; a module's own projection applies its filter. */
+function activeModuleFilterSources(definition: NormalizedReportDefinition): (string | undefined)[] {
+  return reportModuleFilters.filter((filter) => { const ids = definition[filter.selectionKey]; return Array.isArray(ids) && ids.length > 0; }).map((filter) => reportFilterSourceDataset(definition.dataset, filter.id));
+}
+
+/** Installed modules' roster references, and those of extracted modules whose plugins are absent but whose tables remain. */
+function moduleRosterReferences() {
+  const installed = apiModules.all.flatMap((module) => module.rosterReferences ? [module.rosterReferences] : []);
+  const retained = extractedModules.filter((module) => !bundledModuleRegistry.get(module.id)).flatMap((module) => module.rosterReferences ? [module.rosterReferences] : []);
+  const references = [...installed, ...retained];
+  return { labels: references.map((item) => item.label), columns: references.flatMap((item) => item.columns) };
 }
 
 function projectionDefinition(definition: NormalizedReportDefinition, datasetId: string): NormalizedReportDefinition {
@@ -1410,8 +1488,8 @@ async function combinedMemberRows(db: D1Database, principal: Principal, definiti
   if (definition.membership === "historical") coreDefinition.labelIds = [];
   let rows = await projectCoreMembers(db, coreDefinition, context); const indexed = new Map(rows.map((row) => [row.id, row]));
   const historicalSource = definition.membership === "historical" && definition.labelIds.length ? reportFilterSourceDataset(definition.dataset, "membership") : undefined;
-  const outreachLabelSource = definition.outreachLabelIds.length ? reportFilterSourceDataset(definition.dataset, "outreach-labels") : undefined;
-  const sources = [...new Set([...definition.columns.map((column) => reportFieldSourceDataset(definition.dataset, column.key)), historicalSource, outreachLabelSource].filter((source): source is string => Boolean(source) && source !== "core.members"))];
+  const moduleFilterSources = activeModuleFilterSources(definition);
+  const sources = [...new Set([...definition.columns.map((column) => reportFieldSourceDataset(definition.dataset, column.key)), historicalSource, ...moduleFilterSources].filter((source): source is string => Boolean(source) && source !== "core.members"))];
   let historicalMemberIds: Set<string> | undefined;
   for (const source of sources) {
     if (!accessible.has(source)) continue;
@@ -1435,7 +1513,7 @@ async function combinedMemberRows(db: D1Database, principal: Principal, definiti
 }
 
 async function runReportDefinition(db: D1Database, principal: Principal, value: unknown): Promise<ReportRun> {
-  const metadata = await reportMetadata(db); const validation = validateReportDefinition(value, metadata.labels, { allowMissingLabels: true, outreachLabels: metadata.outreachLabels });
+  const metadata = await reportMetadata(db); const validation = validateReportDefinition(value, metadata.labels, { allowMissingLabels: true, moduleFilterOptions: metadata.moduleFilterOptions });
   if (!validation.definition || validation.definition.version !== 2 || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
   const definition = validation.definition; const today = policyLocalDate(new Date().toISOString(), metadata.timeZone); const resolved = resolveReportPeriod(definition.period, today, metadata.baseline); const warnings = [...validation.warnings];
   if (resolved.warning) warnings.push(resolved.warning);
@@ -1445,7 +1523,7 @@ async function runReportDefinition(db: D1Database, principal: Principal, value: 
     ...(definition.meetingType !== "all" ? [reportFilterSourceDataset(definition.dataset, "meeting-type")] : []),
     ...(definition.membership === "historical" && definition.labelIds.length ? [reportFilterSourceDataset(definition.dataset, "membership")] : []),
     ...(definition.labelIds.length ? [reportFilterSourceDataset(definition.dataset, "labels")] : []),
-    ...(definition.outreachLabelIds.length ? [reportFilterSourceDataset(definition.dataset, "outreach-labels")] : []),
+    ...activeModuleFilterSources(definition),
   ];
   const unavailableControls = [...new Set([...controllingFields.map((field) => reportFieldSourceDataset(definition.dataset, field)), ...filterControls].filter((source): source is string => typeof source === "string" && !accessible.has(source)))];
   const pausedReasons = !accessible.has(definition.dataset) ? [reportSourceExplanation(definition.dataset)] : unavailableControls.map((source) => `${reportSourceExplanation(source)} Results are paused because this source controls grouping, filtering, or sorting.`);
@@ -1720,6 +1798,8 @@ function googleRedirectUri(env: Env): string {
 async function googleStart(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
   const verification = new URL(request.url).searchParams.get("verify") === "1";
+  const reauthentication = new URL(request.url).searchParams.get("reauth") === "modules";
+  const reauthenticating = reauthentication ? await requireRole(request, env, ["admin"]) : undefined;
   if (verification) await requireRole(request, env, ["admin"]);
   const installation = await requireDatabase(env).prepare("SELECT auth_mode AS authMode FROM installations WHERE id = 'primary'").first<{ authMode: AuthMode }>();
   if (!installation || !["google", "both"].includes(installation.authMode)) throw new HttpError(404, "Google sign-in is not enabled");
@@ -1730,6 +1810,8 @@ async function googleStart(request: Request, env: Env): Promise<Response> {
   const headers = new Headers({ location: target.toString(), "cache-control": "no-store" });
   headers.append("set-cookie", `lancerlogin_oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`);
   if (verification) headers.append("set-cookie", "lancerlogin_oauth_verify=1; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600");
+  // The callback arrives cross-site without the Strict session cookie; it must sign in the same Admin to count.
+  if (reauthenticating) headers.append("set-cookie", `lancerlogin_oauth_reauth=${encodeURIComponent(reauthenticating.userId)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`);
   return new Response(null, { status: 302, headers });
 }
 async function googleCallback(request: Request, env: Env): Promise<Response> {
@@ -1744,13 +1826,17 @@ async function googleCallback(request: Request, env: Env): Promise<Response> {
   if (!validationResponse.ok || profile.aud !== credentials.clientId || profile.email_verified !== "true" || !profile.email || !["https://accounts.google.com", "accounts.google.com"].includes(profile.iss ?? "")) throw new HttpError(401, "Google identity validation failed");
   const user = await requireDatabase(env).prepare("SELECT id, role FROM users WHERE installation_id = 'primary' AND email = ? AND active = 1").bind(profile.email.toLowerCase()).first<{ id: string; role: Role }>();
   if (!user) throw new HttpError(403, "This Google account is not an active LancerLogin user");
+  const reauthenticating = cookie(request, "lancerlogin_oauth_reauth");
+  if (reauthenticating && (decodeURIComponent(reauthenticating) !== user.id || user.role !== "admin")) throw new HttpError(403, "Sign in with the same Admin Google account to confirm your identity");
   await markIntegrationVerified(requireDatabase(env), "google", user.id, { email: profile.email.toLowerCase() });
+  if (reauthenticating) await writeAudit(requireDatabase(env), { userId: user.id, role: user.role, expiresAt: 0 }, "auth.reauthenticated", "user", user.id, { method: "google", purpose: "plugin_management" });
   const session = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role });
   const verification = cookie(request, "lancerlogin_oauth_verify") === "1";
-  const headers = new Headers({ location: verification ? `${env.ALLOWED_ORIGIN}/settings/integrations?verified=google` : env.ALLOWED_ORIGIN, "cache-control": "no-store" });
+  const headers = new Headers({ location: reauthenticating ? `${env.ALLOWED_ORIGIN}/settings/modules?reauthenticated=1` : verification ? `${env.ALLOWED_ORIGIN}/settings/integrations?verified=google` : env.ALLOWED_ORIGIN, "cache-control": "no-store" });
   headers.append("set-cookie", `lancerlogin_session=${session}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`);
   headers.append("set-cookie", "lancerlogin_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
   headers.append("set-cookie", "lancerlogin_oauth_verify=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
+  headers.append("set-cookie", "lancerlogin_oauth_reauth=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
   return new Response(null, { status: 302, headers });
 }
 
@@ -2131,46 +2217,46 @@ async function discordRequest<T = Record<string, unknown>>(config: ProviderConfi
   throw new HttpError(502, "Discord request did not complete");
 }
 
-function outreachPublicationProviders(env: Env): OutreachPublicationProviders {
+/** Shared provider access for module code, bound to the current (module-scoped) environment. */
+function coreModuleServices(env: Env): CoreModuleServices {
+  return Object.freeze({
+    googleCalendar: Object.freeze({
+      ready: () => googleCalendarIsReady(env),
+      async access() { const { accessToken, secret } = await googleCalendarAccessToken(env, true); return { accessToken, calendarId: secret.calendarId ?? null }; },
+      operationPath: googleCalendarOperationPath,
+      request: async (accessToken: string, path: string, init: RequestInit) => (await googleCalendarProviderRequest(accessToken, path, init, env.moduleProviderAuthority)).body,
+      providerStatus: (error: unknown) => error instanceof GoogleCalendarProviderError ? error.providerStatus : undefined,
+    }),
+    discord: Object.freeze({
+      ready: () => discordCalendarIsReady(env),
+      async client() { const config = await discordConfiguration(env); return { guildId: config.guildId, request: <T,>(path: string, init: RequestInit) => discordRequest<T>(config, path, init) }; },
+      providerStatus: (error: unknown) => error instanceof DiscordResponseError ? error.discordStatus : undefined,
+    }),
+    credentials: moduleCredentials(env.INTEGRATION_KEY),
+  });
+}
+
+const externalModuleIds = new Set(externalModuleManifests.map((module) => module.id));
+/** External plugins receive Core services, never the Worker environment and its secrets. */
+function moduleEnvironment(moduleId: string, env: Env): Env {
+  return externalModuleIds.has(moduleId) ? Object.freeze({}) as Env : env;
+}
+
+function moduleRouteContext(moduleId: string, request: Request, env: Env, url: URL): ModuleRouteContext<Env> {
   return {
-    async status() { return { google_calendar: await googleCalendarIsReady(env), discord: await discordCalendarIsReady(env) }; },
-    async publish(provider: OutreachPublicationProvider, event: OutreachPublicationEvent, savedExternalId?: string) {
-      if (provider === "google_calendar") {
-        const { accessToken, secret } = await googleCalendarAccessToken(env, true); if (!secret.calendarId) throw new HttpError(409, "Select a writable Google Calendar before publication"); const eventId = savedExternalId ?? `llo${(await sha256Hex(`outreach:primary:${event.activityId}`)).slice(0, 48)}`;
-        const path = googleCalendarOperationPath(secret.calendarId, eventId); const payload = outreachGoogleEventPayload(event);
-        if (savedExternalId) try { await googleCalendarProviderRequest(accessToken, path, { method: "PATCH", body: JSON.stringify(payload) }, env.moduleProviderAuthority); return eventId; } catch (error) { if (!(error instanceof GoogleCalendarProviderError) || error.providerStatus !== 404) throw error; }
-        try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId), { method: "POST", body: JSON.stringify({ id: eventId, ...payload }) }, env.moduleProviderAuthority); }
-        catch (error) { if (error instanceof GoogleCalendarProviderError && error.providerStatus === 409) await googleCalendarProviderRequest(accessToken, path, { method: "PATCH", body: JSON.stringify(payload) }, env.moduleProviderAuthority); else throw error; }
-        return eventId;
-      }
-      const config = await discordConfiguration(env); if (event.title.length > 100) throw new HttpError(400, "Discord event names are limited to 100 characters");
-      const correlation = `LancerLogin Outreach · ${(await sha256(`outreach:primary:${event.activityId}`)).slice(0, 24)}`;
-      const description = [event.description, event.location ? `Location: ${event.location}` : "", "Published from LancerLogin Outreach."].filter(Boolean).join("\n");
-      if (description.length > 1_000) throw new HttpError(400, "Discord event descriptions are limited to 1,000 characters");
-      const payload = { name: event.title, description, privacy_level: 2, entity_type: 3, scheduled_start_time: event.startsAt, scheduled_end_time: event.endsAt, entity_metadata: { location: correlation } };
-      let eventId = savedExternalId;
-      if (eventId) try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }); return eventId; } catch (error) { if (!(error instanceof DiscordResponseError) || error.discordStatus !== 404) throw error; eventId = undefined; }
-      const listed = await discordRequest<DiscordScheduledEvent[]>(config, `/guilds/${config.guildId}/scheduled-events`, { method: "GET" });
-      if (!Array.isArray(listed.body)) throw new HttpError(502, "Discord did not return a scheduled event list");
-      eventId = listed.body.find((item) => item.entity_metadata?.location === correlation)?.id;
-      if (eventId) { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }); return eventId; }
-      const created = await discordRequest(config, `/guilds/${config.guildId}/scheduled-events`, { method: "POST", body: JSON.stringify(payload) }); eventId = String(created.body.id ?? "");
-      if (!eventId) throw new HttpError(502, "Discord did not return a scheduled event ID");
-      return eventId;
-    },
-    async remove(provider: OutreachPublicationProvider, externalId: string) {
-      if (provider === "google_calendar") {
-        const { accessToken, secret } = await googleCalendarAccessToken(env, true);
-        if (!secret.calendarId) throw new HttpError(409, "Select a writable Google Calendar before publication cleanup");
-        try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, externalId), { method: "DELETE" }, env.moduleProviderAuthority); }
-        catch (error) { if (!(error instanceof GoogleCalendarProviderError) || ![404, 410].includes(error.providerStatus)) throw error; }
-        return;
-      }
-      const config = await discordConfiguration(env);
-      try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${externalId}`, { method: "DELETE" }); }
-      catch (error) { if (!(error instanceof DiscordResponseError) || error.discordStatus !== 404) throw error; }
-    },
+    request, url, env: moduleEnvironment(moduleId, env), db: requireDatabase(env), services: coreModuleServices(env),
+    requireRole: (roles) => requireRole(request, env, [...roles]),
+    json: <T,>(maxBytes?: number) => parseJson<T>(request, maxBytes),
+    body: async <T,>(maxBytes?: number) => request.method === "GET" ? undefined : parseJson<T>(request, maxBytes),
+    respond: (body, status) => response(body, status),
+    requireDashboardOrigin(message) { if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, message); },
+    dashboardOrigin: env.ALLOWED_ORIGIN || undefined,
   };
+}
+
+function privateModuleResponse(pathname: string): boolean {
+  const owner = bundledModuleRegistry.routeOwner(pathname);
+  return Boolean(owner && apiModules.get(owner.module.id)?.privateResponseRoutes?.includes(owner.route.path));
 }
 type DiscordApplicationCommand = { id?: string; application_id?: string; guild_id?: string; name?: string; type?: number; description?: string; options?: readonly { name?: string; description?: string; type?: number; required?: boolean }[] };
 const coreDiscordManagedCommands: DiscordApplicationCommand[] = [
@@ -3151,29 +3237,6 @@ const tableColumns = {
   platform_module_assignment_revisions: ["installation_id", "user_id", "revision"],
   platform_module_assignments: ["installation_id", "user_id", "module_id", "capabilities_json"],
   platform_module_setup_progress: ["installation_id", "module_id", "step_id", "setup_version", "outcome", "completed_at", "completed_by"],
-  carpool_settings: ["installation_id", "radius_miles", "preferred_radius_miles", "revision", "updated_at"],
-  carpool_plans: ["installation_id", "id", "title", "destination", "event_reference", "event_title_snapshot", "event_starts_at_snapshot", "radius_miles", "preferred_radius_miles", "notes", "archived", "revision", "created_by", "created_at", "updated_at", "meeting_id", "trip_scope", "group_settings_json", "last_rebuild_json", "time_zone", "outbound_departure_at", "return_departure_at"],
-  carpool_people: ["installation_id", "plan_id", "id", "member_id", "display_name", "contact", "source_row", "import_identity", "import_snapshot_json", "outbound_status", "outbound_address", "outbound_lat", "outbound_lon", "outbound_seats", "return_status", "return_address", "return_lat", "return_lon", "return_seats", "return_same_as_outbound", "notes", "revision", "created_at", "updated_at", "outbound_location_source", "outbound_location_label", "return_location_source", "return_location_label"],
-  carpool_assignments: ["installation_id", "plan_id", "direction", "rider_id", "vehicle_person_id", "distance_miles", "locked", "manual", "created_at", "updated_at"],
-  carpool_unresolved: ["installation_id", "plan_id", "direction", "rider_id", "reason", "detail", "created_at"],
-  carpool_import_profiles: ["installation_id", "header_key", "mapping_json", "updated_by", "updated_at"],
-  carpool_location_cache: ["installation_id", "cache_key", "provider", "normalized_address", "original_address", "status", "latitude", "longitude", "label", "saved_at", "expires_at"],
-  hours_categories: ["installation_id", "id", "name", "mode", "impact_default", "archived", "revision", "created_at", "updated_at"],
-  hours_labels: ["installation_id", "id", "name", "archived", "revision", "created_by", "created_at", "updated_at"],
-  hours_teams: ["installation_id", "id", "number", "name", "program", "historical_descriptors", "archived", "revision", "created_at", "updated_at"],
-  hours_activities: ["installation_id", "id", "category_id", "mode", "service_date", "team_id", "title", "description", "location", "impact_relevant", "source_meeting_id", "source_snapshot", "archived", "revision", "created_at", "updated_at", "event_start_local", "event_end_local", "event_start_occurrence", "event_end_occurrence"],
-  hours_activity_labels: ["installation_id", "activity_id", "label_id", "created_by", "created_at"],
-  hours_entry_settings: ["installation_id", "reporting_days", "reopen_hours", "revision"],
-  hours_publication_settings: ["installation_id", "automatic", "revision", "created_at", "updated_at"],
-  hours_entries: ["installation_id", "id", "member_id", "activity_id", "service_date", "time_zone", "start_local", "end_local", "start_occurrence", "end_occurrence", "start_ms", "end_ms", "start_offset_seconds", "end_offset_seconds", "duration_minutes", "task_notes", "status", "channel", "attribution", "actor_user_id", "revision", "created_at", "updated_at"],
-  hours_entry_revisions: ["installation_id", "entry_id", "revision", "member_id", "activity_id", "action", "reason", "actor_user_id", "snapshot_json", "created_at"],
-  hours_submission_keys: ["installation_id", "channel", "key_hash", "fingerprint", "entry_id", "receipt_json", "created_at"],
-  hours_reopen_windows: ["installation_id", "id", "activity_id", "starts_ms", "expires_ms", "reason", "revoked", "revision", "actor_user_id", "created_at", "updated_at"],
-  hours_correction_requests: ["installation_id", "id", "channel", "attribution", "requester_member_id", "entry_id", "claimed_service_date", "message", "key_hash", "fingerprint", "status", "revision", "created_at", "resolved_at", "activity_id"],
-  hours_public_form_settings: ["installation_id", "member_validation", "revision", "updated_at"],
-  hours_correction_resolutions: ["installation_id", "request_id", "action", "note", "actor_user_id", "entry_id", "entry_revision", "created_at"],
-  hours_activity_publications: ["installation_id", "activity_id", "time_zone", "start_local", "end_local", "start_occurrence", "end_occurrence", "start_ms", "end_ms", "google_calendar", "discord", "status", "revision", "actor_user_id", "reviewed_by_user_id", "reviewed_at", "created_at", "updated_at"],
-  hours_publication_operations: ["installation_id", "activity_id", "publication_revision", "provider", "status", "attempts", "next_attempt_at", "external_id", "last_error", "lease_token", "lease_expires_at", "created_at", "updated_at", "action", "event_snapshot_json"],
   organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method", "discord_block_recontests_after_rejection"],
   user_walkthroughs: ["installation_id", "user_id", "page_id", "content_version", "status", "step_id", "updated_at"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id", "debug_mode"],
@@ -3215,8 +3278,6 @@ type BackupTable = keyof typeof tableColumns;
 // Restore parents before children so SQLite's immediate foreign-key checks remain valid.
 const installationTables: BackupTable[] = [
   "installations", "platform_module_administration", "platform_module_administration_epochs", "platform_module_epochs", "platform_modules", "organization_settings", "members", "users", "user_preferences", "platform_module_assignment_epochs", "platform_module_assignment_revisions", "platform_module_assignments", "platform_module_setup_progress", "user_walkthroughs", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
-  "hours_categories", "hours_labels", "hours_teams", "hours_entry_settings", "hours_public_form_settings", "hours_publication_settings", "hours_activities", "hours_activity_labels", "hours_entries", "hours_entry_revisions", "hours_submission_keys", "hours_reopen_windows", "hours_correction_requests", "hours_correction_resolutions", "hours_activity_publications", "hours_publication_operations",
-  "carpool_settings", "carpool_plans", "carpool_people", "carpool_assignments", "carpool_unresolved", "carpool_import_profiles", "carpool_location_cache",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
   "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
@@ -3227,31 +3288,42 @@ const rosterTables: BackupTable[] = ["members", "member_labels", "member_label_c
 const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const safeBackupValue = (value: unknown) => value === null || ["string", "number", "boolean"].includes(typeof value);
-const backupSchemaVersion = 41;
+// Schema 43 and 44: modules that moved into plugins (extracted-modules.ts: Carpool at 43, Outreach at 44) left Core's
+// section; their plugins export them in `externalModules`.
+const backupSchemaVersion = 44;
 const backupEnvelopeFormat = "lancerlogin-community-modular";
 const backupEnvelopeVersion = 1;
+/** Installed plugin modules. Their portable rows travel in the `externalModules` section, outside the first-party Core envelope. */
+const installedExternalBackupModules = externalBackupModules(bundledModuleRegistry, apiModules);
+const installedExternalBackupModuleIds: ReadonlySet<string> = new Set(installedExternalBackupModules.map(({ definition }) => definition.id));
 
 function backupOwnership(scope: BackupScope, schemaVersion = backupSchemaVersion) {
-  const scoped = tablesForScope(scope).filter(table => !(schemaVersion < 33 && table === "hours_public_form_settings") && !(schemaVersion < 35 && table === "carpool_settings"));
-  const core = scoped.filter((table) => !bundledModuleRegistry.tableOwner(table));
-  const modules = bundledModuleRegistry.modules.map((module) => ({
+  const scoped = tablesForScope(scope);
+  const core = scoped.filter((table) => !firstPartyBackupRegistry.tableOwner(table));
+  const modules = firstPartyBackupRegistry.modules.map((module) => ({
     id: module.id,
     contractVersion: module.contractVersion,
     backupVersion: module.backup.version,
-    tables: scoped.filter((table) => bundledModuleRegistry.tableOwner(table)?.id === module.id),
+    tables: scoped.filter((table) => firstPartyBackupRegistry.tableOwner(table)?.id === module.id),
     sharedFields: module.persistence.sharedFields.filter((field) => scoped.includes(field.table as BackupTable)).map(field => ({ ...field, columns: field.columns.filter(column => schemaVersion >= 41 || column !== "discord_block_recontests_after_rejection") })),
     transientAuthority: module.persistence.transientAuthority.filter((field) => scoped.includes(field.table as BackupTable)),
   }));
-  return { core: { version: 1, tables: core }, modules };
+  // Backups made before a module moved into a plugin recorded it as first-party; their ownership metadata still matches exactly.
+  return { core: { version: 1, tables: core }, modules: [...modules, ...extractedModuleOwnership(scope, schemaVersion)] };
 }
 
 async function backupData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const scope = new URL(request.url).searchParams.get("scope") as BackupScope;
   if (!["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Backup scope must be meetings, roster, or installation");
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
-    const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>(); return [table, result.results ?? []] as const;
+    const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>();
+    // Lifecycle, assignment and setup rows of a module whose code is not in this build (a removed plugin, or a module that moved into a
+    // plugin that is not composed) stay out: the backup carries none of that module's data, and this build could not restore them.
+    const rows = (moduleKeyedTables as readonly string[]).includes(table) ? (result.results ?? []).filter((row) => bundledModuleRegistry.get(String(row.module_id))) : result.results ?? [];
+    return [table, rows] as const;
   }));
-  const exportedAt = new Date().toISOString(); const policySettings = scope === "roster" ? await db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ recentDays: number; policyActivatedOn: string | null }>() : null; const backup = { product: "LancerLogin", format: backupEnvelopeFormat, formatVersion: backupEnvelopeVersion, schemaVersion: backupSchemaVersion, scope, exportedAt, ownership: backupOwnership(scope), tables: Object.fromEntries(entries), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
+  const externalModules = scope === "installation" ? await exportExternalModules(db, installedExternalBackupModules) : undefined;
+  const exportedAt = new Date().toISOString(); const policySettings = scope === "roster" ? await db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'").first<{ recentDays: number; policyActivatedOn: string | null }>() : null; const backup = { product: "LancerLogin", format: backupEnvelopeFormat, formatVersion: backupEnvelopeVersion, schemaVersion: backupSchemaVersion, scope, exportedAt, ownership: backupOwnership(scope), tables: Object.fromEntries(entries), ...(externalModules ? { externalModules } : {}), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
   const updateRequestId = new URL(request.url).searchParams.get("updateRequestId");
   if (updateRequestId) {
     if (scope !== "installation") throw new HttpError(400, "Web updates require an entire-installation backup");
@@ -3261,7 +3333,7 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: number; scope: BackupScope; exportedAt: string; attendanceRecentDays: number; attendancePolicyActivatedOn: string | null; tables: Record<BackupTable, Record<string, unknown>[]>; recovery: { revokedKiosks: number; invalidatedPairingCodes: number; pausedProviderOperations: number } };
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: number; scope: BackupScope; exportedAt: string; attendanceRecentDays: number; attendancePolicyActivatedOn: string | null; tables: Record<BackupTable, Record<string, unknown>[]>; recovery: { revokedKiosks: number; invalidatedPairingCodes: number; pausedProviderOperations: number }; externalModules: { included: readonly PreparedExternalModule[]; excluded: readonly ExcludedModuleSummary[] } };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
   organization_settings: tableColumns.organization_settings.slice(0, -13),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
@@ -3288,11 +3360,12 @@ function validatePortableTableScope(tables: Record<BackupTable, Record<string, u
   }
 }
 
-function validateInstallationBackupState(tables: Record<BackupTable, Record<string, unknown>[]>) {
+function validateInstallationBackupState(tables: Record<BackupTable, Record<string, unknown>[]>, includedExternalModules: readonly ModuleDefinition[] = []) {
   if (tables.installations.length !== 1 || tables.platform_module_administration.length !== 1 || tables.platform_module_administration_epochs.length !== 1) throw new HttpError(400, "Backup module administration state is incomplete");
   const administration = tables.platform_module_administration[0]!; const administrationEpoch = tables.platform_module_administration_epochs[0]!;
   if (!portableAuthorityValue(administration.revision, 0) || administration.revision !== administrationEpoch.revision || ![0, 1].includes(Number(administration.selection_completed))) throw new HttpError(400, "Backup module administration authority is invalid");
-  const definitions = new Map(bundledModuleRegistry.modules.map((module) => [module.id, module]));
+  // First-party modules plus installed external modules restored from this backup. Excluded modules' rows were removed beforehand.
+  const definitions = new Map([...firstPartyBackupRegistry.modules, ...includedExternalModules].map((module) => [module.id, module]));
   const modules = new Map<string, Record<string, unknown>>(); const epochs = new Map<string, Record<string, unknown>>();
   for (const row of tables.platform_module_epochs) {
     const id = String(row.module_id); if (!definitions.has(id) || epochs.has(id) || !portableAuthorityValue(row.generation, 1)) throw new HttpError(400, "Backup module generation authority is invalid");
@@ -3339,72 +3412,54 @@ function validateInstallationBackupState(tables: Record<BackupTable, Record<stri
   for (const definition of definitions.values()) if (modules.get(definition.id)?.setup_complete === 1 && definition.setup.steps.some((step) => step.required && !setup.has(`${definition.id}:${step.id}`))) throw new HttpError(400, "Backup module setup progress is incomplete");
 }
 
-function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
+function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: unknown): NormalizedBackup {
   if (!isObject(value) || value.product !== "LancerLogin" || !Number.isSafeInteger(Number(value.schemaVersion)) || Number(value.schemaVersion) < 1 || Number(value.schemaVersion) > backupSchemaVersion || value.scope !== scope || typeof value.exportedAt !== "string" || !validTimestamp(value.exportedAt) || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
   const sourceSchemaVersion = Number(value.schemaVersion);
   // Public Community 1.2.5 and early Modular archives both used schema 22.
   // Recognize the complete Community table manifest, never a partial Modular
   // archive or an archive carrying Modular ownership metadata.
-  const communityTables = tablesForScope(scope).filter(table => !table.startsWith("platform_module") && !table.startsWith("hours_") && !table.startsWith("carpool_") && table !== "user_preferences");
+  const communityTables = tablesForScope(scope).filter(table => !table.startsWith("platform_module") && table !== "user_preferences");
   const community22 = sourceSchemaVersion === 22 && value.format === undefined && value.formatVersion === undefined && value.ownership === undefined
     && canonicalBackupJson(Object.keys(value.tables).sort()) === canonicalBackupJson([...communityTables].sort());
   const schemaVersion = community22 ? 21 : sourceSchemaVersion;
   const sourceTables = value.tables;
   if (sourceSchemaVersion >= 31 && (value.format !== backupEnvelopeFormat || value.formatVersion !== backupEnvelopeVersion || canonicalBackupJson(value.ownership) !== canonicalBackupJson(backupOwnership(scope, sourceSchemaVersion)))) throw new HttpError(400, "Backup ownership does not match this Community-based application");
-  const knownTables = new Set<unknown>(tablesForScope(scope).filter(table => !(sourceSchemaVersion >= 31 && schemaVersion < 33 && table === "hours_public_form_settings") && !(schemaVersion < 35 && table === "carpool_settings")));
+  // Rows of modules that were first-party when this backup was made sit in Core's section (extracted-modules.ts).
+  // They restore through the installed plugin's adapter, or are refused unless discarded like any unavailable plugin section.
+  const extracted = liftExtractedModules(scope, schemaVersion, sourceTables, installedExternalBackupModuleIds);
+  const reservedModuleIds = new Set(extractedModules.filter((module) => sourceSchemaVersion < module.extractedAtSchema).map((module) => module.id));
+  // Schema 41 and earlier carry no external module section; other top-level fields are ignored as before.
+  const externalPlan = planExternalModuleRestore([...extracted.entries, ...sourceSchemaVersion >= externalModuleBackupSchema ? parseExternalModuleSection(value.externalModules, scope, reservedModuleIds) : []], scope === "installation" ? installedExternalBackupModules : [], excludeModules);
+  const knownTables = new Set<unknown>([...tablesForScope(scope), ...extractedModuleTables(scope, schemaVersion)]);
   if (Object.keys(sourceTables).some((table) => !knownTables.has(table))) throw new HttpError(400, "Backup contains tables that are not owned by this Community-based application");
-  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 35 && table === "carpool_settings") && !(schemaVersion < 33 && table === "hours_public_form_settings") && !(schemaVersion < 30 && table.startsWith("carpool_")) && !(schemaVersion < 25 && table.startsWith("hours_")) && !(schemaVersion < 26 && ["hours_reopen_windows", "hours_correction_requests", "hours_correction_resolutions"].includes(table)) && !(schemaVersion < 27 && ["hours_activity_publications", "hours_publication_operations"].includes(table)) && !(schemaVersion < 29 && ["hours_labels", "hours_activity_labels", "hours_publication_settings"].includes(table)) && !(schemaVersion < 22 && table.startsWith("platform_module")) && !(schemaVersion < 24 && table === "user_preferences") && !(schemaVersion < 23 && table === "platform_module_setup_progress") && !(schemaVersion < 21 && table === "user_walkthroughs") && !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings") && !(schemaVersion < 20 && ["saved_report_views", "saved_report_tabs"].includes(table)));
+  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 22 && table.startsWith("platform_module")) && !(schemaVersion < 24 && table === "user_preferences") && !(schemaVersion < 23 && table === "platform_module_setup_progress") && !(schemaVersion < 21 && table === "user_walkthroughs") && !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings") && !(schemaVersion < 20 && ["saved_report_views", "saved_report_tabs"].includes(table)));
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : table === "carpool_plans" && schemaVersion < 39 ? tableColumns.carpool_plans.filter(column => !["time_zone", "outbound_departure_at", "return_departure_at"].includes(column) && (schemaVersion >= 38 || !["group_settings_json", "last_rebuild_json"].includes(column)) && (schemaVersion >= 37 || column !== "trip_scope") && (schemaVersion >= 33 || column !== "meeting_id")) : table === "carpool_people" && schemaVersion < 37 ? tableColumns.carpool_people.filter(column => !column.endsWith("_location_source") && !column.endsWith("_location_label")) : schemaVersion < 36 && table === "hours_publication_operations" ? tableColumns.hours_publication_operations.slice(0, schemaVersion < 29 ? -2 : -1) : schemaVersion < 33 && table === "hours_correction_requests" ? tableColumns.hours_correction_requests.slice(0, -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 40 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -3 : schemaVersion < 31 ? -2 : -1) : schemaVersion < 29 && table === "hours_activities" ? tableColumns.hours_activities.slice(0, -4) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -11) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
+    const columns = table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 40 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -3 : schemaVersion < 31 ? -2 : -1) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -11) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column])) || (sourceSchemaVersion >= 31 || community22) && Object.keys(row).some((column) => !(columns as readonly string[]).includes(column))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
+  rows += externalPlan.entries.reduce((total, entry) => total + entry.rows, 0);
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
 
   const tables = Object.fromEntries((Object.keys(tableColumns) as BackupTable[]).map((table) => [table, [] as Record<string, unknown>[]])) as Record<BackupTable, Record<string, unknown>[]>;
   for (const table of requiredTables) tables[table] = (sourceTables[table] as Record<string, unknown>[]).map((row) => ({ ...row }));
-  if (schemaVersion < 39) tables.carpool_plans = tables.carpool_plans.map(row => ({ ...row, time_zone: "UTC", outbound_departure_at: null, return_departure_at: null }));
-  if (schemaVersion < 38) tables.carpool_plans = tables.carpool_plans.map(row => ({ ...row, group_settings_json: "[]", last_rebuild_json: null }));
-  if (schemaVersion < 37) {
-    tables.carpool_plans = tables.carpool_plans.map(row => ({ ...row, trip_scope: "both" }));
-    tables.carpool_people = tables.carpool_people.map(row => ({ ...row, outbound_location_source: null, outbound_location_label: null, return_location_source: null, return_location_label: null }));
-  }
-  if (schemaVersion < 33) {
-    tables.carpool_plans = tables.carpool_plans.map(row => ({ ...row, meeting_id: null }));
-    tables.hours_correction_requests = tables.hours_correction_requests.map(row => ({ ...row, activity_id: null }));
-    if (scope === "installation") tables.hours_public_form_settings = [{ installation_id: "primary", member_validation: "off", revision: 0, updated_at: value.exportedAt }];
-  }
-  if (tables.hours_public_form_settings.length > 1 || tables.hours_public_form_settings.some(row => !["off", "validity", "name"].includes(String(row.member_validation)) || !Number.isSafeInteger(row.revision) || Number(row.revision) < 0 || Number(row.revision) >= Number.MAX_SAFE_INTEGER || (typeof row.updated_at !== "string" || !validTimestamp(row.updated_at)))) throw new HttpError(400, "Backup public form privacy settings are invalid");
-  if (tables.hours_correction_requests.some(row => row.activity_id !== null && !tables.hours_activities.some(activity => activity.id === row.activity_id && activity.installation_id === row.installation_id))) throw new HttpError(400, "Backup correction activity reference is invalid");
   const pausedProviderOperations = tables.integration_deliveries.filter((row) => row.status === "pending").length
     + tables.google_calendar_operations.filter((row) => row.status === "pending").length
     + tables.discord_calendar_operations.filter((row) => ["pending", "processing"].includes(String(row.status))).length
     + tables.discord_attendance_notifications.filter((row) => row.status === "pending").length
-    + tables.discord_anomaly_reports.filter((row) => row.status === "pending").length
-    + tables.hours_publication_operations.filter((row) => ["pending", "processing"].includes(String(row.status))).length;
+    + tables.discord_anomaly_reports.filter((row) => row.status === "pending").length;
   if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_block_recontests_after_rejection: 0, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, discord_anomaly_reports_enabled: 0, discord_anomaly_report_channel_id: null, discord_anomaly_reports_enabled_at: null, attendance_recent_days: 30, attendance_policy_activated_on: null, ...row, ...(schemaVersion < 31 ? { kiosk_authentication_method: "fingerprint" } : {}) }));
   if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, thread_created_at: null, delivery_id: null, ...row }));
   if (tables.discord_attendance_recipients) tables.discord_attendance_recipients = tables.discord_attendance_recipients.map((row) => ({ delivery_id: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
   if (tables.kiosks) tables.kiosks = tables.kiosks.map((row) => ({ pairing_bound: 0, ...row, ...(schemaVersion < 31 ? { authentication_method: "fingerprint" } : {}), ...(schemaVersion < 40 ? { configured_authentication_method: tables.organization_settings.find(settings => settings.installation_id === row.installation_id)?.kiosk_authentication_method ?? "fingerprint" } : {}) }));
   if (tables.kiosks.some(row => !kioskAuthenticationMethods.has(row.configured_authentication_method as KioskAuthenticationMethod) || !kioskAuthenticationMethods.has(row.authentication_method as KioskAuthenticationMethod))) throw new HttpError(400, "Backup contains an invalid kiosk authentication method");
-  if (schemaVersion < 29) {
-    tables.hours_activities = tables.hours_activities.map((row) => ({ ...row, event_start_local: null, event_end_local: null, event_start_occurrence: null, event_end_occurrence: null }));
-    tables.hours_publication_operations = tables.hours_publication_operations.map((row) => ({ ...row, action: "publish" }));
-    if (scope === "installation") {
-      const createdAt = String(tables.installations.find((row) => row.id === "primary")?.created_at ?? value.exportedAt);
-      tables.hours_publication_settings = [{ installation_id: "primary", automatic: 0, revision: 0, created_at: createdAt, updated_at: createdAt }];
-    }
-  }
   if (schemaVersion < 7 && tables.installations) { const providers = new Set(tables.encrypted_integrations.map((row) => row.provider)); tables.installations = tables.installations.map((row) => ({ ...row, google_enabled: providers.has("google") ? 1 : 0, resend_enabled: providers.has("resend") ? 1 : 0, discord_enabled: providers.has("discord") ? 1 : 0 })); }
   if (schemaVersion < 12 && tables.installations) tables.installations = tables.installations.map((row) => ({ google_calendar_enabled: 0, ...row }));
   if (tables.members) tables.members = tables.members.map((row) => ({ attendance_required_from: String(row.created_at ?? "").slice(0, 10), ...row, ...(schemaVersion < 34 ? { inactive_periods_json: row.active === 0 ? JSON.stringify([[new Date().toISOString(), null]]) : "[]" } : {}) }));
   try { for (const member of tables.members ?? []) validateInactivePeriods(member.inactive_periods_json, member.active); } catch { throw new HttpError(400, "Backup contains invalid member inactivity history"); }
   if (tables.users) tables.users = tables.users.map((row) => ({ debug_mode: 0, ...row }));
-  if (schemaVersion < 36 && tables.hours_publication_operations) tables.hours_publication_operations = tables.hours_publication_operations.map(row => ({ ...row, event_snapshot_json: null }));
-  try { for (const row of tables.hours_publication_operations ?? []) if (row.event_snapshot_json !== null) { const snapshot = parseOutreachPublicationEvent(JSON.parse(String(row.event_snapshot_json))); if (snapshot.activityId !== row.activity_id || snapshot.revision > Number(row.publication_revision)) throw new Error("Publication snapshot identity mismatch"); } } catch { throw new HttpError(400, "Backup publication snapshots are invalid"); }
-  if (tables.hours_publication_operations) tables.hours_publication_operations = tables.hours_publication_operations.map((row) => ["pending", "processing"].includes(String(row.status)) ? { ...row, status: "failed", next_attempt_at: null, last_error: "Restore requires explicit publication retry", lease_token: null, lease_expires_at: null } : row);
   if (scope === "installation" && schemaVersion < 22) {
     tables.platform_module_administration = [{ installation_id: "primary", revision: 0, selection_completed: 1 }];
     tables.platform_module_administration_epochs = [{ installation_id: "primary", revision: 0 }];
@@ -3424,25 +3479,6 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
       const completedBy = tables.users.find((row) => row.role === "admin")?.id ?? null;
       tables.platform_module_setup_progress = ["rules", "meeting", "input", "calendar", "discord"].map((stepId) => ({ installation_id: "primary", module_id: "attendance", step_id: stepId, setup_version: 2, outcome: ["calendar", "discord"].includes(stepId) ? "skipped" : "completed", completed_at: completedAt, completed_by: completedBy }));
     }
-  }
-  if (scope === "installation" && schemaVersion < 25) {
-    const createdAt = String(tables.installations.find((row) => row.id === "primary")?.created_at ?? value.exportedAt);
-    tables.platform_module_epochs.push({ installation_id: "primary", module_id: "hour-tracking", generation: 1 });
-    tables.platform_modules.push({ installation_id: "primary", module_id: "hour-tracking", contract_version: 1, generation: 1, phase: "disabled", setup_version: 1, setup_complete: 0, disabled_at: null, delete_after: null, deletion_cursor: 0, cleanup_failure: null });
-    tables.hours_entry_settings = [{ installation_id: "primary", reporting_days: 30, reopen_hours: 24, revision: 0 }];
-    tables.hours_categories = [
-      { installation_id: "primary", id: "event", name: "Event", mode: "event", impact_default: 1, archived: 0, revision: 0, created_at: createdAt, updated_at: createdAt },
-      { installation_id: "primary", id: "team-support", name: "Team Support", mode: "team", impact_default: 1, archived: 0, revision: 0, created_at: createdAt, updated_at: createdAt },
-      { installation_id: "primary", id: "other-service", name: "Other Service", mode: "task", impact_default: 1, archived: 0, revision: 0, created_at: createdAt, updated_at: createdAt },
-    ];
-  }
-  if (scope === "installation" && schemaVersion < 29) {
-    tables.hours_labels = tables.hours_categories.map((row) => ({ installation_id: row.installation_id, id: row.id, name: row.name, archived: row.archived, revision: row.revision, created_by: null, created_at: row.created_at, updated_at: row.updated_at }));
-    tables.hours_activity_labels = tables.hours_activities.map((row) => ({ installation_id: row.installation_id, activity_id: row.id, label_id: row.category_id, created_by: null, created_at: row.created_at }));
-  }
-  if (scope === "installation" && schemaVersion < 30) {
-    tables.platform_module_epochs.push({ installation_id: "primary", module_id: "carpool", generation: 1 });
-    tables.platform_modules.push({ installation_id: "primary", module_id: "carpool", contract_version: 1, generation: 1, phase: "disabled", setup_version: 1, setup_complete: 0, disabled_at: null, delete_after: null, deletion_cursor: 0, cleanup_failure: null });
   }
   if (tables.meetings) tables.meetings = tables.meetings.map((row) => {
     const normalized: Record<string, unknown> = { series_id: null, recurrence_frequency: null, recurrence_until: null, recurrence_sequence: null, deleted_at: null, weight_category_id: null, weight_category_name: null, attendance_weight: 1, audience_mode: "all", ...row };
@@ -3481,18 +3517,29 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   if (tables.label_attendance_rules.some((row) => !["exclude", "count_missed"].includes(String(row.excused_handling)))) throw new HttpError(400, "Backup attendance rule has invalid excused-meeting handling");
   if (scope === "installation" && schemaVersion >= 20) {
     const restoredLabels = tables.member_labels.map((row) => ({ id: String(row.id), name: String(row.name), active: Boolean(row.active), formulaEnabled: Boolean(row.formula_enabled) }));
-    const restoredOutreachLabels = tables.hours_labels.map((row) => ({ id: String(row.id) }));
     for (const row of tables.saved_report_views) {
-      const validation = validateReportDefinition(parseStoredReportDefinition(String(row.definition_json)), restoredLabels, { allowMissingLabels: true, outreachLabels: restoredOutreachLabels });
+      // A saved report keeps working when its module returns: a report whose dataset belongs to a module this build does
+      // not have is restored as saved. Missing labels and module filter options only warn, so options need not be read here.
+      const stored = parseStoredReportDefinition(String(row.definition_json)) as { version?: unknown; dataset?: unknown } | undefined;
+      if (stored?.version === 2 && typeof stored.dataset === "string" && /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/.test(stored.dataset) && !reportDatasetDefinition(stored.dataset)) continue;
+      const validation = validateReportDefinition(stored, restoredLabels, { allowMissingLabels: true });
       if (!validation.definition || validation.errors.length) throw new HttpError(400, "Backup contains an invalid saved report definition", validation.errors);
     }
   }
+  // Walkthrough progress on pages of extracted modules whose plugins are not installed is not restored.
+  const unavailablePages = unavailableExtractedWalkthroughPages(installedExternalBackupModuleIds);
+  if (unavailablePages.size) tables.user_walkthroughs = tables.user_walkthroughs.filter((row) => !unavailablePages.has(String(row.page_id)));
   for (const row of tables.user_walkthroughs) {
     if (row.installation_id !== "primary" || !tables.users.some((user) => user.id === row.user_id && user.installation_id === row.installation_id)
       || !validWalkthroughProgress({ pageId: row.page_id, version: row.content_version, status: row.status, stepId: row.step_id })) throw new HttpError(400, "Backup walkthrough progress is invalid");
   }
   validatePortableTableScope(tables, scope);
-  if (scope === "installation") { validateInstallationBackupState(tables); validateCarpoolBackupTables(tables); }
+  // Discarded modules, and extracted modules that were never used and have no plugin here, restore as absent.
+  if (scope === "installation") { removeExcludedModuleRows(tables, new Set([...externalPlan.excludedIds, ...extracted.dropped])); validateInstallationBackupState(tables, externalPlan.included.map(({ module }) => module.definition)); }
+  const restoredAt = new Date().toISOString();
+  const installationCreatedAt = tables.installations.find((row) => row.id === "primary")?.created_at;
+  const includedExternalModules = externalPlan.included.map((included) => prepareIncludedModule(included, { installationId: "primary", exportedAt: value.exportedAt as string, restoredAt }, schemaVersion, typeof installationCreatedAt === "string" ? installationCreatedAt : null));
+  requireConfirmedExclusions(externalPlan);
 
   tables.integration_deliveries = tables.integration_deliveries.map((row) => row.status === "pending" ? { ...row, status: "failed" } : row);
   tables.google_calendar_operations = tables.google_calendar_operations.map((row) => row.status === "pending" ? { ...row, status: "failed", next_attempt_at: null, last_error: "Restore requires explicit Calendar review" } : row);
@@ -3507,7 +3554,9 @@ function normalizeBackup(value: unknown, scope: BackupScope): NormalizedBackup {
   if (!Number.isSafeInteger(attendanceRecentDays) || attendanceRecentDays < 1 || attendanceRecentDays > 365) throw new HttpError(400, "Backup attendance window is invalid");
   const attendancePolicyActivatedOn = scope === "roster" && schemaVersion >= 15 ? value.attendancePolicyActivatedOn ?? null : schemaVersion < 15 && (tables.member_labels.some((row) => row.formula_enabled === 1) || tables.label_attendance_rules.length) ? new Date().toISOString().slice(0, 10) : null;
   if (attendancePolicyActivatedOn !== null && !validDate(attendancePolicyActivatedOn)) throw new HttpError(400, "Backup attendance policy activation date is invalid");
-  return { product: "LancerLogin", schemaVersion: sourceSchemaVersion, scope, exportedAt: value.exportedAt, attendanceRecentDays, attendancePolicyActivatedOn, tables, recovery: { revokedKiosks, invalidatedPairingCodes, pausedProviderOperations } };
+  // Provider work an included module paused for review counts with Core's paused operations.
+  const pausedModuleOperations = includedExternalModules.reduce((total, module) => total + module.pausedOperations, 0);
+  return { product: "LancerLogin", schemaVersion: sourceSchemaVersion, scope, exportedAt: value.exportedAt, attendanceRecentDays, attendancePolicyActivatedOn, tables, recovery: { revokedKiosks, invalidatedPairingCodes, pausedProviderOperations: pausedProviderOperations + pausedModuleOperations }, externalModules: { included: includedExternalModules, excluded: externalPlan.unavailable } };
 }
 
 const insertBackupRows = (db: D1Database, table: BackupTable, rows: Record<string, unknown>[]) => rows.map((row) => {
@@ -3540,9 +3589,15 @@ function restoredModuleStateStatements(db: D1Database, table: BackupTable, rows:
 }
 
 async function restoreData(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: BackupScope; confirmation?: string; backup?: unknown }>(request, 10_485_760); const scope = input.scope;
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: BackupScope; confirmation?: string; backup?: unknown; excludeModules?: unknown }>(request, 10_485_760); const scope = input.scope;
   if (!scope || !["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Restore scope must be meetings, roster, or installation");
-  const expected = `RESTORE ${scope.toUpperCase()}`; if (input.confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`); const backup = normalizeBackup(input.backup, scope); const tables = backup.tables;
+  const expected = `RESTORE ${scope.toUpperCase()}`; if (input.confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`);
+  let backup: NormalizedBackup;
+  try { backup = normalizeBackup(input.backup, scope, input.excludeModules); }
+  catch (error) { if (error instanceof ModuleRestoreRefusal) return response(error.body, 409); throw error; }
+  const tables = backup.tables;
+  // Excluded modules restore absent: their rows were removed from every module-keyed Core table and their section is skipped.
+  const excludedModules = backup.externalModules.excluded.map(({ id, label, status, requiredBackupVersion, source, commit, rows }) => ({ id, label, status, backupVersion: requiredBackupVersion, source, commit, rows }));
   let statements: D1Statement[];
   if (scope === "meetings") statements = [
     db.prepare("DELETE FROM discord_anomaly_reports WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_audience_labels WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_weight_categories WHERE installation_id = 'primary'"),
@@ -3556,7 +3611,8 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
     ...insertBackupRows(db, "member_label_changes", tables.member_label_changes), ...insertBackupRows(db, "label_weekly_targets", tables.label_weekly_targets), ...insertBackupRows(db, "label_attendance_rules", tables.label_attendance_rules), db.prepare("DELETE FROM discord_label_role_mappings WHERE installation_id = 'primary' AND label_id IN (SELECT id FROM member_labels WHERE installation_id = 'primary' AND active = 0)"), db.prepare("UPDATE discord_label_role_jobs SET status = 'stale', lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND status IN ('pending', 'running')").bind(new Date().toISOString(), new Date().toISOString()), db.prepare("UPDATE organization_settings SET attendance_recent_days = ?, attendance_policy_activated_on = ? WHERE installation_id = 'primary'").bind(backup.attendanceRecentDays, backup.attendancePolicyActivatedOn),
   ];
   else {
-    statements = [...freshAuthorityStatements(db, tables), db.prepare("DELETE FROM installations WHERE id = 'primary'")];
+    // Installed plugin tables may not cascade from Core rows, so clear them child-first before Core deletion.
+    statements = [...freshAuthorityStatements(db, tables), ...clearExternalModuleStatements(db, installedExternalBackupModules), db.prepare("DELETE FROM installations WHERE id = 'primary'")];
     const authorityTables = new Set<BackupTable>(["platform_module_administration_epochs", "platform_module_epochs", "platform_module_assignment_epochs"]);
     const restoredStateTables = new Set<BackupTable>(["platform_module_administration", "platform_modules", "platform_module_assignment_revisions"]);
     for (const table of installationTables) {
@@ -3564,9 +3620,15 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
       if (table === "member_labels" && backup.schemaVersion >= 14) statements.push(db.prepare("DELETE FROM member_labels WHERE installation_id = 'primary'"));
       statements.push(...(restoredStateTables.has(table) ? restoredModuleStateStatements(db, table, tables[table]) : insertBackupRows(db, table, tables[table])));
     }
+    const restoredModules = new Set(tables.platform_modules.map((row) => String(row.module_id)));
+    statements.push(...freshExternalModuleStatements(db, installedExternalBackupModules.filter(({ definition }) => !restoredModules.has(definition.id)), new Date().toISOString()), ...insertExternalModuleStatements(db, backup.externalModules.included));
   }
-  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: backup.schemaVersion, exportedAt: backup.exportedAt, recovery: backup.recovery }), now));
-  await db.batch(statements); return response({ restored: true, scope, recovery: backup.recovery });
+  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: backup.schemaVersion, exportedAt: backup.exportedAt, recovery: backup.recovery, ...(excludedModules.length ? { excludedModules } : {}) }), now));
+  await db.batch(statements);
+  // An installation restore recreates the installation row, which cascades away the installed-module catalog. Record it again
+  // now, so backups keep plugin sources and removed code stays deletable; a failure retries on the next scheduled pass.
+  if (scope === "installation") { try { await reconcileInstalledModules(db); } catch { /* Retried by the scheduled pass. */ } }
+  return response({ restored: true, scope, recovery: backup.recovery, ...(excludedModules.length ? { excludedModules } : {}) });
 }
 
 async function resetOnboarding(request: Request, env: Env): Promise<Response> {
@@ -3584,24 +3646,14 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.attendance_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString()),
   ]);
   else if (input.scope === "roster") {
-    const references = await db.prepare("SELECT COUNT(*) AS count FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id) OR EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.member_id = m.id) OR EXISTS (SELECT 1 FROM discord_attendance_contests d WHERE d.member_id = m.id) OR EXISTS (SELECT 1 FROM hours_entries h WHERE h.installation_id = m.installation_id AND h.member_id = m.id) OR EXISTS (SELECT 1 FROM hours_correction_requests h WHERE h.installation_id = m.installation_id AND h.requester_member_id = m.id))").first<{ count: number }>();
-    if (Number(references?.count ?? 0) > 0) throw new HttpError(409, "Delete Attendance and Outreach participation first so historical records do not lose their roster references");
+    const modules = moduleRosterReferences();
+    const references = await db.prepare(`SELECT COUNT(*) AS count FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id) OR EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.member_id = m.id) OR EXISTS (SELECT 1 FROM discord_attendance_contests d WHERE d.member_id = m.id)${modules.columns.map(({ table, column }) => ` OR EXISTS (SELECT 1 FROM ${table} h WHERE h.installation_id = m.installation_id AND h.${column} = m.id)`).join("")})`).first<{ count: number }>();
+    if (Number(references?.count ?? 0) > 0) throw new HttpError(409, `Delete ${["Attendance", ...modules.labels].join(" and ")} participation first so historical records do not lose their roster references`);
     await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id IS NOT NULL"), db.prepare("DELETE FROM members WHERE installation_id = 'primary'"), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.roster_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString())]);
   }
   else await db.prepare("DELETE FROM installations WHERE id = 'primary'").run();
   return response({ deleted: true, scope: input.scope });
 }
-
-const registeredModuleJobHandlers: Readonly<Record<string, (env: Env) => Promise<unknown>>> = Object.freeze({
-  // Google Calendar delivery retries safely on the next scheduled pass.
-  "attendance.google-calendar": processGoogleCalendarOperations,
-  "attendance.discord-calendar": processDiscordCalendarOperations,
-  "attendance.discord-channel": syncDiscordManagedSurface,
-  "attendance.discord-notices": processDiscordAttendanceNotifications,
-  "attendance.discord-anomalies": processDiscordAnomalyReports,
-  "attendance.discord-label-roles": processDiscordLabelRoleJobs,
-  "hour-tracking.publication": (env) => processOutreachPublicationOperations(requireDatabase(env), outreachPublicationProviders(env)),
-});
 
 async function moduleJobEnabled(moduleId: string, env: Env): Promise<boolean> {
   try { await requireModuleService(requireDatabase(env), moduleId); return true; }
@@ -3610,10 +3662,11 @@ async function moduleJobEnabled(moduleId: string, env: Env): Promise<boolean> {
 
 async function runRegisteredModuleJob(jobId: string, env: Env): Promise<void> {
   const owner = bundledModuleRegistry.modules.find((module) => module.jobs.some((job) => job.id === jobId));
-  const handler = registeredModuleJobHandlers[jobId];
+  const handler = owner && apiModules.get(owner.id)?.jobs?.[jobId];
   if (!owner || !handler) throw new Error("Registered module job is unavailable");
   const db = requireDatabase(env); const generation = await requireModuleService(db, owner.id);
-  await handler(moduleScopedEnvironment(env, captureModuleServiceDatabase(db, owner.id, generation)));
+  const scopedDatabase = captureModuleServiceDatabase(db, owner.id, generation); const scopedEnvironment = moduleScopedEnvironment(env, scopedDatabase);
+  await handler({ env: moduleEnvironment(owner.id, scopedEnvironment), db: scopedDatabase, services: coreModuleServices(scopedEnvironment) });
 }
 
 export const registeredModuleSchedulerJobs = moduleSchedulerJobs<Env>({ modules: bundledModuleRegistry.modules, enabled: moduleJobEnabled, runJob: runRegisteredModuleJob });
@@ -3641,9 +3694,11 @@ async function platformScheduler(request: Request, env: Env): Promise<Response> 
 
 const worker = { async fetch(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const url = new URL(request.url); let result: Response;
+  const binding = env.DB;
   const usage = env.DB ? measureD1(env.DB) : undefined;
   if (usage) env = { ...env, DB: usage.database };
   try {
+    if (binding && usage && request.method !== "OPTIONS") { const current = env; await ensureModulesReconciled(usage.database, binding, () => webUpdateMaintenance(current)); }
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !["/auth/local", "/auth/logout", "/auth/google/callback"].includes(url.pathname) && await webUpdateMaintenance(env)) return withCors(response({ error: "An installation update requires temporary write suspension. Retry after recovery or completion.", code: "update_maintenance" }, 503, { "retry-after": "30" }), request, env);
     const moduleRoute = bundledModuleRegistry.routeOwner(url.pathname);
     if (request.method !== "OPTIONS" && moduleRoute) {
@@ -3663,14 +3718,19 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
         env = moduleScopedEnvironment(env, captureModuleServiceDatabase(db, moduleRoute.module.id, generation));
       }
     }
+    const moduleRouteHandler = moduleRoute && request.method !== "OPTIONS" ? apiModules.get(moduleRoute.module.id)?.routes?.[moduleRoute.route.path] : undefined;
+    let moduleResult: Response | undefined;
     if (request.method === "OPTIONS") result = new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "authorization, content-type", "access-control-allow-credentials": "true" } });
-    else if (url.pathname === "/health" && request.method === "GET") result = response({ ok: true, service: "lancerlogin-api", mode: env.DB ? "ready" : "unconfigured", releaseVersion: env.RELEASE_VERSION ?? "development" });
+    else if (url.pathname === "/health" && request.method === "GET") result = response({ ok: true, service: "lancerlogin-api", mode: env.DB ? "ready" : "unconfigured", releaseVersion: env.RELEASE_VERSION ?? "development", modules: bundledModuleRegistry.modules.map((module) => module.id) });
     else if (url.pathname === "/setup/status" && request.method === "GET") result = await setupStatus(env);
     else if (url.pathname === "/setup/bootstrap" && request.method === "POST") result = await bootstrap(request, env);
     else if (url.pathname === "/admin/update-info" && request.method === "GET") result = await updateInfo(request, env);
     else if (url.pathname === "/admin/releases/latest" && request.method === "GET") result = await discoverRelease(request, env);
     else if (url.pathname === "/admin/update-channel" && ["GET", "PUT"].includes(request.method)) result = await updateChannel(request, env);
     else if (url.pathname === "/admin/web-updates/status" && request.method === "GET" || ["/admin/web-updates/prepare", "/admin/web-updates/start"].includes(url.pathname) && request.method === "POST") result = await webUpdates(request, env);
+    else if (url.pathname === "/admin/plugins" && request.method === "GET") result = await pluginManagement(request, env, "state");
+    else if (url.pathname === "/admin/plugins/migrations" && request.method === "GET") { await requireRole(request, env, ["admin"]); result = response({ required: await requiredModuleMigrations(env) }); }
+    else if (["/admin/plugins/review", "/admin/plugins/change", "/admin/plugins/reauthenticate", "/admin/plugins/release"].includes(url.pathname) && request.method === "POST") result = await pluginManagement(request, env, url.pathname.slice("/admin/plugins/".length) as "review" | "change" | "reauthenticate" | "release");
     else if (url.pathname === "/auth/local" && request.method === "POST") result = await localLogin(request, env);
     else if (url.pathname === "/auth/session" && request.method === "GET") result = await authSession(request, env);
     else if (/^\/auth\/walkthroughs\/[^/]+$/.test(url.pathname) && ["GET", "PATCH"].includes(request.method)) result = await authWalkthrough(request, env, url.pathname.slice("/auth/walkthroughs/".length));
@@ -3684,17 +3744,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (/^\/admin\/modules\/[^/]+\/setup$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleSetup(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/modules\/assignments\/[^/]+$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleAssignments(request, env, decodeURIComponent(url.pathname.split("/")[4]));
     else if (url.pathname.startsWith("/module-setup/attendance/")) { const principal = await requireRole(request, env, ["admin"]); result = await attendanceSetupRoute(request, requireDatabase(env), principal.userId); }
-    else if (url.pathname.startsWith("/module-setup/hour-tracking/")) { const principal = await requireRole(request, env, ["admin"]); const routed = await outreachSetupRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
-    else if (url.pathname === "/module-setup/carpool/plan" && request.method === "POST") { const principal = await requireRole(request, env, ["admin"]); result = response(await createCarpoolPlan(requireDatabase(env), principal.userId, await parseJson(request)), 201); }
-    else if (url.pathname.startsWith("/public/hours/")) { const routed = await outreachPublicRoute(requireDatabase(env), request, env.ALLOWED_ORIGIN ?? url.origin, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
-    else if (url.pathname === "/admin/hours/public-form-settings") { const principal = await requireRole(request, env, ["admin"]); const routed = await publicFormSettingsRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
-    else if (url.pathname === "/admin/hours/publication-settings") { const principal = await requireRole(request, env, ["admin"]); const routed = await outreachPublicationRoute(requireDatabase(env), outreachPublicationProviders(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
-    else if (url.pathname === "/admin/hours/publications" || url.pathname === "/admin/hours/publication-providers" || /^\/admin\/hours\/activities\/[^/]+\/publication(?:\/|$)/.test(url.pathname)) { const principal = await requireRole(request, env, ["admin", "operator"]); const routed = await outreachPublicationRoute(requireDatabase(env), outreachPublicationProviders(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
-    else if (/^\/admin\/hours\/(reopen-windows|corrections)(?:\/|$)/.test(url.pathname)) { const principal = await requireRole(request, env, ["admin", "operator"]); const routed = await outreachReviewRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
-    else if (/^\/admin\/hours\/(context|member-choices|totals|entries)(?:\/|$)/.test(url.pathname)) { const principal = await requireRole(request, env, ["admin", "operator"]); if (request.method === "PATCH" && request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Participation edits require the dashboard origin"); const routed = await outreachEntryRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request)); result = response(routed.body, routed.status); }
-    else if (url.pathname.startsWith("/admin/hours/")) { const principal = await requireRole(request, env, ["admin", "operator"]); const routed = await outreachCatalogRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request), outreachPublicationProviders(env)); result = response(routed.body, routed.status); }
-    else if (url.pathname === "/admin/carpool/settings") { const principal = await requireRole(request, env, ["admin"]); result = response(await carpoolSettingsRoute(requireDatabase(env), principal.userId, request, request.method === "GET" ? undefined : await parseJson(request), env.INTEGRATION_KEY, env.CARPOOL_GEOAPIFY_KEY)); }
-    else if (url.pathname.startsWith("/admin/carpool/")) { const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const meetingAccess = await createMeetingReferenceAccess(db, principal.userId); const geocoder = await readCarpoolGeocoder(db, env.INTEGRATION_KEY, env.CARPOOL_GEOAPIFY_KEY); const routed = await carpoolRoute(db, principal.userId, request, request.method === "GET" ? undefined : await parseJson(request, 2_000_000), geocoder, meetingAccess); result = response(routed.body, routed.status); }
+    else if (moduleRouteHandler && (moduleResult = await moduleRouteHandler(moduleRouteContext(moduleRoute!.module.id, request, env, url)))) result = moduleResult;
     else if (url.pathname === "/admin/branding" && ["GET", "PATCH"].includes(request.method)) result = await branding(request, env);
     else if (url.pathname === "/meeting-weight-categories" && request.method === "GET") result = await listMeetingWeightCategories(request, env, false);
     else if (url.pathname === "/admin/meeting-weight-categories" && request.method === "GET") result = await listMeetingWeightCategories(request, env, true);
@@ -3869,7 +3919,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     const detail = error instanceof HttpError ? error.details : env.APP_MODE === "unconfigured" && error instanceof Error ? [error.message] : undefined;
     result = response({ error: error instanceof HttpError || error instanceof WebUpdateError ? error.message : "Request failed", details: detail, ...(error instanceof WebUpdateError ? { code: error.code } : {}) }, status);
   }
-  if (url.pathname.startsWith("/public/hours/")) {
+  if (privateModuleResponse(url.pathname)) {
     const headers = new Headers(result.headers); headers.set("cache-control", "no-store, private, max-age=0"); headers.set("pragma", "no-cache"); headers.set("expires", "0"); headers.set("x-robots-tag", "noindex, nofollow");
     result = new Response(result.body, { status: result.status, headers });
   }
@@ -3879,6 +3929,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
 }, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
   if (await webUpdateMaintenance(env)) return;
   const db = requireDatabase(env);
+  try { await reconcileInstalledModules(db); } catch { /* Reconciliation retries on the next scheduled pass. */ }
   for (let pass = 0; pass < 8; pass += 1) { if (await webUpdateMaintenance(env)) return; const cleanup = await runModuleCleanup(db); if (cleanup.status !== "progress") break; }
   if (env.PLATFORM_SCHEDULER_MODE === "durable") return;
   if (controller.cron === "*/5 * * * *") {

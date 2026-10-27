@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "modules": [
+    {
+      "id": "carpool",
+      "source": "https://github.com/isriah/lancerlogin-carpool.git",
+      "commit": "4471b8c118ac392376e9b2c30a876c16a4eab48a"
+    }
+  ]
+}

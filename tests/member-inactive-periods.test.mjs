@@ -29,8 +29,8 @@ class Database {
       INSERT INTO organization_settings(installation_id,time_zone) VALUES ('primary','UTC');
       INSERT INTO platform_module_administration(installation_id,revision,selection_completed) VALUES ('primary',0,1);
       INSERT INTO platform_module_administration_epochs(installation_id,revision) VALUES ('primary',0);
-      INSERT INTO platform_module_epochs(installation_id,module_id,generation) VALUES ('primary','attendance',1),('primary','hour-tracking',1),('primary','carpool',1);
-      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete) VALUES ('primary','attendance',1,1,'enabled',2,1),('primary','hour-tracking',1,1,'disabled',1,0),('primary','carpool',1,1,'disabled',1,0);
+      INSERT INTO platform_module_epochs(installation_id,module_id,generation) VALUES ('primary','attendance',1),('primary','hour-tracking',1);
+      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete) VALUES ('primary','attendance',1,1,'enabled',2,1),('primary','hour-tracking',1,1,'disabled',1,0);
       INSERT INTO platform_module_setup_progress(installation_id,module_id,step_id,setup_version,outcome,completed_at,completed_by) SELECT 'primary','attendance',value,2,'completed','2026-01-01T00:00:00.000Z','admin' FROM json_each('["rules","meeting","input"]');`);
   }
   prepare(sql) {
@@ -117,7 +117,7 @@ test('roster and installation backups retain periods and reject invalid history 
   await change(db, false); db.now = '2026-03-01T12:00:00.000Z'; await change(db, true);
   const periods = db.periods();
   for (const scope of ['roster', 'installation']) {
-    const backup = await good(db, '/admin/data/backup?scope=' + scope); assert.equal(backup.schemaVersion, 41);
+    const backup = await good(db, '/admin/data/backup?scope=' + scope); assert.equal(backup.schemaVersion, 44);
     const row = backup.tables.members.find(m => m.id === 'member'); assert.deepEqual(JSON.parse(row.inactive_periods_json), periods); assert.equal(row.attendance_required_from, '2026-01-01');
     const invalid = structuredClone(backup); invalid.tables.members[0].inactive_periods_json = '[["2026-03-01", "2026-02-01"]]';
     assert.equal((await call(db, '/admin/data/restore', { scope, confirmation: 'RESTORE ' + scope.toUpperCase(), backup: invalid })).status, 400);
@@ -181,17 +181,3 @@ test('inactive opportunities stay outside weekly, percentage, regular and histor
   }
 });
 
-test('installation recovery preserves Carpool defaults and removes nonportable credentials', async t => {
-  const db = new Database(); t.after(() => db.raw.close());
-  db.raw.exec("INSERT INTO carpool_settings VALUES('primary',20,6,2,'2026-10-13T12:00:00Z'); INSERT INTO carpool_geocoding_credentials VALUES('primary','synthetic-encrypted-key','synthetic-iv',0)");
-  db.raw.exec("INSERT INTO carpool_plans(installation_id,id,title,created_at,updated_at) VALUES('primary','lookup-plan','Synthetic lookup recovery','2026-10-13T12:00:00Z','2026-10-13T12:00:00Z'); INSERT INTO carpool_location_resolution VALUES('primary','lookup-plan','synthetic-input','running','synthetic-lease','2099-01-01T00:00:00Z',NULL)");
-  const backup = await good(db, '/admin/data/backup?scope=installation');
-  assert.equal(backup.schemaVersion, 41); assert.equal(backup.tables.carpool_settings[0].preferred_radius_miles, 6);
-  assert.equal('carpool_geocoding_credentials' in backup.tables, false); assert.doesNotMatch(JSON.stringify(backup), /synthetic-encrypted-key/);
-  assert.equal('carpool_location_resolution' in backup.tables, false); assert.doesNotMatch(JSON.stringify(backup), /synthetic-lease|synthetic-input/);
-  await good(db, '/admin/data/restore', { scope: 'installation', confirmation: 'RESTORE INSTALLATION', backup });
-  assert.equal(db.raw.prepare('SELECT preferred_radius_miles FROM carpool_settings').get().preferred_radius_miles, 6); assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM carpool_geocoding_credentials').get().n, 0);
-  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM carpool_location_resolution').get().n, 0);
-  const legacy = structuredClone(backup); legacy.schemaVersion = 34; omitContestResubmissionFields(legacy); legacy.tables.carpool_plans = []; delete legacy.tables.carpool_settings; legacy.ownership.modules.find(module => module.id === 'carpool').tables = legacy.ownership.modules.find(module => module.id === 'carpool').tables.filter(table => table !== 'carpool_settings');
-  await good(db, '/admin/data/restore', { scope: 'installation', confirmation: 'RESTORE INSTALLATION', backup: legacy }); assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM carpool_settings').get().n, 0);
-});

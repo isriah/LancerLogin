@@ -25,6 +25,10 @@ jobs:
       - uses: actions/setup-node@v7
         with: { node-version: 24.21.0, cache: npm }
       - run: npm ci --no-audit
+      - name: Check that selectable installation releases contain the files the installer runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-provision-release-compat.mjs
       - name: Select verification scope
         id: verification-scope
         shell: bash
@@ -78,9 +82,16 @@ jobs:
         run: sudo "$(command -v node)" --test tests/kiosk-artifacts.test.mjs
       - name: Run complete release verification once
         if: steps.verification-scope.outputs.full == 'true'
+        env:
+          # Read access for the plugin repositories pinned by scripts/official-modules.json and tests/fixtures, which the test
+          # harness fetches only when a token is set. Without it,
+          # tests that compose those plugins skip and name the missing token.
+          LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}
         run: npm run verify:release-ci
       - name: Run web-scoped verification
         if: steps.verification-scope.outputs.full != 'true'
+        env:
+          LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}
         run: npm run verify:dev
       - name: Run affected kiosk verification
         if: steps.verification-scope.outputs.full != 'true' && steps.verification-scope.outputs.kiosk == 'true'

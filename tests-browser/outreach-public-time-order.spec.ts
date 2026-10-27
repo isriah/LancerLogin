@@ -1,5 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { pairedViews } from "./paired-views";
+import { requireOutreachPlugin } from "./outreach-fixtures";
+
+requireOutreachPlugin();
 
 const activity = { id: "activity-1", categoryId: "other-service", categoryName: "Other Service", title: "Community drive", serviceDate: "2026-09-28", location: "Library", reopened: false };
 

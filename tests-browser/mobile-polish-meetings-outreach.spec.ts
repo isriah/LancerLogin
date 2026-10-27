@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Locator } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
 import { pairedViews } from "./paired-views";
+import { requireOutreachPlugin } from "./outreach-fixtures";
 
 const meeting = { id: "active-meeting", title: "Synthetic planning", startsAt: "2026-09-28T14:00:00Z", endsAt: "2026-09-28T16:30:00Z", attendanceClosesAt: "2026-09-28T17:00:00Z", required: true, notes: "Bring the synthetic project plan.", audienceMode: "all", audienceLabelIds: [] };
 const activity = { id: "synthetic-service", mode: "event", labelIds: [], labels: [], serviceDate: "2026-09-28", teamId: null, title: "Synthetic service day", description: "Sort practice materials", location: "Synthetic library", impactRelevant: true, archived: false, revision: 0, eventStartLocal: null, eventEndLocal: null, eventStartOccurrence: null, eventEndOccurrence: null };
@@ -45,6 +46,7 @@ for (const { viewport, theme } of pairedViews) {
   });
 
   test(`Outreach calendar, original detail cards and dialog at ${viewport.width} ${theme}`, async ({ page }) => {
+    requireOutreachPlugin();
     await page.setViewportSize(viewport); await appearance(page, theme);
     await page.route("**/platform/modules", route => route.fulfill({ json: outreachSnapshot() }));
     await page.route(/\/admin\/hours(?:\/.*)?(?:\?.*)?$/, route => {

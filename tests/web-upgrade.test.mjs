@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { validateUpgradeEnvironment, validateOfficialSource, validateMigrationPolicy, executeWebUpgrade, createLiveUpgradeIO, retainedDashboardOrigin, controllerCredentialMinimumValidityMs } from "../scripts/run-web-upgrade.mjs";
-import { verifyDispatchCredential, verifyCredentialTarget } from "../scripts/refresh-web-update-credential.mjs";
+import { validateUpgradeEnvironment, validateOfficialSource, validateMigrationPolicy, executeWebUpgrade, createLiveUpgradeIO, retainedDashboardOrigin, controllerCredentialMinimumValidityMs, pluginCompositionEnvironment, composeUpdateModules, verifyPinnedSelection, gitBlobSha, absentSelectionSha } from "../scripts/run-web-upgrade.mjs";
+import { verifyDispatchCredential, verifyCredentialTarget, verifySelectionCredential } from "../scripts/refresh-web-update-credential.mjs";
 import { syntheticUpgradeIO, rehearseSyntheticWebUpgrade } from "../scripts/rehearse-web-upgrade.mjs";
 import { buildPagesProxy } from "../scripts/prepare-pages-proxy.mjs";
 import { recoverWebUpdate } from "../scripts/recover-web-update.mjs";
@@ -175,4 +175,83 @@ test("renamed controller checks retained database name, UUID, account and Worker
   await verifyCredentialTarget(renamed, async (url) => Response.json({ success: true, result: result(url) }));
   await assert.rejects(verifyCredentialTarget(renamed, async (url) => Response.json({ success: true, result: result(url, "renamed-data") })), /database_identity_mismatch/);
   await assert.rejects(verifyCredentialTarget(renamed, async (url) => Response.json({ success: true, result: url.includes("/settings") ? { bindings: [{ name: "DB", type: "d1", id: "wrong" }] } : result(url) })), /worker_database_mismatch/);
+});
+
+test("updates compose the release's official modules with or without the controller's plugin selection", async () => {
+  const calls = [];
+  const compose = async (options) => { calls.push(options); return { composed: true, modules: options.selectionPath ? ["hour-tracking", "carpool"] : ["hour-tracking"] }; };
+  const environment = { PATH: "/bin", CLOUDFLARE_API_TOKEN: "cf", WEB_UPDATE_TOKEN: "update", LANCERLOGIN_PLUGIN_TOKEN: "plugin" };
+  assert.deepEqual(await composeUpdateModules({ selectionPath: "deployment-control/lancerlogin.modules.json", environment, compose }), ["hour-tracking", "carpool"]);
+  assert.deepEqual(await composeUpdateModules({ selectionPath: undefined, environment, compose }), ["hour-tracking"]);
+  assert.deepEqual(calls.map(({ selectionPath, officialModules, env }) => ({ selectionPath, officialModules, env })), [
+    { selectionPath: "deployment-control/lancerlogin.modules.json", officialModules: true, env: { PATH: "/bin", LANCERLOGIN_PLUGIN_TOKEN: "plugin" } },
+    { selectionPath: null, officialModules: true, env: { PATH: "/bin", LANCERLOGIN_PLUGIN_TOKEN: "plugin" } },
+  ]);
+  // An incompatible plugin stops the update in preflight, before claim or maintenance.
+  await assert.rejects(composeUpdateModules({ selectionPath: undefined, environment, compose: async () => { throw new Error("Module hour-tracking needs module contract 2"); } }), /needs module contract 2/);
+  const source = await readFile("scripts/run-web-upgrade.mjs", "utf8");
+  assert.match(source, /composedModules = await preflightModules\(/);
+  assert.match(source, /compose: \(\) => composeUpdateModules\(\{ selectionPath: existsSync\(selection\) \? selection : undefined, environment \}\),/);
+});
+
+test("update preflight composition enforces the controller's plugin source allowlist before claim", async (t) => {
+  // The real composition, with the selection and allowlist in a stand-in controller checkout: a refused source or an
+  // invalid allowlist throws before any plugin is fetched, so the update stops before claim or maintenance.
+  const controller = await mkdtemp(join(tmpdir(), "lancerlogin-upgrade-allowlist-"));
+  t.after(() => rm(controller, { recursive: true, force: true }));
+  const selection = join(controller, "lancerlogin.modules.json");
+  const allowlist = join(controller, "lancerlogin.plugin-sources.json");
+  const environment = { PATH: process.env.PATH, CLOUDFLARE_API_TOKEN: "cf" };
+  await writeFile(selection, JSON.stringify({ format: 1, modules: [{ id: "stranger", source: "https://github.com/stranger/plugin.git", commit: "a".repeat(40) }] }));
+  await writeFile(allowlist, JSON.stringify({ format: 1, allowedSources: ["github.com/trusted-org"] }));
+  await assert.rejects(composeUpdateModules({ selectionPath: selection, environment }), /Module stranger source https:\/\/github\.com\/stranger\/plugin\.git is not allowed by lancerlogin\.plugin-sources\.json/);
+  await writeFile(allowlist, JSON.stringify({ format: 1, allowedSources: ["gitlab.com"] }));
+  await assert.rejects(composeUpdateModules({ selectionPath: selection, environment }), /Module stranger source .* is not allowed/);
+  await writeFile(allowlist, "not json");
+  await assert.rejects(composeUpdateModules({ selectionPath: selection, environment }), /lancerlogin\.plugin-sources\.json is not valid JSON, so no plugin source is allowed/);
+});
+
+test("plugin composition during an update never receives deployment or update credentials", () => {
+  const environment = pluginCompositionEnvironment({ PATH: "/bin", HOME: "/home/runner", CLOUDFLARE_API_TOKEN: "cf", CLOUDFLARE_ACCOUNT_ID: "account", WEB_UPDATE_TOKEN: "update", GITHUB_TOKEN: "gh", INTEGRATION_KEY: "key", LANCERLOGIN_PLUGIN_TOKEN: "plugin" });
+  assert.deepEqual(environment, { PATH: "/bin", HOME: "/home/runner", LANCERLOGIN_PLUGIN_TOKEN: "plugin" });
+});
+test("plugin-changes requests redeploy only the installed release with exactly the pinned selection", async () => {
+  const directory = "apps/api/migrations"; const names = (await readdir(directory)).sort();
+  const files = await Promise.all(names.map(async (name) => ({ name, content: await readFile(`${directory}/${name}`, "utf8") })));
+  const policy = JSON.parse(await readFile("scripts/web-upgrade-policy.json", "utf8"));
+  await validateMigrationPolicy(policy, files, names, "2.0.0-beta.11", "v2.0.0-beta.11", { sameRelease: true });
+  await assert.rejects(validateMigrationPolicy(policy, files, names, "2.0.0-beta.11", "v2.0.0-beta.11"), /migration_compatibility_review_required/);
+  await assert.rejects(validateMigrationPolicy(policy, files, names, "2.0.0-beta.11", "v2.0.0-beta.12", { sameRelease: true }), /migration_compatibility_review_required/);
+  const controller = await mkdtemp(join(tmpdir(), "lancerlogin-selection-pin-"));
+  try {
+    const path = join(controller, "lancerlogin.modules.json"); const text = "{\n  \"format\": 1,\n  \"modules\": []\n}\n";
+    await verifyPinnedSelection(absentSelectionSha, path);
+    await verifyPinnedSelection(null, path);
+    await writeFile(path, text);
+    const git = spawnSync("git", ["hash-object", path], { encoding: "utf8" });
+    if (git.status === 0) assert.equal(gitBlobSha(text), git.stdout.trim());
+    await verifyPinnedSelection(gitBlobSha(text), path);
+    await assert.rejects(verifyPinnedSelection(absentSelectionSha, path), /module_selection_changed/);
+    await assert.rejects(verifyPinnedSelection("1".repeat(40), path), /module_selection_changed/);
+    await assert.rejects(verifyPinnedSelection("not-a-sha", path), /module_selection_invalid/);
+  } finally { await rm(controller, { recursive: true, force: true }); }
+});
+test("the optional plugin selection credential is verified, distinct from the dispatch token and uploaded only when present", async () => {
+  const base = { ...env, LANCERLOGIN_UPDATE_REPOSITORY: "example/private-install", LANCERLOGIN_WEB_UPDATE_TOKEN: "synthetic-dispatch" };
+  assert.equal(await verifySelectionCredential(base, async () => { throw new Error("no request without a selection token"); }), false);
+  const selection = { ...base, LANCERLOGIN_MODULE_SELECTION_TOKEN: "synthetic-selection", MODULE_SELECTION_TOKEN_EXPIRES_AT: new Date(Date.now() + 86_400_000).toISOString() };
+  const calls = [];
+  assert.equal(await verifySelectionCredential(selection, async (url, init) => { calls.push({ url, init }); return Response.json({ private: true }); }), true);
+  assert.deepEqual(calls.map((call) => call.url), ["https://api.github.com/repos/example/private-install", "https://api.github.com/repos/example/private-install/contents/?ref=main"]);
+  assert.equal(calls.every((call) => call.init.headers.authorization === "Bearer synthetic-selection" && call.init.redirect === "error" && !call.init.method), true);
+  await assert.rejects(verifySelectionCredential({ ...selection, LANCERLOGIN_MODULE_SELECTION_TOKEN: "synthetic-dispatch" }, async () => Response.json({ private: true })), /selection_credential_must_be_distinct/);
+  await assert.rejects(verifySelectionCredential({ ...selection, MODULE_SELECTION_TOKEN_EXPIRES_AT: "2020-01-01" }, async () => Response.json({ private: true })), /selection_credential_expiry_required/);
+  await assert.rejects(verifySelectionCredential(selection, async (url) => url.includes("/contents/") ? new Response(null, { status: 403 }) : Response.json({ private: true })), /selection_credential_access_denied/);
+  await assert.rejects(verifySelectionCredential(selection, async () => Response.json({ private: false })), /private_repository_required/);
+  for (const name of ["provision-template", "refresh-web-update-credential"]) {
+    const workflow = await readFile(`.github/workflows/${name}.yml`, "utf8");
+    assert.match(workflow, /LANCERLOGIN_MODULE_SELECTION_TOKEN: \$\{\{ secrets\.LANCERLOGIN_MODULE_SELECTION_TOKEN \}\}/);
+    assert.match(workflow, /MODULE_SELECTION_TOKEN_EXPIRES_AT: \$\{\{ vars\.MODULE_SELECTION_TOKEN_EXPIRES_AT \}\}/);
+  }
+  assert.doesNotMatch(await readFile(".github/workflows/upgrade-web.yml", "utf8"), /MODULE_SELECTION_TOKEN/, "the upgrade workflow never receives the selection credential");
 });

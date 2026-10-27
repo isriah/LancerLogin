@@ -1,23 +1,32 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { officialPluginSource, officialPluginUnavailable } from "./fixtures/official-plugin-source.mjs";
 
-test("Outreach dashboard exposes the agreed everyday workflow", async () => {
-  const [shell, workspace, setup, clock, publicForm, publication, styles, browserFixture, uiStandards, moduleNavigation, settings, participation] = await Promise.all([
+// Outreach is the official plugin; its sources are read at the commit Core pins in scripts/official-modules.json.
+const plugin = officialPluginSource("hour-tracking", [
+  "src/manifest.ts", "src/dashboard.tsx", "src/outreach.css",
+  ...["outreach-workspace.tsx", "outreach-setup-workspace.tsx", "outreach-clock.tsx", "public-outreach-form.tsx", "outreach-activity-publication.tsx", "outreach-settings.tsx", "outreach-participation.ts"].map((file) => `src/dashboard/${file}`),
+  ...["outreach-catalogs.ts", "outreach-entries.ts", "outreach-public.ts"].map((file) => `src/api/${file}`),
+]);
+const skip = plugin ? false : officialPluginUnavailable("hour-tracking");
+
+test("Outreach dashboard exposes the agreed everyday workflow", { skip }, async () => {
+  const [shell, styles, browserFixture, uiStandards, moduleNavigation] = await Promise.all([
     readFile("apps/dashboard/src/app-shell.tsx", "utf8"),
-    readFile("apps/dashboard/src/outreach-workspace.tsx", "utf8"),
-    readFile("apps/dashboard/src/outreach-setup-workspace.tsx", "utf8"),
-    readFile("apps/dashboard/src/outreach-clock.tsx", "utf8"),
-    readFile("apps/dashboard/src/public-outreach-form.tsx", "utf8"),
-    readFile("apps/dashboard/src/outreach-activity-publication.tsx", "utf8"),
     readFile("apps/dashboard/src/styles.css", "utf8"),
     readFile("tests/fixtures/dashboard-preview-server.mjs", "utf8"),
     readFile("docs/UI-STANDARDS.md", "utf8"),
     readFile("apps/dashboard/src/settings-module-navigation.tsx", "utf8"),
-    readFile("apps/dashboard/src/outreach-settings.tsx", "utf8"),
-    readFile("apps/dashboard/src/outreach-participation.ts", "utf8"),
   ]);
-  assert.match(shell, /\["\/hours", "Outreach"\]/);
+  const dashboard = (file) => plugin[`src/dashboard/${file}`];
+  const [workspace, setup, clock, publicForm, publication, settings, participation] = ["outreach-workspace.tsx", "outreach-setup-workspace.tsx", "outreach-clock.tsx", "public-outreach-form.tsx", "outreach-activity-publication.tsx", "outreach-settings.tsx", "outreach-participation.ts"].map(dashboard);
+  const outreachModule = plugin["src/dashboard.tsx"]; const registry = plugin["src/manifest.ts"]; const outreachStyles = plugin["src/outreach.css"];
+  // Outreach rules moved with the plugin and sit beneath its module root.
+  const scope = ':where\\(\\[data-module="hour-tracking"\\]\\) ';
+  assert.match(registry, /navigation: \[\{ label: "Outreach", path: "\/hours" \}\]/);
+  assert.match(shell, /readyModules\.flatMap\(\(\{ manifest \}\) => manifest\.navigation\.map\(\(item\) => \[item\.path, item\.label\]\)\)/);
+  assert.match(outreachModule, /moduleId: "hour-tracking"/);
   assert.match(workspace, /Create Outreach activity/);
   assert.match(workspace, /Activity view/);
   assert.match(workspace, /Activity calendar/);
@@ -35,10 +44,12 @@ test("Outreach dashboard exposes the agreed everyday workflow", async () => {
   assert.match(workspace, /\/admin\/hours\/labels/);
   assert.doesNotMatch(workspace, /item === "labels" \? "Labels"|tab === "labels"/);
   assert.doesNotMatch(workspace, /item === "settings" \? "Settings"|<OutreachSettings/);
-  assert.match(moduleNavigation, /outreachReady \? \[\{ id: "outreach", label: "Outreach", href: "\/settings\/outreach-setup"/);
-  assert.match(shell, /<SettingsModuleNavigation[^>]*outreachReady=\{outreachReady\}/);
-  assert.match(shell, /onOpenActivity=\{\(id\) => navigate\(`/);
-  assert.match(shell, /outreachReady && path === "\/settings\/outreach-setup"\) page = <OutreachSetupSettings isAdmin=\{role === "admin"\}/);
+  assert.match(registry, /settings: \[\{ label: "Outreach", path: "\/settings\/outreach-setup" \}\]/);
+  assert.match(moduleNavigation, /\.\.\.contributed,/);
+  assert.match(shell, /<SettingsModuleNavigation[^>]*modules=\{moduleSettings\}/);
+  assert.match(shell, /const moduleSettings = readyModules\.flatMap\(\(\{ manifest, contribution \}\) => manifest\.settings\.map/);
+  assert.match(outreachModule, /onOpenActivity=\{\(id\) => navigate\(`/);
+  assert.match(outreachModule, /\{ path: "\/settings\/outreach-setup", operator: true, render: \(\{ role, openSetup \}\) => <OutreachSetupSettings isAdmin=\{role === "admin"\} onOpenSetup=\{role === "admin" \? openSetup : undefined\} \/> \}/);
   assert.match(workspace, /Settings &gt; Outreach/);
   assert.match(workspace, /openCorrections\.length > 0/);
   assert.doesNotMatch(workspace, /Manage labels/);
@@ -65,9 +76,10 @@ test("Outreach dashboard exposes the agreed everyday workflow", async () => {
   assert.match(publication, /Off by default/);
   assert.doesNotMatch(publication, /draft|approve/i);
   assert.match(styles, /input\.ui-checkbox \{[^}]*width: 1\.25rem;[^}]*height: 1\.25rem;/s);
-  assert.match(styles, /\.outreach-workspace label:not\(\.checkbox-field\),\.outreach-stack label:not\(\.checkbox-field\) \{[^}]*margin: 0;/s);
-  assert.match(styles, /\.outreach-stack label\.settings-checkbox \{[^}]*display: flex;/s);
-  assert.match(styles, /\.outreach-activity-visibility > summary \{[^}]*background: var\(--ui-surface-subtle\);/s);
+  assert.match(outreachStyles, new RegExp(`${scope}\\.outreach-workspace label:not\\(\\.checkbox-field\\),${scope}\\.outreach-stack label:not\\(\\.checkbox-field\\) \\{[^}]*margin: 0;`, "s"));
+  assert.match(outreachStyles, new RegExp(`${scope}\\.outreach-stack label\\.settings-checkbox \\{[^}]*display: flex;`, "s"));
+  assert.match(outreachStyles, new RegExp(`${scope}\\.outreach-activity-visibility > summary \\{[^}]*background: var\\(--ui-surface-subtle\\);`, "s"));
+  assert.doesNotMatch(styles, /\.outreach-/);
   assert.match(uiStandards, /Collection-management pages show the collection first/);
   assert.match(setup, /Set up Outreach/);
   assert.doesNotMatch(setup, /reuse|Attendance details can be copied|integrations/i);
@@ -93,18 +105,17 @@ test("Outreach dashboard exposes the agreed everyday workflow", async () => {
   assert.match(clock, /ui-button outreach-clock-option/);
   assert.doesNotMatch(setup, /historicalDescriptors/);
   assert.doesNotMatch(publicForm, /Participation category|Service date \(optional\)|receipt reference \(optional\)/);
-  assert.match(browserFixture, /path === "\/reports\/catalog" \? \{[^\n]*outreachLabels: \[\]/);
+  assert.match(browserFixture, /path === "\/reports\/catalog" \? \{[^\n]*reportFilters: \[\]/);
   for (const removed of ["responsibleStaff", "partnerTeam", "planningTime", "endNextDay"]) assert.doesNotMatch(workspace, new RegExp(removed, "i"));
 });
 
-test("Outreach server keeps simplified ownership and accounting boundaries", async () => {
-  const [catalogs, entries, migration, memberMigration, publicRoute] = await Promise.all([
-    readFile("apps/api/src/outreach-catalogs.ts", "utf8"),
-    readFile("apps/api/src/outreach-entries.ts", "utf8"),
+test("Outreach server keeps simplified ownership and accounting boundaries", { skip }, async () => {
+  // Outreach's historical tables stay in Core's migration sequence; the plugin adopts them.
+  const [migration, memberMigration] = await Promise.all([
     readFile("apps/api/migrations/0042_outreach_participation.sql", "utf8"),
     readFile("apps/api/migrations/0043_outreach_member_participation.sql", "utf8"),
-    readFile("apps/api/src/outreach-public.ts", "utf8"),
   ]);
+  const [catalogs, entries, publicRoute] = ["outreach-catalogs.ts", "outreach-entries.ts", "outreach-public.ts"].map((file) => plugin[`src/api/${file}`]);
   assert.match(catalogs, /a\.mode='team'/);
   assert.doesNotMatch(catalogs, /created from member submissions/);
   assert.match(entries, /staffReason/);

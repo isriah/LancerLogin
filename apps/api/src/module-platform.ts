@@ -1,16 +1,15 @@
 import { bundledModuleRegistry, type ModuleLifecyclePhase, type ModulePlatformSnapshot } from "../../../packages/shared/src/module-platform.ts";
-import { attendanceSetupPredicates, attendanceSetupStepValid } from "./attendance-module-setup.ts";
-import { outreachSetupPredicates, outreachSetupStepValid } from "./outreach-module-setup.ts";
-import { carpoolSetupPredicates, carpoolSetupStepValid } from "./carpool-module-setup.ts";
 import { HttpError } from "./http-error.ts";
 import type { D1Database } from "./d1-usage.ts";
+import { installedApiModule } from "./installed-api-modules.ts";
+import { readRemovedModuleDefinitions } from "./module-catalog.ts";
 
 type ModuleDatabase = D1Database;
-const moduleSetupBindings = Object.freeze({
-  attendance: { predicates: attendanceSetupPredicates, stepValid: attendanceSetupStepValid },
-  "hour-tracking": { predicates: outreachSetupPredicates, stepValid: outreachSetupStepValid },
-  carpool: { predicates: carpoolSetupPredicates, stepValid: carpoolSetupStepValid },
-} satisfies Record<string, { predicates: Readonly<Record<string, (installationId: string) => { sql: string; bindings: readonly unknown[] }>>; stepValid: (db: D1Database, stepId: string) => Promise<boolean> }>);
+
+/** An installed module has no lifecycle row yet; reconcile installed modules and read again. */
+export class ModuleRegistrationIncomplete extends HttpError {
+  constructor() { super(409, "Module registration is incomplete; reload to continue"); }
+}
 type ModuleStateRow = {
   role: "admin" | "operator";
   revision: number;
@@ -64,15 +63,23 @@ function moduleRows(db: ModuleDatabase, userId: string) {
     ORDER BY m.module_id`).bind(installationId, userId).all<ModuleStateRow>();
 }
 
-export async function readModulePlatformSnapshot(db: ModuleDatabase, userId: string): Promise<ModulePlatformSnapshot> {
+/** `unregistered` decides how an installed module without a lifecycle row is handled: fail, leave it out, or show it as setup incomplete. */
+export async function readModulePlatformSnapshot(db: ModuleDatabase, userId: string, options: { unregistered?: "error" | "omit" | "show" } = {}): Promise<ModulePlatformSnapshot> {
   const rows = (await moduleRows(db, userId)).results ?? [];
   if (!rows.length) throw new HttpError(409, "Module registration is unavailable");
   const first = rows[0]!;
   if (!integer(first.revision) || first.revision !== first.administrationEpoch) throw new HttpError(409, "Module configuration requires recovery reconciliation");
   const byId = new Map(rows.map((row) => [row.moduleId, row]));
-  const modules = bundledModuleRegistry.modules.filter((module) => module.available).map((module) => {
+  const modules = bundledModuleRegistry.modules.filter((module) => module.available).flatMap((module): ModulePlatformSnapshot["modules"][number][] => {
     const row = byId.get(module.id);
-    if (!row || !integer(row.generation, 1) || row.generation !== row.moduleEpoch || row.contractVersion !== module.contractVersion || row.setupVersion !== module.setup.version) throw new HttpError(409, "Module lifecycle requires recovery reconciliation");
+    if (!row && (options.unregistered ?? "error") === "error") throw new ModuleRegistrationIncomplete();
+    if (!row) return options.unregistered === "show" ? [{
+      id: module.id, label: module.label, description: module.description, contractVersion: module.contractVersion, enabled: false, phase: "disabled", generation: 0,
+      dependencies: module.dependencies, permissions: [], effectiveCapabilities: [], workspaceReady: false, navigation: [], settings: [], setup: { ...module.setup, ready: false },
+      deletion: { disabledAt: null, deleteAfter: null, contentStillPresent: false, cleanupFailure: "Database setup for this module has not completed. LancerLogin retries automatically.", data: module.deletedData },
+      unavailable: "setup-incomplete",
+    }] : [];
+    if (!integer(row.generation, 1) || row.generation !== row.moduleEpoch || row.contractVersion !== module.contractVersion || row.setupVersion !== module.setup.version) throw new HttpError(409, "Module lifecycle requires recovery reconciliation");
     const assigned = parseCapabilities(row.capabilitiesJson);
     const assignmentValid = row.assignmentRevision !== null && row.assignmentRevision === row.assignmentEpoch;
     if (row.role === "operator" && !assignmentValid) throw new HttpError(409, "Module assignments require recovery reconciliation");
@@ -81,7 +88,7 @@ export async function readModulePlatformSnapshot(db: ModuleDatabase, userId: str
     const retaining = row.phase === "retained" || row.phase === "deleting";
     if (retaining && (!row.disabledAt || !row.deleteAfter || Date.parse(row.deleteAfter) - Date.parse(row.disabledAt) !== 7 * 24 * 60 * 60 * 1000)) throw new HttpError(409, "Module retention requires recovery reconciliation");
     if (!retaining && (row.disabledAt !== null || row.deleteAfter !== null)) throw new HttpError(409, "Module retention requires recovery reconciliation");
-    return {
+    return [{
       id: module.id,
       label: module.label,
       description: module.description,
@@ -97,35 +104,55 @@ export async function readModulePlatformSnapshot(db: ModuleDatabase, userId: str
       settings: module.settings,
       setup: { ...module.setup, ready: row.setupComplete === 1 },
       deletion: { disabledAt: row.disabledAt, deleteAfter: row.deleteAfter, contentStillPresent: retaining, cleanupFailure: row.cleanupFailure, data: module.deletedData },
-    };
+    }];
   });
-  return { revision: first.revision, selectionCompleted: first.selectionCompleted === 1, capabilities: modules.flatMap((module) => module.effectiveCapabilities), modules };
+  const removedRows = rows.filter((row) => !bundledModuleRegistry.get(row.moduleId) && ["enabled", "retained", "deleting"].includes(row.phase));
+  const removedDefinitions = removedRows.length ? await readRemovedModuleDefinitions(db, removedRows.map((row) => row.moduleId)) : new Map();
+  // A removed module whose definition the catalog has not recorded yet (such as a module that moved into a plugin before the
+  // catalog existed) asks the caller to reconcile first, so its retained data is listed instead of silently left out.
+  if ((options.unregistered ?? "error") === "error" && removedRows.some((row) => !removedDefinitions.has(row.moduleId))) throw new ModuleRegistrationIncomplete();
+  const unavailable = removedRows.flatMap((row): ModulePlatformSnapshot["modules"][number][] => {
+    const definition = removedDefinitions.get(row.moduleId); if (!definition) return [];
+    const retaining = row.phase === "retained" || row.phase === "deleting";
+    if (!integer(row.generation, 1) || row.generation !== row.moduleEpoch || retaining !== Boolean(row.disabledAt && row.deleteAfter)) throw new HttpError(409, "Module lifecycle requires recovery reconciliation");
+    return [{
+      id: row.moduleId, label: definition.label, description: definition.description, contractVersion: row.contractVersion, enabled: row.phase === "enabled", phase: row.phase, generation: row.generation,
+      dependencies: definition.dependencies, permissions: [], effectiveCapabilities: [], workspaceReady: false, navigation: [], settings: [],
+      setup: { version: row.setupVersion, steps: [], ready: row.setupComplete === 1 },
+      deletion: { disabledAt: row.disabledAt, deleteAfter: row.deleteAfter, contentStillPresent: retaining, cleanupFailure: row.cleanupFailure, data: definition.deletedData },
+      unavailable: "removed",
+    }];
+  });
+  return { revision: first.revision, selectionCompleted: first.selectionCompleted === 1, capabilities: modules.flatMap((module) => module.effectiveCapabilities), modules: [...modules, ...unavailable] };
 }
 
 type ModuleConfiguration = { enabled: string[]; revision: number; confirmDisable: { moduleId: string; generation: number }[] };
-export function validateModuleConfiguration(value: unknown): ModuleConfiguration {
+/** `keepEnabled` names enabled modules whose code was removed: they may stay enabled but can never be newly enabled. */
+export function validateModuleConfiguration(value: unknown, keepEnabled: readonly string[] = []): ModuleConfiguration {
   if (!object(value) || Object.keys(value).some((key) => !["enabled", "revision", "confirmDisable"].includes(key)) || !Array.isArray(value.enabled) || value.enabled.some((item) => typeof item !== "string") || !integer(value.revision) || value.confirmDisable !== undefined && !Array.isArray(value.confirmDisable)) throw new HttpError(400, "Provide selected modules and the current configuration revision");
-  try { bundledModuleRegistry.validateSelection(value.enabled as string[]); } catch { throw new HttpError(400, "Select available modules and all required dependencies"); }
+  try { bundledModuleRegistry.validateSelection((value.enabled as string[]).filter((moduleId) => !keepEnabled.includes(moduleId))); } catch { throw new HttpError(400, "Select available modules and all required dependencies"); }
   const confirmations = value.confirmDisable ?? [];
   if (confirmations.some((item) => !object(item) || Object.keys(item).some((key) => !["moduleId", "generation"].includes(key)) || typeof item.moduleId !== "string" || !integer(item.generation, 1)) || new Set(confirmations.map((item) => item.moduleId)).size !== confirmations.length) throw new HttpError(400, "Provide current module generations for disable confirmation");
   return { enabled: [...value.enabled] as string[], revision: Number(value.revision), confirmDisable: confirmations as ModuleConfiguration["confirmDisable"] };
 }
 
 export async function configureModulePlatform(db: ModuleDatabase, actorUserId: string, value: unknown) {
-  const input = validateModuleConfiguration(value);
-  const current = await readModulePlatformSnapshot(db, actorUserId);
+  const current = await readModulePlatformSnapshot(db, actorUserId, { unregistered: "omit" });
+  const input = validateModuleConfiguration(value, current.modules.filter((module) => module.unavailable && module.enabled).map((module) => module.id));
+  if (input.enabled.some((moduleId) => !current.modules.some((module) => module.id === moduleId))) throw new HttpError(409, "A selected module is still being set up. Reload and try again.");
   if (current.revision !== input.revision) throw new HttpError(409, "Module configuration changed; reload before saving");
   const selected = new Set(input.enabled);
   const transitions = current.modules.map((module) => {
     const enable = selected.has(module.id);
     const disabling = module.enabled && !enable;
     const fresh = module.phase === "deleted" && enable;
+    const firstEnable = enable && (module.phase === "deleted" || module.phase === "disabled");
     if (module.phase === "deleting" && enable) throw new HttpError(409, `${module.label} deletion has started and must finish before fresh setup`);
     if (disabling && !input.confirmDisable.some((item) => item.moduleId === module.id && item.generation === module.generation)) throw new HttpError(409, `Review and confirm the current ${module.label} generation before disabling it`);
     const generation = disabling || fresh ? module.generation + 1 : module.generation;
     if (!integer(generation, 1)) throw new HttpError(409, "Module authority is exhausted");
     const phase: ModuleLifecyclePhase = enable ? "enabled" : disabling ? "retained" : module.phase;
-    return { module, enable, disabling, fresh, generation, phase };
+    return { module, enable, disabling, fresh, firstEnable, generation, phase };
   });
   const attendance = transitions.find((item) => item.module.id === "attendance")!;
   const disablingAttendance = attendance.disabling;
@@ -175,11 +202,7 @@ export async function configureModulePlatform(db: ModuleDatabase, actorUserId: s
         AND EXISTS(SELECT 1 FROM platform_modules m JOIN platform_module_epochs e ON e.installation_id=m.installation_id AND e.module_id=m.module_id AND e.generation=m.generation
           WHERE m.installation_id=kiosk_commands.installation_id AND m.module_id='attendance' AND m.generation=? AND m.phase='retained')`).bind(installationId, attendance.generation),
     ] : []),
-    ...transitions.filter((item) => item.module.id === "hour-tracking" && item.fresh).flatMap(() => [
-      db.prepare("INSERT OR IGNORE INTO hours_entry_settings(installation_id) VALUES(?)").bind(installationId),
-      ...[["event", "Event", "event"], ["team-support", "Team Support", "team"], ["other-service", "Other Service", "task"]].map(([id, name, mode]) =>
-        db.prepare("INSERT OR IGNORE INTO hours_categories(installation_id,id,name,mode,impact_default,created_at,updated_at) VALUES(?,?,?,?,1,?,?)").bind(installationId, id, name, mode, now, now)),
-    ]),
+    ...transitions.filter((item) => item.firstEnable).flatMap((item) => installedApiModule(item.module.id)?.freshEnable?.(db, { installationId, now }) ?? []),
     db.prepare(`INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,metadata_json,created_at)
       SELECT ?,?,?, 'modules.configured','platform_module',?,?,? WHERE EXISTS(SELECT 1 FROM platform_module_administration a JOIN platform_module_administration_epochs e ON e.installation_id=a.installation_id AND e.revision=a.revision WHERE a.installation_id=? AND a.revision=?)`)
       .bind(operationId, installationId, actorUserId, installationId, JSON.stringify({ enabled: input.enabled }), now, installationId, input.revision + 1),
@@ -187,7 +210,7 @@ export async function configureModulePlatform(db: ModuleDatabase, actorUserId: s
   const results = await db.batch(statements);
   const transitionResults = results.slice(2, 2 + transitions.length * 2);
   if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1 || transitionResults.some((result) => result.meta?.changes !== 1) || results.at(-1)?.meta?.changes !== 1) throw new HttpError(409, "Module configuration or Admin access changed; reload before saving");
-  return readModulePlatformSnapshot(db, actorUserId);
+  return readModulePlatformSnapshot(db, actorUserId, { unregistered: "show" });
 }
 
 export async function readModuleAssignments(db: ModuleDatabase, actorUserId: string, targetUserId: string) {
@@ -311,7 +334,7 @@ export async function readModuleSetup(db: ModuleDatabase, actorUserId: string, m
     FROM platform_module_setup_progress WHERE installation_id=? AND module_id=? ORDER BY completed_at,step_id`)
     .bind(installationId, moduleId).all<SetupProgressRow>()).results ?? [];
   const byStep = new Map(progress.filter((item) => item.setupVersion === module.setup.version).map((item) => [item.stepId, item]));
-  const stepValid = moduleSetupBindings[moduleId as keyof typeof moduleSetupBindings]?.stepValid;
+  const stepValid = installedApiModule(moduleId)?.setup.stepValid;
   if (!stepValid) throw new HttpError(500, "Module setup binding is unavailable");
   const steps = await Promise.all(module.setup.steps.map(async (step) => {
     const recorded = byStep.get(step.id); const valid = await stepValid(db, step.id);
@@ -334,7 +357,7 @@ export async function updateModuleSetup(db: ModuleDatabase, actorUserId: string,
   const step = module.setup.steps.find((item) => item.id === input.stepId);
   if (!step) throw new HttpError(400, "Unknown module setup step");
   if (step.required && input.outcome === "skipped") throw new HttpError(400, "Required module setup steps cannot be skipped");
-  const predicates = moduleSetupBindings[moduleId as keyof typeof moduleSetupBindings]?.predicates;
+  const predicates = installedApiModule(moduleId)?.setup.predicates;
   const predicateFactory = predicates?.[input.stepId];
   if (!predicateFactory) throw new HttpError(500, "Module setup binding is unavailable");
   const predicate = predicateFactory(installationId);

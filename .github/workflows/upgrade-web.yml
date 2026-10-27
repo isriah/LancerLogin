@@ -69,4 +69,8 @@ jobs:
         working-directory: lancerlogin-source
         run: npm ci --no-audit
       - name: Claim, checkpoint, upgrade and verify retained installation
+        env:
+          # The runner composes the release's official modules and this repository's lancerlogin.modules.json in preflight.
+          # Optional read-only token for private plugin repositories in lancerlogin.modules.json.
+          LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}
         run: node lancerlogin-source/scripts/run-web-upgrade.mjs

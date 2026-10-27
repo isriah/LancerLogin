@@ -7,14 +7,29 @@ const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.s
 
 function fail(): never { throw new Error("Module access could not be verified. Reload the workspace."); }
 
+/**
+ * A module the Worker reports as unavailable: plugin code that was removed while lifecycle or retained data remains, or an
+ * installed plugin whose database setup has not completed. It grants nothing, so only its lifecycle shape is checked; one
+ * unavailable plugin must never make the rest of the workspace unverifiable.
+ */
+function checkUnavailable(module: ModulePlatformSnapshot["modules"][number]) {
+  const definition = bundledModuleRegistry.get(module.id);
+  const kind = module.unavailable;
+  if (typeof module.id !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(module.id) || typeof module.label !== "string" || typeof module.description !== "string" || !integer(module.contractVersion, 1)) fail();
+  if (kind === "setup-incomplete" ? !definition?.available || module.phase !== "disabled" || module.generation !== 0 : kind !== "removed" || definition || !["enabled", "retained", "deleting"].includes(module.phase) || !integer(module.generation, 1)) fail();
+  if (typeof module.enabled !== "boolean" || module.enabled !== (module.phase === "enabled") || !strings(module.dependencies) || !equal(module.permissions, []) || !equal(module.effectiveCapabilities, []) || module.workspaceReady !== false || !equal(module.navigation, []) || !equal(module.settings, [])) fail();
+  if (!record(module.setup) || !record(module.deletion) || typeof module.deletion.contentStillPresent !== "boolean" || module.deletion.contentStillPresent !== ["retained", "deleting"].includes(module.phase) || !(module.deletion.cleanupFailure === null || typeof module.deletion.cleanupFailure === "string") || !Array.isArray(module.deletion.data)) fail();
+}
+
 export function readModuleSnapshot(value: unknown): ModulePlatformSnapshot {
   if (!record(value) || !integer(value.revision) || typeof value.selectionCompleted !== "boolean" || !strings(value.capabilities) || !Array.isArray(value.modules)) fail();
   const snapshot = value as unknown as ModulePlatformSnapshot;
   const expected = bundledModuleRegistry.modules.filter((module) => module.available);
-  if (snapshot.modules.length !== expected.length) fail();
   const seen = new Set<string>();
   const effective = new Set<string>();
   for (const module of snapshot.modules) {
+    if (!record(module) || seen.has(module.id)) fail();
+    if (module.unavailable !== undefined) { checkUnavailable(module); seen.add(module.id); continue; }
     const definition = bundledModuleRegistry.get(module.id);
     if (!definition?.available || seen.has(module.id) || module.label !== definition.label || module.description !== definition.description || module.contractVersion !== definition.contractVersion || !integer(module.generation, 1) || typeof module.enabled !== "boolean" || !["disabled", "enabled", "retained", "deleting", "deleted"].includes(module.phase) || module.enabled !== (module.phase === "enabled")) fail();
     seen.add(module.id);

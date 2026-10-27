@@ -1,20 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { RouteLink } from "./router";
 
-type ModuleNavigation = { id: string; label: string; href: string; paths?: string[] };
+export type ModuleSettingsNavigation = { readonly id: string; readonly label: string; readonly href: string; readonly paths?: readonly string[] };
 type Props = {
   currentPath: string;
   navigate: (path: string) => void;
   attendanceReady: boolean;
-  outreachReady: boolean;
-  carpoolReady: boolean;
+  /** Settings declared by ready contributed modules, in registry order. */
+  modules: readonly ModuleSettingsNavigation[];
 };
 
-export function SettingsModuleNavigation({ currentPath, navigate, attendanceReady, outreachReady, carpoolReady }: Props) {
-  const modules: ModuleNavigation[] = [
+export function SettingsModuleNavigation({ currentPath, navigate, attendanceReady, modules: contributed }: Props) {
+  const modules: ModuleSettingsNavigation[] = [
     ...(attendanceReady ? [{ id: "attendance", label: "Attendance", href: "/settings/attendance", paths: ["/settings/configuration", "/settings/guided-setup", "/settings/fingerprint-sharing", "/settings/fingerprint-recovery"] }] : []),
-    ...(outreachReady ? [{ id: "outreach", label: "Outreach", href: "/settings/outreach-setup" }] : []),
-    ...(carpoolReady ? [{ id: "carpool", label: "Carpool", href: "/settings/carpool" }] : []),
+    ...contributed,
   ];
   const activeModule = modules.find((module) => [module.href, ...(module.paths ?? [])].some((href) => currentPath === href || currentPath.startsWith(`${href}/`)))?.id;
   const [open, setOpen] = useState(false);

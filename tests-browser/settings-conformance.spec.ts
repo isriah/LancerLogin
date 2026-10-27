@@ -2,7 +2,9 @@ import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { expectDashboardTypography } from "./dashboard-typography";
 import { discovered } from "./release-discovery";
-import { attendanceSnapshot, carpoolSnapshot, outreachSnapshot } from "./module-fixtures";
+import { attendanceSnapshot, combinedSnapshot, outreachSnapshot } from "./module-fixtures";
+import { carpoolComposed, carpoolSnapshot } from "./carpool-fixtures";
+import { requireOutreachPlugin } from "./outreach-fixtures";
 import { pairedViews } from "./paired-views";
 
 const settings = {
@@ -154,9 +156,10 @@ test("Settings keeps navigation and user controls together and persists Debug mo
 });
 
 test("Settings uses one direct link per enabled module", async ({ page }) => {
+  requireOutreachPlugin();
   await useSettingsContext(page);
-  const snapshot = attendanceSnapshot(); snapshot.modules[1] = outreachSnapshot().modules[1]!; snapshot.modules[2] = carpoolSnapshot().modules[2]!;
-  snapshot.capabilities = snapshot.modules.flatMap(module => module.effectiveCapabilities);
+  // Every module in this build is enabled: Attendance, official Outreach and, when its plugin is composed, Carpool.
+  const snapshot = combinedSnapshot(attendanceSnapshot(), outreachSnapshot(), ...(carpoolComposed ? [carpoolSnapshot()] : []));
   await page.route("**/platform/modules", route => route.fulfill({ json: snapshot }));
   await page.goto("/settings/organization");
   const modules = page.getByRole("button", { name: "Modules", exact: true }); await openSettingsNavigation(page); await modules.click();
@@ -164,12 +167,12 @@ test("Settings uses one direct link per enabled module", async ({ page }) => {
   const attendance = menu.getByRole("link", { name: "Attendance", exact: true }); await expect(attendance).toHaveAttribute("href", "/settings/attendance");
   await expect(menu.getByRole("button")).toHaveCount(0);
   const outreach = menu.getByRole("link", { name: "Outreach", exact: true }); const carpool = menu.getByRole("link", { name: "Carpool", exact: true });
-  await expect(outreach).toHaveAttribute("href", "/settings/outreach-setup"); await expect(carpool).toHaveAttribute("href", "/settings/carpool");
+  await expect(outreach).toHaveAttribute("href", "/settings/outreach-setup"); if (carpoolComposed) await expect(carpool).toHaveAttribute("href", "/settings/carpool"); else await expect(carpool).toHaveCount(0);
   await attendance.focus(); await page.keyboard.press("Enter"); await expect(page).toHaveURL(/\/settings\/attendance$/);
   await expect(page.getByRole("navigation", { name: "Attendance settings sections" }).getByRole("link", { name: "Attendance rules" })).toHaveAttribute("aria-current", "page");
   await openSettingsNavigation(page); await modules.click();
   await expect(menu.getByRole("link", { name: "Kiosk Simulator" })).toHaveCount(0);
-  await expect(menu.getByRole("link")).toHaveCount(4); await expect(outreach).toBeVisible(); await expect(carpool).toBeVisible();
+  await expect(menu.getByRole("link")).toHaveCount(carpoolComposed ? 4 : 3); await expect(outreach).toBeVisible(); if (carpoolComposed) await expect(carpool).toBeVisible();
   await page.keyboard.press("Escape"); await expect(modules).toBeFocused();
 });
 
@@ -706,6 +709,37 @@ test("module switches retain draft save and disable review", async ({ page }) =>
   expect(writes).toEqual([]); await page.getByRole("button", { name: "Cancel", exact: true }).click(); expect(writes).toEqual([]);
 });
 
+test("module draft and disable review survive background refreshes until confirmed", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  let reads = 0; const writes: { enabled: string[]; revision: number; confirmDisable: { moduleId: string }[] }[] = [];
+  await page.route("**/platform/modules", route => { reads += 1; return route.fulfill({ json: attendanceSnapshot({ revision: 4 }) }); });
+  await page.route("**/admin/modules", route => { writes.push(route.request().postDataJSON()); return route.fulfill({ json: {} }); });
+  await page.goto("/settings/modules");
+  const attendance = page.getByRole("switch", { name: /^Attendance/ }); const review = page.getByRole("region", { name: "Confirm module disable" });
+  await expect(attendance).toBeChecked(); await attendance.uncheck();
+  await page.getByRole("button", { name: "Review module disable", exact: true }).click(); await expect(review).toBeFocused();
+  for (const _ of [1, 2]) { const before = reads; await page.evaluate(() => window.dispatchEvent(new Event("focus"))); await expect.poll(() => reads).toBeGreaterThan(before); }
+  await page.waitForTimeout(250);
+  await expect(attendance).not.toBeChecked(); await expect(review).toBeVisible(); expect(writes).toEqual([]);
+  await review.getByRole("button", { name: "Confirm disable", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]).toMatchObject({ revision: 4, confirmDisable: [{ moduleId: "attendance" }] }); expect(writes[0].enabled).not.toContain("attendance");
+});
+
+test("module draft resets with a notice when the server configuration changes", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  let snapshot = attendanceSnapshot({ revision: 4 }); const writes: unknown[] = [];
+  await page.route("**/platform/modules", route => route.fulfill({ json: snapshot }));
+  await page.route("**/admin/modules", route => { writes.push(route.request().postDataJSON()); return route.fulfill({ json: {} }); });
+  await page.goto("/settings/modules");
+  const attendance = page.getByRole("switch", { name: /^Attendance/ });
+  await expect(attendance).toBeChecked(); await attendance.uncheck();
+  await page.getByRole("button", { name: "Review module disable", exact: true }).click();
+  snapshot = attendanceSnapshot({ revision: 5 }); await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("alert").filter({ hasText: "Module settings changed elsewhere." })).toBeVisible();
+  await expect(attendance).toBeChecked(); await expect(page.getByRole("region", { name: "Confirm module disable" })).toBeHidden(); expect(writes).toEqual([]);
+});
+
 test("scheduler job disclosures retain complete timestamps and provider-delivery distinction", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
   await page.route("**/admin/preferences", route => route.fulfill({ json: { developerSchedulerEnabled: true, revision: 1 } }));
@@ -735,4 +769,65 @@ for (const theme of ["light", "dark"] as const) test(`Settings keeps approved co
     }
     await page.screenshot({ path: test.info().outputPath(`${path.split("/").pop()}-${theme}-320.png`), fullPage: true });
   }
+});
+
+const unavailablePlugin = { id: "synthetic-retired", label: "Retired Synthetic Plugin", status: "missing", requiredBackupVersion: 3, installedBackupVersion: null, requiredContractVersion: 1, installedContractVersion: null, source: "https://example.test/plugins/synthetic-retired-with-a-long-repository-name.git", commit: "a".repeat(40), rows: 2 };
+async function openInstallationRestore(page: Page) {
+  await page.goto("/settings/data");
+  const installation = page.locator(".data-category").filter({ has: page.getByRole("heading", { name: "Entire installation", exact: true }) });
+  await installation.getByText("Restore or delete data", { exact: true }).click();
+  await installation.getByRole("button", { name: "Restore file", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Restore Entire installation" });
+  await dialog.locator("input[type='file']").setInputFiles({ name: "installation.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ product: "LancerLogin", schemaVersion: 42 })) });
+  await dialog.getByRole("textbox").fill("RESTORE INSTALLATION");
+  await dialog.getByRole("button", { name: "Validate and restore", exact: true }).click();
+  return dialog;
+}
+
+for (const { viewport, theme } of pairedViews) {
+  test(`installation restore names unavailable plugin modules and requires an explicit discard at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+    await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+    await useSettingsContext(page);
+    const requests: { excludeModules?: string[] }[] = [];
+    await page.route("**/admin/data/restore", (route) => {
+      const body = route.request().postDataJSON() as { excludeModules?: string[] }; requests.push(body);
+      return body.excludeModules
+        ? route.fulfill({ json: { restored: true, scope: "installation", recovery: { revokedKiosks: 0, invalidatedPairingCodes: 0, pausedProviderOperations: 0 }, excludedModules: [{ id: unavailablePlugin.id, label: unavailablePlugin.label, status: "missing", backupVersion: 3, source: unavailablePlugin.source, commit: unavailablePlugin.commit, rows: 2 }] } })
+        : route.fulfill({ status: 409, json: { error: "This backup contains module data this installation cannot restore. Install the listed modules and retry, or confirm a restore that discards their data.", code: "module-restore-refused", reason: "unavailable-modules", modules: [unavailablePlugin], dependencies: [], optOut: { available: true, excludeModules: [unavailablePlugin.id] }, details: [] } });
+    });
+    const dialog = await openInstallationRestore(page);
+    const notice = dialog.getByRole("alert").filter({ hasText: "Retired Synthetic Plugin" });
+    await expect(notice).toContainText("not installed"); await expect(notice).toContainText("holds 2 records"); await expect(notice).toContainText(unavailablePlugin.commit);
+    await expect(dialog.getByRole("button", { name: "Validate and restore", exact: true })).toBeDisabled();
+    const discard = dialog.getByRole("checkbox", { name: "Discard 2 records from this module and restore everything else" });
+    await expect(discard).not.toBeChecked();
+    const label = await dialog.locator(".module-restore-refusal .checkbox-field").boundingBox(); expect(label!.height).toBeGreaterThanOrEqual(44);
+    const unchecked = await discard.evaluate((element) => { const style = getComputedStyle(element); return { appearance: style.appearance, width: style.width, height: style.height, radius: style.borderRadius, background: style.backgroundColor }; });
+    expect(unchecked.appearance).toBe("none"); expect(parseFloat(unchecked.width)).toBeGreaterThanOrEqual(20); expect(unchecked.width).toBe(unchecked.height); expect(unchecked.radius).not.toBe("0px"); expect(unchecked.background).not.toBe("rgba(0, 0, 0, 0)");
+    await expectResponsiveFit(page);
+    await discard.focus(); await page.keyboard.press("Space"); await expect(discard).toBeChecked();
+    const checked = await discard.evaluate((element) => { const probe = document.createElement("span"); probe.style.color = "var(--primary)"; element.parentElement!.append(probe); const primary = getComputedStyle(probe).color; probe.remove(); return { background: getComputedStyle(element).backgroundColor, primary }; });
+    expect(checked.background).toBe(checked.primary);
+    expect(requests.map((request) => request.excludeModules)).toEqual([undefined]);
+    await dialog.getByRole("button", { name: "Restore without these modules", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Discarded Retired Synthetic Plugin (2 records)." })).toBeVisible();
+    expect(requests.map((request) => request.excludeModules)).toEqual([undefined, [unavailablePlugin.id]]);
+  });
+}
+
+test("installation restore offers no discard while an included module depends on an unavailable one", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  const requests: unknown[] = [];
+  await page.route("**/admin/data/restore", (route) => { requests.push(route.request().postDataJSON()); return route.fulfill({ status: 409, json: { error: "This backup contains module data that cannot be discarded because restored modules depend on it. Install the listed modules and retry.", code: "module-restore-refused", reason: "excluded-module-dependency", modules: [{ ...unavailablePlugin, status: "newer", installedBackupVersion: 2, source: null, commit: null }], dependencies: [{ moduleId: "synthetic-addon", label: "Synthetic Add-on", dependsOn: unavailablePlugin.id }], optOut: { available: false, excludeModules: [unavailablePlugin.id] }, details: [] } }); });
+  const dialog = await openInstallationRestore(page);
+  const notice = dialog.getByRole("alert").filter({ hasText: "Retired Synthetic Plugin" });
+  await expect(notice).toContainText("installed version is older (module backup version 2)");
+  await expect(notice).toContainText("Synthetic Add-on depends on Retired Synthetic Plugin");
+  await expect(dialog.getByRole("checkbox")).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Validate and restore", exact: true })).toBeDisabled();
+  await dialog.locator("input[type='file']").setInputFiles({ name: "other.json", mimeType: "application/json", buffer: Buffer.from("{}") });
+  await expect(notice).toHaveCount(0); await expect(dialog.getByRole("button", { name: "Validate and restore", exact: true })).toBeEnabled();
+  expect(requests).toHaveLength(1);
+  await expectResponsiveFit(page);
 });

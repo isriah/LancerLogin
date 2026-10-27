@@ -68,7 +68,7 @@ async function useReferenceContext(page: Page,role: Role="admin",debugMode=false
     const from=new URL(route.request().url()).searchParams.get("from") ?? undefined;
     return route.fulfill({ json: referenceAttendanceReport(from) });
   });
-  await page.route("**/reports/catalog",(route) => route.fulfill({ json: { datasets: [attendanceDataset],columns: reportColumns,labels: [{ id: "mentor",name: "Mentor",active: 1 }],outreachLabels: [],baseline: null,timeZone: "UTC",defaultDefinition: defaultReportDefinition,role,attendanceAvailable: true } }));
+  await page.route("**/reports/catalog",(route) => route.fulfill({ json: { datasets: [attendanceDataset],columns: reportColumns,labels: [{ id: "mentor",name: "Mentor",active: 1 }],reportFilters: [],baseline: null,timeZone: "UTC",defaultDefinition: defaultReportDefinition,role,attendanceAvailable: true } }));
   await page.route("**/reports/views/*",async (route) => {
     const id=decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!); const report=savedReports.find((item) => item.id===id);
     if(!report) return route.fulfill({ status: 404,json: { error: "Report not found" } });

@@ -35,15 +35,17 @@ export async function verifyPassword(password: string, encoded: string): Promise
   return constantTimeEqual(actual, expected);
 }
 
-export type SessionPrincipal = { userId: string; role: "admin" | "operator"; expiresAt: number };
+/** authenticatedAt records when the user last proved their identity (sign-in or re-authentication); older sessions omit it. */
+export type SessionPrincipal = { userId: string; role: "admin" | "operator"; expiresAt: number; authenticatedAt?: number };
 
 export function createSessionCodec(secret: string, now = () => Date.now()) {
   const keyBytes = decodeBase64Url(secret);
   if (keyBytes.length < 32) throw new Error("SESSION_KEY must contain at least 32 random bytes");
   const importKey = () => crypto.subtle.importKey("raw", asArrayBuffer(keyBytes), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
   return {
-    async issue(principal: Omit<SessionPrincipal, "expiresAt">, ttlMs = 8 * 60 * 60_000): Promise<string> {
-      const payload = encodeBase64Url(encoder.encode(JSON.stringify({ ...principal, expiresAt: now() + ttlMs })));
+    async issue(principal: Omit<SessionPrincipal, "expiresAt" | "authenticatedAt">, ttlMs = 8 * 60 * 60_000): Promise<string> {
+      const issuedAt = now();
+      const payload = encodeBase64Url(encoder.encode(JSON.stringify({ ...principal, expiresAt: issuedAt + ttlMs, authenticatedAt: issuedAt })));
       const signature = new Uint8Array(await crypto.subtle.sign("HMAC", await importKey(), encoder.encode(payload)));
       return `${payload}.${encodeBase64Url(signature)}`;
     },

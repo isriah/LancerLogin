@@ -5,11 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./civil-time": "./src/civil-time.ts",
-    "./carpool-state": "./src/carpool-state.ts",
-    "./carpool-groups": "./src/carpool-groups.ts",
-    "./carpool-schedule": "./src/carpool-schedule.ts",
-    "./carpool-share": "./src/carpool-share.ts"
+    "./civil-time": "./src/civil-time.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

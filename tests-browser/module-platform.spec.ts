@@ -34,7 +34,7 @@ test("Core-only home keeps roster and reports while hiding Attendance surfaces",
   ];
   const dataset = { id: "core.members", label: "Members", description: "Core roster identities and current label membership.", available: true, rowIdentity: "core.member.identity", capability: "core.roster", fields, filters: ["roster", "labels"], groupBy: ["core.member.identity"], defaultColumns: ["core.member.name", "core.member.id", "core.member.status", "core.member.labels"], defaultSort: { field: "core.member.name", direction: "asc" }, relationships: [] };
   const definition = { version: 2, dataset: "core.members", groupBy: ["core.member.identity"], period: { type: "all" }, roster: "active", meetingType: "all", labelIds: [], labelMatch: "any", membership: "current", columns: dataset.defaultColumns.map((key) => ({ key })), columnFilters: [], sort: { column: { key: "core.member.name" }, direction: "asc" } };
-  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets: [dataset], columns: fields.map((field) => ({ key: field.id, label: field.label, group: field.group, sortable: field.sortable, filterKind: field.valueType, datasets: [dataset.id] })), labels: [], outreachLabels: [], baseline: null, timeZone: "UTC", defaultDefinition: definition, role: "admin", attendanceAvailable: false } }));
+  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets: [dataset], columns: fields.map((field) => ({ key: field.id, label: field.label, group: field.group, sortable: field.sortable, filterKind: field.valueType, datasets: [dataset.id] })), labels: [], reportFilters: [], baseline: null, timeZone: "UTC", defaultDefinition: definition, role: "admin", attendanceAvailable: false } }));
   await page.goto("/dashboard");
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Roster", exact: true })).toBeVisible();
@@ -62,4 +62,26 @@ test("Admin assigns Attendance explicitly to an Operator", async ({ page }) => {
   await page.getByRole("button", { name: "Save assignments" }).click();
   await expect(page.getByText("Module assignments saved.")).toBeVisible();
   expect(assignments.capabilities).toEqual(["attendance.manage"]);
+});
+
+test("an unavailable plugin keeps the workspace usable and explains itself in Settings", async ({ page }) => {
+  const removed = { id: "retired-plugin", label: "Retired Plugin", description: "Code no longer installed", contractVersion: 1, enabled: true, phase: "enabled", generation: 2, dependencies: [], permissions: [], effectiveCapabilities: [], workspaceReady: false, navigation: [], settings: [], setup: { version: 1, steps: [], ready: true }, deletion: { disabledAt: null, deleteAfter: null, contentStillPresent: false, cleanupFailure: null, data: ["Retired records"] }, unavailable: "removed" };
+  let state: any = snapshot({ enabled: true, selected: true }); state.modules.push(removed);
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: state }));
+  await page.goto("/settings/modules");
+  await expect(page.getByRole("heading", { name: "Modules", exact: true })).toBeVisible();
+  await expect(page.getByText("Module access unavailable")).toHaveCount(0);
+  await expect(page.getByText("Code is no longer installed. Disable it to delete its retained data.")).toBeVisible();
+  await expect(page.getByRole("switch", { name: /Retired Plugin/ })).toBeChecked();
+
+  // An installed module whose database setup has not completed is reported as such, not as a cleanup problem.
+  state = snapshot({ enabled: false, selected: true });
+  const attendance = state.modules.find((module: any) => module.id === "attendance");
+  Object.assign(attendance, { enabled: false, phase: "disabled", generation: 0, permissions: [], effectiveCapabilities: [], workspaceReady: false, navigation: [], settings: [], unavailable: "setup-incomplete", setup: { ...attendance.setup, ready: false }, deletion: { ...attendance.deletion, cleanupFailure: "Database setup for this module has not completed. LancerLogin retries automatically." } });
+  state.capabilities = [];
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Modules", exact: true })).toBeVisible();
+  await expect(page.getByText("Database setup has not completed. LancerLogin retries automatically.")).toBeVisible();
+  await expect(page.getByText("Cleanup needs recovery attention and will retry.")).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: /Attendance/ })).toBeDisabled();
 });

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { prepareTestComposition, readTestSelection } from "./test-plugin-sources.mjs";
 
 const modes = new Set(["fast", "acceptance"]);
 const selectionKeys = ["javascript", "typescript", "browser", "typecheckWorkspaces", "buildWorkspaces"];
@@ -64,7 +65,9 @@ export function discoverModuleManifests(root = process.cwd()) {
     if (typeof value.module !== "string" || !/^[a-z0-9-]+$/.test(value.module) || name !== `${value.module}.json`) throw new Error(`Module test manifest ${name} has an invalid module identity.`);
     if (manifests.has(value.module)) throw new Error(`Duplicate module test manifest: ${value.module}.`);
     if (typeof value.label !== "string" || !value.label.trim()) throw new Error(`Module test manifest ${name} requires a label.`);
-    const manifest = { schemaVersion: 1, module: value.module, label: value.label, fast: validateSelection(root, value.module, "fast", value.fast), acceptance: validateSelection(root, value.module, "acceptance", value.acceptance) };
+    // A plugin module names a test selection file; its browser specs, typechecks and builds run with that plugin composed.
+    if (value.pluginSelection !== undefined && (typeof value.pluginSelection !== "string" || !/^tests\/fixtures\/[a-z0-9-]+\.modules\.json$/.test(value.pluginSelection) || !existsSync(join(root, value.pluginSelection)))) throw new Error(`Module test manifest ${name} has an invalid plugin selection.`);
+    const manifest = { schemaVersion: 1, module: value.module, label: value.label, ...(value.pluginSelection ? { pluginSelection: value.pluginSelection } : {}), fast: validateSelection(root, value.module, "fast", value.fast), acceptance: validateSelection(root, value.module, "acceptance", value.acceptance) };
     manifests.set(manifest.module, manifest);
   }
   return manifests;
@@ -72,7 +75,7 @@ export function discoverModuleManifests(root = process.cwd()) {
 
 function printSelection(manifest, mode) {
   const selection = manifest[mode];
-  console.log(`${manifest.module} - ${manifest.label} - ${mode}`);
+  console.log(`${manifest.module} - ${manifest.label} - ${mode}${manifest.pluginSelection ? ` (composed from ${manifest.pluginSelection})` : ""}`);
   for (const key of selectionKeys) {
     console.log(`  ${key}:`);
     for (const item of selection[key]) console.log(`    ${item}`);
@@ -80,9 +83,9 @@ function printSelection(manifest, mode) {
   }
 }
 
-function run(root, label, command, args) {
+function run(root, label, command, args, env = process.env) {
   console.log(`\n${label}`);
-  const result = spawnSync(command, args, { cwd: root, stdio: "inherit", shell: false });
+  const result = spawnSync(command, args, { cwd: root, stdio: "inherit", shell: false, env });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${label} failed${result.signal ? ` (${result.signal})` : ""}.`);
 }
@@ -109,9 +112,23 @@ export function runModuleTests({ root = process.cwd(), mode, moduleId, execute =
   if (!execute) return 0;
   if (selection.javascript.length) run(root, `${manifest.label} JavaScript tests`, process.execPath, ["--test", "--test-concurrency=2", ...selection.javascript]);
   if (selection.typescript.length) run(root, `${manifest.label} TypeScript tests`, process.execPath, ["--experimental-strip-types", "--test", "--test-concurrency=2", ...selection.typescript]);
-  if (selection.browser.length) run(root, `${manifest.label} browser tests`, process.execPath, [join(root, "scripts", "run-browser-tests.mjs"), ...selection.browser, `--workers=${process.env.CI ? 1 : 2}`]);
-  if (selection.typecheckWorkspaces.length) runNpm(root, `${manifest.label} typechecks`, ["run", "typecheck", ...selection.typecheckWorkspaces.flatMap((workspace) => ["--workspace", workspace])]);
-  if (selection.buildWorkspaces.length) runNpm(root, `${manifest.label} builds`, ["run", "build", ...selection.buildWorkspaces.flatMap((workspace) => ["--workspace", workspace])]);
+  const composeScript = [`--experimental-strip-types`, "--disable-warning=ExperimentalWarning", join(root, "scripts", "compose-modules.mjs")];
+  const composed = Boolean(manifest.pluginSelection) && (selection.browser.length + selection.typecheckWorkspaces.length + selection.buildWorkspaces.length) > 0;
+  if (composed) {
+    // Private https pins compose with LANCERLOGIN_PLUGIN_TOKEN or a local plugin checkout; a plugin repository's CI
+    // overrides the plugin under test with LANCERLOGIN_<NAME>_PLUGIN_SOURCE/COMMIT (see test-plugin-sources.mjs).
+    const { modules, officialModules } = readTestSelection(manifest.pluginSelection, root);
+    const prepared = prepareTestComposition({ modules, officialModules, root });
+    if (prepared.reason) throw new Error(`${manifest.label} cannot be composed: ${prepared.reason}`);
+    try { run(root, `Compose ${manifest.label} plugin`, process.execPath, [...composeScript, ...prepared.args], prepared.env); } finally { prepared.cleanup(); }
+  }
+  try {
+    if (selection.browser.length) run(root, `${manifest.label} browser tests`, process.execPath, [join(root, "scripts", "run-browser-tests.mjs"), ...selection.browser, `--workers=${process.env.CI ? 1 : 2}`]);
+    if (selection.typecheckWorkspaces.length) runNpm(root, `${manifest.label} typechecks`, ["run", "typecheck", ...selection.typecheckWorkspaces.flatMap((workspace) => ["--workspace", workspace])]);
+    if (selection.buildWorkspaces.length) runNpm(root, `${manifest.label} builds`, ["run", "build", ...selection.buildWorkspaces.flatMap((workspace) => ["--workspace", workspace])]);
+  } finally {
+    if (composed) run(root, "Restore plugin-free generated files", process.execPath, [...composeScript, "--restore"]);
+  }
   return 0;
 }
 

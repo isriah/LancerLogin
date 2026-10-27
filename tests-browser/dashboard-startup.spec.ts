@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { attendanceSnapshot } from "./module-fixtures";
+import { outreachComposed, outreachSkipReason } from "./outreach-fixtures";
 
 const delayedPaths = new Set(["/setup/status", "/auth/session", "/platform/modules", "/admin/members", "/labels", "/admin/attendance/members", "/reports/attendance", "/reports/catalog", "/reports/views", "/reports/leaderboard"]);
 
@@ -97,12 +98,16 @@ test("invalid module access fails closed and recovers on a fresh focus check", a
   await expect(page.getByRole("table", { name: "Roster members" })).toHaveCount(0);
 });
 
-test("public Outreach and first setup cannot consume preloaded protected access", async ({ page }) => {
+test("public Outreach cannot consume preloaded protected access", async ({ page }) => {
+  test.skip(!outreachComposed, outreachSkipReason);
   let protectedReads = 0;
   page.on("request", (request) => { if (["/auth/session", "/platform/modules", "/admin/members"].includes(new URL(request.url()).pathname)) protectedReads++; });
   await page.goto("/submit-hours");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   expect(protectedReads).toBe(0);
+});
+
+test("first setup cannot consume preloaded protected access", async ({ page }) => {
   await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
   await page.goto("/roster");
   await expect(page.getByRole("heading", { name: "Create your installation" })).toBeVisible();

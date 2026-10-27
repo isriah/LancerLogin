@@ -1,5 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { attendanceSnapshot, outreachSetupState, outreachSnapshot, type OutreachSetupState } from "./module-fixtures";
+import { attendanceSnapshot, combinedSnapshot, outreachSetupState, outreachSnapshot, type OutreachSetupState } from "./module-fixtures";
+import { requireOutreachPlugin } from "./outreach-fixtures";
+
+requireOutreachPlugin();
 
 type WorkspaceState = { activities: Record<string, unknown>[]; entries: Record<string, unknown>[]; countedMinutes: number; labels?: Record<string, unknown>[]; windows?: Record<string, unknown>[]; corrections?: Record<string, unknown>[]; publications?: Record<string, unknown>[] };
 
@@ -141,8 +144,8 @@ async function routeWorkspaceReads(page: Page, state: WorkspaceState) {
 for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) test(`Meetings and Outreach share the same operational browser geometry at ${viewport.width}`, async ({ page }) => {
   await page.setViewportSize(viewport);
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const attendance = attendanceSnapshot(); const outreach = outreachSnapshot();
-  await page.route("**/platform/modules", (route) => route.fulfill({ json: { revision: 0, selectionCompleted: true, capabilities: [...new Set([...attendance.capabilities, ...outreach.capabilities])], modules: [attendance.modules[0], outreach.modules[1], outreach.modules[2]] } }));
+  // Attendance and Outreach enabled; every other module in this build stays disabled.
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: combinedSnapshot(attendanceSnapshot(), outreachSnapshot()) }));
   await page.route("**/auth/walkthroughs/*", (route) => { const pageId = new URL(route.request().url()).pathname.split("/").at(-1); return route.fulfill({ json: { progress: { pageId, version: 1, status: "completed", stepId: null } } }); });
   await page.route(/\/meetings(?:\?.*)?$/, (route) => route.fulfill({ json: { meetings: [{ id: "meeting-1", title: "Community planning", startsAt: "2026-09-28T13:00:00.000Z", endsAt: "2026-09-28T14:00:00.000Z", attendanceClosesAt: "2026-09-28T15:00:00.000Z", required: 1, notes: "", audienceMode: "all", audienceLabelIds: [] }] } }));
   await routeWorkspaceReads(page, { activities: [{ id: "activity-1", mode: "event", labelIds: [], labels: [], serviceDate: "2026-09-28", teamId: null, title: "Community planning", description: "", location: "", impactRelevant: true, archived: false, revision: 0, eventStartLocal: "09:00", eventEndLocal: "10:00", eventStartOccurrence: null, eventEndOccurrence: null }], entries: [], countedMinutes: 0 });

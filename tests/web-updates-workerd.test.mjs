@@ -43,6 +43,7 @@ async function runtime({ redirectPath, redirectStatus = 302, statusRunId = "123"
     await database.exec((await readFile("apps/api/migrations/0029_web_updates.sql", "utf8")).replace(/^--.*$/gm, "").replaceAll("\n", " "));
     await database.exec("CREATE TABLE kiosk_commands(id TEXT, installation_id TEXT, command_type TEXT, completed_at TEXT, created_at TEXT, success INTEGER, resolution_status TEXT); CREATE TABLE kiosks(id TEXT)");
     await database.exec((await readFile("apps/api/migrations/0061_update_channels.sql", "utf8")).replace(/^--.*$/gm, "").replaceAll("\n", " "));
+    await database.exec((await readFile("apps/api/migrations/0080_plugin_selection_updates.sql", "utf8")).replace(/^--.*$/gm, "").replaceAll("\n", " "));
     const fetch = (path, body) => worker.dispatchFetch(`http://localhost${path}`, body ? { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {});
     const seed = async ({ state = "prepared", runId = null } = {}) => database.prepare("INSERT INTO web_update_requests (id, installation_id, release_tag, release_sha, release_notes, previous_version, state, created_at, expires_at, updated_at, backup_exported_at, started_at, run_id) VALUES (?, 'primary', 'v1.0.0', ?, '', '0.24.0', ?, ?, ?, ?, ?, ?, ?)").bind(requestId, sha, state, new Date().toISOString(), new Date(Date.now() + 3_600_000).toISOString(), new Date().toISOString(), new Date().toISOString(), state === "prepared" ? null : new Date().toISOString(), runId).run();
     return { worker, database, fetch, seed, calls };

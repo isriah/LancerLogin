@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseReleaseVersion, kioskReleaseTransition, compareReleaseVersions, completeOfficialRelease, newestOfficialRelease } from "../packages/shared/src/release-policy.mjs";
+import { parseReleaseVersion, kioskReleaseTransition, compareReleaseVersions, completeOfficialRelease, newestOfficialRelease, releaseAllowed, pluginReleaseKind, pluginTrackOffers, newestPluginRelease } from "../packages/shared/src/release-policy.mjs";
+import { githubRepository, resolveSelection } from "../scripts/resolve-plugin-releases.mjs";
 import { releasePublicationPolicy, assertLatestPromotion } from "../scripts/release-channel.mjs";
 import { validateMigrationPolicy } from "../scripts/run-web-upgrade.mjs";
 import { resolveKioskRelease } from "../apps/kiosk/src/resolve-kiosk-release.mjs";
@@ -31,6 +32,65 @@ test("tracks require matching release flags, complete assets and canonical tags"
   assert.doesNotThrow(() => assertLatestPromotion("v1.2.6", "v1.2.5"));
   assert.doesNotThrow(() => assertLatestPromotion("v2.0.0-beta.1", "v1.2.6"));
   for (const previous of ["v1.2.6", "v2.0.0", "v1.2.5-beta.1", "unknown"]) assert.throws(() => assertLatestPromotion("v1.2.6", previous), /latest_must_advance/);
+});
+test("nightly plugin builds sort below every beta of their base and are never offered to Stable or Beta", () => {
+  // Core release and update paths keep refusing nightly versions; only callers that opt in can parse them.
+  assert.equal(parseReleaseVersion("v2.0.1-nightly.20261026"), undefined);
+  assert.equal(compareReleaseVersions("2.0.1-nightly.20261026", "2.0.0"), undefined);
+  assert.equal(releaseAllowed("v2.0.1-nightly.20261026", "beta", true), false);
+  assert.deepEqual(parseReleaseVersion("v2.0.1-nightly.20261026", { nightly: true }), { parts: [2n, 0n, 1n], beta: undefined, nightly: 20261026n });
+  for (const value of ["v2.0.1-nightly.2026102", "v2.0.1-nightly.20260230", "v2.0.1-nightly.20261301", "v2.0.1-nightly.19991231", "v2.0.1-nightly.20261026.1", "v2.0.1-beta.1-nightly.20261026"]) assert.equal(parseReleaseVersion(value, { nightly: true }), undefined, value);
+  const options = { nightly: true };
+  for (const [a, b] of [["2.0.1-beta.0", "2.0.1-nightly.20991231"], ["2.0.1", "2.0.1-nightly.20261026"], ["2.0.1-nightly.20261026", "2.0.0"], ["2.0.1-nightly.20261027", "2.0.1-nightly.20261026"], ["2.0.1-nightly.20261026", "2.0.0-beta.9"]]) {
+    assert.equal(compareReleaseVersions(a, b, options), 1, `${a} > ${b}`); assert.equal(compareReleaseVersions(b, a, options), -1);
+  }
+  assert.equal(pluginReleaseKind("v1.0.0"), "stable"); assert.equal(pluginReleaseKind("v1.0.1-beta.2"), "beta"); assert.equal(pluginReleaseKind("v1.0.1-nightly.20261026"), "nightly"); assert.equal(pluginReleaseKind("1.0.0"), undefined);
+  assert.equal(pluginTrackOffers("stable", "v1.0.1-nightly.20261026", true), false);
+  assert.equal(pluginTrackOffers("beta", "v1.0.1-nightly.20261026", true), false);
+  assert.equal(pluginTrackOffers("nightly", "v1.0.1-nightly.20261026", true), true);
+  assert.equal(pluginTrackOffers("nightly", "v1.0.1-nightly.20261026", false), false, "a nightly must be a prerelease");
+  assert.equal(pluginTrackOffers("stable", "v1.0.1-beta.1", true), false); assert.equal(pluginTrackOffers("beta", "v1.0.1-beta.1", true), true);
+  assert.equal(pluginTrackOffers("stable", "v1.0.0", true), false, "a stable release must not be a prerelease");
+  const plugin = (tag, extra = {}) => ({ tag_name: tag, draft: false, prerelease: !/^v\d+\.\d+\.\d+$/.test(tag), immutable: true, ...extra });
+  const feed = [plugin("v1.0.0"), plugin("v1.0.1-beta.1"), plugin("v1.0.1-nightly.20261026"), plugin("v1.0.2-nightly.20261101"), plugin("v1.0.3", { immutable: false }), plugin("v1.0.4", { draft: true })];
+  assert.equal(newestPluginRelease(feed, "stable")?.tag_name, "v1.0.0");
+  assert.equal(newestPluginRelease(feed, "beta")?.tag_name, "v1.0.1-beta.1");
+  assert.equal(newestPluginRelease(feed, "nightly")?.tag_name, "v1.0.2-nightly.20261101");
+  assert.equal(newestPluginRelease([...feed, plugin("v1.0.2")], "nightly")?.tag_name, "v1.0.2", "a stable release outranks nightlies of its base");
+  assert.equal(newestPluginRelease(feed, "weekly"), undefined);
+});
+test("plugins:resolve pins the highest release on a track to its full commit and never stores a tag", () => {
+  assert.equal(githubRepository("https://github.com/isriah/lancerlogin-carpool.git"), "isriah/lancerlogin-carpool");
+  for (const value of ["https://gitlab.com/o/r.git", "https://github.com/o/r", "http://github.com/o/r.git", "https://token@github.com/o/r.git", "file:///tmp/r"]) assert.equal(githubRepository(value), undefined, value);
+  const releases = { "isriah/lancerlogin-carpool": [
+    { tag_name: "v1.0.0", draft: false, prerelease: false, immutable: true },
+    { tag_name: "v1.0.1-nightly.20261027", draft: false, prerelease: true, immutable: true },
+  ], "isriah/lancerlogin-outreach": [{ tag_name: "v1.0.0", draft: false, prerelease: false, immutable: true }] };
+  const commits = { "v1.0.0": "a".repeat(40), "v1.0.1-nightly.20261027": "b".repeat(40) };
+  const options = { listReleases: (repository) => releases[repository], resolveTag: (_repository, tag) => commits[tag] };
+  const selection = () => ({ format: 1, modules: [
+    { id: "carpool", source: "https://github.com/isriah/lancerlogin-carpool.git", commit: "0".repeat(40) },
+    { id: "hour-tracking", source: "https://github.com/isriah/lancerlogin-outreach.git", commit: "0".repeat(40) },
+  ] });
+  const stable = selection();
+  assert.deepEqual(resolveSelection(stable, { track: "stable", ...options }).map(({ id, tag, commit }) => [id, tag, commit]), [["carpool", "v1.0.0", "a".repeat(40)], ["hour-tracking", "v1.0.0", "a".repeat(40)]]);
+  assert.deepEqual(stable.modules.map((module) => Object.keys(module)), [["id", "source", "commit"], ["id", "source", "commit"]]);
+  const nightly = selection();
+  assert.deepEqual(resolveSelection(nightly, { track: "nightly", moduleId: "carpool", ...options }).map(({ tag, kind }) => [tag, kind]), [["v1.0.1-nightly.20261027", "nightly"]]);
+  assert.equal(nightly.modules[0].commit, "b".repeat(40)); assert.equal(nightly.modules[1].commit, "0".repeat(40), "only --module changes");
+  const untouched = selection();
+  assert.throws(() => resolveSelection(untouched, { track: "beta", ...options, listReleases: (repository) => repository.endsWith("outreach") ? [] : releases[repository] }), /no published, immutable release on the beta track/);
+  assert.equal(untouched.modules[0].commit, "0".repeat(40), "a failed resolution writes nothing");
+  assert.throws(() => resolveSelection(selection(), { track: "weekly", ...options }), /--track must be one of stable, beta, nightly/);
+  assert.throws(() => resolveSelection(selection(), { track: "stable", moduleId: "missing", ...options }), /no module missing/);
+  assert.throws(() => resolveSelection({ format: 1, modules: [{ id: "x", source: "file:///tmp/x", commit: "0".repeat(40) }] }, { track: "stable", ...options }), /cannot be resolved/);
+  // Without --track, each entry uses its own release track from the selection file (absent means stable).
+  const own = selection(); own.modules[0].track = "nightly";
+  assert.deepEqual(resolveSelection(own, options).map(({ id, track, tag }) => [id, track, tag]), [["carpool", "nightly", "v1.0.1-nightly.20261027"], ["hour-tracking", "stable", "v1.0.0"]]);
+  assert.equal(own.modules[0].track, "nightly", "the track is kept");
+  const unknown = selection(); unknown.modules[1].track = "beta";
+  assert.throws(() => resolveSelection(unknown, { track: "stable", ...options }), /Module hour-tracking track "beta" is not supported; use "stable" or "nightly"/);
+  assert.equal(unknown.modules[0].commit, "0".repeat(40));
 });
 test("reviewed independent bridge permits only the unchanged ordinary migration prefix", async () => {
   const files = [{ name: "0001_core.sql", content: "one" }, { name: "0040_module.sql", content: "two" }, { name: "0061_update_channels.sql", content: "three" }];

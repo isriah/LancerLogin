@@ -19,6 +19,28 @@ export async function verifyDispatchCredential(env, request = fetch) {
   if (workflow.state !== "active" || workflow.path !== ".github/workflows/upgrade-web.yml") throw new Error("reviewed_workflow_required");
   // GitHub read preflight cannot prove Actions write; the installer must grant that permission.
 }
+/**
+ * The optional plugin selection credential lets the Worker commit lancerlogin.modules.json for dashboard plugin management.
+ * It must be a separate fine-grained token (Contents write on only this private repository), never the dispatch token.
+ * Returns false when it is not configured; the dashboard then shows plugin management as unavailable.
+ */
+export async function verifySelectionCredential(env, request = fetch) {
+  if (!env.LANCERLOGIN_MODULE_SELECTION_TOKEN) return false;
+  const repo = env.LANCERLOGIN_UPDATE_REPOSITORY;
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo ?? "") || repo.toLowerCase() === "isriah/lancerlogin") throw new Error("private_repository_required");
+  if (!(Date.parse(env.MODULE_SELECTION_TOKEN_EXPIRES_AT ?? "") > Date.now())) throw new Error("selection_credential_expiry_required");
+  if (env.LANCERLOGIN_MODULE_SELECTION_TOKEN === env.LANCERLOGIN_WEB_UPDATE_TOKEN) throw new Error("selection_credential_must_be_distinct");
+  const headers = { authorization: `Bearer ${env.LANCERLOGIN_MODULE_SELECTION_TOKEN}`, accept: "application/vnd.github+json", "user-agent": "LancerLogin", "x-github-api-version": "2026-03-10" };
+  const get = async (path) => {
+    const response = await request(`https://api.github.com/repos/${repo}${path}`, { headers, redirect: "error", signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error("selection_credential_access_denied");
+    return response.json();
+  };
+  if ((await get("")).private !== true) throw new Error("private_repository_required");
+  await get("/contents/?ref=main");
+  // A read preflight cannot prove Contents write; the installer must grant that permission.
+  return true;
+}
 export async function verifyCredentialTarget(env, request = fetch) {
   if (!/^[a-z][a-z0-9-]{2,40}$/.test(env.INSTALLATION_SLUG ?? "") || !/^[0-9a-f-]{36}$/.test(env.DATABASE_ID ?? "") || !/^[0-9a-f]{32}$/.test(env.CLOUDFLARE_ACCOUNT_ID ?? "") || !env.CLOUDFLARE_API_TOKEN?.startsWith("cfat_")) throw new Error("fixed_account_resources_required");
   if (env.API_URL) {
@@ -39,11 +61,14 @@ export async function verifyCredentialTarget(env, request = fetch) {
 async function main() {
   if (process.env.REPOSITORY_PRIVATE !== "true" || !/^[a-z][a-z0-9-]{2,40}$/.test(process.env.INSTALLATION_SLUG ?? "")) throw new Error("private_installation_required");
   await verifyDispatchCredential(process.env);
+  const selection = await verifySelectionCredential(process.env);
   if (process.argv.includes("--verify-only")) return;
   const target = { ...process.env };
   if (process.env.WEB_UPDATE_CONFIG) target.DATABASE_ID = JSON.parse(await readFile(process.env.WEB_UPDATE_CONFIG, "utf8")).d1_databases?.find((binding) => binding.binding === "DB")?.database_id;
   await verifyCredentialTarget(target);
-  const secretDocument = JSON.stringify({ WEB_UPDATE_TOKEN: process.env.LANCERLOGIN_WEB_UPDATE_TOKEN, WEB_UPDATE_TOKEN_EXPIRES_AT: process.env.WEB_UPDATE_TOKEN_EXPIRES_AT });
+  // Without a configured selection credential, any previously uploaded one is retained unchanged.
+  const secretDocument = JSON.stringify({ WEB_UPDATE_TOKEN: process.env.LANCERLOGIN_WEB_UPDATE_TOKEN, WEB_UPDATE_TOKEN_EXPIRES_AT: process.env.WEB_UPDATE_TOKEN_EXPIRES_AT,
+    ...(selection ? { MODULE_SELECTION_TOKEN: process.env.LANCERLOGIN_MODULE_SELECTION_TOKEN, MODULE_SELECTION_TOKEN_EXPIRES_AT: process.env.MODULE_SELECTION_TOKEN_EXPIRES_AT } : {}) });
   await new Promise((done, reject) => {
     const child = spawn(process.execPath, [resolve("node_modules/wrangler/bin/wrangler.js"), "secret", "bulk", "--name", `${process.env.INSTALLATION_SLUG}-api`, ...(process.env.WEB_UPDATE_CONFIG ? ["--config", process.env.WEB_UPDATE_CONFIG] : [])], { shell: false, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, WRANGLER_SEND_METRICS: "false", WRANGLER_WRITE_LOGS: "false", WRANGLER_LOG_SANITIZE: "true" } });
     child.stdout.on("data", () => {}); child.stderr.on("data", () => {});
@@ -52,6 +77,6 @@ async function main() {
     child.on("exit", (code) => code === 0 ? done() : reject(new Error("credential_upload_failed")));
     child.stdin.end(secretDocument);
   });
-  console.log("Private dispatch credential and expiry refreshed. Data and installation encryption/session secrets retained.");
+  console.log(`Private dispatch credential${selection ? " and plugin selection credential" : ""} and expiry refreshed. Data and installation encryption/session secrets retained.`);
 }
-if (process.argv[1]?.endsWith("refresh-web-update-credential.mjs")) main().catch(() => { console.error("Credential refresh stopped. Check the private workflow, token scope, expiry and exact Worker through secure provider interfaces."); process.exitCode = 1; });
+if (process.argv[1]?.endsWith("refresh-web-update-credential.mjs")) main().catch(() => { console.error("Credential refresh stopped. Check the private workflow, both token scopes and expiries, and the exact Worker through secure provider interfaces."); process.exitCode = 1; });

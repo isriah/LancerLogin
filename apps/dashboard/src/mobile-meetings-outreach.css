@@ -6,13 +6,12 @@
 .app .compact-view-toggle label { position: relative; display: flex; align-items: center; justify-content: center; gap: var(--space-1); min-width: var(--control-min-block-size); min-height: var(--control-min-block-size); margin: 0; padding: var(--space-2); font-size: var(--text-small); }
 .app .compact-view-toggle input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; margin: 0; cursor: pointer; }
 .app .compact-view-toggle label:has(input:focus-visible) { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
-.app .compact-view-toggle svg,.app .compact-pencil svg,.app .outreach-activity-visibility svg { width: var(--space-5); height: var(--space-5); flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; }
+.app .compact-view-toggle svg,.app .compact-pencil svg { width: var(--space-5); height: var(--space-5); flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; }
 .app .compact-table-controls { grid-template-columns: minmax(0,1fr) auto; }
 .app .compact-month-calendar { overflow: visible; }
 .app .compact-month-calendar .calendar-heading { display: flex; flex-wrap: nowrap; align-items: center; flex-direction: row; justify-content: space-between; gap: var(--space-2); border-bottom: 0; }
 .app .compact-month-calendar .calendar-heading > button { flex: none; width: auto; margin: 0; min-height: var(--control-min-block-size); padding: var(--space-2) var(--space-3); white-space: nowrap; font-size: var(--text-small); }
 .app .compact-month-navigation { display: grid; grid-template-columns: var(--control-min-block-size) minmax(0,1fr) var(--control-min-block-size); align-items: center; gap: var(--space-2); padding: 0 var(--space-4) var(--space-4); position: relative; }
-.app .compact-month-navigation:has(.outreach-activity-visibility) { grid-template-columns: var(--control-min-block-size) minmax(0,1fr) var(--control-min-block-size) var(--control-min-block-size); }
 .app .compact-month-navigation > strong { text-align: center; font-family: var(--font-body); font-size: var(--text-body); }
 .app .compact-month-navigation > button { width: var(--control-min-block-size); min-height: var(--control-min-block-size); margin: 0; padding: var(--space-2); }
 .app .compact-month-calendar .calendar-grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); padding: 0 var(--space-2); gap: var(--space-1) 0; }
@@ -39,20 +38,7 @@
 .app .calendar-selected-record:last-child { border-bottom: 0; padding-bottom: 0; }
 .app .calendar-selected-record > p { margin: 0; color: var(--ui-text-muted); font-size: var(--text-small); }
 .app .calendar-selected-record > button { justify-self: start; margin: 0; }
-.app .outreach-activity-visibility > summary { display: flex; align-items: center; justify-content: center; min-width: var(--control-min-block-size); width: var(--control-min-block-size); padding: var(--space-1); gap: var(--space-1); }
-.app .outreach-activity-visibility > summary::after { content: none; }
-.app .outreach-activity-visibility > summary small { font-size: var(--text-caption); }
-.app .outreach-submission-disclosure { border-top: 1px solid var(--ui-border); margin-top: var(--space-4); padding-top: var(--space-2); }
-.app .outreach-submission-disclosure > summary { display: list-item; min-height: var(--control-min-block-size); padding: var(--space-3) 0; color: var(--ui-text); font-weight: 500; cursor: pointer; }
-.app .outreach-submission-disclosure .outreach-submission-log { margin-top: var(--space-3); }
-.app .compact-back-link { display: inline-flex; align-items: center; min-height: var(--control-min-block-size); width: fit-content; margin-bottom: 0; color: var(--ui-text); text-decoration: none; }
-.app .compact-back-link:hover { text-decoration: underline; }
-.app .compact-activity-heading { display: flex; align-items: flex-start; justify-content: space-between; }
-.app .compact-activity-heading > div:first-child { min-width: 0; }
-.app .compact-activity-heading h1 { overflow-wrap: anywhere; }
 .app button.compact-pencil { display: inline-flex; justify-content: center; align-items: center; width: var(--control-min-block-size); min-width: var(--control-min-block-size); height: var(--control-min-block-size); padding: var(--space-2); margin: 0; }
-.app .outreach-participation-action { margin: var(--space-3) 0; }
-.app .outreach-participation-action > button { width: 100%; }
 .app .meeting-more-actions { position: relative; }
 .app .meeting-more-actions > summary { display: flex; align-items: center; justify-content: center; min-height: var(--control-min-block-size); padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-control); color: var(--ui-text); background: var(--ui-surface-subtle); cursor: pointer; list-style: none; }
 .app .meeting-more-actions > summary::-webkit-details-marker { display: none; }
@@ -73,19 +59,18 @@
 .app :is(.meeting-create-dialog,.meeting-management-dialog) .dialog-heading > div { flex: 1; min-width: 0; }
 .app :is(.meeting-create-dialog,.meeting-management-dialog) .dialog-heading > button { flex: none; width: var(--control-min-block-size); min-height: var(--control-min-block-size); margin: 0; padding: var(--space-2); }
 .app :is(.meeting-create-dialog,.meeting-management-dialog) .dialog-actions { border-top: 1px solid var(--ui-border); padding-top: var(--space-4); gap: var(--space-2); }
-.app .outreach-activity-create-form .outreach-time-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
 @media (max-width: 760px) {
   .app .compact-table-controls { grid-template-columns: 1fr; }
   .app .compact-month-calendar .calendar-heading { padding: var(--space-4); }
   .app .compact-month-navigation { gap: var(--space-1); }
   .app .compact-month-navigation > strong { font-size: var(--text-small); }
   .app .calendar-selected-record > button { width: 100%; }
-  .app .meeting-detail-workspace:not(.outreach-detail-workspace) .meeting-detail-actions { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: var(--space-2); }
-  .app .meeting-detail-workspace:not(.outreach-detail-workspace) .meeting-summary { display: grid; grid-template-columns: 1fr; gap: 0; padding: var(--space-4); background: var(--ui-surface); }
-  .app .meeting-detail-workspace:not(.outreach-detail-workspace) .meeting-summary > div { display: grid; grid-template-columns: minmax(0,.7fr) minmax(0,1.3fr); gap: var(--space-3); padding: var(--space-2) 0; background: transparent; }
+  .app .meeting-detail-workspace:not([data-module] *) .meeting-detail-actions { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: var(--space-2); }
+  .app .meeting-detail-workspace:not([data-module] *) .meeting-summary { display: grid; grid-template-columns: 1fr; gap: 0; padding: var(--space-4); background: var(--ui-surface); }
+  .app .meeting-detail-workspace:not([data-module] *) .meeting-summary > div { display: grid; grid-template-columns: minmax(0,.7fr) minmax(0,1.3fr); gap: var(--space-3); padding: var(--space-2) 0; background: transparent; }
   .app .meeting-summary dt { margin: 0; font-size: var(--text-small); }
   .app .meeting-summary dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
-  .app .meeting-detail-workspace:not(.outreach-detail-workspace) .meeting-summary > .meeting-summary-notes { display: grid; grid-template-columns: 1fr; border-top: 1px solid var(--ui-border); margin-top: var(--space-2); padding-top: var(--space-3); }
+  .app .meeting-detail-workspace:not([data-module] *) .meeting-summary > .meeting-summary-notes { display: grid; grid-template-columns: 1fr; border-top: 1px solid var(--ui-border); margin-top: var(--space-2); padding-top: var(--space-3); }
   .app .meeting-summary > .meeting-summary-notes dd { text-align: left; white-space: pre-wrap; }
   .app .attendance-table .attendance-row:not(.header) { position: relative; padding: var(--space-4); }
   .app .attendance-correction-toggle { position: absolute; top: var(--space-4); right: var(--space-4); }
@@ -105,16 +90,12 @@
 .app .compact-calendar-today { display: flex; justify-content: center; margin-bottom: var(--space-3); }
 .app .compact-calendar-today button { min-height: var(--control-min-block-size); margin: 0; }
 @media (max-width: 760px) {
-  .app .outreach-activity-summary dl { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  .app .outreach-activity-summary .outreach-reporting-summary { grid-column: 1 / -1; }
-  .app .compact-activity-heading { flex-direction: row; }
-  .app .compact-activity-heading .meeting-detail-actions { display: flex; flex: none; }
   .app .attendance-table .attendance-row:not(.header) > [role="cell"]:first-child { padding-right: calc(var(--control-min-block-size) + var(--space-2)); min-height: var(--control-min-block-size); }
-  .app .meeting-directory:not(.outreach-activity-directory) .responsive-table td:first-child { position: relative; z-index: 1; align-self: start; }
-  .app .meeting-directory:not(.outreach-activity-directory) .responsive-table td.meeting-title-cell { grid-column: 1 / -1; grid-row: 1; }
-  .app .meeting-directory:not(.outreach-activity-directory) .meeting-title-cell > a { display: flex; align-items: center; min-height: var(--control-min-block-size); margin-left: calc(var(--control-min-block-size) + var(--space-3)); }
-  .app .meeting-directory:not(.outreach-activity-directory) .responsive-table td.meeting-notes-cell { display: block; grid-column: 1 / -1; color: var(--ui-text-muted); font-size: var(--text-small); white-space: pre-wrap; }
-  .app .meeting-directory:not(.outreach-activity-directory) .responsive-table td.meeting-empty-notes { display: none; }
+  .app .meeting-directory:not([data-module] *) .responsive-table td:first-child { position: relative; z-index: 1; align-self: start; }
+  .app .meeting-directory:not([data-module] *) .responsive-table td.meeting-title-cell { grid-column: 1 / -1; grid-row: 1; }
+  .app .meeting-directory:not([data-module] *) .meeting-title-cell > a { display: flex; align-items: center; min-height: var(--control-min-block-size); margin-left: calc(var(--control-min-block-size) + var(--space-3)); }
+  .app .meeting-directory:not([data-module] *) .responsive-table td.meeting-notes-cell { display: block; grid-column: 1 / -1; color: var(--ui-text-muted); font-size: var(--text-small); white-space: pre-wrap; }
+  .app .meeting-directory:not([data-module] *) .responsive-table td.meeting-empty-notes { display: none; }
 }
 @media (max-width: 360px) {
   .app .compact-view-toggle .meeting-view-label { display: none; }

@@ -1,4 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
+import { requireOutreachPlugin } from "./outreach-fixtures";
+
+requireOutreachPlugin();
 
 type Mode = "off" | "validity" | "name";
 const activity = { id: "event-1", title: "Synthetic community drive", serviceDate: "2026-09-28", location: "Library", reopened: false };

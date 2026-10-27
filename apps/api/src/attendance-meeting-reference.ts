@@ -9,7 +9,8 @@ export type MeetingReferenceAccess = {
   list(): Promise<MeetingReference[]>;
   find(id: string): Promise<MeetingReference | null>;
   read<T>(operation: (db: D1Database) => Promise<T>): Promise<T>;
-  withTarget<T>(id: string, operation: (db: D1Database) => Promise<T>): Promise<T>;
+  /** Run `operation` while the meeting stays available. `unavailableMessage` is the 400 error when it is not available now. */
+  withTarget<T>(id: string, operation: (db: D1Database) => Promise<T>, unavailableMessage?: string): Promise<T>;
 };
 
 function captureActiveTarget(db: D1Database, id: string): D1Database {
@@ -39,6 +40,6 @@ export async function createMeetingReferenceAccess(db: D1Database, actor: string
     list: async () => (await scoped.prepare(`${select} ORDER BY starts_at DESC,id`).all<MeetingReference>()).results ?? [],
     find,
     read: (operation) => operation(scoped),
-    async withTarget(id, operation) { if (!await find(id)) throw new HttpError(400, "Choose an available meeting from this installation or leave the Carpool unlinked."); return operation(captureActiveTarget(scoped, id)); },
+    async withTarget(id, operation, unavailableMessage = "Choose an available meeting from this installation or leave it unlinked.") { if (!await find(id)) throw new HttpError(400, unavailableMessage); return operation(captureActiveTarget(scoped, id)); },
   };
 }

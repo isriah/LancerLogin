@@ -61,7 +61,7 @@ test("upgrade guide links carry-over, web-first updates and restore authority bo
   assert.match(guide, /Update the web software first, then each kiosk/);
   assert.match(guide, /password hashes/);
   assert.match(guide, /pinned report tabs and walkthrough progress/);
-  assert.match(guide, /Outreach and Carpool start disabled/);
+  assert.match(guide, /Outreach starts disabled/);
   assert.match(guide, /intentionally revokes kiosk and pairing authority/);
   assert.match(guide, /Do not automatically roll back code, restore D1, restore an old queue/);
   for (const match of guide.matchAll(/\]\(([^)]+)\)/g)) {

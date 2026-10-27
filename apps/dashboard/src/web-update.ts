@@ -6,6 +6,8 @@ export type WebUpdateRequest = {
   stage: string; createdAt: string; expiresAt: string; updatedAt: string; backupExported: boolean;
   maintenance: boolean; errorCode: string | null; runUrl: string | null; reloadReady: boolean;
   channel?: "stable" | "beta";
+  /** release installs a newer official release; modules redeploys the installed release with changed plugins. */
+  mode?: "release" | "modules";
 };
 export type WebUpdateResponse = { releaseVersion: string; workflowUrl: string; request: WebUpdateRequest | null; activeRequest?: WebUpdateRequest | null; latestCompletedRequest?: WebUpdateRequest | null };
 
@@ -33,9 +35,23 @@ const errors: Record<string, string> = {
   run_mismatch: "The workflow run could not be matched safely. Ask your installation operator to inspect it; do not dispatch again.",
   dispatch_ambiguous: "GitHub's dispatch response was uncertain. LancerLogin is reconciling this request; do not start another update.",
   dispatch_unresolved: "No unique workflow run could be proved. Manual investigation is required; do not dispatch again.",
+  selection_credential_required: "Plugin changes need the plugin selection credential. Your installation operator must provision it securely.",
+  selection_credential_expired: "The plugin selection credential has expired. Your installation operator must renew it before plugins can change.",
+  selection_credential_permission: "The plugin selection credential cannot access the private deployment repository. Your installation operator must grant Contents access.",
+  selection_unavailable: "The plugin selection could not be read from the private deployment repository. Try again later.",
+  selection_invalid: "The plugin selection in the private deployment repository is invalid. Your installation operator must repair it.",
+  module_selection_changed: "The plugin selection changed after this update was prepared. Prepare it again and download its associated backup.",
+  module_selection_preflight: "The plugin selection deployed by this update did not match the prepared one, so nothing changed. Prepare it again.",
   superseded_by_later_release: "A later reviewed release repaired this installation. The earlier update remains in history and no longer blocks writes.",
 };
-export function webUpdateError(code?: string | null, fallback = "The web update could not be completed.") { return code ? errors[code] ?? fallback : fallback; }
+const migrationLabels: Record<string, string> = { carpool: "Carpool", "hour-tracking": "Outreach Participation" };
+export function webUpdateError(code?: string | null, fallback = "The web update could not be completed.") {
+  if (code?.startsWith("module_migration_required")) {
+    const names = code.split(":")[1]?.split(",").filter(Boolean).map((id) => migrationLabels[id] ?? id) ?? [];
+    return `${names.length ? names.join(" and ") : "A module"} ${names.length > 1 ? "are" : "is"} in use and now a separate plugin. Nothing changed. Keep it by adding its plugin, or disable it in Settings > Modules, then prepare the update again.`;
+  }
+  return code ? errors[code] ?? fallback : fallback;
+}
 export function webUpdateStatus(request: WebUpdateRequest) {
   const statuses: Record<WebUpdateRequest["state"], string> = {
     prepared: "Update prepared. Download the backup, then confirm that you saved the file.",
@@ -49,7 +65,12 @@ export function webUpdateStatus(request: WebUpdateRequest) {
     recovery_required: "Recovery required. Do not start another update. Your installation operator must inspect and repair the installation with explicit recovery authorization.",
     expired: "This prepared update expired. Prepare a new update and download its associated backup.",
   };
-  return `Update to ${request.targetTag}. ${statuses[request.state]}${request.errorCode ? ` ${webUpdateError(request.errorCode)}` : ""}${request.maintenance ? " Installation writes are paused; kiosk scans remain queued for replay." : ""}`;
+  const subject = request.mode === "modules" ? `Plugin changes for ${request.targetTag}` : `Update to ${request.targetTag}`;
+  return `${subject}. ${statuses[request.state]}${request.errorCode ? ` ${webUpdateError(request.errorCode)}` : ""}${request.maintenance ? " Installation writes are paused; kiosk scans remain queued for replay." : ""}`;
+}
+/** A plugin-changes request keeps the release version, so a tab loaded before it finished needs a reload to use it. */
+export function canReloadPluginChanges(request: WebUpdateRequest | undefined, loadedAt: number) {
+  return Boolean(request && request.mode === "modules" && request.state === "succeeded" && request.reloadReady && !request.maintenance && Date.parse(request.updatedAt) > loadedAt);
 }
 export function canReloadWebUpdate(request: WebUpdateRequest, bundledVersion: string, installedVersion = request.targetTag) {
   return request.state === "succeeded" && request.reloadReady === true && !request.maintenance

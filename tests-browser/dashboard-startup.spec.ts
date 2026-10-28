@@ -102,9 +102,27 @@ test("public Outreach cannot consume preloaded protected access", async ({ page 
   test.skip(!outreachComposed, outreachSkipReason);
   let protectedReads = 0;
   page.on("request", (request) => { if (["/auth/session", "/platform/modules", "/admin/members"].includes(new URL(request.url()).pathname)) protectedReads++; });
-  await page.goto("/submit-hours");
-  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  // A public page owns every path below its base, so a direct deep load renders the same public page without signing in.
+  for (const path of ["/submit-hours", "/submit-hours/", "/submit-hours/manage", "/submit-hours/a/b"]) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { level: 1, name: "Record Outreach" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Skip to submission form" })).toBeAttached();
+  }
   expect(protectedReads).toBe(0);
+});
+
+test("a public page follows in-place navigation below its base and reloads when leaving every public page", async ({ page }) => {
+  test.skip(!outreachComposed, outreachSkipReason);
+  const move = (path: string) => page.evaluate((next) => { history.pushState({}, "", next); window.dispatchEvent(new PopStateEvent("popstate")); }, path);
+  await page.goto("/submit-hours");
+  await expect(page.getByRole("heading", { level: 1, name: "Record Outreach" })).toBeVisible();
+  await page.evaluate(() => { (window as unknown as { samePage: boolean }).samePage = true; });
+  await move("/submit-hours/manage");
+  await expect(page.getByRole("heading", { level: 1, name: "Record Outreach" })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { samePage?: boolean }).samePage)).toBe(true);
+  await move("/dashboard");
+  await expect(page.getByRole("link", { name: "Skip to main content" })).toBeAttached();
+  expect(await page.evaluate(() => (window as unknown as { samePage?: boolean }).samePage)).toBeUndefined();
 });
 
 test("first setup cannot consume preloaded protected access", async ({ page }) => {

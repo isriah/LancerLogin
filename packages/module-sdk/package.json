@@ -1,6 +1,6 @@
 {
   "name": "@lancerlogin/module-sdk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Supported interfaces for LancerLogin module plugins. The major version is the module contract version.",

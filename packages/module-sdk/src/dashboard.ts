@@ -9,6 +9,7 @@ export type {
   DashboardPageContext,
   DashboardPathParams,
   DashboardPublicPage,
+  DashboardPublicPageContext,
   DashboardRole,
   DashboardSettingsPage,
   DashboardSetupProps,

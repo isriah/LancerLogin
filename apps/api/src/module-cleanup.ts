@@ -152,8 +152,12 @@ async function finish(db: D1Database, state: DueState, token: string, now: Date,
     db.prepare(`UPDATE platform_module_administration_epochs SET revision=(SELECT revision FROM platform_module_administration WHERE installation_id=?)
       WHERE installation_id=? AND EXISTS(SELECT 1 FROM audit_log WHERE id=? AND installation_id=?)`)
       .bind(state.installationId, state.installationId, auditId, state.installationId),
+    // Interface grants to or from the module never outlive its data: enabling it again needs an Admin's fresh grant.
+    db.prepare(`DELETE FROM platform_module_interface_grants WHERE installation_id=? AND (consumer_module_id=? OR provider_module_id=?)
+      AND EXISTS(SELECT 1 FROM audit_log WHERE id=? AND installation_id=?)`)
+      .bind(state.installationId, state.moduleId, state.moduleId, auditId, state.installationId),
   ]);
-  if (results.some((result) => result.meta?.changes !== 1)) return { status: "retry-required" };
+  if (results.slice(0, 4).some((result) => result.meta?.changes !== 1)) return { status: "retry-required" };
   return { status: "deleted" };
 }
 

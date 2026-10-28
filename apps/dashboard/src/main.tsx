@@ -1,4 +1,4 @@
-import { FormEvent, StrictMode, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, StrictMode, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource/bebas-neue/latin-400.css";
 import "@fontsource/roboto/latin-400.css";
@@ -14,6 +14,7 @@ import type { ModuleNavigationResult } from "./module-navigation";
 import { installedDashboardModules } from "./installed-dashboard-modules";
 import { resolveDashboardPublicPage } from "./module-contributions.ts";
 import { ModuleRoot } from "./module-slots";
+import { normalizePath, usePath } from "./router";
 import { WalkthroughSessionProvider } from "./page-walkthrough";
 import { AppErrorFallback, ErrorBoundary } from "./error-boundary";
 import { clearWalkthroughSession } from "./walkthrough-session";
@@ -142,10 +143,22 @@ function ProvisionedEntry({ startup, status, onConfigured, theme, onTheme }: { s
   if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
   const branding = status.configured ? status.settings : undefined;
   const style = branding ? brandTheme(branding.primaryColor, branding.secondaryColor) : undefined;
-  // A module's public page (such as Outreach's submission form) renders without signing in, inside its module root.
-  const publicPage = status.configured ? resolveDashboardPublicPage(installedDashboardModules, window.location.pathname) : undefined;
-  if (publicPage) return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">{publicPage.page.skipLinkLabel}</a><div className="provisioned-main"><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><ModuleRoot moduleId={publicPage.moduleId}>{publicPage.page.render()}</ModuleRoot></div></div>;
+  if (status.configured && resolveDashboardPublicPage(installedDashboardModules, normalizePath(window.location.pathname))) return <PublicModuleEntry branding={branding} style={style} theme={theme} onTheme={onTheme} />;
   return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to main content</a><div className="provisioned-main">{status.configured ? <ConfiguredInstallation initialSession={startup?.session} initialModules={startup?.modules} status={status} onStatusChange={onConfigured} theme={theme} onTheme={onTheme} /> : <><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><FirstAdminSetup onConfigured={onConfigured} /></>}</div></div>;
+}
+
+/**
+ * A module's public page (such as Outreach's submission form), rendered without signing in inside its module root. It owns
+ * its base path and every path below it, so it follows in-place navigation between its sub pages. Leaving every public
+ * page reloads, because this entry never started the signed-in session and module reads.
+ */
+function PublicModuleEntry({ branding, style, theme, onTheme }: { branding?: Branding; style?: CSSProperties; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
+  const { path, navigate } = usePath();
+  const publicPage = resolveDashboardPublicPage(installedDashboardModules, path);
+  const leaving = !publicPage;
+  useEffect(() => { if (leaving) window.location.reload(); }, [leaving]);
+  if (!publicPage) return null;
+  return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">{publicPage.page.skipLinkLabel}</a><div className="provisioned-main"><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><ModuleRoot moduleId={publicPage.moduleId}>{publicPage.page.render({ subpath: publicPage.subpath, navigate })}</ModuleRoot></div></div>;
 }
 
 function EntryHeader({ branding, theme, onTheme }: { branding?: Branding; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) { return <header className="setup-header"><a className="brand-home-link" href="/dashboard" aria-label="Go to Dashboard">{branding?.logoData ? <AdaptiveBrandLogo src={branding.logoData} alt="" backdrop={branding.logoBackdrop} className="header-logo" /> : <div className="brand-mark" aria-hidden="true">L</div>}<span className="brand-heading"><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></span></a><ThemeToggle theme={theme} onTheme={onTheme} /></header>; }

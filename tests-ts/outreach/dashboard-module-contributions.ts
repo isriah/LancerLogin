@@ -1,15 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { attendanceModule, createModuleRegistry, type ModuleDefinition , bundledModuleRegistry } from "../../packages/shared/src/module-platform.ts";
-import { composeDashboardModules, contributedModules, createDashboardModuleSet, dashboardModuleWideLayout, dashboardSlotContributors, dashboardSlots, decodeDashboardPathParams, matchDashboardPath, resolveDashboardModulePage, validDashboardPathPattern, type DashboardModuleContribution } from "../../apps/dashboard/src/module-contributions.ts";
+import { renderToStaticMarkup } from "react-dom/server";
+import { composeDashboardModules, contributedModules, createDashboardModuleSet, dashboardModuleWideLayout, dashboardSlotContributors, dashboardSlots, decodeDashboardPathParams, matchDashboardPath, resolveDashboardModulePage, resolveDashboardPublicPage, validDashboardPathPattern, type DashboardModuleContribution, type DashboardPublicPage } from "../../apps/dashboard/src/module-contributions.ts";
 import { externalDashboardModules } from "../../apps/dashboard/src/generated/external-modules.ts";
+import exampleManifest from "../../tests/fixtures/module-plugins/example/src/manifest.ts";
 
 // Outreach is the official plugin composed for this file; its manifest is no longer a first-party export.
 const outreachModule = bundledModuleRegistry.get("hour-tracking")!;
 
 // A synthetic standalone module with a wide workspace, a nested plan route, a settings page and setup.
 const ridesModule: ModuleDefinition = {
-  ...outreachModule, reportFilters: [], walkthroughs: {}, id: "rides", label: "Rides", description: "Synthetic module for dashboard contribution tests.",
+  ...outreachModule, interfaces: [], reportFilters: [], walkthroughs: {}, id: "rides", label: "Rides", description: "Synthetic module for dashboard contribution tests.",
   capabilities: [{ id: "rides.manage", label: "Manage Rides", operator: true }], navigation: [{ label: "Rides", path: "/rides" }], settings: [{ label: "Rides", path: "/settings/rides" }],
   setup: { version: 1, steps: [{ id: "workspace", label: "First plan", required: true }] }, jobs: [], discordCommands: [], reportDatasets: [],
   apiRoutes: [{ path: "/admin/rides", match: "prefix", access: "workspace" }], tablePrefix: "rides_", persistence: { tables: [], sharedFields: [], transientAuthority: [] },
@@ -125,4 +127,56 @@ test("an invalid plugin dashboard contribution is left out without breaking Core
   });
   assert.deepEqual(set.all.map((contribution) => contribution.moduleId), ["attendance", "hour-tracking", "rides", "valid"]);
   assert.deepEqual(reported, ["broken", "orphan"]);
+});
+
+test("a public page owns its single-segment base and every path below it", () => {
+  const withPublic = (contribution: DashboardModuleContribution, ...paths: string[]) => ({ ...contribution, publicPages: paths.map((path): DashboardPublicPage => ({ path, skipLinkLabel: "Skip to the form", render })) });
+  const modules = createDashboardModuleSet(registry, [attendance, withPublic(outreach, "/submit-hours"), withPublic(rides, "/visit", "/ride")]);
+  const resolved = (path: string) => { const page = resolveDashboardPublicPage(modules, path); return page && [page.moduleId, page.page.path, page.subpath]; };
+  // An Outreach-style single page still resolves at its base, with an empty subpath.
+  assert.deepEqual(resolved("/submit-hours"), ["hour-tracking", "/submit-hours", ""]);
+  assert.deepEqual(resolved("/visit"), ["rides", "/visit", ""]);
+  assert.deepEqual(resolved("/visit/manage"), ["rides", "/visit", "manage"]);
+  assert.deepEqual(resolved("/visit/a/b"), ["rides", "/visit", "a/b"]);
+  assert.deepEqual(resolved("/visit/plan%2Fone%20two"), ["rides", "/visit", "plan/one two"]);
+  assert.deepEqual(resolved("/ride/x"), ["rides", "/ride", "x"]);
+  for (const path of ["/visitor", "/visit-manage", "/rides", "/rides/plans/x", "/hours/visit", "/dashboard", "/visit/%E0"]) assert.equal(resolveDashboardPublicPage(modules, path), undefined, path);
+
+  // The base stays one segment, and neither its subtree nor a reserved path's subtree may hold the other.
+  const nested = createModuleRegistry([attendanceModule, outreachModule, { ...ridesModule, navigation: [{ label: "Rides", path: "/rides/board" }] }]);
+  const board = { ...rides, routes: [{ path: "/rides/board", render }] };
+  assert.equal(createDashboardModuleSet(nested, [attendance, withPublic(outreach, "/ride"), board]).all.length, 3);
+  const invalid: [string, typeof registry, DashboardModuleContribution[]][] = [
+    ["nested base", registry, [attendance, outreach, withPublic(rides, "/visit/manage")]],
+    ["trailing slash", registry, [attendance, outreach, withPublic(rides, "/visit/")]],
+    ["Core page", registry, [attendance, outreach, withPublic(rides, "/roster")]],
+    ["Core page with deep paths", registry, [attendance, outreach, withPublic(rides, "/meetings")]],
+    ["Core settings subtree", registry, [attendance, outreach, withPublic(rides, "/settings")]],
+    ["same-origin API", registry, [attendance, outreach, withPublic(rides, "/api")]],
+    ["built assets", registry, [attendance, outreach, withPublic(rides, "/assets")]],
+    ["module navigation subtree", registry, [attendance, outreach, withPublic(rides, "/hours")]],
+    ["module navigation below the base", nested, [attendance, withPublic(outreach, "/rides"), board]],
+    ["another module's public page", registry, [attendance, withPublic(outreach, "/visit"), withPublic(rides, "/visit")]],
+    ["duplicate public page", registry, [attendance, outreach, withPublic(rides, "/visit", "/visit")]],
+  ];
+  for (const [name, set, contributions] of invalid) assert.throws(() => createDashboardModuleSet(set, contributions), /public pages are invalid/, name);
+});
+
+// The synthetic plugin's dashboard entry is TSX, which Node's type stripping cannot load, so bundle it with React's JSX runtime.
+async function exampleDashboard() {
+  const { build } = await import("esbuild");
+  const { outputFiles } = await build({ entryPoints: ["tests/fixtures/module-plugins/example/src/dashboard.tsx"], bundle: true, write: false, format: "esm", platform: "node", jsx: "automatic", logLevel: "silent" });
+  return (await import(`data:text/javascript,${encodeURIComponent(outputFiles[0]!.text)}`)).default as DashboardModuleContribution;
+}
+
+test("the synthetic plugin's public page renders its own sub pages below its base", async () => {
+  const modules = createDashboardModuleSet(createModuleRegistry([attendanceModule, exampleManifest as unknown as ModuleDefinition]), [attendance, await exampleDashboard()]);
+  const heading = (path: string) => {
+    const page = resolveDashboardPublicPage(modules, path);
+    return page && [page.moduleId, page.page.skipLinkLabel, /<h1[^>]*>(.*?)<\/h1>/.exec(renderToStaticMarkup(page.page.render({ subpath: page.subpath, navigate: () => undefined })))?.[1]];
+  };
+  assert.deepEqual(heading("/example-request"), ["example", "Skip to Example request", "Request an Example item"]);
+  assert.deepEqual(heading("/example-request/status"), ["example", "Skip to Example request", "Example request status"]);
+  assert.deepEqual(heading("/example-request/status/old"), ["example", "Skip to Example request", "Page unavailable"]);
+  for (const path of ["/example", "/example-requests", "/settings/example"]) assert.equal(heading(path), undefined, path);
 });

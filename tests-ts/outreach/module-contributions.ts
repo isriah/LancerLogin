@@ -8,7 +8,7 @@ import { installedApiModules } from "../../apps/api/src/installed-api-modules.ts
 const outreachModule = bundledModuleRegistry.get("hour-tracking")!;
 
 const synthetic: ModuleDefinition = {
-  ...outreachModule,
+  ...outreachModule, interfaces: [],
   reportFilters: [],
   walkthroughs: {},
   id: "synthetic",

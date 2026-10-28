@@ -18,7 +18,7 @@ function moduleSnapshotItem(definition: ModuleDefinition, enabled: boolean, setu
     enabled,
     phase: enabled ? "enabled" : "disabled",
     generation: 1,
-    dependencies: definition.dependencies,
+    dependencies: bundledModuleRegistry.requiredModules(definition.id),
     permissions: definition.capabilities,
     effectiveCapabilities,
     workspaceReady: effectiveCapabilities.length > 0,

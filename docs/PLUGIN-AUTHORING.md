@@ -85,7 +85,17 @@ export default defineModuleManifest({
 });
 ```
 
-Core's registry rejects conflicting IDs, capabilities, routes, dashboard paths, Discord commands, report datasets, tables and table prefixes, so a plugin that clashes with another installed module is refused before the build. Report datasets, report filters, Discord commands and walkthroughs are described in [module authoring](MODULE-AUTHORING.md#manifest).
+Core's registry rejects conflicting IDs, capabilities, routes, dashboard paths, Discord commands, report datasets, interfaces, tables and table prefixes, so a plugin that clashes with another installed module is refused before the build. Report datasets, report filters, Discord commands and walkthroughs are described in [module authoring](MODULE-AUTHORING.md#manifest).
+
+### Calling other modules
+
+From SDK 1.1.0 (declare `@lancerlogin/module-sdk` `^1.1.0`), a plugin can offer Worker calls to other modules and call theirs, instead of reading their tables. A provider declares `interfaces`, each namespaced by its module ID with a whole-number version and operations; every operation names the provider capability a signed-in caller needs, a plain-language label Admins read, and whether it is `grantable` to another module. A consumer declares `uses` with the interface, version, the operations it calls, whether it is `required` and a `reason` shown to Admins:
+
+```ts
+uses: [{ interface: "example.items", version: 1, operations: ["list"], required: false, reason: "Show Example items beside each run" }],
+```
+
+A required use behaves like a dependency: composition refuses the plugin without a provider that offers that version and every listed operation, and it can be enabled only with the provider. An optional use may be missing. Calls are available only while both modules are enabled and the provider is set up, and only with the signed-in user's own access to the provider or a grant an Admin gives the consumer in **Settings > Modules**. See [cross-module calls](MODULE-AUTHORING.md#cross-module-calls) for the full rules.
 
 ### Permissions and navigation
 
@@ -126,7 +136,22 @@ export default defineApiModule({
 });
 ```
 
-Provide exactly one handler for every declared route, setup step, job, report dataset and Discord command, and nothing undeclared; Core refuses the contribution otherwise. A route handler returns `undefined` for requests in its family that it does not handle. Handlers receive `request`, `url`, the module-scoped `db`, Core `services` (shared Google Calendar and Discord connections, module credentials), `requireRole`, `json`, `body`, `respond`, `requireDashboardOrigin` and `dashboardOrigin`. The database rechecks the module's lifecycle and the user's authority with every statement. Read Core data only through the SDK's projections (`listActiveRosterIdentities`, `activeRosterIdentity`, `createMeetingReferenceAccess`), never another module's tables. Jobs run on Core's scheduler while the module is enabled; persist retry state and keep provider operations idempotent. Optional fields such as `freshEnable` (idempotent default rows on first enablement), `reportFilters`, `rosterReferences` and `privateResponseRoutes` are covered in [module authoring](MODULE-AUTHORING.md#worker-contribution).
+Provide exactly one handler for every declared route, setup step, job, report dataset, Discord command and interface operation, and nothing undeclared; Core refuses the contribution otherwise. A route handler returns `undefined` for requests in its family that it does not handle. Handlers receive `request`, `url`, the module-scoped `db`, Core `services` (shared Google Calendar, Discord and email connections, module credentials, and `services.modules` for other modules' interfaces), `requireRole`, `json`, `body`, `respond`, `requireDashboardOrigin` and `dashboardOrigin`. The database rechecks the module's lifecycle and the user's authority with every statement. Read Core data only through the SDK's projections (`listActiveRosterIdentities`, `activeRosterIdentity`, `installationTimeZone`, `createMeetingReferenceAccess`), never another module's tables. Jobs run on Core's scheduler while the module is enabled; persist retry state and keep provider operations idempotent. Optional fields such as `freshEnable` (idempotent default rows on first enablement), `reportFilters`, `rosterReferences` and `privateResponseRoutes` are covered in [module authoring](MODULE-AUTHORING.md#worker-contribution).
+
+A provider implements its interfaces under `interfaces`, one handler per declared operation. Each handler receives the provider's own scoped `db` and `services`, the `caller` (calling module, with the signed-in `userId` or the `grantId`) and the JSON input, validates the input and returns a JSON result or throws `HttpError`, which the caller receives with the same status and message. A consumer calls `services.modules.interface(id, version)`, which returns nothing when the interface is unavailable, then `call(operation, input)`. Input and result are plain JSON of at most 64 KB. A call is not atomic with the consumer's own writes, so keep operations idempotent and call them from a job with retry state:
+
+```ts
+interfaces: {
+  "example.items": { list: async ({ db }) => ({ items: await listItems(db) }) },
+},
+jobs: {
+  "relay.sync": async ({ services }) => {
+    const items = await services.modules.interface("example.items", 1);
+    if (!items) return { available: false };
+    return items.call("list", {});
+  },
+},
+```
 
 ## Dashboard contribution
 
@@ -150,7 +175,7 @@ export default defineDashboardModule({
 });
 ```
 
-`routes` render every navigation path and `settingsPages` exactly the manifest's settings paths. Call the plugin's own routes with `dashboardApi`. Import UI helpers only from the SDK (`useModalFocus`, `usePath`, `RouteLink`, `SettingsSectionNavigation`, `MonthCalendar` and the others listed in [module authoring](MODULE-AUTHORING.md#dashboard-contribution)). Core wraps plugin pages in an element with `data-module="<module id>"`; prefix every selector in the plugin stylesheet with `:where([data-module="<module id>"])` and follow [UI standards](UI-STANDARDS.md). A dashboard contribution that fails validation is left out and reported in the browser console, while Core and other modules keep working.
+`routes` render every navigation path and `settingsPages` exactly the manifest's settings paths. `publicPages` render pages anyone can open without signing in at a single-segment base path, such as `/visit`, and every path below it, which `render` receives as `subpath` (see [module authoring](MODULE-AUTHORING.md#dashboard-contribution)). Call the plugin's own routes with `dashboardApi`. Import UI helpers only from the SDK (`useModalFocus`, `usePath`, `RouteLink`, `SettingsSectionNavigation`, `MonthCalendar` and the others listed in [module authoring](MODULE-AUTHORING.md#dashboard-contribution)). Core wraps plugin pages in an element with `data-module="<module id>"`; prefix every selector in the plugin stylesheet with `:where([data-module="<module id>"])` and follow [UI standards](UI-STANDARDS.md). A dashboard contribution that fails validation is left out and reported in the browser console, while Core and other modules keep working.
 
 ## Migrations
 

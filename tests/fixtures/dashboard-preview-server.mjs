@@ -53,6 +53,7 @@ const server = createServer((request, response) => {
     : path === "/auth/session" ? { user: { id: "admin-1", role: "admin", debugMode: false } }
     : path === "/platform/modules" ? defaultModuleSnapshot
     : path.startsWith("/admin/modules/assignments/") ? { userId: decodeURIComponent(path.split("/")[4]), revision: 0, capabilities: [] }
+    : path === "/admin/modules/grants" ? { uses: [], reauthentication: { freshUntil: null, password: true, google: false } }
     : path === "/admin/setup/progress" ? { completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }
     : path === "/integrations/capabilities" ? { integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: true } } }
     : path === "/meetings" ? { meetings, lateScanMinutes: 30 }

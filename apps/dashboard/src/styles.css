@@ -1955,3 +1955,10 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
 .plugin-nightly-warning { margin: 0; }
 .plugin-release-lookup { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
 .plugin-release-lookup .field-help { flex: 1 1 16rem; margin: 0; overflow-wrap: anywhere; }
+/* Settings > Modules: module access grants reuse the plugin row, dialog and identity confirmation patterns. */
+.module-access { display: grid; gap: var(--space-4); margin-top: var(--space-6); }
+.module-access-operations { display: grid; gap: var(--space-1); margin: 0; padding-inline-start: var(--space-5); }
+.module-access-status { font-size: var(--text-small); font-weight: 700; color: var(--ui-text-muted); }
+.module-access-row[data-status="granted"] .module-access-status { color: var(--ui-success); }
+.module-access-row[data-status="outdated"] .module-access-status { color: var(--ui-warning); }
+.module-access .settings-notice:focus { outline: 2px solid var(--ui-focus); outline-offset: 2px; }

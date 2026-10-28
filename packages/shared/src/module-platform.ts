@@ -86,6 +86,36 @@ export type ReportModuleFilterDefinition = {
   readonly matchKey: string;
 };
 
+/** One request and response operation of a provided interface. */
+export type ModuleInterfaceOperationDefinition = {
+  readonly id: string;
+  /** Plain-language description an Admin reads when granting access, for example "Create Outreach supported teams". */
+  readonly label: string;
+  /** One of the provider's own capabilities. A signed-in caller needs it; a standing grant replaces it only when grantable. */
+  readonly capability: string;
+  /** Whether an Admin may grant this operation to another module, for calls from jobs and public requests. */
+  readonly grantable: boolean;
+};
+
+/** Worker calls a module offers other modules. The ID is namespaced by the provider: `<module id>.<name>`. */
+export type ModuleInterfaceDefinition = {
+  readonly id: string;
+  /** Major version. A consumer names the version it was written for; an incompatible change is a new version. */
+  readonly version: number;
+  readonly label: string;
+  readonly operations: readonly ModuleInterfaceOperationDefinition[];
+};
+
+/** Another module's interface this module calls. A required use behaves like a dependency; an optional one may be missing. */
+export type ModuleInterfaceUse = {
+  readonly interface: string;
+  readonly version: number;
+  readonly operations: readonly string[];
+  readonly required: boolean;
+  /** Why the module asks, shown to Admins who grant it access. */
+  readonly reason: string;
+};
+
 export type ModuleDefinition = {
   readonly id: string;
   readonly label: string;
@@ -93,6 +123,10 @@ export type ModuleDefinition = {
   readonly contractVersion: number;
   readonly available: boolean;
   readonly dependencies: readonly string[];
+  /** Interfaces this module provides to other modules (SDK 1.1.0). */
+  readonly interfaces?: readonly ModuleInterfaceDefinition[];
+  /** Interfaces of other modules this module calls (SDK 1.1.0). */
+  readonly uses?: readonly ModuleInterfaceUse[];
   readonly capabilities: readonly ModuleCapabilityDefinition[];
   readonly navigation: readonly { readonly label: string; readonly path: string }[];
   readonly settings: readonly { readonly label: string; readonly path: string }[];
@@ -168,6 +202,35 @@ export type ModulePlatformSnapshot = {
 const moduleIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const capabilityPattern = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
 const tablePrefixPattern = /^[a-z][a-z0-9_]*_$/;
+const interfaceIdPattern = /^([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const operationIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const plainText = (value: unknown, maximum: number) => typeof value === "string" && value.trim() === value && value.length > 0 && value.length <= maximum;
+const interfaceVersion = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= 1_000;
+// Manifests arrive as untyped JSON from plugin inspection; a boolean check keeps their declared element types.
+const isList = (value: unknown): boolean => Array.isArray(value);
+
+/** The module whose ID prefixes an interface ID, or undefined for a malformed ID. */
+export function interfaceProviderId(interfaceId: string): string | undefined {
+  return interfaceId.length <= 80 ? interfaceIdPattern.exec(interfaceId)?.[1] : undefined;
+}
+
+/** Modules that must be enabled first: declared dependencies, then the providers of required interface uses. */
+export function requiredModuleIds(module: ModuleDefinition): string[] {
+  return [...new Set([...module.dependencies, ...(module.uses ?? []).filter((use) => use.required).map((use) => interfaceProviderId(use.interface) ?? use.interface)])];
+}
+
+/**
+ * Why a module's use of an interface cannot be served by the given modules, or undefined when the provider declares that
+ * interface at that version with every operation the use names. Composition refuses required uses that have a reason.
+ */
+export function interfaceUseProblem(use: ModuleInterfaceUse, modules: readonly ModuleDefinition[]): string | undefined {
+  const provider = modules.find((module) => module.interfaces?.some((item) => item.id === use.interface));
+  const definition = provider?.interfaces?.find((item) => item.id === use.interface);
+  if (!provider || !definition) return `no installed module provides ${use.interface}`;
+  if (definition.version !== use.version) return `${provider.id} provides ${use.interface} version ${definition.version}, not ${use.version}`;
+  const missing = use.operations.filter((operation) => !definition.operations.some((item) => item.id === operation));
+  return missing.length ? `${provider.id} ${use.interface} version ${use.version} has no ${missing.join(", ")} operation${missing.length === 1 ? "" : "s"}` : undefined;
+}
 
 function freeze<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -191,6 +254,7 @@ export function createModuleRegistry(input: readonly ModuleDefinition[]) {
   const reportDefinitionKeys = new Set<string>(coreReportDefinitionKeys);
   const fieldAliases = new Map<string, string>();
   const walkthroughPages = new Set<string>();
+  const interfaces = new Map<string, { readonly module: ModuleDefinition; readonly definition: ModuleInterfaceDefinition }>();
   const fieldSignature = (field: ReportFieldDefinition) => JSON.stringify({ label: field.label, group: field.group, kind: field.kind, valueType: field.valueType, sortable: field.sortable, filterOperators: [...field.filterOperators], requiresLabel: field.requiresLabel ?? false, durationUnits: field.durationUnits ? [...field.durationUnits] : [], defaultDurationUnit: field.defaultDurationUnit ?? null });
   const registerDatasetDefinition = (dataset: ReportDatasetDefinition) => {
     if (datasetDefinitions.has(dataset.id)) throw new Error("Invalid or duplicate report dataset contribution");
@@ -269,6 +333,25 @@ export function createModuleRegistry(input: readonly ModuleDefinition[]) {
       if ((route.match === "pattern" ? !route.path.startsWith("^") : !route.path.startsWith("/")) || !["exact", "prefix", "pattern"].includes(route.match) || !["workspace", "service", "setup"].includes(route.access)) throw new Error("Invalid module API route");
       if (route.match === "pattern") new RegExp(route.path);
     }
+    if (module.interfaces !== undefined && !isList(module.interfaces)) throw new Error("Invalid module interface");
+    for (const definition of module.interfaces ?? []) {
+      // An interface is namespaced by its provider, and an operation requires one of the provider's own capabilities.
+      if (!definition || typeof definition !== "object" || interfaceProviderId(definition.id) !== module.id || !interfaceVersion(definition.version) || !plainText(definition.label, 80) || !isList(definition.operations) || !definition.operations.length) throw new Error("Invalid module interface");
+      if (interfaces.has(definition.id)) throw new Error("Duplicate module interface");
+      if (new Set(definition.operations.map((operation) => operation?.id)).size !== definition.operations.length) throw new Error("Duplicate module interface operation");
+      for (const operation of definition.operations) {
+        if (!operation || typeof operation !== "object" || typeof operation.id !== "string" || operation.id.length > 40 || !operationIdPattern.test(operation.id) || !plainText(operation.label, 120) || typeof operation.grantable !== "boolean") throw new Error("Invalid module interface operation");
+        if (!module.capabilities.some((capability) => capability.id === operation.capability)) throw new Error("Module interface operations require the provider's own capabilities");
+      }
+      interfaces.set(definition.id, { module, definition });
+    }
+    if (module.uses !== undefined && !isList(module.uses)) throw new Error("Invalid module interface use");
+    for (const use of module.uses ?? []) {
+      const provider = use && typeof use === "object" && typeof use.interface === "string" ? interfaceProviderId(use.interface) : undefined;
+      if (!provider || !interfaceVersion(use.version) || !isList(use.operations) || !use.operations.length || new Set(use.operations).size !== use.operations.length || use.operations.some((operation) => typeof operation !== "string" || operation.length > 40 || !operationIdPattern.test(operation)) || typeof use.required !== "boolean" || !plainText(use.reason, 200)) throw new Error("Invalid module interface use");
+      if (provider === module.id) throw new Error("A module cannot use its own interface");
+    }
+    if (new Set((module.uses ?? []).map((use) => `${use.interface}@${use.version}`)).size !== (module.uses ?? []).length) throw new Error("Duplicate module interface use");
   }
   for (const module of modules) if (module.dependencies.some((dependency) => !ids.has(dependency))) throw new Error("Unknown module dependency");
   // A prefix claims every name that starts with it, so no prefix may contain another or another module's declared table.
@@ -292,10 +375,11 @@ export function createModuleRegistry(input: readonly ModuleDefinition[]) {
   };
   const validateSelection = (selected: readonly string[]) => {
     if (new Set(selected).size !== selected.length || selected.some((id) => !get(id)?.available)) throw new Error("Unknown or unavailable module");
-    for (const id of selected) if (get(id)!.dependencies.some((dependency) => !selected.includes(dependency))) throw new Error("Missing module dependency");
+    for (const id of selected) if (requiredModuleIds(get(id)!).some((dependency) => !selected.includes(dependency))) throw new Error("Missing module dependency");
     return [...selected];
   };
   return freeze({ modules, get, routeOwner, validateSelection, capabilityOwner: (capability: string) => capabilities.get(capability), discordCommandOwner: (name: string) => discordCommands.get(name), reportDatasetOwner: (datasetId: string) => reportDatasets.get(datasetId), tableOwner: (table: string) => persistenceTables.get(table),
+    interfaceOwner: (interfaceId: string) => interfaces.get(interfaceId), requiredModules: (moduleId: string) => { const module = get(moduleId); return module ? requiredModuleIds(module) : []; },
     reportFilters: [...reportFilters.values()].map(({ filter }) => filter), reportFilterOwner: (filterId: string) => reportFilters.get(filterId)?.module, reportFieldAliases: Object.fromEntries(fieldAliases) as Readonly<Record<string, string>> });
 }
 

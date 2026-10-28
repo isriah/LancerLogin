@@ -27,7 +27,7 @@ const manifest = (await import(pathToFileURL(manifestPath).href)).default;
 const api = (await import(pathToFileURL(apiPath).href)).default;
 if (!manifest || typeof manifest !== "object") throw new Error("The manifest entry must default-export a module definition");
 if (!api || typeof api !== "object") throw new Error("The api entry must default-export an API module contribution");
-const known = new Set(["moduleId", "routes", "coreRoutes", "privateResponseRoutes", "setup", "jobs", "reports", "reportFilters", "discord", "rosterReferences", "cleanup", "installationSeed", "freshEnable", "backup"]);
+const known = new Set(["moduleId", "routes", "coreRoutes", "privateResponseRoutes", "setup", "jobs", "reports", "reportFilters", "discord", "interfaces", "rosterReferences", "cleanup", "installationSeed", "freshEnable", "backup"]);
 const unknown = Object.keys(api).filter((key) => !known.has(key));
 if (unknown.length) throw new Error(`API contribution has unknown fields: ${unknown.join(", ")}`);
 if (!api.setup || typeof api.setup.stepValid !== "function") throw new Error("API contribution setup.stepValid must be a function");
@@ -44,6 +44,10 @@ if (backup !== undefined) {
 }
 const filters = api.reportFilters;
 if (filters !== undefined && (!filters || typeof filters !== "object" || Array.isArray(filters) || Object.values(filters).some((handler) => !handler || typeof handler.options !== "function"))) throw new Error("API contribution reportFilters must map filter IDs to handlers with options");
+// Interface handlers: one function per operation, keyed by interface ID and then operation ID.
+const interfaces = api.interfaces;
+if (interfaces !== undefined && (!interfaces || typeof interfaces !== "object" || Array.isArray(interfaces))) throw new Error("API contribution interfaces must map interface IDs to operation handlers");
+const interfaceOperations = Object.fromEntries(Object.entries(interfaces ?? {}).map(([id, handlers]) => [id, handlerNames(handlers, `interfaces.${id}`)]));
 const references = api.rosterReferences;
 if (references !== undefined && (!references || typeof references.label !== "string" || !Array.isArray(references.columns) || references.columns.some((item) => !item || typeof item.table !== "string" || typeof item.column !== "string"))) throw new Error("API contribution rosterReferences is invalid");
 
@@ -63,6 +67,7 @@ process.stdout.write(JSON.stringify({
     jobs: handlerNames(api.jobs, "jobs"),
     reports: handlerNames(api.reports, "reports"),
     discord: handlerNames(api.discord, "discord"),
+    interfaces: interfaceOperations,
     cleanup: { steps: JSON.parse(JSON.stringify(api.cleanup.steps)), blocker: blocker ? { sql: blocker.sql, recordFailure: blocker.recordFailure } : undefined },
   },
 }));

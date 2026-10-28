@@ -1,0 +1,22 @@
+{
+  "name": "lancerlogin-module-consumer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic, unshipped LancerLogin module plugin that calls the Example plugin's interface in cross-module tests.",
+  "lancerlogin": {
+    "moduleId": "consumer",
+    "contract": 1,
+    "core": ">=2.0.0-beta.0 <3.0.0",
+    "tablePrefix": "consumer_",
+    "entries": {
+      "manifest": "./src/manifest.ts",
+      "api": "./src/api.ts"
+    },
+    "migrations": "./migrations",
+    "adoptedCoreMigrations": []
+  },
+  "peerDependencies": {
+    "@lancerlogin/module-sdk": "^1.1.0"
+  }
+}

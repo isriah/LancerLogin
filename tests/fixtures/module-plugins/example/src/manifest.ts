@@ -1,5 +1,6 @@
 // Synthetic, unshipped module definition for composition tests. It declares every contribution point a plugin
-// can use: a job, a Discord command, a report dataset, and workspace, public service and setup routes.
+// can use: a job, a Discord command, a report dataset, workspace, public service and setup routes, and an interface other
+// modules call (tests/fixtures/module-plugins/consumer uses it).
 const text = ["contains", "equals", "empty", "not_empty"] as const;
 const number = ["minimum", "equals", "maximum", "between", "empty", "not_empty"] as const;
 
@@ -11,6 +12,14 @@ const manifest = {
   available: true,
   dependencies: [],
   capabilities: [{ id: "example.manage", label: "Manage Example", operator: true }],
+  interfaces: [{
+    id: "example.items", version: 1, label: "Example items",
+    operations: [
+      { id: "list", label: "List Example items", capability: "example.manage", grantable: true },
+      { id: "create", label: "Create Example items", capability: "example.manage", grantable: true },
+      { id: "close", label: "Close Example items", capability: "example.manage", grantable: false },
+    ],
+  }],
   navigation: [{ label: "Example", path: "/example" }],
   settings: [{ label: "Example", path: "/settings/example" }],
   setup: { version: 1, steps: [{ id: "catalog", label: "First Example item", required: true }] },

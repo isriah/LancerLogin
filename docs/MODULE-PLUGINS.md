@@ -66,6 +66,17 @@ An entry is a host, allowing every owner on it, or `host/owner`. With the file, 
 
 The file is authoritative, not just a dashboard check. Composition reads it from beside the selection file and refuses any entry of `lancerlogin.modules.json` whose source it does not allow, so a direct edit of the selection cannot build a forbidden plugin. Provisioning and web updates (including **Apply plugin changes**) compose this way, and an update with a forbidden source stops in preflight, before maintenance. The matching is the dashboard's: the source's host must equal an entry's host and, for a `host/owner` entry, its owner must match ignoring case. An invalid file refuses composition entirely, even when the selection names no plugin. Core's own pins of the official modules are not checked; a selection entry that pins an official module is.
 
+## Module access
+
+Some modules use another module's data through Core, for example to create records in it from their own scheduled work. A module that does so declares what it asks for, and **Settings > Modules > Module access** lists it: the module that asks, the module that provides the access, each operation in plain language (for example "List Example items"), the module's reason, and its status. The section appears only when an installed module asks for access.
+
+- **Without a grant,** a module can use another module only on behalf of the signed-in person, and only as far as that person's own access to the providing module allows: an Admin, or an Operator assigned to that module. Scheduled work and public pages have no signed-in person, so nothing happens there.
+- **Grant** lets the module use the listed operations on its own, from scheduled work or public pages, without anyone signed in. Grant only what you expect it to need. Some operations can never be granted; they are marked "signed-in people only". Granting needs an active Admin, the dashboard, and confirming your identity again (your password, or signing in with Google again) within the last ten minutes, like a plugin change. Every grant and revocation is recorded in the audit log, and so is every call a module makes.
+- **Revoke** takes effect at once, including for work already running: its next step is refused.
+- **Status.** A row shows who granted it and when, or that it is not granted. It also says when the providing module is not installed, not enabled or not set up, in which case nothing can be called until it is. When a module's update asks for more operations than its grant covers, the row says so and **Grant again** replaces the grant; until then the old grant covers only what it listed. A new version of what a module asks for is listed as its own row, not yet granted.
+- **Lifecycle.** Disabling either module stops its calls at once; re-enabling it within the retention period restores the grant. When either module's retained data is deleted, its grants are deleted too. Grants are not part of backups: after restoring a backup, review **Module access** and grant again.
+- A module that requires another module's access cannot be enabled without that module, and composition refuses a build that leaves it out, like any module dependency.
+
 ## Carpool is a plugin
 
 Carpool is no longer part of LancerLogin itself. It is the separately selected Carpool plugin, and an installation includes it only by listing it in `lancerlogin.modules.json`:

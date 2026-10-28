@@ -4,6 +4,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 > Release notes record what was true when a version shipped. For current procedures, use the linked guide rather than applying older transition steps out of context.
 
+- [v2.0.0-beta.15](v2.0.0-beta.15.md) - Plugin email, plugin sub-pages and Administrator-granted access between modules
 - [v2.0.0-beta.14](v2.0.0-beta.14.md) - Fingerprint match scores with a minimum, kiosk warning reasons and reader cleanup
 - [v2.0.0-beta.13](v2.0.0-beta.13.md) - Security and reliability fixes, automatic kiosk update rollback and a local plugin development loop
 - [v2.0.0-beta.12](v2.0.0-beta.12.md) - Module plugins; Outreach becomes an official plugin and Carpool an opt-in plugin

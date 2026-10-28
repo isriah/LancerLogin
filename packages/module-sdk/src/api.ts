@@ -4,6 +4,10 @@ export { HttpError } from "../../../apps/api/src/http-error.ts";
 export type {
   ApiModuleContribution,
   CoreModuleServices,
+  ModuleInterfaceCallContext,
+  ModuleInterfaceCaller,
+  ModuleInterfaceClient,
+  ModuleInterfaceHandler,
   ModuleJobContext,
   ModuleLifecycleContext,
   ModulePrincipal,
@@ -22,6 +26,7 @@ export type {
 } from "../../../apps/api/src/module-contributions.ts";
 export type { CleanupStep } from "../../../apps/api/src/module-cleanup.ts";
 export type { ModuleCredentials } from "../../../apps/api/src/integration-crypto.ts";
+export type { ModuleEmailMessage } from "../../../apps/api/src/module-email.ts";
 export type { DiscordModuleInteraction, DiscordModuleInteractionHandler } from "../../../apps/api/src/module-discord.ts";
 export type { ReportProjectionContext, ReportProjectionHandler, ReportRosterMember } from "../../../apps/api/src/module-reporting.ts";
 
@@ -34,6 +39,7 @@ export type { NormalizedReportDefinition, ReportCell, ReportResultRow } from "..
 
 // Permission-scoped Core projections. Pass the module's captured database from the request or job context.
 export { activeRosterIdentity, listActiveRosterIdentities } from "../../../apps/api/src/core-roster-projection.ts";
+export { installationTimeZone } from "../../../apps/api/src/core-installation-projection.ts";
 export { createMeetingReferenceAccess, type MeetingReference, type MeetingReferenceAccess } from "../../../apps/api/src/attendance-meeting-reference.ts";
 
 import type { ApiModuleContribution } from "../../../apps/api/src/module-contributions.ts";

@@ -48,13 +48,13 @@ test("bundled registration assigns Outreach entry points without an Attendance d
 test("module Discord command contributions reject collisions", () => {
   const persistence = { tables: [], sharedFields: [], transientAuthority: [] };
   const backup = { version: 1, tables: [] };
-  const first = { ...outreachModule, reportFilters: [], walkthroughs: {}, id: "synthetic-one", capabilities: [{ id: "synthetic.one", label: "One", operator: true }], jobs: [], reportDatasets: [], persistence, backup, lifecycle: { cleanupTargets: ["synthetic-one"] }, discordCommands: [{ name: "shared-command", type: 1 as const, description: "First synthetic command" }] };
-  const second = { ...outreachModule, reportFilters: [], walkthroughs: {}, id: "synthetic-two", capabilities: [{ id: "synthetic.two", label: "Two", operator: true }], jobs: [], reportDatasets: [], persistence, backup, lifecycle: { cleanupTargets: ["synthetic-two"] }, discordCommands: [{ name: "shared-command", type: 1 as const, description: "Second synthetic command" }] };
+  const first = { ...outreachModule, interfaces: [], reportFilters: [], walkthroughs: {}, id: "synthetic-one", capabilities: [{ id: "synthetic.one", label: "One", operator: true }], jobs: [], reportDatasets: [], persistence, backup, lifecycle: { cleanupTargets: ["synthetic-one"] }, discordCommands: [{ name: "shared-command", type: 1 as const, description: "First synthetic command" }] };
+  const second = { ...outreachModule, interfaces: [], reportFilters: [], walkthroughs: {}, id: "synthetic-two", capabilities: [{ id: "synthetic.two", label: "Two", operator: true }], jobs: [], reportDatasets: [], persistence, backup, lifecycle: { cleanupTargets: ["synthetic-two"] }, discordCommands: [{ name: "shared-command", type: 1 as const, description: "Second synthetic command" }] };
   assert.throws(() => createModuleRegistry([first, second]), /duplicate Discord command contribution/i);
 });
 
 test("an unshipped synthetic module can contribute a Discord command without Core branching", () => {
-  const synthetic = { ...outreachModule, reportFilters: [], walkthroughs: {}, id: "synthetic", label: "Synthetic", capabilities: [{ id: "synthetic.manage", label: "Manage Synthetic", operator: true }], jobs: [], reportDatasets: [], discordCommands: [{ name: "synthetic-check", type: 1 as const, description: "Check the synthetic extension contract" }] };
+  const synthetic = { ...outreachModule, interfaces: [], reportFilters: [], walkthroughs: {}, id: "synthetic", label: "Synthetic", capabilities: [{ id: "synthetic.manage", label: "Manage Synthetic", operator: true }], jobs: [], reportDatasets: [], discordCommands: [{ name: "synthetic-check", type: 1 as const, description: "Check the synthetic extension contract" }] };
   const registry = createModuleRegistry([synthetic]);
   const dispatch = createModuleDiscordDispatcher(registry, [{ moduleId: "synthetic", handlers: { "synthetic-check": async () => "Synthetic extension ready" } }]);
   assert.equal(registry.discordCommandOwner("synthetic-check")?.id, "synthetic");
@@ -63,7 +63,7 @@ test("an unshipped synthetic module can contribute a Discord command without Cor
 });
 
 test("an unshipped synthetic module can contribute a report dataset through the static projection contract", async () => {
-  const synthetic = { ...outreachModule, reportFilters: [], walkthroughs: {}, id: "synthetic", label: "Synthetic", capabilities: [{ id: "synthetic.manage", label: "Manage Synthetic", operator: true }], jobs: [], discordCommands: [], reportDatasets: [{
+  const synthetic = { ...outreachModule, interfaces: [], reportFilters: [], walkthroughs: {}, id: "synthetic", label: "Synthetic", capabilities: [{ id: "synthetic.manage", label: "Manage Synthetic", operator: true }], jobs: [], discordCommands: [], reportDatasets: [{
     id: "synthetic.records", label: "Synthetic records", description: "Synthetic report contract proof.", rowIdentity: "synthetic.record.id", capability: "synthetic.manage",
     fields: [{ id: "synthetic.record.id", label: "Record ID", group: "Synthetic", kind: "dimension" as const, valueType: "text" as const, sortable: true, filterOperators: ["contains" as const] }], filters: [], groupBy: ["synthetic.record.id"], defaultColumns: ["synthetic.record.id"], defaultSort: { field: "synthetic.record.id", direction: "asc" as const }, relationships: [],
   }] };
@@ -89,9 +89,9 @@ test("module persistence and portable backup ownership are collision checked", (
   assert.equal(attendanceModule.backup.version, 2);
   assert.ok(attendanceModule.persistence.sharedFields.some((entry) => entry.table === "organization_settings" && entry.columns.includes("kiosk_authentication_method")));
   assert.deepEqual(bundledModuleRegistry.tableOwner("kiosks")?.persistence.transientAuthority.find((entry) => entry.table === "kiosks")?.columns, ["token_hash", "active"]);
-  const duplicateTableModule = { ...outreachModule, persistence: { ...outreachModule.persistence, tables: [...outreachModule.persistence.tables, "meetings"] }, backup: { ...outreachModule.backup, tables: [...outreachModule.backup.tables, "meetings"] } };
+  const duplicateTableModule = { ...outreachModule, interfaces: [], persistence: { ...outreachModule.persistence, tables: [...outreachModule.persistence.tables, "meetings"] }, backup: { ...outreachModule.backup, tables: [...outreachModule.backup.tables, "meetings"] } };
   assert.throws(() => createModuleRegistry([attendanceModule, duplicateTableModule]), /duplicate module persistence table/i);
-  assert.throws(() => createModuleRegistry([{ ...outreachModule, persistence: { ...outreachModule.persistence, transientAuthority: [{ table: "members", columns: ["active"] }] } }]), /Transient authority must belong to a module table/i);
+  assert.throws(() => createModuleRegistry([{ ...outreachModule, interfaces: [], persistence: { ...outreachModule.persistence, transientAuthority: [{ table: "members", columns: ["active"] }] } }]), /Transient authority must belong to a module table/i);
 });
 
 test("module selection supports Core-only, Attendance, and Outreach installations", () => {
@@ -122,7 +122,7 @@ test("module table prefixes claim owned names without overlapping another module
   assert.equal(outreachModule.tablePrefix, "hours_");
   assert.equal(attendanceModule.tablePrefix, undefined);
   const persistence = { tables: ["example_items", "example_notes"], sharedFields: [], transientAuthority: [] };
-  const example = { ...outreachModule, reportFilters: [], walkthroughs: {}, id: "example", label: "Example", capabilities: [{ id: "example.manage", label: "Manage Example", operator: true }], navigation: [], settings: [], setup: { version: 1, steps: [] }, jobs: [], discordCommands: [], reportDatasets: [], apiRoutes: [{ path: "/admin/example", match: "prefix" as const, access: "workspace" as const }], tablePrefix: "example_", persistence, backup: { version: 1, tables: ["example_items", "example_notes"] }, lifecycle: { cleanupTargets: ["example_items", "example_notes"] } };
+  const example = { ...outreachModule, interfaces: [], reportFilters: [], walkthroughs: {}, id: "example", label: "Example", capabilities: [{ id: "example.manage", label: "Manage Example", operator: true }], navigation: [], settings: [], setup: { version: 1, steps: [] }, jobs: [], discordCommands: [], reportDatasets: [], apiRoutes: [{ path: "/admin/example", match: "prefix" as const, access: "workspace" as const }], tablePrefix: "example_", persistence, backup: { version: 1, tables: ["example_items", "example_notes"] }, lifecycle: { cleanupTargets: ["example_items", "example_notes"] } };
   assert.equal(createModuleRegistry([attendanceModule, outreachModule, example]).tableOwner("example_items")?.id, "example");
   for (const tablePrefix of ["Example_", "example", "_example_", "1example_", "example-", "example_.", ""]) assert.throws(() => createModuleRegistry([{ ...example, tablePrefix }]), /Invalid module table prefix/, tablePrefix);
   assert.throws(() => createModuleRegistry([{ ...example, persistence: { ...persistence, tables: ["example_items", "notes"] }, backup: { version: 1, tables: ["example_items", "notes"] }, lifecycle: { cleanupTargets: ["example_items", "notes"] } }]), /Invalid module table prefix/);

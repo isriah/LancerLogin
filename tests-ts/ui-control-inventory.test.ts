@@ -35,6 +35,7 @@ const reviewedNativeControls: Record<string, Counts> = {
   "meetings-page.tsx": { button: 4, input: 3, select: 2, summary: 1 },
   "member-detail-page.tsx": { button: 5, summary: 1 },
   "member-label-controls.tsx": { button: 6, input: 3, select: 2, textarea: 1 },
+  "module-access-grants.tsx": { button: 5 },
   "module-controls.tsx": { button: 6, input: 2 },
   "plugin-management.tsx": { button: 13, input: 5, select: 1 },
   "module-setup-workspace.tsx": { button: 7, input: 10, select: 2 },

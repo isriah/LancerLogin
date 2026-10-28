@@ -75,7 +75,7 @@ export async function readModulePlatformSnapshot(db: ModuleDatabase, userId: str
     if (!row && (options.unregistered ?? "error") === "error") throw new ModuleRegistrationIncomplete();
     if (!row) return options.unregistered === "show" ? [{
       id: module.id, label: module.label, description: module.description, contractVersion: module.contractVersion, enabled: false, phase: "disabled", generation: 0,
-      dependencies: module.dependencies, permissions: [], effectiveCapabilities: [], workspaceReady: false, navigation: [], settings: [], setup: { ...module.setup, ready: false },
+      dependencies: bundledModuleRegistry.requiredModules(module.id), permissions: [], effectiveCapabilities: [], workspaceReady: false, navigation: [], settings: [], setup: { ...module.setup, ready: false },
       deletion: { disabledAt: null, deleteAfter: null, contentStillPresent: false, cleanupFailure: "Database setup for this module has not completed. LancerLogin retries automatically.", data: module.deletedData },
       unavailable: "setup-incomplete",
     }] : [];
@@ -96,7 +96,8 @@ export async function readModulePlatformSnapshot(db: ModuleDatabase, userId: str
       enabled: row.phase === "enabled",
       phase: row.phase,
       generation: row.generation,
-      dependencies: module.dependencies,
+      // Required interface uses are dependencies too, so the dashboard asks for their providers before enabling.
+      dependencies: bundledModuleRegistry.requiredModules(module.id),
       permissions: module.capabilities,
       effectiveCapabilities,
       workspaceReady: effectiveCapabilities.length > 0,

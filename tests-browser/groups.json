@@ -264,7 +264,7 @@
     "plugin-management.spec.ts": {
       "group": "integration",
       "area": "Plugin management, backup and apply",
-      "seconds": 13
+      "seconds": 19
     },
     "public-docs-conformance.spec.ts": {
       "group": "core",

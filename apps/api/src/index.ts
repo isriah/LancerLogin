@@ -4,8 +4,9 @@ import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, typ
 import { createSessionCodec, createSignedStateCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { authRateLimits, bootstrapClaimKey, clearFailedLogins, consumeAuthRateLimit, lockActive, pruneAuthProtection, recordFailedLogin, setupResetCookie, setupResetGrantKey, setupResetGrantMs } from "./auth-protection.ts";
 import { decryptIntegration, encryptIntegration, moduleCredentials } from "./integration-crypto.ts";
+import { moduleEmailIdempotencyKey, moduleEmailMessage, resendModuleEmailPayload } from "./module-email.ts";
 import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance } from "./web-updates.ts";
-import { commitPluginChange, currentSelectionSha, lookupPluginRelease, pluginManagementState, requiredModuleMigrations, requireNoModuleMigration, reviewPluginChange, selectionCredentialState } from "./plugin-selection.ts";
+import { commitPluginChange, currentSelectionSha, freshUntil, lookupPluginRelease, pluginManagementState, requiredModuleMigrations, requireNoModuleMigration, reviewPluginChange, selectionCredentialState } from "./plugin-selection.ts";
 import { discoveryForChannel, releaseRequestHeaders, resolveOfficialRelease } from "./release-discovery.ts";
 import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
 import { kioskReleaseTransition } from "../../../packages/shared/src/release-policy.mjs";
@@ -31,6 +32,7 @@ import { attendanceSetupRoute } from "./attendance-module-setup.ts";
 import { dispatchModuleDiscordCommand } from "./module-discord.ts";
 import { createApiModuleSet, type ApiModuleContribution, type CoreModuleServices, type ModuleReportFilterOption, type ModuleRouteContext } from "./module-contributions.ts";
 import { installedApiModules } from "./installed-api-modules.ts";
+import { grantModuleInterface, moduleInterfaceServices, readModuleInterfaceGrants, revokeModuleInterfaceGrant } from "./module-interfaces.ts";
 import { attendanceApiModule } from "./attendance-api-module.ts";
 import { ensureModulesReconciled, reconcileInstalledModules } from "./module-catalog.ts";
 import { externalModuleManifests } from "../../../packages/shared/src/generated/external-manifests.ts";
@@ -110,6 +112,10 @@ class DiscordResponseError extends HttpError {
   readonly discordStatus: number;
   readonly discordCode?: number;
   constructor(status: number, message: string, code?: number) { super(502, `Discord rejected the request (${status})${message ? `: ${message}` : ""}`); this.discordStatus = status; this.discordCode = code; }
+}
+class EmailProviderError extends HttpError {
+  readonly emailStatus: number;
+  constructor(status: number, message: string) { super(502, `Resend rejected the email (${status})${message ? `: ${message}` : ""}`); this.emailStatus = status; }
 }
 class GoogleCalendarProviderError extends Error {
   readonly providerStatus: number;
@@ -322,7 +328,8 @@ async function pluginManagement(request: Request, env: Env, action: "state" | "r
   if (action === "release") return response(await lookupPluginRelease(input));
   if (action === "change") return response(await commitPluginChange(env, principal, input), 201);
   // Fresh re-authentication with the Admin's own local password replaces the session with a newly authenticated one.
-  if (Object.keys(input).some((key) => key !== "password") || typeof input.password !== "string" || !input.password || input.password.length > 1_024) throw new HttpError(400, "Enter your password");
+  // The same confirmation covers plugin changes and module access grants in Settings > Modules; `purpose` only labels the audit entry.
+  if (Object.keys(input).some((key) => key !== "password" && key !== "purpose") || typeof input.password !== "string" || !input.password || input.password.length > 1_024 || input.purpose !== undefined && input.purpose !== "module_access") throw new HttpError(400, "Enter your password");
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
   const user = await db.prepare("SELECT id, role, password_hash AS passwordHash, locked_until AS lockedUntil, session_epoch AS sessionEpoch FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; role: Role; passwordHash: string | null; lockedUntil?: string; sessionEpoch?: number }>();
   if (!user?.passwordHash) throw new WebUpdateError(409, "password_unavailable", "This account has no LancerLogin password. Sign in with Google again instead.");
@@ -330,10 +337,29 @@ async function pluginManagement(request: Request, env: Env, action: "state" | "r
   if (lockActive(user.lockedUntil)) throw new WebUpdateError(401, "reauthentication_failed", "Too many attempts. Try again later.");
   if (!await verifyPassword(input.password, user.passwordHash)) { await recordFailedLogin(db, user.id); throw new WebUpdateError(401, "reauthentication_failed", "The password is incorrect."); }
   if (!await clearFailedLogins(db, user.id)) throw new WebUpdateError(401, "reauthentication_failed", "Too many attempts. Try again later.");
-  await writeAudit(db, principal, "auth.reauthenticated", "user", user.id, { method: "password", purpose: "plugin_management" });
+  await writeAudit(db, principal, "auth.reauthenticated", "user", user.id, { method: "password", purpose: input.purpose ?? "plugin_management" });
   const token = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role, epoch: Number(user.sessionEpoch ?? 0) });
   const fresh = await createSessionCodec(env.SESSION_KEY).verify(token);
   return response({ ok: true, freshUntil: fresh?.authenticatedAt ? fresh.authenticatedAt + 10 * 60_000 : null }, 200, { "set-cookie": sessionCookie(token) });
+}
+/**
+ * Settings > Modules: the interface uses each module declares, and the standing grants an active Admin gives them. Like a
+ * plugin change, a grant or revocation needs the dashboard origin and fresh authentication.
+ */
+async function moduleInterfaceGrants(request: Request, env: Env, action: "list" | "grant" | "revoke"): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (action !== "list") {
+    if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Module access changes require the dashboard origin");
+    const input = await parseJson<unknown>(request, 4_096);
+    if (!freshUntil(principal)) throw new HttpError(401, "Confirm your identity again before changing module access.", undefined, "reauthentication_required");
+    if (action === "grant") await grantModuleInterface(db, principal.userId, input); else await revokeModuleInterfaceGrant(db, principal.userId, input);
+  }
+  const [state, user, installation] = await Promise.all([
+    readModuleInterfaceGrants(db),
+    db.prepare("SELECT password_hash IS NOT NULL AS password, email FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ password: number; email?: string | null }>(),
+    db.prepare("SELECT auth_mode AS authMode FROM installations WHERE id = 'primary'").first<{ authMode: AuthMode }>(),
+  ]);
+  return response({ ...state, reauthentication: { freshUntil: freshUntil(principal), password: Boolean(user?.password), google: Boolean(user?.email) && ["google", "both"].includes(installation?.authMode ?? "") } }, action === "grant" ? 201 : 200);
 }
 async function localLogin(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); if (!env.SESSION_KEY) throw new HttpError(503, "Local authentication is not configured");
@@ -2210,7 +2236,7 @@ function html(value: unknown): string { return String(value ?? "").replaceAll("&
 async function resendConfiguration(env: Env): Promise<Record<string, string>> {
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const record = await integrationRecord(env, "resend"); if (!record || record.enabled === 0) throw new HttpError(503, "Resend is not enabled");
-  if (!record.verifiedAt) throw new HttpError(503, "Resend verification is required before sending attendance email");
+  if (!record.verifiedAt) throw new HttpError(503, "Resend verification is required before sending email");
   return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
 }
 async function sendAttendanceEmail(request: Request, env: Env): Promise<Response> {
@@ -2286,8 +2312,26 @@ async function discordRequest<T = Record<string, unknown>>(config: ProviderConfi
   throw new HttpError(502, "Discord request did not complete");
 }
 
-/** Shared provider access for module code, bound to the current (module-scoped) environment. */
-function coreModuleServices(env: Env): CoreModuleServices {
+async function resendIsReady(env: Env): Promise<boolean> {
+  if (!env.INTEGRATION_KEY) return false;
+  const record = await integrationRecord(env, "resend"); return Boolean(record && record.enabled !== 0 && record.verifiedAt);
+}
+/** One module message through the verified Resend connection; the key and From address never leave Core. */
+async function sendModuleEmail(env: Env, moduleId: string, value: unknown): Promise<{ id: string | null }> {
+  const message = moduleEmailMessage(value);
+  const config = await resendConfiguration(env);
+  await requireProviderAuthority(env);
+  const result = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", "idempotency-key": moduleEmailIdempotencyKey(moduleId, message.idempotencyKey) }, body: JSON.stringify(resendModuleEmailPayload(config.fromEmail, message)) });
+  const body = await result.json().catch(() => ({})) as { id?: unknown; message?: unknown };
+  if (!result.ok) throw new EmailProviderError(result.status, typeof body.message === "string" ? body.message.replace(/\s+/g, " ").slice(0, 180) : "");
+  return { id: typeof body.id === "string" ? body.id : null };
+}
+
+/**
+ * Shared provider access for module code, bound to the current (module-scoped) environment. `userId` is the signed-in user
+ * of a workspace or setup request, whose own access can authorize interface calls; `nested` marks an interface handler.
+ */
+function coreModuleServices(env: Env, moduleId: string, caller: { readonly userId?: string; readonly nested?: boolean } = {}): CoreModuleServices {
   return Object.freeze({
     googleCalendar: Object.freeze({
       ready: () => googleCalendarIsReady(env),
@@ -2301,7 +2345,16 @@ function coreModuleServices(env: Env): CoreModuleServices {
       async client() { const config = await discordConfiguration(env); return { guildId: config.guildId, request: <T,>(path: string, init: RequestInit) => discordRequest<T>(config, path, init) }; },
       providerStatus: (error: unknown) => error instanceof DiscordResponseError ? error.discordStatus : undefined,
     }),
+    email: Object.freeze({
+      ready: () => resendIsReady(env),
+      send: (message: unknown) => sendModuleEmail(env, moduleId, message),
+      providerStatus: (error: unknown) => error instanceof EmailProviderError ? error.emailStatus : undefined,
+    }),
     credentials: moduleCredentials(env.INTEGRATION_KEY),
+    modules: moduleInterfaceServices({
+      db: requireDatabase(env), consumerId: moduleId, userId: caller.userId, nested: caller.nested, handlers: (providerId) => apiModules.get(providerId)?.interfaces,
+      providerServices: (db, providerId) => coreModuleServices(moduleScopedEnvironment(env, db), providerId, { nested: true }),
+    }),
   });
 }
 
@@ -2311,9 +2364,10 @@ function moduleEnvironment(moduleId: string, env: Env): Env {
   return externalModuleIds.has(moduleId) ? Object.freeze({}) as Env : env;
 }
 
-function moduleRouteContext(moduleId: string, request: Request, env: Env, url: URL): ModuleRouteContext<Env> {
+/** `userId`: the signed-in user of a workspace or setup route. Service routes act without one. */
+function moduleRouteContext(moduleId: string, request: Request, env: Env, url: URL, userId?: string): ModuleRouteContext<Env> {
   return {
-    request, url, env: moduleEnvironment(moduleId, env), db: requireDatabase(env), services: coreModuleServices(env),
+    request, url, env: moduleEnvironment(moduleId, env), db: requireDatabase(env), services: coreModuleServices(env, moduleId, { userId }),
     requireRole: (roles) => requireRole(request, env, [...roles]),
     json: <T,>(maxBytes?: number) => parseJson<T>(request, maxBytes),
     body: async <T,>(maxBytes?: number) => request.method === "GET" ? undefined : parseJson<T>(request, maxBytes),
@@ -3769,7 +3823,7 @@ async function runRegisteredModuleJob(jobId: string, env: Env): Promise<void> {
   if (!owner || !handler) throw new Error("Registered module job is unavailable");
   const db = requireDatabase(env); const generation = await requireModuleService(db, owner.id);
   const scopedDatabase = captureModuleServiceDatabase(db, owner.id, generation); const scopedEnvironment = moduleScopedEnvironment(env, scopedDatabase);
-  await handler({ env: moduleEnvironment(owner.id, scopedEnvironment), db: scopedDatabase, services: coreModuleServices(scopedEnvironment) });
+  await handler({ env: moduleEnvironment(owner.id, scopedEnvironment), db: scopedDatabase, services: coreModuleServices(scopedEnvironment, owner.id) });
 }
 
 export const registeredModuleSchedulerJobs = moduleSchedulerJobs<Env>({ modules: bundledModuleRegistry.modules, enabled: moduleJobEnabled, runJob: runRegisteredModuleJob });
@@ -3808,16 +3862,17 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
       if (retryAfter) return withCors(response({ error: "Too many attempts. Wait a few minutes and try again.", code: "rate_limited" }, 429, { "retry-after": String(retryAfter) }), request, env);
     }
     const moduleRoute = bundledModuleRegistry.routeOwner(url.pathname);
+    let moduleUserId: string | undefined;
     if (request.method !== "OPTIONS" && moduleRoute) {
       const db = requireDatabase(env);
       if (moduleRoute.route.access === "workspace") {
-        const principal = await requireRole(request, env, ["admin", "operator"]);
+        const principal = await requireRole(request, env, ["admin", "operator"]); moduleUserId = principal.userId;
         const generation = await requireModuleWorkspace(db, principal.userId, moduleRoute.module.id);
         const capability = moduleRoute.module.capabilities.find((item) => item.operator)?.id;
         if (!capability) throw new HttpError(500, "Module workspace capability is unavailable");
         env = moduleScopedEnvironment(env, captureModuleWorkspaceDatabase(db, moduleRoute.module.id, generation, principal.userId, capability));
       } else if (moduleRoute.route.access === "setup") {
-        const principal = await requireRole(request, env, ["admin"]);
+        const principal = await requireRole(request, env, ["admin"]); moduleUserId = principal.userId;
         const generation = await requireModuleSetup(db, principal.userId, moduleRoute.module.id);
         env = moduleScopedEnvironment(env, captureModuleSetupDatabase(db, moduleRoute.module.id, generation, principal.userId));
       } else {
@@ -3848,10 +3903,11 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/auth/google/callback" && request.method === "GET") result = await googleCallback(request, env);
     else if (url.pathname === "/platform/modules" && request.method === "GET") result = await modulePlatform(request, env);
     else if (url.pathname === "/admin/modules" && request.method === "PUT") result = await modulePlatform(request, env);
+    else if (url.pathname === "/admin/modules/grants" && ["GET", "POST"].includes(request.method) || url.pathname === "/admin/modules/grants/revoke" && request.method === "POST") result = await moduleInterfaceGrants(request, env, request.method === "GET" ? "list" : url.pathname.endsWith("/revoke") ? "revoke" : "grant");
     else if (/^\/admin\/modules\/[^/]+\/setup$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleSetup(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/modules\/assignments\/[^/]+$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleAssignments(request, env, decodeURIComponent(url.pathname.split("/")[4]));
     else if (url.pathname.startsWith("/module-setup/attendance/")) { const principal = await requireRole(request, env, ["admin"]); result = await attendanceSetupRoute(request, requireDatabase(env), principal.userId); }
-    else if (moduleRouteHandler && (moduleResult = await moduleRouteHandler(moduleRouteContext(moduleRoute!.module.id, request, env, url)))) result = moduleResult;
+    else if (moduleRouteHandler && (moduleResult = await moduleRouteHandler(moduleRouteContext(moduleRoute!.module.id, request, env, url, moduleUserId)))) result = moduleResult;
     else if (url.pathname === "/admin/branding" && ["GET", "PATCH"].includes(request.method)) result = await branding(request, env);
     else if (url.pathname === "/meeting-weight-categories" && request.method === "GET") result = await listMeetingWeightCategories(request, env, false);
     else if (url.pathname === "/admin/meeting-weight-categories" && request.method === "GET") result = await listMeetingWeightCategories(request, env, true);

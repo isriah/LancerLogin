@@ -56,6 +56,8 @@ If you restore meetings without their original roster backup, review audience la
 
 A meetings restore updates meetings that still exist by ID in place, so their live Google Calendar and Discord scheduled-event links survive and later syncs update the same external events instead of creating duplicates. These links are operational state of the running installation and are not part of the backup. Meetings absent from the backup are deleted with their links; their external events are left in place, and the restore response reports how many were detached as `recovery.detachedCalendarEvents`. Remove those events from the calendar or Discord server manually if they are no longer wanted.
 
+Module access grants, which let one module call another without a signed-in user, are authority rather than data. Backups leave them out, and an entire-installation restore removes them. After a restore, review **Settings > Modules > Module access** and grant again; see [module access](MODULE-PLUGINS.md#module-access).
+
 Operational web-update locks and recovery records are deliberately outside the dashboard category backups. They prevent an old restore from erasing an active deployment claim. Worker update credentials are secrets and are never in a backup.
 
 A dashboard restore is one all-or-nothing database transaction, limited to 150,000 records. Cloudflare D1 also limits how long a single transaction may run (about 30 seconds) and how much memory it may use. If a large backup exceeds those limits, the transaction is rolled back, nothing changes, and the restore returns HTTP 503 with an explanation. Restore one category at a time, or use the D1 restore workflow below for very large installations.

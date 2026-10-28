@@ -67,6 +67,44 @@ export function captureModuleSetupDatabase(db: D1Database, moduleId: string, gen
   });
 }
 
+/** The authority one interface call runs under: an Admin's standing grant to the consumer, or the signed-in user. */
+export type ModuleInterfaceAuthority =
+  | { readonly grantId: string; readonly operation: string }
+  | { readonly userId: string; readonly capability: string };
+
+/**
+ * The provider's database for one interface call, composed over the consumer's captured database so both guards run.
+ * Every batch also rechecks the provider's and consumer's lifecycle at their captured generations and the call's
+ * authority, so disabling either module or revoking the grant stops the next statement of a running call.
+ */
+export function captureModuleInterfaceDatabase(db: D1Database, call: {
+  readonly provider: { readonly moduleId: string; readonly generation: number };
+  readonly consumer: { readonly moduleId: string; readonly generation: number };
+  readonly interfaceId: string;
+  readonly version: number;
+  readonly authority: ModuleInterfaceAuthority;
+}) {
+  const provider = moduleStatePredicate(call.provider.moduleId, call.provider.generation, true);
+  requireGeneration(call.consumer.generation);
+  const consumer = `EXISTS(SELECT 1 FROM platform_modules c JOIN platform_module_epochs ce ON ce.installation_id=c.installation_id AND ce.module_id=c.module_id AND ce.generation=c.generation
+    WHERE c.installation_id='primary' AND c.module_id=? AND c.generation=? AND c.phase='enabled')`;
+  const authority = "grantId" in call.authority
+    ? { sql: `EXISTS(SELECT 1 FROM platform_module_interface_grants g, json_each(g.operations_json) o WHERE g.installation_id='primary' AND g.id=?
+        AND g.consumer_module_id=? AND g.provider_module_id=? AND g.interface_id=? AND g.interface_version=? AND g.revoked_at IS NULL AND o.type='text' AND o.value=?)`,
+      bindings: [call.authority.grantId, call.consumer.moduleId, call.provider.moduleId, call.interfaceId, call.version, call.authority.operation] }
+    : { sql: `EXISTS(SELECT 1 FROM users u WHERE u.installation_id='primary' AND u.id=? AND u.active=1
+        AND (u.role='admin' OR (u.role='operator' AND EXISTS(SELECT 1 FROM platform_module_assignments g
+          JOIN platform_module_assignment_revisions r ON r.installation_id=g.installation_id AND r.user_id=g.user_id
+          JOIN platform_module_assignment_epochs e ON e.installation_id=r.installation_id AND e.user_id=r.user_id AND e.revision=r.revision,
+          json_each(g.capabilities_json) c WHERE g.installation_id=u.installation_id AND g.user_id=u.id AND g.module_id=?
+          AND c.type='text' AND c.value=?))))`,
+      bindings: [call.authority.userId, call.provider.moduleId, call.authority.capability] };
+  return scopedDatabase(db, {
+    sql: `${provider.sql} AND ${consumer} AND ${authority.sql}`,
+    bindings: [...provider.bindings, call.consumer.moduleId, call.consumer.generation, ...authority.bindings],
+  });
+}
+
 export function captureModuleWorkspaceDatabase(db: D1Database, moduleId: string, generation: number, userId: string, capability: string) {
   const state = moduleStatePredicate(moduleId, generation, true);
   return scopedDatabase(db, {

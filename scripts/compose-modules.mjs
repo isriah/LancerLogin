@@ -353,7 +353,7 @@ function routesOverlap(external, other) {
 
 /** Validate first-party and external manifests and API shapes together through the Core registry and contribution binder. */
 export async function validateModuleSet(firstParty, externals) {
-  const { createModuleRegistry } = await import("../packages/shared/src/module-platform.ts");
+  const { createModuleRegistry, interfaceUseProblem } = await import("../packages/shared/src/module-platform.ts");
   const { createApiModuleSet } = await import("../apps/api/src/module-contributions.ts");
   const firstPartyIds = new Set(firstParty.map((module) => module.id));
   for (const external of externals) if (firstPartyIds.has(external.plugin.moduleId)) fail(`Module ${external.plugin.moduleId} is a first-party module and cannot be selected as a plugin`);
@@ -363,6 +363,12 @@ export async function validateModuleSet(firstParty, externals) {
   }
   const all = [...firstParty, ...externals.map((item) => item.manifest)];
   const registry = createModuleRegistry(all);
+  // A required interface use is a dependency: its provider must be composed with that version and every named operation.
+  // An optional use may be missing; it is simply unavailable at run time.
+  for (const module of all) for (const use of module.uses ?? []) {
+    const problem = use.required ? interfaceUseProblem(use, all) : undefined;
+    if (problem) fail(`Module ${module.id} requires ${use.interface} version ${use.version}, but ${problem}`);
+  }
   // Compare each plugin with the modules before it, so a clash names the plugin that introduced it.
   for (const [index, external] of externals.entries()) for (const route of external.manifest.apiRoutes) for (const other of [...firstParty, ...externals.slice(0, index).map((item) => item.manifest)]) {
     const clash = other.apiRoutes.find((candidate) => routesOverlap(route, candidate));
@@ -376,7 +382,7 @@ export async function validateModuleSet(firstParty, externals) {
   const stub = async () => undefined;
   const handlers = (names) => Object.fromEntries(names.map((name) => [name, stub]));
   const contributions = [
-    ...firstParty.map((module) => ({ moduleId: module.id, coreRoutes: true, setup: { predicates: handlers(module.setup.steps.map((step) => step.id)), stepValid: stub }, jobs: handlers(module.jobs.map((job) => job.id)), reports: handlers((module.reportDatasets ?? []).map((dataset) => dataset.id)), discord: handlers(module.discordCommands.map((command) => command.name)), cleanup: { steps: [{ kind: "assignments" }] } })),
+    ...firstParty.map((module) => ({ moduleId: module.id, coreRoutes: true, setup: { predicates: handlers(module.setup.steps.map((step) => step.id)), stepValid: stub }, jobs: handlers(module.jobs.map((job) => job.id)), reports: handlers((module.reportDatasets ?? []).map((dataset) => dataset.id)), discord: handlers(module.discordCommands.map((command) => command.name)), interfaces: Object.fromEntries((module.interfaces ?? []).map((definition) => [definition.id, handlers(definition.operations.map((operation) => operation.id))])), cleanup: { steps: [{ kind: "assignments" }] } })),
     ...externals.map(({ api }) => ({ moduleId: api.moduleId, routes: handlers(api.routes), setup: { predicates: handlers(api.setupPredicates), stepValid: stub }, jobs: handlers(api.jobs), reports: handlers(api.reports), discord: handlers(api.discord), cleanup: api.cleanup })),
   ];
   // Rebuild the declared shape of each plugin contribution so the Core binder applies its external-module rules exactly as the Worker will.
@@ -388,6 +394,7 @@ export async function validateModuleSet(firstParty, externals) {
     if (api.backup) contribution.backup = { version: api.backup.version, tables: api.backup.tables, ...Object.fromEntries(api.backup.hooks.map((hook) => [hook, (value) => value])) };
     if (api.reportFilters?.length) contribution.reportFilters = Object.fromEntries(api.reportFilters.map((id) => [id, { options: stub }]));
     if (api.rosterReferences) contribution.rosterReferences = api.rosterReferences;
+    if (api.interfaces && Object.keys(api.interfaces).length) contribution.interfaces = Object.fromEntries(Object.entries(api.interfaces).map(([id, operations]) => [id, handlers(operations)]));
   }
   try { createApiModuleSet(registry, contributions, { externalModuleIds: new Set(externals.map((external) => external.plugin.moduleId)) }); } catch (error) { fail(error.message); }
   return registry;

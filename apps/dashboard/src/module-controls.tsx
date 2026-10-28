@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useId, useRef, useState } from "react";
 import type { ModulePlatformSnapshot, ModuleSnapshotItem } from "../../../packages/shared/src/module-platform.ts";
 import { api } from "./dashboard-api";
 import { readModuleSnapshot } from "./module-client";
+import { ModuleAccessGrants } from "./module-access-grants";
 import { PluginManagement } from "./plugin-management";
 
 type Notice = { tone: "success" | "error"; text: string };
@@ -61,7 +62,7 @@ export function ModuleSettings({ snapshot, onChanged, selection = false }: { sna
       {review.length > 0 && <section ref={reviewPanel} className="settings-callout module-disable-review" role="region" tabIndex={-1} aria-labelledby={`${id}-review-title`}><div><h2 id={`${id}-review-title`}>Confirm module disable</h2><p>Access, device input, submissions, and scheduled work stop immediately. Module data is retained for 7 days before it becomes eligible for deletion.</p>{review.map((module) => <div key={module.id}><h3>{module.label}</h3><ul>{module.deletion.data.map((item) => <li key={item}>{item}</li>)}</ul></div>)}</div><div className="module-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void apply(review)}>Confirm disable</button><button type="button" disabled={busy} onClick={() => setReview([])}>Cancel</button></div></section>}
       <div className="module-actions"><button className="primary-button" type="submit" disabled={busy || invalid || !changed || review.length > 0}>{busy ? "Saving..." : stored.modules.some((module) => module.enabled && !draft.includes(module.id)) ? "Review module disable" : selection ? "Continue" : "Save modules"}</button></div>
     </form> : <p className="ui-status" data-tone="error" role="alert">Module state is unavailable. Reload the page.</p>}
-    {!selection && <PluginManagement />}
+    {!selection && <><ModuleAccessGrants /><PluginManagement /></>}
   </section>;
 }
 

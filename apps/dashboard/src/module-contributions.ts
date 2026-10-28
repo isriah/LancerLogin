@@ -48,21 +48,36 @@ export type DashboardModuleWalkthrough = {
   readonly definition: WalkthroughExperienceDefinition;
 };
 
+/** Core-owned values handed to a public page. */
+export type DashboardPublicPageContext = {
+  /** The decoded rest of the path below the page's base path: `""` at the base, `"manage"` at `/visit/manage`, `"a/b"` at `/visit/a/b`. */
+  readonly subpath: string;
+  /** Navigate in place. Paths below the base stay on this page; a path outside every public page loads the signed-in dashboard. */
+  readonly navigate: DashboardNavigate;
+};
+
 /**
  * A page anyone can open without signing in, such as a public submission form. Core renders it with the installation's
  * branding header, outside the signed-in dashboard, whenever the module's dashboard contribution is installed. The page
- * calls only the module's `service` routes, which enforce enablement and their own rules.
+ * owns its base path and every path below it, and renders its own sub pages from `subpath`. It calls only the module's
+ * `service` routes, which enforce enablement and their own rules.
  */
 export type DashboardPublicPage = {
-  /** An exact single-segment path such as `/submit-hours`, outside Core's own pages and every module's navigation. */
+  /**
+   * A single-segment base path such as `/submit-hours`. The page also renders every path below it, so the base and that
+   * subtree stay clear of Core's own paths, every module's navigation and settings paths and every other public page.
+   */
   readonly path: string;
   /** Text of the skip link that moves focus to the page content. */
   readonly skipLinkLabel: string;
-  readonly render: () => ReactNode;
+  readonly render: (context: DashboardPublicPageContext) => ReactNode;
 };
 
-/** Paths of Core's signed-in pages. Public pages may not use them. */
-export const coreDashboardPaths = Object.freeze(["/", "/admin", "/attendance", "/dashboard", "/integrations", "/kiosks", "/meetings", "/reports", "/roster", "/settings", "/simulator", "/login", "/setup"]);
+/**
+ * Paths Core serves itself: its signed-in pages, the same-origin API proxy (`/api`) and built assets (`/assets`). Public
+ * pages may not use them or any path below them.
+ */
+export const coreDashboardPaths = Object.freeze(["/", "/admin", "/api", "/assets", "/attendance", "/dashboard", "/integrations", "/kiosks", "/meetings", "/reports", "/roster", "/settings", "/simulator", "/login", "/setup"]);
 
 /** A meeting reference handed to slot contributions. Contributions load their own permission-scoped data. */
 export type DashboardMeetingReference = { readonly id: string };
@@ -195,6 +210,8 @@ export function createDashboardModuleSet(registry: Registry, contributions: read
     if (module.setup.steps.length ? typeof contribution.setup !== "function" : contribution.setup) throw new Error(`Module ${module.id} setup workspace does not match declared setup`);
     for (const page of contribution.publicPages ?? []) {
       const reserved = [...coreDashboardPaths, ...registry.modules.flatMap((item) => [...item.navigation, ...item.settings].map((entry) => entry.path))];
+      // A public page owns its base and every path below it, so neither that subtree nor a reserved path's subtree may hold
+      // the other. Bases are single segments, so two public pages overlap only when their bases are equal.
       if (!/^\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(page.path) || reserved.some((path) => within(page.path, path) || within(path, page.path)) || publicPaths.has(page.path) || typeof page.render !== "function" || typeof page.skipLinkLabel !== "string" || !page.skipLinkLabel.trim()) throw new Error(`Module ${module.id} public pages are invalid`);
       publicPaths.add(page.path);
     }
@@ -265,11 +282,15 @@ export function dashboardSlotContributors(modules: DashboardModuleSet, slot: Das
   return modules.entries.filter(({ manifest, contribution }) => (contribution[field] as Readonly<Record<string, unknown>> | undefined)?.[slot] && ready(manifest.id));
 }
 
-/** The public page a contributed module serves at exactly this path. */
+/**
+ * The public page a contributed module serves at this normalized path: its base path or any path below it, with the decoded
+ * `subpath` below the base. A malformed escape matches no public page, so the dashboard treats it as any unknown path.
+ */
 export function resolveDashboardPublicPage(modules: DashboardModuleSet, path: string) {
   for (const { manifest, contribution } of modules.entries) {
-    const page = contribution.publicPages?.find((item) => item.path === path);
-    if (page) return { moduleId: manifest.id, page };
+    const page = contribution.publicPages?.find((item) => within(path, item.path));
+    if (!page) continue;
+    try { return { moduleId: manifest.id, page, subpath: decodeURIComponent(path.slice(page.path.length + 1)) }; } catch { return undefined; }
   }
   return undefined;
 }

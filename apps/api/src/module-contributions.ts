@@ -4,6 +4,7 @@ import type { D1Database, D1Statement } from "./d1-usage.ts";
 import type { ModuleCredentials } from "./integration-crypto.ts";
 import type { CleanupStep } from "./module-cleanup.ts";
 import type { DiscordModuleInteractionHandler } from "./module-discord.ts";
+import type { ModuleEmailMessage } from "./module-email.ts";
 import type { ReportProjectionHandler } from "./module-reporting.ts";
 
 export type ModuleRole = "admin" | "operator";
@@ -26,9 +27,38 @@ export type CoreModuleServices = {
     /** HTTP status of a Discord response failure, or undefined for any other error. */
     providerStatus(error: unknown): number | undefined;
   };
+  /** One message at a time through the installation's verified Resend connection. Core keeps the API key and From address. */
+  readonly email: {
+    /** Resend is enabled and verified. */
+    ready(): Promise<boolean>;
+    /** Send to one recipient. Core prefixes the idempotency key with the module ID. Returns Resend's message ID. */
+    send(message: ModuleEmailMessage): Promise<{ readonly id: string | null }>;
+    /** HTTP status of a Resend rejection, or undefined for any other error. */
+    providerStatus(error: unknown): number | undefined;
+  };
   /** Encrypt module-owned credentials with Core's integration key. */
   readonly credentials: ModuleCredentials;
+  /** Other modules' interfaces this module declares in `uses` (SDK 1.1.0). */
+  readonly modules: {
+    /**
+     * A client for a declared interface use, or undefined when the module did not declare it, the provider is not installed,
+     * enabled and set up, or neither an Admin's grant nor the signed-in user authorizes any of the declared operations.
+     */
+    interface(id: string, version: number): Promise<ModuleInterfaceClient | undefined>;
+  };
 };
+
+/** Calls one declared interface. Each call rechecks authority; a provider failure arrives as an `HttpError`. */
+export type ModuleInterfaceClient = {
+  /** Call a declared operation with a JSON input; resolves to the provider's JSON result. */
+  call(operation: string, input?: unknown): Promise<unknown>;
+};
+/** Who is calling an interface operation: the calling module, with the signed-in user or the Admin grant it called under. */
+export type ModuleInterfaceCaller = { readonly moduleId: string; readonly userId?: string; readonly grantId?: string };
+/** What a provider's interface handler receives besides the input. `db` and `services` are the provider's own, for its current generation. */
+export type ModuleInterfaceCallContext = { readonly db: D1Database; readonly services: CoreModuleServices; readonly caller: ModuleInterfaceCaller };
+/** Validate the input; return a JSON result or throw an `HttpError` the caller receives with its status and message. */
+export type ModuleInterfaceHandler = (context: ModuleInterfaceCallContext, input: unknown) => Promise<unknown>;
 
 /** Core-owned request services handed to module route handlers. `env` and `db` are already module scoped. */
 export type ModuleRouteContext<Environment> = {
@@ -127,6 +157,8 @@ export type ApiModuleContribution<Environment> = {
   readonly reportFilters?: Readonly<Record<string, ModuleReportFilterHandler>>;
   readonly rosterReferences?: ModuleRosterReferences;
   readonly discord?: Readonly<Record<string, DiscordModuleInteractionHandler>>;
+  /** Handlers for every operation of every interface the manifest declares in `interfaces`, keyed by interface ID then operation ID. */
+  readonly interfaces?: Readonly<Record<string, Readonly<Record<string, ModuleInterfaceHandler>>>>;
   readonly cleanup: {
     readonly steps: readonly CleanupStep[];
     /** Work that must drain before retained data is deleted. */
@@ -189,6 +221,11 @@ export function createApiModuleSet<Environment>(registry: Registry, contribution
     const references = contribution.rosterReferences;
     if (references && (typeof references.label !== "string" || !references.label.trim() || references.label.length > 40 || !Array.isArray(references.columns) || !references.columns.length || references.columns.some((item) => !module.persistence.tables.includes(item.table) || !safeName.test(item.column)))) throw new Error(`Module ${module.id} roster references must name its own tables`);
     if (!sameKeys(Object.keys(contribution.discord ?? {}), module.discordCommands.map((command) => command.name))) throw new Error(`Module ${module.id} Discord handlers do not match declared commands`);
+    const interfaces = contribution.interfaces ?? {};
+    if (!sameKeys(Object.keys(interfaces), (module.interfaces ?? []).map((definition) => definition.id)) || (module.interfaces ?? []).some((definition) => {
+      const handlers = interfaces[definition.id];
+      return !handlers || typeof handlers !== "object" || !sameKeys(Object.keys(handlers), definition.operations.map((operation) => operation.id)) || Object.values(handlers).some((handler) => typeof handler !== "function");
+    })) throw new Error(`Module ${module.id} interface handlers do not match declared interface operations`);
     if (external.has(module.id) && (contribution.coreRoutes || contribution.installationSeed)) throw new Error(`External module ${module.id} cannot use Core routes or installation seeds`);
     if (!contribution.cleanup.steps.length || contribution.cleanup.steps.some((step) => step.kind !== "assignments" && !safeName.test(step.table))) throw new Error(`Module ${module.id} cleanup steps are invalid`);
     validateBackupAdapter(module, contribution.backup, external.has(module.id));

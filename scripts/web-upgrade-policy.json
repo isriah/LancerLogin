@@ -425,6 +425,11 @@
       "name": "0085_reader_cleanup.sql",
       "sha256": "7614a9f7315dcea696790be1d2c494016b7f71be0ed9ba20679a54e2246f74bb",
       "forwardCompatible": true
+    },
+    {
+      "name": "0086_module_interface_grants.sql",
+      "sha256": "dcf155484f081f2e0cb609c2f45a5492d1fb9c42f5afd60fb82f2be1b1fadeef",
+      "forwardCompatible": true
     }
   ]
 }

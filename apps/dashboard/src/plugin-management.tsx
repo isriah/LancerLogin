@@ -28,9 +28,10 @@ type Review = {
   declaredNote: string; trustStatement: string; allowlist: string;
 };
 type ReleaseLookup = { track: Track; release: { tag: string; kind: "stable" | "beta" | "nightly"; commit: string; url: string | null } | null; reason?: string };
-class RequestError extends Error { constructor(message: string, readonly code?: string) { super(message); } }
+export class RequestError extends Error { constructor(message: string, readonly code?: string) { super(message); } }
 
-async function request<T>(path: string, body?: unknown): Promise<T> {
+/** GET, or POST a JSON body, with the session cookie; failures carry the Worker's message and stable code. */
+export async function request<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, { credentials: "include", cache: "no-store", ...(body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });
   const result = await response.json().catch(() => ({})) as T & { error?: string; code?: string };
   if (!response.ok) throw new RequestError(result.error ?? "The request could not be completed.", result.code);
@@ -45,6 +46,20 @@ const pendingText: Record<Pending["kind"], (change: Pending) => string> = {
 };
 const trackLabel: Record<Track, string> = { stable: "Stable", nightly: "Nightly (testing only)" };
 const nightlyWarning = "Nightly releases are testing builds. Use the Nightly track only on a test installation, never on one people depend on.";
+/**
+ * Fresh authentication for changes in Settings > Modules: the Admin's own password, or signing in with Google again. Either
+ * lasts ten minutes. `onConfirm` posts the password and resolves true when the identity was confirmed.
+ */
+export function IdentityConfirmation({ options, freshUntil, busy, action, onConfirm }: { options: PluginState["reauthentication"]; freshUntil: number | null; busy: boolean; action: string; onConfirm: (password: string) => Promise<boolean> }) {
+  const [password, setPassword] = useState("");
+  if (freshUntil && freshUntil > Date.now()) return <p className="field-help" role="status">Identity confirmed until {new Date(freshUntil).toLocaleTimeString()}.</p>;
+  return <div className="plugin-reauth"><p>Confirm your identity to {action}. Confirmation lasts ten minutes.</p>
+    {options.password && <form className="ui-form" onSubmit={(event) => { event.preventDefault(); void onConfirm(password).then((confirmed) => { if (confirmed) setPassword(""); }); }}><label>Your password<input className="ui-control" type="password" autoComplete="current-password" value={password} disabled={busy} required onChange={(event) => setPassword(event.target.value)} /></label><button className="ui-button" type="submit" disabled={busy || !password}>Confirm identity</button></form>}
+    {options.google && <a className="ui-button" href={`${apiBaseUrl}/auth/google/start?reauth=modules`}>Sign in again with Google</a>}
+    {!options.password && !options.google && <p className="ui-status" data-tone="error">Sign out and sign in again to confirm your identity.</p>}
+  </div>;
+}
+
 const removalBlocked = (phase: Phase) => phase === "enabled" ? "Disable this module above before removing its plugin." : phase === "retained" || phase === "deleting" ? "Its retained data must be deleted before the plugin can be removed." : "";
 
 function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; state: PluginState; onClose: () => void; onCommitted: (message: string) => void }) {
@@ -53,7 +68,6 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
   const [lookup, setLookup] = useState<{ busy: boolean; result?: ReleaseLookup; error?: string }>({ busy: false });
   const lookupRun = useRef(0);
   const [trusted, setTrusted] = useState(false);
-  const [password, setPassword] = useState("");
   const [freshUntil, setFreshUntil] = useState(state.reauthentication.freshUntil);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -85,9 +99,10 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
     await run(async () => { setTrusted(false); setReview(await request<Review>("/admin/plugins/review", body(form))); });
   }
   useEffect(() => { if (draft.action === "remove") void inspect(); else if (draft.action === "upgrade" && canLookup) void findRelease(form, false); }, []);
-  async function reauthenticate(event: FormEvent) {
-    event.preventDefault();
-    await run(async () => { const result = await request<{ freshUntil: number | null }>("/admin/plugins/reauthenticate", { password }); setPassword(""); setFreshUntil(result.freshUntil); });
+  async function reauthenticate(password: string) {
+    let confirmed = false;
+    await run(async () => { const result = await request<{ freshUntil: number | null }>("/admin/plugins/reauthenticate", { password }); setFreshUntil(result.freshUntil); confirmed = true; });
+    return confirmed;
   }
   async function commit() {
     if (!review) return;
@@ -133,12 +148,7 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
       {review.action === "remove" ? <p>{review.official ? "The installation returns to the commit LancerLogin pins for this module." : "The plugin's code is removed when the change is applied. Its module is already disabled with no retained data."}</p>
         : <><p className="settings-callout plugin-trust">{review.trustStatement}</p>
           <label className="module-choice"><input type="checkbox" className="ui-checkbox" checked={trusted} disabled={busy} onChange={(event) => setTrusted(event.target.checked)} /><span>I trust this source and reviewed this exact commit.</span></label></>}
-      {fresh ? <p className="field-help" role="status">Identity confirmed until {new Date(freshUntil!).toLocaleTimeString()}.</p>
-        : <div className="plugin-reauth"><p>Confirm your identity to change plugins. Confirmation lasts ten minutes.</p>
-          {state.reauthentication.password && <form className="ui-form" onSubmit={(event) => void reauthenticate(event)}><label>Your password<input className="ui-control" type="password" autoComplete="current-password" value={password} disabled={busy} required onChange={(event) => setPassword(event.target.value)} /></label><button className="ui-button" type="submit" disabled={busy || !password}>Confirm identity</button></form>}
-          {state.reauthentication.google && <a className="ui-button" href={`${apiBaseUrl}/auth/google/start?reauth=modules`}>Sign in again with Google</a>}
-          {!state.reauthentication.password && !state.reauthentication.google && <p className="ui-status" data-tone="error">Sign out and sign in again to confirm your identity.</p>}
-        </div>}
+      <IdentityConfirmation options={state.reauthentication} freshUntil={freshUntil} busy={busy} action="change plugins" onConfirm={reauthenticate} />
       <div className="module-actions">
         <button className={`ui-button ui-button--primary primary-button${review.action === "remove" ? " ui-button--danger" : ""}`} type="button" disabled={busy || !fresh || review.action !== "remove" && (!trusted || review.metadata?.state === "incompatible")} onClick={() => void commit()}>{busy ? "Committing…" : review.action === "remove" ? "Commit removal" : "Commit change"}</button>
         {draft.action !== "remove" && <button className="ui-button" type="button" disabled={busy} onClick={() => setReview(undefined)}>Edit</button>}
@@ -164,7 +174,7 @@ export function PluginManagement() {
   }
   useEffect(() => {
     void load();
-    if (new URLSearchParams(window.location.search).get("reauthenticated") === "1") setNotice("Identity confirmed. Review and commit your plugin change within ten minutes.");
+    if (new URLSearchParams(window.location.search).get("reauthenticated") === "1") setNotice("Identity confirmed. Make your plugin or module access change within ten minutes.");
   }, []);
   const ready = state?.credential.state === "ready" && Boolean(state.repository) && Boolean(state.selection) && !state.error;
   const locked = Boolean(state?.activeUpdate) || updateActive;

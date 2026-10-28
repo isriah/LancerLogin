@@ -1,4 +1,4 @@
-import { createModuleRegistry, firstPartyModules, type ModuleDefinition } from "../../../packages/shared/src/module-platform.ts";
+import { createModuleRegistry, firstPartyModules, requiredModuleIds, type ModuleDefinition } from "../../../packages/shared/src/module-platform.ts";
 import type { D1Database, D1Statement } from "./d1-usage.ts";
 import { HttpError } from "./http-error.ts";
 import { externalModuleIds, type ApiModuleContribution, type ModuleBackupAdapter, type ModuleBackupRestoreContext, type ModuleBackupTables } from "./module-contributions.ts";
@@ -172,7 +172,7 @@ export function planExternalModuleRestore(entries: readonly ExternalModuleBackup
     unavailable.push({ id: entry.id, label: entry.label, status, requiredBackupVersion: entry.backupVersion, installedBackupVersion: definition?.backup.version ?? null, requiredContractVersion: entry.contractVersion, installedContractVersion: definition?.contractVersion ?? null, source: entry.source, commit: entry.commit, rows: entry.rows });
   }
   const excludedIds = new Set(unavailable.map((module) => module.id));
-  const dependencies = included.flatMap(({ module }) => module.definition.dependencies.filter((dependency) => excludedIds.has(dependency)).map((dependsOn) => ({ moduleId: module.definition.id, label: module.definition.label, dependsOn })));
+  const dependencies = included.flatMap(({ module }) => requiredModuleIds(module.definition).filter((dependency) => excludedIds.has(dependency)).map((dependsOn) => ({ moduleId: module.definition.id, label: module.definition.label, dependsOn })));
   if (dependencies.length) throw refusal({ unavailable }, dependencies);
   if (!unavailable.length && requested.length) throw new HttpError(400, "excludeModules may name only modules this installation cannot restore");
   const confirmed = requested.length === excludedIds.size && requested.every((id) => excludedIds.has(id));

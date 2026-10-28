@@ -20,6 +20,11 @@ import { createModuleReportDispatcher } from "../apps/api/src/module-reporting.t
 import { createTestD1Database } from "./fixtures/d1-database.ts";
 import { prepareTestComposition } from "../scripts/test-plugin-sources.mjs";
 import { isolatedGitEnv } from "../scripts/git-env.mjs";
+import { registerHooks } from "node:module";
+
+// Composed plugin code imported below resolves the module SDK to this Core's copy, as a composed build does.
+const coreParent = new URL("../package.json", import.meta.url).href;
+registerHooks({ resolve: (specifier, context, nextResolve) => nextResolve(specifier, specifier === "@lancerlogin/module-sdk" || specifier.startsWith("@lancerlogin/module-sdk/") ? { ...context, parentURL: coreParent } : context) });
 
 const fixture = "tests/fixtures/module-plugins/example";
 const corePackage = JSON.parse(readFileSync("package.json", "utf8"));
@@ -258,9 +263,9 @@ test("collisions with first-party or other plugins are refused through the Core 
   assert.equal(registry.tableOwner("example_items")?.id, "example");
   // A second plugin must not reuse anything the first one owns.
   const second = (change: (manifest: any, api: any) => void) => external((manifest, api) => {
-    Object.assign(manifest, { id: "second", label: "Second", tablePrefix: "second_", capabilities: [{ id: "second.manage", label: "Manage Second", operator: true }], jobs: [], discordCommands: [], reportDatasets: [], navigation: [{ label: "Second", path: "/second" }], settings: [], apiRoutes: [{ path: "/admin/second", match: "prefix", access: "workspace" }] });
+    Object.assign(manifest, { id: "second", label: "Second", tablePrefix: "second_", capabilities: [{ id: "second.manage", label: "Manage Second", operator: true }], jobs: [], discordCommands: [], reportDatasets: [], interfaces: [], navigation: [{ label: "Second", path: "/second" }], settings: [], apiRoutes: [{ path: "/admin/second", match: "prefix", access: "workspace" }] });
     Object.assign(manifest.persistence, { tables: ["second_items"] }); Object.assign(manifest.backup, { tables: ["second_items"], nonPortableTables: [] }); manifest.lifecycle = { cleanupTargets: ["second_items"] };
-    Object.assign(api, { moduleId: "second", routes: ["/admin/second"], jobs: [], reports: [], discord: [], cleanup: { steps: [{ kind: "delete", table: "second_items" }] }, backup: { version: 1, tables: { second_items: api.backup.tables.example_items }, hooks: [] } });
+    Object.assign(api, { moduleId: "second", routes: ["/admin/second"], jobs: [], reports: [], discord: [], interfaces: {}, cleanup: { steps: [{ kind: "delete", table: "second_items" }] }, backup: { version: 1, tables: { second_items: api.backup.tables.example_items }, hooks: [] } });
     change(manifest, api);
   }, "second");
   assert.ok(await validateModuleSet(firstParty, [external(), second(() => {})]));

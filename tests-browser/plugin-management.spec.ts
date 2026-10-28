@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { attendanceSnapshot } from "./module-fixtures";
+import type { ModuleAccessUse } from "../apps/dashboard/src/module-access-grants";
 import type { PluginState } from "../apps/dashboard/src/plugin-management";
 import type { WebUpdateRequest } from "../apps/dashboard/src/web-update";
 
@@ -281,4 +282,136 @@ test("Settings > Updates explains a used module that moved into a plugin and kee
   await expect(page.getByText("Added the carpool plugin. The next update installs LancerLogin and the plugin together.")).toBeVisible();
   await expect(notice).toHaveCount(0);
   expect(mock.posts.find((post) => post.path === "change")?.body).toMatchObject({ action: "add", id: "carpool", source, commit, trustConfirmed: true });
+});
+
+type AccessUse = ModuleAccessUse;
+const accessUse = (overrides: Partial<AccessUse> = {}): AccessUse => ({
+  consumer: { id: "consumer", label: "Consumer", phase: "enabled" }, provider: { id: "example", label: "Example", state: "ready" },
+  interface: { id: "example.items", version: 1, label: "Example items" }, required: false, reason: "Copy Example items into Consumer runs",
+  operations: [{ id: "list", label: "List Example items", grantable: true }, { id: "create", label: "Create Example items", grantable: true }, { id: "close", label: "Close Example items", grantable: false }],
+  grantable: ["list", "create"], grant: null, ...overrides,
+});
+async function accessSetup(page: Page) {
+  const mock = await setup(page);
+  const ledger = accessUse({ consumer: { id: "relay", label: "Relay", phase: "enabled" }, provider: { id: "ledger", label: "Ledger", state: "disabled" }, interface: { id: "ledger.entries", version: 2, label: "Ledger entries" }, required: true, reason: "Post relay totals", operations: [{ id: "post", label: "Post Ledger entries", grantable: true }], grantable: ["post"], grant: { id: "grant-ledger", operations: ["post"], grantedAt: "2026-10-20T15:00:00.000Z", grantedBy: "admin", current: true } });
+  let uses = [accessUse(), ledger]; let freshUntil: number | null = null; let stale = false;
+  const state = () => ({ uses, reauthentication: { freshUntil, password: true, google: false } });
+  await page.route("**/admin/modules/grants", (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: state() });
+    mock.posts.push({ path: "grant", body: route.request().postDataJSON() });
+    if (stale) { stale = false; freshUntil = null; return route.fulfill({ status: 401, json: { error: "Confirm your identity again before changing module access.", code: "reauthentication_required" } }); }
+    uses = [accessUse({ grant: { id: "grant-consumer", operations: ["list", "create"], grantedAt: new Date().toISOString(), grantedBy: "admin", current: true } }), ledger];
+    return route.fulfill({ status: 201, json: state() });
+  });
+  await page.route("**/admin/modules/grants/revoke", (route) => {
+    mock.posts.push({ path: "revoke", body: route.request().postDataJSON() });
+    uses = [accessUse(), ledger];
+    return route.fulfill({ json: state() });
+  });
+  await page.route("**/admin/plugins/reauthenticate", (route) => {
+    const body = route.request().postDataJSON() as { password: string; purpose?: string }; mock.posts.push({ path: "reauthenticate", body: { password: body.password ? "[provided]" : "", purpose: body.purpose } });
+    if (body.password !== "correct") return route.fulfill({ status: 401, json: { error: "The password is incorrect.", code: "reauthentication_failed" } });
+    freshUntil = Date.now() + 600_000;
+    return route.fulfill({ json: { ok: true, freshUntil } });
+  });
+  return { posts: mock.posts, expire() { stale = true; } };
+}
+
+test("Admin reviews, grants and revokes module access in Settings > Modules after confirming identity", async ({ page }) => {
+  const mock = await accessSetup(page);
+  await page.goto("/settings/modules");
+  const access = page.locator(".module-access");
+  await expect(access.getByRole("heading", { name: "Module access", exact: true })).toBeVisible();
+  const consumer = access.locator(".module-access-row").filter({ hasText: "Consumer asks to use Example" });
+  await expect(consumer).toContainText("List Example items");
+  await expect(consumer).toContainText("Close Example items (signed-in people only)");
+  await expect(consumer).toContainText("Reason: Copy Example items into Consumer runs");
+  await expect(consumer).toContainText("Not granted. Signed-in people with access to Example can still use it from Consumer.");
+  const relay = access.locator(".module-access-row").filter({ hasText: "Relay asks to use Ledger" });
+  await expect(relay).toContainText("Ledger is not enabled, so this access is unavailable until it is.");
+  await expect(relay).toContainText("Relay cannot be enabled without Ledger.");
+  await expect(relay).toContainText("Granted by admin on");
+  await expect(relay.getByRole("button", { name: /^Grant/ })).toHaveCount(0);
+
+  // Escape closes the dialog without a change and returns focus to its button.
+  const grantButton = consumer.getByRole("button", { name: "Grant Consumer access to Example" });
+  await grantButton.click();
+  let dialog = page.getByRole("dialog", { name: "Grant Consumer access" });
+  await expect(dialog).toContainText("List Example items");
+  await expect(dialog).toContainText("Not included: Close Example items. Only signed-in people with access to Example can do this.");
+  await expect(dialog).toContainText("Copy Example items into Consumer runs");
+  await expect(dialog.getByRole("button", { name: "Grant access" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(grantButton).toBeFocused();
+
+  // A wrong password is refused; the confirmed identity then allows the grant of exactly the grantable operations.
+  await page.keyboard.press("Enter");
+  dialog = page.getByRole("dialog", { name: "Grant Consumer access" });
+  await dialog.getByLabel("Your password").fill("wrong");
+  await dialog.getByRole("button", { name: "Confirm identity" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("The password is incorrect.");
+  await dialog.getByLabel("Your password").fill("correct");
+  await page.keyboard.press("Enter");
+  await expect(dialog.getByText(/Identity confirmed until/)).toBeVisible();
+  await dialog.getByRole("button", { name: "Grant access" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(mock.posts.find((post) => post.path === "grant")?.body).toEqual({ consumer: "consumer", interface: "example.items", version: 1, operations: ["list", "create"] });
+  expect(mock.posts.filter((post) => post.path === "reauthenticate").map((post) => post.body)).toEqual([{ password: "[provided]", purpose: "module_access" }, { password: "[provided]", purpose: "module_access" }]);
+  await expect(access.getByRole("status").filter({ hasText: "Consumer can now use Example without a signed-in user." })).toBeFocused();
+  await expect(consumer).toContainText("Granted by admin on");
+  await expect(consumer.getByRole("button", { name: /^Grant/ })).toHaveCount(0);
+
+  // Revoking within the confirmation window needs no second password.
+  await consumer.getByRole("button", { name: "Revoke Consumer access to Example" }).click();
+  dialog = page.getByRole("dialog", { name: "Revoke Consumer access" });
+  await expect(dialog).toContainText("A call already running stops at its next step");
+  await expect(dialog.getByText(/Identity confirmed until/)).toBeVisible();
+  await dialog.getByRole("button", { name: "Revoke access" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(mock.posts.find((post) => post.path === "revoke")?.body).toEqual({ grantId: "grant-consumer" });
+  await expect(access.getByRole("status").filter({ hasText: "Revoked Consumer's access to Example." })).toBeFocused();
+  await expect(consumer).toContainText("Not granted.");
+
+  // When the session's confirmation has lapsed, the Worker refuses and the dialog asks for identity again.
+  mock.expire();
+  await consumer.getByRole("button", { name: "Grant Consumer access to Example" }).click();
+  dialog = page.getByRole("dialog", { name: "Grant Consumer access" });
+  await dialog.getByRole("button", { name: "Grant access" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Confirm your identity again before changing module access.");
+  await expect(dialog.getByLabel("Your password")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Grant access" })).toBeDisabled();
+});
+
+test("module access controls use shared themed styles at desktop and mobile in light and dark", async ({ page }) => {
+  await accessSetup(page);
+  for (const theme of ["light", "dark"]) for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await page.addInitScript((value) => localStorage.setItem("lancerlogin-theme", value), theme);
+    await page.goto("/settings/modules");
+    await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+    const grant = page.getByRole("button", { name: "Grant Consumer access to Example" });
+    const revoke = page.getByRole("button", { name: "Revoke Relay access to Ledger" });
+    const styles = (locator: typeof grant, expected: { background: string; color: string }) => locator.evaluate((element, colors) => {
+      const actual = getComputedStyle(element); const probe = document.createElement("span"); probe.style.color = colors.color; probe.style.backgroundColor = colors.background; probe.style.borderRadius = "var(--radius-control)"; element.append(probe); const reference = getComputedStyle(probe);
+      const result = { background: actual.backgroundColor === reference.backgroundColor, color: actual.color === reference.color, radius: actual.borderRadius === reference.borderRadius, focus: actual.outlineStyle, height: element.getBoundingClientRect().height }; probe.remove(); return result;
+    }, expected);
+    await grant.focus();
+    const primary = await styles(grant, { background: "var(--primary)", color: "var(--on-primary)" });
+    expect(primary).toMatchObject({ background: true, color: true, radius: true }); expect(primary.focus).not.toBe("none"); expect(primary.height).toBeGreaterThanOrEqual(44);
+    await revoke.focus();
+    const secondary = await styles(revoke, { background: "var(--ui-surface)", color: "var(--ui-text)" });
+    expect(secondary).toMatchObject({ radius: true }); expect(secondary.focus).not.toBe("none"); expect(secondary.height).toBeGreaterThanOrEqual(44);
+    const granted = await page.locator(".module-access-row[data-status='granted'] .module-access-status").evaluate((element) => { const probe = document.createElement("span"); probe.style.color = "var(--ui-success)"; element.append(probe); const same = getComputedStyle(element).color === getComputedStyle(probe).color; probe.remove(); return same; });
+    expect(granted).toBe(true);
+    await page.locator(".module-access").screenshot({ path: test.info().outputPath(`module-access-list-${theme}-${width}.png`) });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await grant.click();
+    const dialog = page.getByRole("dialog", { name: "Grant Consumer access" });
+    expect(await dialog.getByLabel("Your password").evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    expect(await dialog.getByRole("button", { name: "Grant access" }).evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`module-access-${theme}-${width}.png`) });
+    await page.keyboard.press("Escape");
+  }
 });

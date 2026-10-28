@@ -175,3 +175,48 @@ test("first-Admin setup registers composed plugins at once, after earlier reques
   assert.equal((await fetch("/health")).status, 200);
   assert.equal(db.count("SELECT COUNT(*) AS n FROM platform_module_catalog WHERE module_id='example'"), 1);
 });
+
+test("a composed plugin sends email through Core's Resend connection and reads the installation time zone", async (t) => {
+  const { db, env, call } = installation();
+  const { encryptIntegration } = await import("../apps/api/src/integration-crypto.ts");
+  let modules = await call("/platform/modules");
+  modules = await call("/admin/modules", { method: "PUT", body: { enabled: ["attendance", "example"], revision: modules.body.revision } });
+  db.raw.exec("INSERT INTO example_items(installation_id,id,title,created_at) VALUES ('primary','first','First item','2026-10-26T00:00:00.000Z')");
+  const generation = modules.body.modules.find((module: any) => module.id === "example").generation;
+  assert.equal((await call("/admin/modules/example/setup", { method: "PUT", body: { generation, stepId: "catalog", outcome: "completed" } })).status, 200);
+  const timeZone = db.rows<{ time_zone: string }>("SELECT time_zone FROM organization_settings WHERE installation_id='primary'")[0]!.time_zone;
+
+  // Without a verified Resend connection the service reports not ready and nothing is sent.
+  const sent: { url: string; headers: Headers; body: Record<string, unknown> }[] = [];
+  let reply = () => new Response(JSON.stringify({ id: "email-1" }), { status: 200, headers: { "content-type": "application/json" } });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (!url.startsWith("https://api.resend.com/")) throw new Error(`Unexpected provider request ${url}`);
+    sent.push({ url, headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+    return reply();
+  }) as typeof fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+  assert.deepEqual((await call("/admin/example/notify", { body: { to: "guest@example.test", key: "1" }, dashboard: true })).body, { ready: false, timeZone });
+  db.raw.exec("UPDATE installations SET resend_enabled=1 WHERE id='primary'");
+  const encrypted = await encryptIntegration({ apiKey: "re_synthetic_key", fromEmail: "team@example.test" }, sessionSecret);
+  db.raw.prepare("INSERT INTO encrypted_integrations(id,installation_id,provider,ciphertext,iv,updated_at) VALUES ('resend','primary','resend',?,?,'2026-01-01')").run(encrypted.ciphertext, encrypted.iv);
+  assert.equal((await call("/admin/example/notify", { body: { to: "guest@example.test", key: "1" }, dashboard: true })).body.ready, false, "an unverified connection is not ready");
+  assert.equal(sent.length, 0);
+
+  // A verified connection sends one message from Core's address, with a module-namespaced idempotency key.
+  db.raw.exec("UPDATE encrypted_integrations SET verified_at='2026-01-02' WHERE provider='resend'");
+  const delivered = await call("/admin/example/notify", { body: { to: "guest@example.test", key: "1" }, dashboard: true });
+  assert.deepEqual(delivered.body, { ready: true, timeZone, id: "email-1" });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.headers.get("idempotency-key"), "module-example-notice-1");
+  assert.equal(sent[0]!.headers.get("authorization"), "Bearer re_synthetic_key");
+  assert.deepEqual(sent[0]!.body, { from: "team@example.test", to: ["guest@example.test"], subject: "Example notice", text: `Example notice (${timeZone})` });
+  assert.equal(JSON.stringify(delivered.body).includes("re_synthetic_key"), false);
+
+  // A provider rejection reaches the plugin as a status it can act on; a malformed message never reaches Resend.
+  reply = () => new Response(JSON.stringify({ message: "Invalid `to` field" }), { status: 422, headers: { "content-type": "application/json" } });
+  assert.deepEqual(await call("/admin/example/notify", { body: { to: "guest@example.test", key: "2" }, dashboard: true }), { status: 502, body: { ready: true, timeZone, providerStatus: 422 } });
+  assert.equal((await call("/admin/example/notify", { body: { to: "not an address", key: "3" }, dashboard: true })).status, 400);
+  assert.equal(sent.length, 2);
+});

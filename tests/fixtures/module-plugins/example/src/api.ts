@@ -1,6 +1,6 @@
 // Synthetic, unshipped API contribution for composition tests. Handlers receive Core's module context and the
 // module-scoped database; they never see the Worker environment or Core credentials.
-import type { ApiModuleContribution } from "@lancerlogin/module-sdk/api";
+import { HttpError, installationTimeZone, type ApiModuleContribution } from "@lancerlogin/module-sdk/api";
 import { countOpenItems, itemsWithRequests } from "./items.ts";
 
 const installationId = "primary";
@@ -17,6 +17,23 @@ const api: ApiModuleContribution<unknown> = {
     "/admin/example": async (context: any) => {
       // Lets tests confirm a plugin receives Core services but none of the Worker environment.
       if (context.url.pathname === "/admin/example/environment") return context.respond({ environmentKeys: Object.keys(context.env ?? {}), credentials: context.services.credentials.available });
+      // Lets tests exercise Core's shared email service and the installation time zone projection.
+      if (context.url.pathname === "/admin/example/notify" && context.request.method === "POST") {
+        await context.requireRole(["admin"]);
+        context.requireDashboardOrigin("Example changes require the dashboard origin");
+        const input = await context.json(2048);
+        const ready = await context.services.email.ready();
+        const timeZone = await installationTimeZone(context.db, installationId);
+        if (!ready) return context.respond({ ready, timeZone });
+        try {
+          const sent = await context.services.email.send({ to: input?.to, subject: "Example notice", text: `Example notice (${timeZone})`, idempotencyKey: `notice-${input?.key}` });
+          return context.respond({ ready, timeZone, id: sent.id });
+        } catch (error) {
+          const providerStatus = context.services.email.providerStatus(error);
+          if (providerStatus === undefined) throw error;
+          return context.respond({ ready, timeZone, providerStatus }, 502);
+        }
+      }
       if (context.url.pathname !== "/admin/example/items") return undefined;
       await context.requireRole(["admin", "operator"]);
       if (context.request.method === "GET") return context.respond({ items: await itemsWithRequests(context.db, installationId) });
@@ -56,6 +73,26 @@ const api: ApiModuleContribution<unknown> = {
       const title = interaction.data?.options?.find((option: any) => option.name === "title")?.value;
       const open = await countOpenItems(db, installationId, title);
       return `${open} open Example item${open === 1 ? "" : "s"}${title ? ` titled ${title}` : ""}`;
+    },
+  },
+  // Other modules call these through Core with an Admin's grant or a signed-in user's Example access. The handlers validate
+  // their own input and see who is calling; `create` writes twice, so tests can revoke access between its statements.
+  interfaces: {
+    "example.items": {
+      list: async ({ db }: any) => ({ items: (await itemsWithRequests(db, installationId)).map(({ id, title }) => ({ id, title })) }),
+      create: async ({ db, caller }: any, input: any) => {
+        if (!validId(input?.id) || typeof input?.title !== "string" || !input.title.trim() || input.title.length > 120) throw new HttpError(400, "An item ID and title are required");
+        if (await db.prepare("SELECT 1 FROM example_items WHERE installation_id = ? AND id = ?").bind(installationId, input.id).first()) throw new HttpError(409, "That Example item already exists");
+        await db.prepare("INSERT INTO example_items (installation_id, id, title, created_at) VALUES (?, ?, ?, ?)").bind(installationId, input.id, input.title.trim(), new Date().toISOString()).run();
+        await db.prepare("INSERT INTO example_requests (installation_id, id, item_id, note, created_at) VALUES (?, ?, ?, ?, ?)").bind(installationId, `${input.id}-origin`, input.id, `Created by ${caller.moduleId}${caller.grantId ? " with a grant" : ` for ${caller.userId}`}`, new Date().toISOString()).run();
+        return { id: input.id };
+      },
+      close: async ({ db }: any, input: any) => {
+        if (!validId(input?.id)) throw new HttpError(400, "An item ID is required");
+        const result = await db.prepare("UPDATE example_items SET closed = 1 WHERE installation_id = ? AND id = ?").bind(installationId, input.id).run();
+        if (result.meta?.changes !== 1) throw new HttpError(404, "That Example item does not exist");
+        return { closed: input.id };
+      },
     },
   },
   cleanup: { steps: [{ kind: "delete", table: "example_requests" }, { kind: "delete", table: "example_items" }, { kind: "assignments" }] },

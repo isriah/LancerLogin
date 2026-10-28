@@ -45,7 +45,10 @@ test("acknowledged history is not resent every heartbeat, but local reviews and 
   clock += 60 * 60_000;
   await sync.tick({});
   await sync.tick({});
-  assert.deepEqual(batches.slice(3).map(batch => batch.length), [50, 35], "the hourly refresh can rebuild a lost cloud mirror");
+  // The hourly refresh polls cloud-open records so dashboard reviews reach the
+  // kiosk; settled-7 is reviewed in the cloud and is final.
+  assert.deepEqual(batches.slice(3).map(batch => batch.length), [50, 34], "the hourly refresh polls open records");
+  assert.equal(batches.slice(3).flat().includes("settled-7"), false);
   assert.equal(sync.hasFailures(), false);
 });
 

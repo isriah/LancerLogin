@@ -400,6 +400,16 @@
       "name": "0080_plugin_selection_updates.sql",
       "sha256": "81f3612fb1863bd6ddefac697dca040de51f2b4e6a62dbec2180044b5e167060",
       "forwardCompatible": true
+    },
+    {
+      "name": "0081_auth_hardening.sql",
+      "sha256": "74262747ad34b0e72e651f60d662d93095f89eceea4b9272e21e9952e8a72c1d",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0082_kiosk_roster_revision.sql",
+      "sha256": "aee4ee101332377382570c140251e05631548ee1f3367a0e4ade220741799bf6",
+      "forwardCompatible": true
     }
   ]
 }

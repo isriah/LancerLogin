@@ -8,9 +8,16 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const uuid = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 
-export function kioskBrowserArguments(profile) {
+export const kioskUrl = "http://127.0.0.1:8788/";
+
+// Static, script-free page shown while the local service is still starting
+// (slow boot, wait-online delays, crash loop). It needs no network or service.
+export const kioskWaitingUrl = `data:text/html;charset=utf-8,${encodeURIComponent("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>LancerLogin kiosk</title><style>html,body{height:100%;margin:0;background:#424a53;color:#fff;font-family:system-ui,sans-serif;display:grid;place-items:center;text-align:center}h1{font-size:44px;margin:0 0 16px}p{font-size:22px;margin:0 24px;opacity:.85}</style></head><body><main><h1>Starting attendance...</h1><p>The kiosk service is starting. This screen opens attendance automatically when it is ready.</p><p>If it stays here for several minutes, restart the device or ask an Administrator to check the kiosk service.</p></main></body></html>")}`;
+
+export function kioskBrowserArguments(profile, url = kioskUrl) {
   if (!isAbsolute(profile)) throw new Error("Desktop profile must be absolute");
-  return [`--user-data-dir=${profile}`, "--kiosk", "--noerrdialogs", "--disable-infobars", "--start-fullscreen", "http://127.0.0.1:8788/"];
+  if (![kioskUrl, kioskWaitingUrl].includes(url)) throw new Error("Unsupported kiosk browser page");
+  return [`--user-data-dir=${profile}`, "--kiosk", "--noerrdialogs", "--disable-infobars", "--start-fullscreen", url];
 }
 
 export async function createDesktopLauncherClient({ fetchImpl = fetch, baseUrl = "http://127.0.0.1:8788", instanceId = randomUUID(), secret = randomBytes(32).toString("base64url") } = {}) {
@@ -67,33 +74,62 @@ export async function createDesktopLauncherClient({ fetchImpl = fetch, baseUrl =
 
 // Only this process's ChildProcess handle is signalled. No global process scan,
 // arbitrary PID, elevated helper or desktop-session impersonation is needed.
-export async function superviseKioskBrowser({ launch, client, signal, pollIntervalMs = 1000, graceMs = 2000, registrationAttempts = 1 }) {
-  for (let attempt = 0; ; attempt++) {
-    try { await client.register(); break; }
-    catch (error) {
-      if (signal?.aborted || attempt + 1 >= registrationAttempts || [400, 409, 410].includes(error?.status)) throw error;
-      await delay(pollIntervalMs);
-    }
-  }
-  let child, exited = false, exitPromise;
-  async function stop() {
-    if (!child || exited) return;
+function ownChild(child, graceMs) {
+  const handle = { child, exited: false };
+  handle.exitPromise = new Promise((resolve, reject) => {
+    child.once("exit", () => { handle.exited = true; resolve(); });
+    child.once("error", error => { handle.exited = true; reject(error); });
+  });
+  // Observe spawn errors immediately even when the first poll is pending.
+  handle.exitPromise.catch(() => undefined);
+  handle.stop = async () => {
+    if (handle.exited) return;
     child.kill("SIGTERM");
     let timer;
-    await Promise.race([exitPromise, new Promise(resolve => { timer = setTimeout(resolve, graceMs); })]);
+    await Promise.race([handle.exitPromise.catch(() => undefined), new Promise(resolve => { timer = setTimeout(resolve, graceMs); })]);
     clearTimeout(timer);
-    if (!exited) { child.kill("SIGKILL"); await exitPromise; }
-  }
+    if (!handle.exited) { child.kill("SIGKILL"); await handle.exitPromise.catch(() => undefined); }
+  };
+  return handle;
+}
+
+export function registrationRetryDelay(failuresAfterWaiting, { retryDelayMs = 1000, maxRetryDelayMs = 30_000 } = {}) {
+  return Math.min(maxRetryDelayMs, retryDelayMs * 2 ** Math.min(Math.max(failuresAfterWaiting, 0), 16));
+}
+
+// Registration retries quickly a few times. When launchWaiting is supplied and
+// the service is still unavailable, a static "starting" page is opened and
+// registration keeps retrying with capped exponential backoff, so an offline or
+// slow boot never leaves the bare desktop. A live competing registration (409)
+// or an invalid request (400/410) still stops without taking over its owner.
+export async function superviseKioskBrowser({ launch, launchWaiting, client, signal, pollIntervalMs = 1000, graceMs = 2000, registrationAttempts = 1, retryDelayMs = pollIntervalMs, maxRetryDelayMs = 30_000 }) {
+  let waiting;
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try { await client.register(); break; }
+      catch (error) {
+        if (signal?.aborted || [400, 409, 410].includes(error?.status)) throw error;
+        const exhausted = attempt + 1 >= registrationAttempts;
+        if (exhausted && !launchWaiting) throw error;
+        if (exhausted && !waiting) waiting = ownChild(launchWaiting(), graceMs);
+        // Closing the waiting screen (shortcut, crash) ends this launcher.
+        if (waiting?.exited) throw error;
+        const wait = waiting ? registrationRetryDelay(attempt + 1 - registrationAttempts, { retryDelayMs, maxRetryDelayMs }) : pollIntervalMs;
+        let timer;
+        await Promise.race([new Promise(resolve => { timer = setTimeout(resolve, wait); signal?.addEventListener("abort", resolve, { once: true }); }), waiting?.exitPromise.catch(() => undefined)].filter(Boolean));
+        clearTimeout(timer);
+        if (signal?.aborted) { await waiting?.stop(); return { exited: true }; }
+      }
+    }
+  } catch (error) { await waiting?.stop(); throw error; }
+  // The real attendance page replaces the waiting page only after registration.
+  await waiting?.stop();
+  let owned;
+  async function stop() { await owned?.stop(); }
   try {
     if (signal?.aborted) return { exited: true };
-    child = launch();
-    exitPromise = new Promise((resolve, reject) => {
-      child.once("exit", () => { exited = true; resolve(); });
-      child.once("error", error => { exited = true; reject(error); });
-    });
-    // Observe spawn errors immediately even when the first poll is pending.
-    exitPromise.catch(() => undefined);
-    while (!exited && !signal?.aborted) {
+    owned = ownChild(launch(), graceMs);
+    while (!owned.exited && !signal?.aborted) {
       try {
         const requestId = await client.poll();
         if (requestId) { await stop(); await client.acknowledge(requestId); return { exited: true }; }
@@ -102,7 +138,7 @@ export async function superviseKioskBrowser({ launch, client, signal, pollInterv
         // Outage/lease recovery and a competing live registration never grant
         // permission to close this browser. Retry without taking over its owner.
       }
-      await Promise.race([exitPromise, delay(pollIntervalMs)]);
+      await Promise.race([owned.exitPromise, delay(pollIntervalMs)]);
     }
     await stop();
     return { exited: true };
@@ -120,7 +156,8 @@ export async function runDesktopLauncher(browserPath) {
   process.once("SIGTERM", stop); process.once("SIGINT", stop);
   try {
     return await superviseKioskBrowser({ client: await createDesktopLauncherClient(), signal: abort.signal, registrationAttempts: 10,
-      launch: () => spawn(browserPath, kioskBrowserArguments(profile), { stdio: "ignore", shell: false }) });
+      launch: () => spawn(browserPath, kioskBrowserArguments(profile), { stdio: "ignore", shell: false }),
+      launchWaiting: () => spawn(browserPath, kioskBrowserArguments(profile, kioskWaitingUrl), { stdio: "ignore", shell: false }) });
   } finally { process.removeListener("SIGTERM", stop); process.removeListener("SIGINT", stop); }
 }
 

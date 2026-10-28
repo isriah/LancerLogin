@@ -12,6 +12,7 @@ import { createPortal } from "react-dom";
 import { api, apiBaseUrl } from "./dashboard-api";
 import { RouteLink, routeWillChangeEvent, usePath } from "./router";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
+import { removeStorage, saveBlob, writeStorage } from "./browser-storage";
 import { attendanceRateText, policyResultText, reportQuery, type AttendanceReport, type ReportFilters } from "./report-attendance";
 import { InfoHeading } from "./info-tip";
 import { EditableReportTable } from "./report-result-table";
@@ -23,8 +24,8 @@ type Draft = { name: string; scope: ReportScope; definition: ReportDefinition; i
 const legacyViewKey = "lancerlogin-reports-view";
 const draftKey = "lancerlogin-report-draft-v1";
 function storedDraft(): Draft | undefined { try { return JSON.parse(sessionStorage.getItem(draftKey) ?? "") as Draft; } catch { return undefined; } }
-function saveDraft(draft: Draft) { sessionStorage.setItem(draftKey, JSON.stringify(draft)); }
-function directReportId(path: string) { return path.startsWith("/reports/view/") ? decodeURIComponent(path.slice("/reports/view/".length)) : undefined; }
+function saveDraft(draft: Draft) { writeStorage("session", draftKey, JSON.stringify(draft)); }
+function directReportId(path: string) { if (!path.startsWith("/reports/view/")) return undefined; try { return decodeURIComponent(path.slice("/reports/view/".length)); } catch { return undefined; } }
 
 export function ReportsPage({ discordEnabled, debugMode, onWalkthroughChange }: { discordEnabled: boolean; debugMode: boolean; onWalkthroughChange: (state: { open: boolean; navigation: boolean }) => void }) {
   const { path, navigate } = usePath();
@@ -41,7 +42,7 @@ export function ReportsPage({ discordEnabled, debugMode, onWalkthroughChange }: 
   const editor = useRef<ReportEditorHandle>(null);
   const [pendingLeave, setPendingLeave] = useState<{ action: () => void | Promise<void> }>();
   function requestLeave(action: () => void | Promise<void>) { if (dirty) setPendingLeave({ action }); else void action(); }
-  function finishLeave(next: string) { if (path === "/reports/new") sessionStorage.removeItem(draftKey); allowNextRoute.current = true; setDirty(false); navigate(next); }
+  function finishLeave(next: string) { if (path === "/reports/new") removeStorage("session", draftKey); allowNextRoute.current = true; setDirty(false); navigate(next); }
   function leave(next: string) { if (next !== path) requestLeave(() => finishLeave(next)); }
   useEffect(() => {
     const guard = (event: Event) => {
@@ -76,7 +77,7 @@ export function ReportsPage({ discordEnabled, debugMode, onWalkthroughChange }: 
   const visibleTabs = selected && selected.pinnedPosition === null ? [...pinned, selected] : pinned;
   return <><section className="page-stack reports-page" aria-labelledby="reports-title" data-walkthrough-page="reports" data-walkthrough-ready={catalog ? "true" : undefined} tabIndex={-1}>
     <div className="page-intro"><h1 id="reports-title">Reports</h1></div>{notice && <p className="setup-status" role="status">{notice}</p>}
-    <nav className="report-tabs" data-walkthrough="reports-tabs" aria-label="Report pages">{catalog?.attendanceAvailable && <button className={path === "/reports" ? "active" : ""} type="button" onClick={() => leave("/reports")}>Leaderboard</button>}{visibleTabs.map((item) => <span className={`report-tab${reportId === item.id ? " active" : ""}`} key={item.id}><button type="button" onClick={() => leave(`/reports/view/${encodeURIComponent(item.id)}`)} aria-current={reportId === item.id ? "page" : undefined}>{item.name}</button><button className="tab-close" type="button" disabled={pinBusy} title={item.pinnedPosition === null ? "Close report" : "Unpin report"} aria-label={(item.pinnedPosition === null ? "Close " : "Unpin ") + item.name} onClick={() => item.pinnedPosition === null ? leave("/reports") : void unpin(item.id)}>×</button></span>)}<ReportBrowser browse={browse} onBrowse={setBrowse}>{legacyDraft && <div className="browse-report-row"><button type="button" onClick={() => { requestLeave(() => { finishLeave("/reports/new"); saveDraft(legacyDraft); }); }}>Imported browser view <small>Unsaved draft</small></button><button type="button" aria-label="Dismiss imported browser view" onClick={() => { localStorage.removeItem(legacyViewKey); setNotice("Imported browser view dismissed."); }}>×</button></div>}{available.map((item) => <div className="browse-report-row" key={item.id}><button className="ui-button" type="button" aria-current={item.id === reportId ? "page" : undefined} onClick={() => openReport(item)}>{item.name}<small>{item.scope}{item.id === reportId ? " · Open" : ""}{item.pinnedPosition !== null ? " · Pinned" : ""}</small></button><button className="ui-button" type="button" disabled={pinBusy} aria-label={(item.pinnedPosition === null ? "Pin " : "Unpin ") + item.name} onClick={() => void persistPins(item.pinnedPosition === null ? [...pinned.map((report) => report.id), item.id] : pinned.filter((report) => report.id !== item.id).map((report) => report.id))}>{item.pinnedPosition === null ? "Pin" : "Unpin"}</button></div>)}{!available.length && !legacyDraft && <p>No reports match.</p>}</ReportBrowser><button className="ui-button report-add-tab" type="button" onClick={() => leave("/reports/new")}>New report</button></nav>
+    <nav className="report-tabs" data-walkthrough="reports-tabs" aria-label="Report pages">{catalog?.attendanceAvailable && <button className={path === "/reports" ? "active" : ""} type="button" onClick={() => leave("/reports")}>Leaderboard</button>}{visibleTabs.map((item) => <span className={`report-tab${reportId === item.id ? " active" : ""}`} key={item.id}><button type="button" onClick={() => leave(`/reports/view/${encodeURIComponent(item.id)}`)} aria-current={reportId === item.id ? "page" : undefined}>{item.name}</button><button className="tab-close" type="button" disabled={pinBusy} title={item.pinnedPosition === null ? "Close report" : "Unpin report"} aria-label={(item.pinnedPosition === null ? "Close " : "Unpin ") + item.name} onClick={() => item.pinnedPosition === null ? leave("/reports") : void unpin(item.id)}>×</button></span>)}<ReportBrowser browse={browse} onBrowse={setBrowse}>{legacyDraft && <div className="browse-report-row"><button type="button" onClick={() => { requestLeave(() => { finishLeave("/reports/new"); saveDraft(legacyDraft); }); }}>Imported browser view <small>Unsaved draft</small></button><button type="button" aria-label="Dismiss imported browser view" onClick={() => { removeStorage("local", legacyViewKey); setNotice("Imported browser view dismissed."); }}>×</button></div>}{available.map((item) => <div className="browse-report-row" key={item.id}><button className="ui-button" type="button" aria-current={item.id === reportId ? "page" : undefined} onClick={() => openReport(item)}>{item.name}<small>{item.scope}{item.id === reportId ? " · Open" : ""}{item.pinnedPosition !== null ? " · Pinned" : ""}</small></button><button className="ui-button" type="button" disabled={pinBusy} aria-label={(item.pinnedPosition === null ? "Pin " : "Unpin ") + item.name} onClick={() => void persistPins(item.pinnedPosition === null ? [...pinned.map((report) => report.id), item.id] : pinned.filter((report) => report.id !== item.id).map((report) => report.id))}>{item.pinnedPosition === null ? "Pin" : "Unpin"}</button></div>)}{!available.length && !legacyDraft && <p>No reports match.</p>}</ReportBrowser><button className="ui-button report-add-tab" type="button" onClick={() => leave("/reports/new")}>New report</button></nav>
     {!catalog ? <p className="empty-state">Report controls are unavailable.</p> : path === "/reports" ? catalog.attendanceAvailable ? <Leaderboard discordEnabled={discordEnabled} initialBaseline={catalog.baseline} /> : <ReportStart catalog={catalog} onCreate={(definition) => { saveDraft({ name: "Untitled report", scope: "personal", definition }); leave("/reports/new"); }} /> : path === "/reports/new" ? <ReportEditor key="new" catalog={catalog} draft={storedDraft()} pinnedIds={pinned.map((item) => item.id)} editorRef={editor} onDirtyChange={setDirty} onLibrariesChanged={loadLibraries} onNavigate={navigate} onSavedNavigate={finishLeave} onTogglePin={async (id) => { await persistPins(pinned.some((report) => report.id === id) ? pinned.filter((report) => report.id !== id).map((report) => report.id) : [...pinned.map((report) => report.id), id]); }} /> : selected ? <ReportEditor key={selected.id} catalog={catalog} saved={selected} pinnedIds={pinned.map((item) => item.id)} editorRef={editor} onDirtyChange={setDirty} onLibrariesChanged={loadLibraries} onNavigate={navigate} onSavedNavigate={finishLeave} onTogglePin={async (id) => { await persistPins(pinned.some((report) => report.id === id) ? pinned.filter((report) => report.id !== id).map((report) => report.id) : [...pinned.map((report) => report.id), id]); }} /> : reportId ? <section className="ui-card empty-page"><h2>Report unavailable</h2><p>This report was deleted or is private to another account.</p><button type="button" onClick={() => navigate("/reports")}>Return to Reports</button></section> : null}
   </section>
   {pendingLeave && <ReportLeaveDialog onSave={() => editor.current?.save() ?? Promise.resolve({ ok: false, error: "The report is unavailable. Cancel to return to Reports." })} onLeave={async () => { await pendingLeave.action(); setPendingLeave(undefined); }} onCancel={() => setPendingLeave(undefined)} />}
@@ -105,7 +106,9 @@ function ReportBrowser({ browse, onBrowse, children }: { browse: string; onBrows
     updatePosition();
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
-    return () => { window.removeEventListener("resize", updatePosition); window.removeEventListener("scroll", updatePosition, true); };
+    // A web font that finishes loading while the popup is open reflows the report tabs and moves the trigger.
+    document.fonts?.addEventListener("loadingdone", updatePosition);
+    return () => { window.removeEventListener("resize", updatePosition); window.removeEventListener("scroll", updatePosition, true); document.fonts?.removeEventListener("loadingdone", updatePosition); };
   }, [open]);
   const style = { "--report-browser-left": `${position.left}px`, "--report-browser-top": `${position.top}px` } as CSSProperties;
   const portalTarget = details.current?.closest(".app") ?? document.body;
@@ -266,13 +269,13 @@ function ReportEditor({ catalog, saved, draft, pinnedIds, onDirtyChange, onLibra
       const created = copy || !saved;
       const { report } = await api<{ report: SavedReport }>(created ? "/reports/views" : "/reports/views/" + encodeURIComponent(saved.id), { method: created ? "POST" : "PATCH", body: JSON.stringify({ name: saveName, scope, definition, ...(created ? {} : { revision: original.current.revision }) }) });
       if (!alive.current) return { ok: false };
-      if (seed.imported) localStorage.removeItem(legacyViewKey);
+      if (seed.imported) removeStorage("local", legacyViewKey);
       const nextDefinition = definitionForDashboard(report.definition, catalog);
       setName(report.name); setScope(report.scope); setDefinition(nextDefinition);
       original.current = { name: report.name, scope: report.scope, definition: cloneReportDefinition(nextDefinition), revision: report.revision, imported: false };
       setEditing(false); onDirtyChange(false); setNotice("");
       try { await onLibrariesChanged(); } catch { setNotice("Report saved. Reload the page to refresh the report library."); }
-      if (alive.current) { sessionStorage.removeItem(draftKey); if (navigateAfter) onSavedNavigate("/reports/view/" + encodeURIComponent(report.id)); }
+      if (alive.current) { removeStorage("session", draftKey); if (navigateAfter) onSavedNavigate("/reports/view/" + encodeURIComponent(report.id)); }
       return { ok: true };
     } catch (error) { const message = (error as Error).message + (!saved || copy ? " Check Browse reports before trying to save again." : ""); if (alive.current) setNotice(message); return { ok: false, error: message }; }
     finally { finishOperation(); }
@@ -289,8 +292,7 @@ function ReportEditor({ catalog, saved, draft, pinnedIds, onDirtyChange, onLibra
     try {
       const response = await fetch(apiBaseUrl + (detail ? "/exports/report-detail.csv" : "/exports/report.csv"), { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ definition }) });
       if (!response.ok) { const body = await response.json().catch(() => ({})) as { error?: string }; throw new Error(body.error ?? "CSV export failed"); }
-      const blob = await response.blob(), url = URL.createObjectURL(blob), link = document.createElement("a");
-      link.href = url; link.download = reportExportFilename(name, detail); link.click(); URL.revokeObjectURL(url);
+      saveBlob(await response.blob(), reportExportFilename(name, detail));
       if (alive.current) setNotice("CSV downloaded for all matching rows using the current filters.");
     } catch (error) { if (alive.current) setNotice((error as Error).message); }
     finally { finishOperation(); }

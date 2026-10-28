@@ -1,0 +1,36 @@
+#!/bin/sh
+# Opt-in pre-push quick check. Enable with `npm run hooks:install`, disable with `npm run hooks:uninstall`.
+# Runs scripts/check-quick.mjs against its default base and blocks the push only when a check fails.
+
+if [ -n "${CI:-}" ]; then
+  exit 0
+fi
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root" || exit 0
+# Git exports repository variables to hooks; tests that create their own repositories must not inherit them.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
+
+if [ ! -f scripts/check-quick.mjs ]; then
+  exit 0
+fi
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-push: node is not on PATH; skipping the quick check."
+  exit 0
+fi
+if [ ! -d node_modules ]; then
+  echo "pre-push: node_modules is missing; skipping the quick check (run npm ci --no-audit to enable it)."
+  exit 0
+fi
+
+node scripts/check-quick.mjs </dev/null
+status=$?
+if [ "$status" -eq 0 ]; then
+  exit 0
+fi
+if [ "$status" -eq 2 ]; then
+  echo "pre-push: the quick check could not start (see above); pushing without it."
+  exit 0
+fi
+echo "pre-push: quick check failed; push blocked. Bypass once with: git push --no-verify"
+exit 1

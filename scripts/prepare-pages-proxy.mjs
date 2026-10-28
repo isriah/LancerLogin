@@ -14,16 +14,29 @@ export default {
     const incoming = new URL(request.url);
     if (incoming.pathname === "/__lancerlogin-release" && request.method === "GET") return Response.json({ releaseVersion: RELEASE_VERSION }, { headers: { "cache-control": "no-store" } });
     if (incoming.pathname === "/api" || incoming.pathname.startsWith("/api/")) {
-      const target = new URL(incoming.pathname.slice(4) || "/", API_ORIGIN);
+      const path = incoming.pathname.slice(4) || "/";
+      if (path.startsWith("//")) return badRequest();
+      const target = new URL(API_ORIGIN);
+      target.pathname = path;
       target.search = incoming.search;
+      if (target.origin !== API_ORIGIN) return badRequest();
       return fetch(new Request(target, request));
     }
     const asset = await env.ASSETS.fetch(request);
-    if (asset.status !== 404 || request.method !== "GET" || !request.headers.get("accept")?.includes("text/html")) return asset;
+    if (asset.status !== 404 || request.method !== "GET" || !request.headers.get("accept")?.includes("text/html")) return denyFraming(asset);
     const shell = new URL("/index.html", incoming.origin);
-    return env.ASSETS.fetch(new Request(shell, request));
+    return denyFraming(await env.ASSETS.fetch(new Request(shell, request)));
   },
 };
+function badRequest() {
+  return new Response("Bad request", { status: 400, headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" } });
+}
+function denyFraming(response) {
+  const framed = new Response(response.body, response);
+  framed.headers.set("content-security-policy", "frame-ancestors 'none'");
+  framed.headers.set("x-frame-options", "DENY");
+  return framed;
+}
 `;
 }
 

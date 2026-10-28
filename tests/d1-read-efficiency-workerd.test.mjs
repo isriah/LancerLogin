@@ -14,7 +14,9 @@ test("real D1 indexes, scoped reports and revision cache reduce row reads withou
     const database = await runtime.getD1Database("DB");
     const migrations = (await readdir("apps/api/migrations")).filter((name) => name.endsWith(".sql")).sort();
     const apply = async (name) => database.exec((await readFile(`apps/api/migrations/${name}`, "utf8")).replace(/^\s*--.*$/gm, "").replace(/\r?\n/g, " "));
-    for (const name of migrations.filter((name) => name !== "0037_report_read_efficiency.sql")) await apply(name);
+    // 0037 is applied later to measure the read savings; 0082 seeds the kiosk roster revision from its table, so it follows.
+    const deferred = ["0037_report_read_efficiency.sql", "0082_kiosk_roster_revision.sql"];
+    for (const name of migrations.filter((name) => !deferred.includes(name))) await apply(name);
     await database.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES ('primary','2026-01-01','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('admin','primary','admin','admin','2026-01-01');
       INSERT INTO platform_module_administration(installation_id,revision,selection_completed) VALUES ('primary',0,1);
@@ -29,7 +31,7 @@ test("real D1 indexes, scoped reports and revision cache reduce row reads withou
     const source = await readFile("apps/api/src/index.ts", "utf8");
     const attendanceSql = source.match(/db\.prepare\("(SELECT m\.id AS memberId[^"\n]+)"\)\.bind\(meetingId/)[1];
     const before = await database.prepare(attendanceSql).bind("meeting1", "meeting1", "meeting1", "meeting1", 0).all();
-    await apply("0037_report_read_efficiency.sql");
+    for (const name of deferred) await apply(name);
     const after = await database.prepare(attendanceSql).bind("meeting1", "meeting1", "meeting1", "meeting1", 0).all();
     assert.deepEqual(after.results, before.results);
     assert.ok(after.meta.rows_read < before.meta.rows_read / 10, `before=${before.meta.rows_read}, after=${after.meta.rows_read}`);

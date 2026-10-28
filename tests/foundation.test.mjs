@@ -280,7 +280,8 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.equal((workflow.match(/secrets:\s*\|/g) ?? []).length, 0);
   assert.match(workflow, /accounts\/\$CLOUDFLARE_ACCOUNT_ID\/tokens\/verify/);
   assert.doesNotMatch(workflow, /user\/tokens\/verify/);
-  assert.equal((workflow.match(/accountId: \$\{\{ env\.CLOUDFLARE_ACCOUNT_ID \}\}/g) ?? []).length, 3);
+  // The deploy actions read the account ID from the secret; the job sets no secret in its env.
+  assert.equal((workflow.match(/accountId: \$\{\{ secrets\.CLOUDFLARE_ACCOUNT_ID \}\}/g) ?? []).length, 3);
   assert.doesNotMatch(workflow, /accountId:\s*[a-f0-9]{32}|account_id\s*[:=]\s*[a-f0-9]{32}/i);
   assert.doesNotMatch(workflow, /run:[\s\S]{0,300}\$\{\{ inputs\.(?:operation|confirmation|installation_slug) \}\}/);
 });
@@ -321,11 +322,12 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   assert.match(ciWorkflow, /HEAD_COMMIT_MESSAGE.*Release\\ v\*/);
   assert.match(ciWorkflow, /outputs\.full == 'true'[\s\S]*kiosk-artifacts\.test\.mjs/);
   assert.match(ciWorkflow, /outputs\.full != 'true' && steps\.verification-scope\.outputs\.kiosk == 'true'/);
-  assert.equal((ciWorkflow.match(/npm ci --no-audit/g) ?? []).length, 2);
+  // verify and the core, plugin and integration browser shard jobs install; a private repository adds its private browser shards.
+  assert.equal((ciWorkflow.match(/npm ci --no-audit/g) ?? []).length, ciWorkflow.includes("  private-browser-shard:") ? 5 : 4);
   assert.match(ciWorkflow, /schedule:[\s\S]*cron:/);
   assert.match(ciWorkflow, /workflow_dispatch:/);
   assert.match(ciWorkflow, /dependency-audit:[\s\S]*npm run audit:release/);
-  const dependencyAuditJob = ciWorkflow.match(/  dependency-audit:([\s\S]*?)  browser-shard:/)?.[1];
+  const dependencyAuditJob = ciWorkflow.match(/  dependency-audit:([\s\S]*?)  core-browser-shard:/)?.[1];
   assert.ok(dependencyAuditJob);
   assert.match(dependencyAuditJob, /node-version: 24/);
   assert.match(dependencyAuditJob, /npm ci --ignore-scripts --no-audit/);
@@ -335,13 +337,19 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   assert.match(dependencyAuditJob, /HEAD_COMMIT_MESSAGE.*Release\\ v\*/);
   assert.match(ciWorkflow, /timeout-minutes: 20/);
   assert.match(ciWorkflow, /rhysd\/actionlint:1\.7\.12/);
-  const browserShardJob = ciWorkflow.match(/  browser-shard:([\s\S]*?)  browser-smoke:/)?.[1];
+  // The release-gate browser suite runs in three groups (tests-browser/groups.json), each split into balanced file parts.
+  const { browserShardCounts } = await import("../scripts/release-publication.mjs");
+  const browserJob = (name, next) => ciWorkflow.match(new RegExp(`  ${name}:([\\s\\S]*?)  ${next}:`))?.[1];
+  const matrixOf = (count) => `shard: [${Array.from({ length: count }, (_, index) => index + 1).join(", ")}]`;
+  const browserShardJob = browserJob("core-browser-shard", "plugin-browser-shard");
   assert.ok(browserShardJob);
   assert.match(browserShardJob, /workflow_dispatch/);
   assert.match(browserShardJob, /startsWith\(github\.event\.head_commit\.message, 'Release v'\)/);
   assert.match(browserShardJob, /fail-fast: false/);
-  assert.match(browserShardJob, /shard: \[1, 2, 3, 4, 5, 6\]/);
-  assert.match(browserShardJob, /npm run test:browser -- --shard=\$\{\{ matrix\.shard \}\}\/6/);
+  assert.ok(browserShardJob.includes(`name: Core browser shard \${{ matrix.shard }}/${browserShardCounts.core}\n`));
+  assert.ok(browserShardJob.includes(matrixOf(browserShardCounts.core)));
+  assert.ok(browserShardJob.includes(`run: npm run test:browser -- --group core --part \${{ matrix.shard }}/${browserShardCounts.core}\n`));
+  assert.doesNotMatch(browserShardJob, /--compose-selection|--shard=/);
   assert.match(browserShardJob, /require\('playwright-core\/package\.json'\)\.version[\s\S]*actions\/cache@v4[\s\S]*path: ~\/\.cache\/ms-playwright[\s\S]*key: playwright-\$\{\{ runner\.os \}\}-\$\{\{ steps\.playwright-version\.outputs\.version \}\}/);
   // The default-branch cache warmer stays outside Verify so release gates keep their exact required job list.
   const cacheWorkflow = await readFile(".github/workflows/playwright-cache.yml", "utf8");
@@ -351,12 +359,33 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   assert.doesNotMatch(ciWorkflow, /playwright-cache\.yml|name: Keep Playwright browser cached/);
   assert.match(browserShardJob, /cache-hit != 'true'\s+run: npx playwright install --with-deps chromium/);
   assert.match(browserShardJob, /cache-hit == 'true'\s+run: npx playwright install-deps chromium/);
-  assert.match(browserShardJob, /name: Run this browser shard\s+timeout-minutes: 15\s+run: npm run test:browser/);
+  assert.match(browserShardJob, /name: Run this core browser shard\s+timeout-minutes: 15\s+run: npm run test:browser/);
+  // The plugin and integration groups run only in the complete gate and composed, so their plugin specs cannot skip there.
+  for (const [group, name, next] of [["plugin", "plugin-browser-shard", "integration-browser-shard"], ["integration", "integration-browser-shard", "browser-smoke"]]) {
+    const job = browserJob(name, next);
+    const count = browserShardCounts[group];
+    assert.ok(job, name);
+    assert.ok(job.includes(`name: ${group[0].toUpperCase()}${group.slice(1)} browser shard \${{ matrix.shard }}/${count}\n`), name);
+    assert.match(job, /if: >-\s+github\.event_name == 'workflow_dispatch' \|\|\s+\(github\.event_name == 'push' && startsWith\(github\.event\.head_commit\.message, 'Release v'\)\)\s+runs-on/);
+    assert.doesNotMatch(job, /pull_request|schedule/);
+    assert.match(job, /fail-fast: false/);
+    assert.ok(job.includes(matrixOf(count)), name);
+    assert.match(job, /timeout-minutes: 30/);
+    assert.match(job, /name: Run this \w+ browser shard\s+timeout-minutes: 15/);
+    assert.match(job, /LANCERLOGIN_PLUGIN_TOKEN: \$\{\{ secrets\.LANCERLOGIN_PLUGIN_TOKEN \}\}/);
+    assert.ok(job.includes(`run: npm run test:browser -- --group ${group} --compose-selection tests/fixtures/carpool.modules.json --part \${{ matrix.shard }}/${count}\n`), name);
+    assert.doesNotMatch(job, /--grep|--project|--shard=|continue-on-error/);
+    assert.match(job, /cache-hit != 'true'\s+run: npx playwright install --with-deps chromium/);
+  }
+  assert.doesNotMatch(ciWorkflow, /^  browser-shard:/m);
   const browserGate = ciWorkflow.match(/  browser-smoke:([\s\S]*)$/)?.[1];
   assert.ok(browserGate);
-  assert.match(browserGate, /needs: browser-shard/);
+  assert.match(browserGate, /needs: \[core-browser-shard, plugin-browser-shard, integration-browser-shard\]/);
   assert.match(browserGate, /startsWith\(github\.event\.head_commit\.message, 'Release v'\)/);
-  assert.match(browserGate, /test "\$SHARD_RESULT" = success/);
+  for (const [variable, job] of [["CORE_SHARD_RESULT", "core-browser-shard"], ["PLUGIN_SHARD_RESULT", "plugin-browser-shard"], ["INTEGRATION_SHARD_RESULT", "integration-browser-shard"]]) {
+    assert.ok(browserGate.includes(`test "$${variable}" = success`), variable);
+    assert.ok(browserGate.includes(`${variable}: \${{ needs.${job}.result }}`), variable);
+  }
   assert.equal(packageDocument.scripts["test:browser"], "node scripts/run-browser-tests.mjs");
   const browserRunner = await readFile("scripts/run-browser-tests.mjs", "utf8");
   assert.match(browserRunner, /PWTEST_CACHE_DIR/);

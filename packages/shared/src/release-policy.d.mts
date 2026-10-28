@@ -5,6 +5,9 @@ export function compareReleaseVersions(left: string, right: string): -1 | 0 | 1 
 export function releaseAllowed(tag: unknown, channel?: UpdateChannel, prerelease?: unknown): boolean;
 export function completeOfficialRelease(value: unknown, channel?: UpdateChannel): OfficialRelease | undefined;
 export function newestOfficialRelease(values: unknown, channel?: UpdateChannel): OfficialRelease | undefined;
+export function officialAssetDigest(value: unknown, name: string): string | undefined;
+export type KioskRelease = OfficialRelease & { digests: { installer: string; arm64: string; armv7: string } };
+export function completeKioskRelease(value: unknown, channel?: UpdateChannel): KioskRelease | undefined;
 
 export function kioskReleaseTransition(candidate: unknown, installed: unknown): "upgrade" | "current" | "replace-development" | "unavailable";
 

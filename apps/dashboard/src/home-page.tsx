@@ -1,3 +1,4 @@
+import { readStorage, writeStorage } from "./browser-storage";
 import { visiblePoll } from "./visible-poll";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./dashboard-api";
@@ -19,7 +20,7 @@ type MeetingView = "calendar" | "table";
 export function HomePage({ navigate, discordEnabled, onWalkthroughChange, debugMode }: { onWalkthroughChange: (state: { open: boolean; navigation: boolean }) => void; role: "admin" | "operator"; navigate: (path: string) => void; discordEnabled: boolean; debugMode: boolean }) {
   const [meetings, setMeetings] = useState<Meeting[]>([]); const [notice, setNotice] = useState("Loading dashboard…");
   const [noticeTone, setNoticeTone] = useState<"neutral" | "success" | "error">("neutral");
-  const [meetingView, setMeetingView] = useState<MeetingView>(() => window.localStorage.getItem(dashboardMeetingViewKey) === "table" ? "table" : "calendar");
+  const [meetingView, setMeetingView] = useState<MeetingView>(() => readStorage("local", dashboardMeetingViewKey) === "table" ? "table" : "calendar");
   const [creating, setCreating] = useState(false); const [creationNotice, setCreationNotice] = useState("");
   const [undo, setUndo] = useState<PendingMeetingDeletion | undefined>(readMeetingDeletion);
   const [undoBusy, setUndoBusy] = useState(false); const [deleteBusy, setDeleteBusy] = useState(false); const restoring = useRef(false); const mounted = useRef(true);
@@ -54,7 +55,7 @@ export function HomePage({ navigate, discordEnabled, onWalkthroughChange, debugM
     setMeetings(result.meetings); setNotice(""); setNoticeTone("neutral");
   }
   useEffect(() => { return visiblePoll(load, 60_000, (error) => { setNotice(error.message); setNoticeTone("error"); }, true); }, [discordEnabled]);
-  function chooseView(view: MeetingView) { if (!active) window.localStorage.setItem(dashboardMeetingViewKey, view); setMeetingView(view); }
+  function chooseView(view: MeetingView) { if (!active) writeStorage("local", dashboardMeetingViewKey, view); setMeetingView(view); }
   function addMeeting() { if (active) return; setCreationNotice(""); setCreating(true); }
   async function created(count: number, calendarSync?: CalendarSync, calendarDelivery?: CalendarDelivery) { const success = `${count} ${count === 1 ? "meeting" : "meetings"} created.${calendarDeliveryMessage(calendarDelivery, calendarSync)}`; try { await load(); setCreationNotice(success); setNoticeTone(calendarDelivery?.google_calendar.failed || calendarDelivery?.discord.failed || calendarSync?.failed ? "error" : "success"); } catch { setCreationNotice(`${success} Refresh Dashboard to see the latest meeting list.`); setNoticeTone("error"); } }
   function deleted(deletion: PendingMeetingDeletion) { if (mounted.current) { setCreationNotice(""); setUndo(deletion); } }

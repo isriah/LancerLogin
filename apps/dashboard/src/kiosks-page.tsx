@@ -10,6 +10,7 @@ import { useDashboardLoadingOverlay } from "./loading-overlay";
 import { formatVersion, isNewerRelease } from "./update-indicator";
 import { hasComparableStableVersions, kioskUpdateTransition } from "./update-release";
 import { useReleaseCheck } from "./use-release-check";
+import { diagnosticUrl } from "./web-update";
 import { KioskEnrollmentDialog, type EnrollmentSession } from "./kiosk-enrollment-dialog";
 
 type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; readerOnline?: number; authenticationMethod?: KioskAuthenticationMethod; configuredAuthenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string; pendingEvents?: number; lastSyncAt?: string; errorCategory?: string; pairedAt: string };
@@ -187,7 +188,7 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
 
 
               {discordConfigured && <button type="button" disabled={example || discordBusy} onClick={() => void syncDiscordStatus()}>{discordBusy ? "Syncing…" : "Sync Discord status"}</button>}
-              {discordConfigured && discordMessageUrl && <a className="secondary-button action-link" href={discordMessageUrl} target="_blank" rel="noreferrer">View Discord status message</a>}
+              {discordConfigured && diagnosticUrl(discordMessageUrl) && <a className="secondary-button action-link" href={diagnosticUrl(discordMessageUrl)} target="_blank" rel="noreferrer">View Discord status message</a>}
             </div>
             </details>
             <details className="kiosk-management-section" open={walkthroughOpen || undefined}><summary>Retire kiosk</summary><button className="danger-button" type="button" disabled={example} data-walkthrough="kiosk-retire" onClick={() => void retire()}>Retire kiosk</button></details>

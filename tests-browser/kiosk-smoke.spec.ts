@@ -4,6 +4,10 @@ import { attendanceSnapshot } from "./module-fixtures";
 
 const kioskBaseUrl = process.env.LANCERLOGIN_KIOSK_BASE_URL ?? "http://127.0.0.1:8792";
 
+// The kiosk keeps polling display-state. Let a poll already inside a route.fetch() handler finish before the
+// context closes; otherwise its fetched response is disposed mid-handler and the test fails after its assertions.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: "wait" }); });
+
 test("public attendance screen shows clock guidance without administrative review counts", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 480 });
   const needsReview = 12;

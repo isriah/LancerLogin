@@ -41,6 +41,29 @@ export function completeOfficialRelease(value, channel = "stable") {
   if (!required.every((name) => names.has(name))) return;
   return { tag: value.tag_name, notes: typeof value.body === "string" ? value.body.slice(0, 32_000) : "", prerelease: value.prerelease };
 }
+// GitHub records a SHA-256 digest for each uploaded release asset. On an immutable release those assets cannot be
+// replaced, so the API digest binds the kiosk installer and archives without trusting a checksum file from the same
+// release. Returns the lowercase hex digest, or undefined when the asset is missing, duplicated or has no digest.
+export function officialAssetDigest(value, name) {
+  if (!value || typeof value !== "object" || !Array.isArray(value.assets)) return;
+  const matches = value.assets.filter((asset) => asset?.name === name);
+  const digest = matches.length === 1 && typeof matches[0].digest === "string" ? /^sha256:([0-9a-f]{64})$/.exec(matches[0].digest) : undefined;
+  return digest?.[1];
+}
+// Physical kiosks install release assets as root, so every track (stable too) requires an immutable release and
+// GitHub asset digests for the installer and both archives.
+export function completeKioskRelease(value, channel = "stable") {
+  const target = completeOfficialRelease(value, channel);
+  if (!target || value.immutable !== true) return;
+  const version = target.tag.slice(1);
+  const digests = {
+    installer: officialAssetDigest(value, "install-lancerlogin.sh"),
+    arm64: officialAssetDigest(value, `lancerlogin-kiosk-${version}-linux-arm64.tar.gz`),
+    armv7: officialAssetDigest(value, `lancerlogin-kiosk-${version}-linux-armv7.tar.gz`),
+  };
+  if (!digests.installer || !digests.arm64 || !digests.armv7) return;
+  return { ...target, digests };
+}
 export function newestOfficialRelease(values, channel = "stable") {
   if (!Array.isArray(values)) return;
   return values.map((value) => completeOfficialRelease(value, channel)).filter(Boolean)

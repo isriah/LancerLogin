@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local",
+    "prebuild": "node ../../scripts/check-module-composition.mjs",
     "build": "esbuild ./src/index.ts --bundle --format=esm --platform=browser --outfile=dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, sign as signBytes } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createOfflineQueue, createSensorAdapter, issuePairingCode, redeemPairingCode } from "../apps/kiosk/src/local-runtime.mjs";
-import { completeKioskCommand, fetchKioskCommand, fetchKioskConfiguration, normalizeApiUrl, pairInstallation, sendAttendance, sendHeartbeat } from "../apps/kiosk/src/cloud-client.mjs";
+import { completeKioskCommand, createDeliveryBackoff, fetchKioskCommand, fetchKioskConfiguration, normalizeApiUrl, pairInstallation, sendAttendance, sendHeartbeat } from "../apps/kiosk/src/cloud-client.mjs";
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
 import { createCredentialStore } from "../apps/kiosk/src/credential-store.mjs";
@@ -976,19 +976,25 @@ test("sensor adapter exposes slot matches, never a template", async () => {
   assert.deepEqual(await adapter.match(), { matched: true, slot: 12 });
 });
 
-test("guided installer previews safely and installs fixed, checksummed releases without Git", async () => {
+test("guided installer previews safely and installs fixed, digest-verified releases without Git", async () => {
   const installer = (await readFile("apps/kiosk/scripts/install-lancerlogin.sh", "utf8")).replaceAll("\r\n", "\n");
   assert.match(installer, /--dry-run/);
   assert.match(installer, /--install/);
   assert.match(installer, /--no-fingerprint-reader/);
-  assert.match(installer, /sha256sum --check/);
+  // The archive is trusted only through the immutable release's GitHub asset digest, never a same-release .sha256 file.
+  assert.match(installer, /sha256sum --check --strict/);
+  assert.match(installer, /release\.immutable !== true/);
+  assert.match(installer, /LANCERLOGIN_ARCHIVE_SHA256_ARM64/);
+  assert.doesNotMatch(installer, /\$archive\.sha256" --output|RELEASE_ROOT\/\$archive\.sha256/);
+  for (const download of installer.match(/^\s*curl --fail --location.*$/gm) ?? []) assert.match(download, /--connect-timeout \d+ --max-time \d+/);
   assert.match(installer, /releases\/download\/v\$\{VERSION\}/);
   assert.match(installer, /Environment=LANCERLOGIN_VERSION=%s/);
   assert.match(installer, /Environment=LANCERLOGIN_SENSOR_PATH=%s/);
   assert.match(installer, /SENSOR_PATH.*disabled/s);
   assert.match(installer, /SENSOR_OPTION.*--no-fingerprint-reader/s);
   assert.match(installer, /Port 8788 is already used by another service/);
-  assert.match(installer, /curl --fail --silent --show-error http:\/\/127\.0\.0\.1:8788\/health/);
+  assert.match(installer, /HEALTH_URL=http:\/\/127\.0\.0\.1:8788\/health/);
+  assert.match(installer, /curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "\$HEALTH_URL"/);
   assert.match(installer, /systemctl restart lancerlogin-kiosk\.service/);
   assert.match(installer, /49-lancerlogin-network\.rules/);
   assert.match(installer, /49-lancerlogin-recovery\.rules/);
@@ -1005,11 +1011,15 @@ test("guided installer previews safely and installs fixed, checksummed releases 
   assert.match(installer, /SUDO_USER/);
   assert.doesNotMatch(installer, /Worker API URL from the GitHub workflow summary/);
   assert.match(installer, /node_major.*-ge 18/s);
-  assert.match(installer, /normalize_runtime_permissions\(\)/);
-  assert.match(installer, /find \/opt\/lancerlogin -xdev -type d -exec chmod 0755/);
-  assert.match(installer, /find \/opt\/lancerlogin -xdev -type f -exec chmod 0644/);
-  assert.ok(installer.indexOf("normalize_runtime_permissions\ntar --extract") > 0);
-  assert.ok(installer.indexOf("chmod 0755 /opt/lancerlogin\nnormalize_runtime_permissions") > 0);
+  assert.match(installer, /normalize_tree_permissions\(\)/);
+  assert.match(installer, /find "\$tree" -xdev -type d -exec chmod 0755/);
+  assert.match(installer, /find "\$tree" -xdev -type f -exec chmod 0644/);
+  assert.ok(installer.indexOf('chmod 0755 "$staging"\n  normalize_tree_permissions "$staging"') > 0);
+  // Versioned releases: staged and checked while the old release runs, then switched with an atomic rename.
+  assert.ok(installer.indexOf("\nstage_release ") > 0 && installer.indexOf("\nstage_release ") < installer.indexOf("\nsystemctl stop lancerlogin-kiosk.service"));
+  assert.ok(installer.indexOf("\nsystemctl stop lancerlogin-kiosk.service") < installer.indexOf('\npoint_link current "releases/$new_release"'));
+  assert.match(installer, /mv -T -f -- "\$temporary_link" "\$RUNTIME_ROOT\/\$name"/);
+  assert.ok(installer.indexOf("wait_until_healthy || exit 1") < installer.indexOf("\nphase=done"));
   const updater = await readFile("apps/kiosk/scripts/lancerlogin-install-release.sh", "utf8");
   assert.match(updater, /\/usr\/bin\/bash "\$temporary\/install-lancerlogin\.sh" --install/);
   assert.doesNotMatch(installer, /sudo -u/);
@@ -1021,9 +1031,12 @@ test("systemd configures an enabled R503 and permits non-fingerprint startup", a
   assert.match(unit, /SupplementaryGroups=dialout/);
   assert.match(unit, /LANCERLOGIN_SENSOR_PATH.*!= disabled.*-e.*LANCERLOGIN_SENSOR_PATH.*\/bin\/stty -F.*LANCERLOGIN_SENSOR_PATH.*57600/);
   assert.ok(unit.indexOf("ExecStartPre=") < unit.indexOf("ExecStart=/usr/bin/node"));
+  // An offline boot must not wait for network-online.target before serving the local screen.
+  assert.doesNotMatch(unit.replace(/^#.*$/gm, ""), /network-online\.target/);
+  assert.match(unit, /^After=network\.target$/m);
 });
 
-test("kiosk update unit permits only a checksum-verified official target and no arbitrary arguments", async () => {
+test("kiosk update unit permits only a digest-verified official target and no arbitrary arguments", async () => {
   const [helper, unit, policy] = await Promise.all([
     readFile("apps/kiosk/scripts/lancerlogin-install-release.sh", "utf8"),
     readFile("apps/kiosk/systemd/lancerlogin-update.service", "utf8"),
@@ -1031,12 +1044,19 @@ test("kiosk update unit permits only a checksum-verified official target and no 
   ]);
   assert.match(helper, /\/usr\/bin\/node \/opt\/lancerlogin\/src\/resolve-kiosk-release\.mjs/);
   assert.match(helper, /accepts no arguments/);
-  assert.match(helper, /install-lancerlogin\.sh\.sha256/);
-  assert.match(helper, /sha256sum --check install-lancerlogin\.sh\.sha256/);
+  // The installer is checked against the resolver's GitHub asset digest, not a downloaded .sha256 file.
+  assert.doesNotMatch(helper, /install-lancerlogin\.sh\.sha256" --output|\$release_root\/install-lancerlogin\.sh\.sha256/);
+  assert.match(helper, /printf '%s  %s\\n' "\$installer_sha256" install-lancerlogin\.sh/);
+  assert.match(helper, /sha256sum --check --strict --quiet install-lancerlogin\.sh\.sha256/);
+  assert.match(helper, /--connect-timeout 15 --max-time 120/);
+  assert.match(helper, /^\{ main "\$@"; exit \$\?; \}$/m);
   assert.doesNotMatch(helper, /\$1|VERSION:-|GITHUB_API=.*\$/);
   assert.match(unit, /ExecStart=\/usr\/local\/sbin\/lancerlogin-install-release/);
+  assert.match(unit, /^TimeoutStartSec=20min$/m);
+  assert.match(unit, /^StateDirectory=lancerlogin-update$/m);
   assert.match(policy, /subject\.user === "lancerlogin"/);
-  assert.match(policy, /action\.lookup\("unit"\) === "lancerlogin-update\.service"/);
+  assert.match(policy, /action\.lookup\("unit"\) === "lancerlogin-update\.service" && action\.lookup\("verb"\) === "start"/);
+  assert.equal(policy.match(/polkit\.Result\.YES/g)?.length, 1);
 });
 
 test("kiosk update handoff reports a failed verified systemd unit without changing its fixed target", async () => {
@@ -1266,6 +1286,7 @@ test("local attendance acknowledges durable offline saves without waiting for cl
       const program = `
         import assert from 'node:assert/strict';
         import {readFile} from 'node:fs/promises';
+        const {createFileQueue}=await import(new URL('./file-queue.mjs',process.argv[1]).href);
         const mode=process.argv[2];const originalFetch=globalThis.fetch;let release;
         const held=new Promise(resolve=>{release=resolve});
         globalThis.fetch=async(url,options)=>{
@@ -1291,7 +1312,7 @@ test("local attendance acknowledges durable offline saves without waiting for cl
             assert.deepEqual(await response.json(),{accepted:true,queued:1});
             const retry=await submit();assert.equal(retry.status,200);
             assert.deepEqual(await retry.json(),{accepted:false,queued:1});
-            const saved=JSON.parse(await readFile(process.env.LANCERLOGIN_QUEUE,'utf8'));
+            const saved=await createFileQueue(process.env.LANCERLOGIN_QUEUE).pending();
             assert.equal(saved.length,1);assert.equal(saved[0].eventId,event.eventId);assert.equal(saved[0].memberId,event.memberId);assert.equal(saved[0].pairingId,'synthetic-pairing');
             assert.equal(saved[0].clock.version,1);assert.equal(saved[0].clock.verified,false);
             assert.ok(Number.isFinite(Date.parse(saved[0].occurredAt)));assert.notEqual(saved[0].occurredAt,event.occurredAt);
@@ -1405,12 +1426,14 @@ test("rejected scans and safe reasons survive replay without blocking later vali
     const restarted = createFileQueue(path);
     assert.deepEqual(await restarted.diagnostics(), { saved: 3, pending: 0, accepted: 1, duplicate: 1, rejected: 1, needsReview: 1, clockPending: 0, historyComplete: true });
     assert.deepEqual(await restarted.rejections(), [{ eventId: "rejected-1", memberId: "synthetic-a", occurredAt: "2026-09-19T12:00:00.000Z", httpStatus: 409, reasonCode: "no_eligible_meeting", reviewStatus: "open" }]);
-    assert.deepEqual(JSON.parse(await readFile(path, "utf8")), []);
+    assert.deepEqual(await createFileQueue(path).pending(), []);
     assert.equal(await restarted.markReviewed("missing-event"), false);
     assert.equal(await restarted.markReviewed("rejected-1"), true);
     assert.equal((await createFileQueue(path).rejections())[0].reviewStatus, "reviewed");
     assert.deepEqual(await restarted.diagnostics(), { saved: 3, pending: 0, accepted: 1, duplicate: 1, rejected: 1, needsReview: 0, clockPending: 0, historyComplete: true });
-    assert.equal((await readFile(path, "utf8")).includes("Do not store this raw message"), false);
+    await restarted.compact();
+    for (const file of await readdir(directory)) assert.equal((await readFile(join(directory, file), "utf8")).includes("Do not store this raw message"), false);
+    assert.deepEqual(JSON.parse(await readFile(path, "utf8")), []);
   } finally { await rm(directory, { recursive: true }); }
 });
 
@@ -1424,6 +1447,8 @@ test("the release 1.0.6 array queue upgrades without losing its pending scan", a
     const restarted = createFileQueue(path);
     assert.deepEqual(await restarted.diagnostics(), { saved: 1, pending: 0, accepted: 0, duplicate: 0, rejected: 1, needsReview: 1, clockPending: 0, historyComplete: false });
     assert.equal((await restarted.rejections())[0].eventId, "legacy-1");
+    assert.deepEqual(await createFileQueue(path).pending(), []);
+    await restarted.compact();
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")), []);
   } finally { await rm(directory, { recursive: true }); }
 });
@@ -1596,6 +1621,42 @@ test("temporary HTTP client failures stay pending for replay", async () => {
       fetchImpl: async () => new Response(JSON.stringify({ error: "Try again" }), { status, headers: { "content-type": "application/json" } }),
     }), /Try again/);
   }
+});
+
+test("unknown 4xx responses keep scans queued; only explicit API rejection reasons are permanent", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-queue-unknown-4xx-")); const path = join(directory, "queue.json");
+  const config = { apiUrl: "https://api.example.test", kioskToken: "secret" };
+  const event = { eventId: "deploy-window-1", memberId: "synthetic-member", occurredAt: "2026-09-19T12:00:00.000Z" };
+  const reply = (status, body, type = "application/json") => async () => new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "content-type": type } });
+  try {
+    // A misrouted deploy, proxy or path change must not turn every scan into a review item.
+    for (const [status, body, type] of [[404, { error: "Not found" }], [405, { error: "Method not allowed" }], [410, { error: "Gone" }], [413, { error: "Too large" }], [404, "<html>Not found</html>", "text/html"], [409, { error: "Unexpected conflict" }], [400, { error: "Bad request" }], [404, { error: "Not found", code: "made_up_reason" }]]) {
+      await assert.rejects(sendAttendance(config, event, { fetchImpl: reply(status, body, type) }), error => error.transient === true && error.status === status);
+    }
+    const queue = createFileQueue(path); await queue.enqueue(event);
+    assert.deepEqual(await queue.flush(item => sendAttendance(config, item, { fetchImpl: reply(404, { error: "Not found" }) })), []);
+    assert.deepEqual((await createFileQueue(path).pending()).map(item => item.eventId), ["deploy-window-1"]);
+    assert.equal((await createFileQueue(path).rejections()).length, 0);
+    // Explicit codes from the API are permanent, whatever the message says.
+    for (const [status, code] of [[404, "roster_inactive"], [409, "no_eligible_meeting"], [409, "attendance_complete"], [409, "participation_not_started"], [409, "pairing_mismatch"], [409, "scan_window_closed"], [400, "invalid_scan"]]) {
+      const result = await sendAttendance(config, event, { fetchImpl: reply(status, { error: "Reworded message", code }) });
+      assert.deepEqual([result.rejected, result.code, result.status], [true, code, status]);
+    }
+    // Older APIs without codes are recognized only by their exact semantic messages.
+    for (const [status, message, code] of [[404, "This identity is not linked to an active roster member", "roster_inactive"], [409, "Attendance is closed for this meeting", "scan_window_closed"], [400, "eventId, memberId, and a valid occurredAt timestamp are required", "invalid_scan"]]) {
+      assert.equal((await sendAttendance(config, event, { fetchImpl: reply(status, { error: message }) })).code, code);
+    }
+  } finally { await rm(directory, { recursive: true }); }
+});
+
+test("delivery backoff grows on unexpected HTTP rejections, ignores connectivity loss and resets on success", () => {
+  let clock = 0; const backoff = createDeliveryBackoff({ now: () => clock, baseMs: 1000, maxMs: 8000 });
+  backoff.failed(new Error("offline")); assert.equal(backoff.blocked(), false);
+  const delays = [];
+  for (let index = 0; index < 6; index++) { backoff.failed(Object.assign(new Error("404"), { transient: true })); delays.push(backoff.retryAt() - clock); }
+  assert.deepEqual(delays, [1000, 2000, 4000, 8000, 8000, 8000]);
+  assert.equal(backoff.blocked(), true); clock += 8000; assert.equal(backoff.blocked(), false);
+  backoff.succeeded(); backoff.failed(Object.assign(new Error("404"), { transient: true })); assert.equal(backoff.retryAt() - clock, 1000);
 });
 
 test("an ambiguous success response cannot remove a queued scan", async () => {
@@ -1789,7 +1850,7 @@ test("offline estimates survive restart using durable events and conservatively 
     assert.equal(new Set(sent).size, sent.length);
     assert.deepEqual(await createFileQueue(path).pending(), []);
     assert.deepEqual(await restarted.scan(13), { state: "welcome", detail: "Saved for sync | Welcome" });
-    const persisted = JSON.parse(await readFile(path, "utf8"));
+    const persisted = await createFileQueue(path).pending();
     assert.equal(persisted.length, 1);
     assert.deepEqual(Object.keys(persisted[0]).sort(), ["eventId", "memberId", "occurredAt"]);
   } finally { await rm(directory, { recursive: true }); }
@@ -1971,10 +2032,18 @@ test("kiosk footer shows the release version without masking reader failures", (
 
 test("root helper executes strict release validation before any download", async () => {
   const helper = await readFile("apps/kiosk/scripts/lancerlogin-install-release.sh", "utf8");
-  const release = tag => ({ tag_name: tag, draft: false, prerelease: false, assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap(arch => {
+  const release = tag => ({ tag_name: tag, draft: false, prerelease: false, immutable: true, assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap(arch => {
     const archive = `lancerlogin-kiosk-${tag.slice(1)}-linux-${arch}.tar.gz`;
     return [archive, `${archive}.sha256`];
-  })].map(name => ({ name })) });
+  })].map((name, index) => ({ name, digest: `sha256:${index.toString(16).repeat(64)}` })) });
+  {
+    // Stable releases also need immutability and GitHub asset digests for the installer and both archives.
+    const good = release("v1.0.0"); const installed = { installedVersion: "0.1.0", fetcher: async (url) => Response.json(url.includes("/commits/") ? { sha: "b".repeat(40) } : good) };
+    assert.deepEqual((await resolveKioskRelease(installed)).digests, { installer: "0".repeat(64), arm64: "2".repeat(64), armv7: "4".repeat(64) });
+    for (const payload of [{ ...good, immutable: false }, { ...good, immutable: undefined }, { ...good, assets: good.assets.map((asset, index) => index === 2 ? { name: asset.name } : asset) }, { ...good, assets: good.assets.map((asset, index) => index === 0 ? { ...asset, digest: "sha512:" + "a".repeat(128) } : asset) }, { ...good, assets: [...good.assets, good.assets[0]] }]) {
+      await assert.rejects(resolveKioskRelease({ ...installed, fetcher: async (url) => Response.json(url.includes("/commits/") ? { sha: "b".repeat(40) } : payload) }), /newer_official_release_required/);
+    }
+  }
   const resolve = async (payload) => resolveKioskRelease({ installedVersion: "0.1.0", fetcher: async (url) => Response.json(url.includes("/commits/") ? { sha: "b".repeat(40) } : payload) });
   for (const tag of ["v0.24.0", "v1.0.0", "v12.3.45", "v01.0.0", "v1.00.0", "v1.0.00", "v1.0.0-beta", "v1.0.0+build", "v1.0.0\n", "v1.0.0/evil"]) {
     if (["v0.24.0", "v1.0.0", "v12.3.45"].includes(tag)) assert.equal((await resolve(release(tag))).version, tag.slice(1));

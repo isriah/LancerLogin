@@ -15,6 +15,7 @@ import { installedDashboardModules } from "./installed-dashboard-modules";
 import { resolveDashboardPublicPage } from "./module-contributions.ts";
 import { ModuleRoot } from "./module-slots";
 import { WalkthroughSessionProvider } from "./page-walkthrough";
+import { AppErrorFallback, ErrorBoundary } from "./error-boundary";
 import { clearWalkthroughSession } from "./walkthrough-session";
 // Loaded last so desktop consistency rules follow every page and mobile stylesheet.
 import "./desktop-layout.css";
@@ -171,9 +172,11 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
   async function submit(event: FormEvent) {
     event.preventDefault(); setResult({ busy: true });
     if (usesLocal && localPassword !== localPasswordConfirmation) { setResult({ error: "The password confirmation does not match. Re-enter both password fields." }); return; }
-    const response = await fetch(`${apiBaseUrl}/setup/bootstrap`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ setupCode, organizationName, timeZone, authMode, adminEmail: usesGoogle ? adminEmail : undefined, googleClientId: usesGoogle ? googleClientId : undefined, googleClientSecret: usesGoogle ? googleClientSecret : undefined, localUsername: usesLocal ? localUsername : undefined, localPassword: usesLocal ? localPassword : undefined }) });
-    const body = await response.json() as { error?: string; details?: string[] };
-    if (!response.ok) { setResult({ error: body.details?.join(" ") ?? body.error ?? "Setup failed" }); return; }
+    let response: Response;
+    try { response = await fetch(`${apiBaseUrl}/setup/bootstrap`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ setupCode, organizationName, timeZone, authMode, adminEmail: usesGoogle ? adminEmail : undefined, googleClientId: usesGoogle ? googleClientId : undefined, googleClientSecret: usesGoogle ? googleClientSecret : undefined, localUsername: usesLocal ? localUsername : undefined, localPassword: usesLocal ? localPassword : undefined }) }); }
+    catch { setResult({ error: "Setup service unavailable. Check your connection and try again; your entries are kept." }); return; }
+    const body = await response.json().catch(() => ({})) as { error?: string; details?: string[] };
+    if (!response.ok) { setResult({ error: body.details?.join(" ") ?? body.error ?? (response.status >= 500 ? "Setup service unavailable. Try again; your entries are kept." : "Setup failed") }); return; }
     onConfigured({ configured: true, installation: { authMode }, settings: { organizationName, subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } });
   }
 
@@ -192,26 +195,43 @@ function ConfiguredInstallation({ initialSession, initialModules, status, onStat
   const [session, setSession] = useState<DashboardSession>();
   const [moduleRequest, setModuleRequest] = useState(() => initialModules);
   const [checking, setChecking] = useState(true);
-  useEffect(() => {
-    let active = true;
-    void (initialSession ?? loadDashboardSession()).then((user) => {
-      if (!active) return;
+  const [sessionUnavailable, setSessionUnavailable] = useState(false);
+  const mounted = useRef(true);
+  function checkSession(request: Promise<DashboardSession | undefined>) {
+    setChecking(true); setSessionUnavailable(false);
+    void request.then((user) => {
+      if (!mounted.current) return;
       setSession(user); setChecking(false);
       if (!user) setModuleRequest(undefined);
+    }, () => {
+      // A transient failure is not a sign-out: keep the session cookie and offer a retry instead of the sign-in form.
+      if (!mounted.current) return;
+      setModuleRequest(undefined); setSessionUnavailable(true); setChecking(false);
     });
-    return () => { active = false; };
+  }
+  useEffect(() => {
+    mounted.current = true;
+    checkSession(initialSession ?? loadDashboardSession());
+    return () => { mounted.current = false; };
   }, []);
   if (checking) return <section className="centered-state auth-check" aria-live="polite" aria-busy="true"><p className="kicker">Secure sign-in</p><h1>Checking your session…</h1><p>Confirming whether this browser already has an active dashboard session.</p></section>;
-  if (session) return <WalkthroughSessionProvider userId={session.id}><AppShell initialModules={moduleRequest} themeControl={<ThemeToggle theme={theme} onTheme={onTheme} />} role={session.role} debugMode={session.debugMode} onDebugModeChanged={async (debugMode) => { const response = await fetch(`${apiBaseUrl}/auth/preferences`, { method: "PATCH", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ debugMode }) }); if (!response.ok) throw new Error("Could not save Debug mode."); setSession((current) => current ? { ...current, debugMode } : current); }} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => { clearWalkthroughSession(session.id); setModuleRequest(undefined); setSession(undefined); }); }} /></WalkthroughSessionProvider>;
+  if (sessionUnavailable) return <section className="centered-state auth-check" aria-live="polite"><p className="kicker">Secure sign-in</p><h1>Session check unavailable</h1><p>LancerLogin could not confirm your session. Check your connection and try again.</p><button className="primary-button" type="button" onClick={() => checkSession(loadDashboardSession())}>Try again</button></section>;
+  if (session) return <WalkthroughSessionProvider userId={session.id}><AppShell initialModules={moduleRequest} themeControl={<ThemeToggle theme={theme} onTheme={onTheme} />} role={session.role} debugMode={session.debugMode} onDebugModeChanged={async (debugMode) => { const response = await fetch(`${apiBaseUrl}/auth/preferences`, { method: "PATCH", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ debugMode }) }); if (!response.ok) throw new Error("Could not save Debug mode."); setSession((current) => current ? { ...current, debugMode } : current); }} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSessionExpired={() => { setModuleRequest(undefined); setSession(undefined); }} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => { clearWalkthroughSession(session.id); setModuleRequest(undefined); setSession(undefined); }); }} /></WalkthroughSessionProvider>;
   return <><EntryHeader branding={status.settings} theme={theme} onTheme={onTheme} /><LocalLogin status={status} onSignedIn={setSession} /></>;
+}
+
+function signInFailureMessage(status: number) {
+  if (status === 429) return "Too many sign-in attempts. Wait a few minutes before trying again.";
+  if (status >= 500) return "Sign-in service unavailable. Try again shortly.";
+  return "Invalid username or password. Check your details or wait before trying again.";
 }
 
 function LocalLogin({ status, onSignedIn }: { status: SetupStatus; onSignedIn: (user: { id: string; role: "admin" | "operator"; debugMode: boolean }) => void }) {
   const mode = status.installation?.authMode ?? "local";
   const [username, setUsername] = useState(""); const [password, setPassword] = useState(""); const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent) { event.preventDefault(); setMessage(""); setBusy(true); try { const response = await fetch(`${apiBaseUrl}/auth/local`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ username, password }) }); if (response.ok) onSignedIn((await response.json() as { user: { id: string; role: "admin" | "operator"; debugMode: boolean } }).user); else setMessage("Invalid username or password. Check your details or wait before trying again."); } catch { setMessage("Sign-in service unavailable. Check your connection and try again."); } finally { setBusy(false); } }
+  async function submit(event: FormEvent) { event.preventDefault(); setMessage(""); setBusy(true); try { const response = await fetch(`${apiBaseUrl}/auth/local`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ username, password }) }); if (response.ok) onSignedIn((await response.json() as { user: { id: string; role: "admin" | "operator"; debugMode: boolean } }).user); else setMessage(signInFailureMessage(response.status)); } catch { setMessage("Sign-in service unavailable. Check your connection and try again."); } finally { setBusy(false); } }
   const messageId = message ? "sign-in-message" : undefined;
   return <main id="dashboard-content" className="login-card ui-card" aria-labelledby="sign-in-title"><div className="form-intro"><p className="kicker">{status.settings?.organizationName ?? "LancerLogin"}</p><h1 id="sign-in-title">Welcome back</h1><p>Sign in to manage attendance and finish setup.</p></div>{mode !== "google" && <form className="ui-form" onSubmit={submit} aria-describedby={messageId}><label htmlFor="sign-in-username">Username<input id="sign-in-username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><label htmlFor="sign-in-password">Password<input id="sign-in-password" required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><button className="primary-button" disabled={busy} type="submit">{busy ? "Signing in…" : "Sign in"}</button></form>}{mode === "both" && <div className="auth-divider" aria-hidden="true"><span>or</span></div>}{mode !== "local" && <a className="google-button action-link" href={`${apiBaseUrl}/auth/google/start`}>Continue with Google</a>}{message && <p id="sign-in-message" className="ui-status auth-message" data-tone="error" role="alert" tabIndex={-1}>{message}</p>}</main>;
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode><ErrorBoundary fallback={() => <AppErrorFallback />}><App /></ErrorBoundary></StrictMode>);

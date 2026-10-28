@@ -1,6 +1,6 @@
 # Authoring a module
 
-A module is either first-party, shipped in this repository, or a plugin: a separate git repository that an installation selects and composes into its own build. Both implement the same contract. This guide covers plugins first; first-party differences are noted at the end. Installations select plugins as described in [module plugins](MODULE-PLUGINS.md).
+A module is either first-party, shipped in this repository, or a plugin: a separate git repository that an installation selects and composes into its own build. Both implement the same contract. This guide covers plugins first; first-party differences are noted at the end. Installations select plugins as described in [module plugins](MODULE-PLUGINS.md). For a step-by-step path from a new repository to a release, including the local development loop and the template repository, see [writing a plugin](PLUGIN-AUTHORING.md).
 
 Plugins import only `@lancerlogin/module-sdk`. Composition refuses imports of Core source, other `@lancerlogin/*` packages, or relative paths that leave the plugin.
 

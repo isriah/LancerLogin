@@ -37,9 +37,10 @@ function defaultMeeting(timeZone: string) {
 
 type ModuleSetupWorkspaceProps = DashboardSetupProps;
 
-/** Render the guided setup contributed by the module being set up, inside its module root unless the Core shell owns it. Offer Finish setup later when the shell allows deferring it. */
-export function ModuleSetupWorkspace({ setup: Setup, moduleRoot = false, onFinishLater, ...props }: ModuleSetupWorkspaceProps & { setup?: React.ComponentType<DashboardSetupProps>; moduleRoot?: boolean; onFinishLater?: () => void }) {
+/** Render the guided setup contributed by the module being set up, inside its module root unless the Core shell owns it. Offer Finish setup later when the shell allows deferring it, or Close setup when it was reopened after completion. */
+export function ModuleSetupWorkspace({ setup: Setup, moduleRoot = false, onFinishLater, onClose, ...props }: ModuleSetupWorkspaceProps & { setup?: React.ComponentType<DashboardSetupProps>; moduleRoot?: boolean; onFinishLater?: () => void; onClose?: () => void }) {
   const workspace = !Setup ? <p className="ui-status" data-tone="error" role="alert">Module setup is unavailable.</p> : moduleRoot ? <ModuleRoot moduleId={props.module.id}><Setup {...props} /></ModuleRoot> : <Setup {...props} />;
+  if (onClose && !onFinishLater) return <>{workspace}<div className="module-setup-later"><button type="button" onClick={onClose} aria-describedby="module-setup-close-help">Close setup</button><p id="module-setup-close-help" className="field-help">{props.module.label} setup is complete. Saved steps stay as they are.</p></div></>;
   if (!onFinishLater) return workspace;
   return <>{workspace}<div className="module-setup-later"><button type="button" onClick={onFinishLater} aria-describedby="module-setup-later-help">Finish setup later</button><p id="module-setup-later-help" className="field-help">{props.module.label} stays unavailable until its required steps are complete. Continue setup from the notice at the top of any page.</p></div></>;
 }

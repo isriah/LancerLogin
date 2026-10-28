@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./dashboard-api";
+import { visiblePoll } from "./visible-poll";
 import { readUpdateChannelSetting, announceUpdateChannelChange, channelNoticeEvent, channelNoticeKey, type UpdateChannelSetting } from "./use-release-check";
 import type { UpdateChannel } from "../../../packages/shared/src/release-policy.mjs";
 export function UpdateChannelCard() {
@@ -17,13 +18,13 @@ export function UpdateChannelCard() {
   }
   useEffect(() => {
     let active = true;
-    const refresh = () => { void readUpdateChannelSetting().then((value) => { if (active) acceptSetting(value); }).catch((error: Error) => { if (active) setNotice(error.message); }); };
+    const read = () => readUpdateChannelSetting().then((value) => { if (active) acceptSetting(value); }).catch((error: Error) => { if (active) setNotice(error.message); });
+    const refresh = () => { void read(); };
     const onStorage = (event: StorageEvent) => { if (event.key === channelNoticeKey) refresh(); };
-    refresh();
     window.addEventListener(channelNoticeEvent, refresh);
     window.addEventListener("storage", onStorage);
-    const timer = window.setInterval(refresh, 30_000);
-    return () => { active = false; window.removeEventListener(channelNoticeEvent, refresh); window.removeEventListener("storage", onStorage); window.clearInterval(timer); };
+    const stop = visiblePoll(read, 30_000, undefined, true);
+    return () => { active = false; window.removeEventListener(channelNoticeEvent, refresh); window.removeEventListener("storage", onStorage); stop(); };
   }, []);
   async function save() {
     if (!setting) return; setBusy(true); setNotice("");

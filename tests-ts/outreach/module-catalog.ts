@@ -109,7 +109,7 @@ test("reconciliation does not register modules before installation setup", async
   const database = new Database();
   try {
     database.sqlite.exec("DELETE FROM installations");
-    assert.deepEqual(await reconcileInstalledModules(database), { changed: false, failures: [] });
+    assert.deepEqual(await reconcileInstalledModules(database), { changed: false, failures: [], unconfigured: true });
     assert.equal(database.count("SELECT COUNT(*) AS n FROM platform_module_catalog"), 0);
   } finally { database.close(); }
 });

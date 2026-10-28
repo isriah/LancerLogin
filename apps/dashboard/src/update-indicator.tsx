@@ -21,10 +21,14 @@ export const checkForUpdate = createSingleFlight(async (): Promise<Check> => {
     reloadAvailable: state.reloadAvailable };
 });
 
-function useUpdateCheck() {
+export type UpdateCheck = Check;
+
+/** One update check per signed-in Admin shell, shared by the header indicator and the update popup. */
+export function useUpdateCheck(enabled = true) {
   const [check, setCheck] = useState<Check>();
-  const release = useReleaseCheck();
+  const release = useReleaseCheck(enabled);
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
     async function refresh() {
       try { const next = await checkForUpdate(); if (active) setCheck(next); }
@@ -32,20 +36,18 @@ function useUpdateCheck() {
     }
     const stop = visiblePoll(refresh, 30_000, undefined, true);
     return () => { active = false; stop(); };
-  }, [release.checkedAt, release.fresh, release.release?.tag_name]);
+  }, [enabled, release.checkedAt, release.fresh, release.release?.tag_name]);
   if (check?.reloadAvailable) return check;
   return release.fresh && check?.latest === formatVersion(release.release?.tag_name) && check.available ? check : undefined;
 }
 
-export function UpdateIndicator({ openUpdates }: { openUpdates: () => void }) {
-  const check = useUpdateCheck();
+export function UpdateIndicator({ check, openUpdates }: { check?: Check; openUpdates: () => void }) {
   if (!check) return null;
   const version = check.reloadAvailable ? check.served : check.latest;
   return <button className="update-indicator" type="button" onClick={openUpdates} aria-label={check.reloadAvailable ? `LancerLogin ${version} is installed. Open Updates to reload.` : `LancerLogin ${version} is available. Open Updates.`}><span aria-hidden="true">↑</span> {check.reloadAvailable ? "Reload update" : "Update available"} <strong>{version}</strong></button>;
 }
 
-export function UpdateAvailablePopup({ openUpdates, suppressed = false }: { openUpdates: () => void; suppressed?: boolean }) {
-  const check = useUpdateCheck();
+export function UpdateAvailablePopup({ check, openUpdates, suppressed = false }: { check?: Check; openUpdates: () => void; suppressed?: boolean }) {
   const [dismissedVersion, setDismissedVersion] = useState<string>();
   const noticeKey = check?.reloadAvailable ? `reload-${check.served}` : `update-${check?.latest}`;
   if (!check || dismissedVersion === noticeKey || readDismissed(noticeKey) || suppressed) return null;

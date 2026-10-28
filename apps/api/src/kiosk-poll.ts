@@ -49,8 +49,8 @@ export async function kioskPoll(request: Request, { db, credentialHash, secret, 
         FROM organization_settings WHERE installation_id='primary') AS configuration` : ""}
       ${fingerprints ? `,EXISTS(SELECT 1 FROM maintenance_lock) AS maintenance,
       (SELECT json_object('id',id,'createdAt',createdAt,'kind','reset_fingerprint_mappings') FROM pending_reset) AS reset,
-      (SELECT revision FROM report_data_revision WHERE installation_id='primary') AS rosterRevision,
-      CASE WHEN (SELECT revision FROM report_data_revision WHERE installation_id='primary')<>? AND k.pairingBound=1 THEN
+      (SELECT revision FROM kiosk_roster_revision WHERE installation_id='primary') AS rosterRevision,
+      CASE WHEN (SELECT revision FROM kiosk_roster_revision WHERE installation_id='primary')<>? AND k.pairingBound=1 THEN
         (SELECT json_group_array(json_object('rosterId',id,'memberId',external_id,'firstName',first_name,'lastName',last_name))
           FROM (SELECT id,external_id,first_name,last_name FROM members WHERE installation_id='primary' AND active=1 ORDER BY last_name,first_name LIMIT 10001)) END AS members,
       (SELECT v.enabled FROM kiosk_fingerprint_vault_settings v,sharing_kiosk me WHERE v.installation_id='primary') AS vaultEnabled,

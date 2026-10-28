@@ -2,7 +2,7 @@ import { readFile, readdir, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { buildProvisionConfig } from "./prepare-cloudflare-provision.mjs";
 import { buildPagesProxy } from "./prepare-pages-proxy.mjs";
 
@@ -13,14 +13,18 @@ import { parseReleaseVersion, releaseAllowed, compareReleaseVersions } from "../
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const shaPattern = /^[0-9a-f]{40}$/;
 export const controllerCredentialMinimumValidityMs = 2 * 60 * 60_000;
-export function validateUpgradeEnvironment(env) {
+/**
+ * credentials: false is the workflow's --validate step, which runs from the controller checkout with no secrets in its
+ * environment; it checks the request and fixed resources only. Every mutating run requires the scoped credentials.
+ */
+export function validateUpgradeEnvironment(env, { credentials = true } = {}) {
   if (env.REPOSITORY_PRIVATE !== "true") throw new Error("private_repository_required");
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.UPDATE_REPOSITORY ?? "") || env.UPDATE_REPOSITORY.toLowerCase() === "isriah/lancerlogin") throw new Error("private_repository_required");
   if (!idPattern.test(env.REQUEST_ID ?? "") || !env.RELEASE_TAG?.startsWith("v") || !parseReleaseVersion(env.RELEASE_TAG) || !shaPattern.test(env.RELEASE_SHA ?? "") || !/^[1-9][0-9]*$/.test(env.EXECUTOR_RUN_ID ?? "")) throw new Error("invalid_request");
   if (!/^[a-z][a-z0-9-]{2,40}$/.test(env.INSTALLATION_SLUG ?? "") || !idPattern.test(env.DATABASE_ID ?? "")) throw new Error("fixed_resources_required");
   const api = new URL(env.API_URL);
   if (api.protocol !== "https:" || api.username || api.password || api.search || api.hash || api.pathname !== "/" || !api.hostname.startsWith(`${env.INSTALLATION_SLUG}-api.`) || !api.hostname.endsWith(".workers.dev")) throw new Error("fixed_api_origin_required");
-  if (!/^[0-9a-f]{32}$/.test(env.CLOUDFLARE_ACCOUNT_ID ?? "") || !env.CLOUDFLARE_API_TOKEN?.startsWith("cfat_")) throw new Error("scoped_account_credential_required");
+  if (credentials && (!/^[0-9a-f]{32}$/.test(env.CLOUDFLARE_ACCOUNT_ID ?? "") || !env.CLOUDFLARE_API_TOKEN?.startsWith("cfat_"))) throw new Error("scoped_account_credential_required");
   if (!(Date.parse(env.WEB_UPDATE_TOKEN_EXPIRES_AT ?? "") - Date.now() >= controllerCredentialMinimumValidityMs)) throw new Error("dispatch_credential_expiry_required");
   return { requestId: env.REQUEST_ID, tag: env.RELEASE_TAG, sha: env.RELEASE_SHA, runId: env.EXECUTOR_RUN_ID,
     slug: env.INSTALLATION_SLUG, databaseName: resolveDatabaseName(env.INSTALLATION_SLUG, env.DATABASE_NAME), databaseId: env.DATABASE_ID, apiUrl: api.origin,
@@ -110,25 +114,34 @@ export async function preflightModules({ pinnedSelectionSha, selectionPath, comp
   return composed;
 }
 
-/** IO abstraction is also used by the no-cloud synthetic failure/recovery rehearsal. */
-export async function executeWebUpgrade(context, io) {
+/**
+ * IO abstraction is also used by the no-cloud synthetic failure/recovery rehearsal.
+ * progress is shared with the cancellation handler (interruptUnchanged): it records whether the request is claimed and
+ * whether a mutation may have started. Once interrupted, the run never starts a mutation.
+ */
+export async function executeWebUpgrade(context, io, progress = {}) {
   let claimed = false; let maintenance = false; let mutation = false; let stage = "preflight";
+  const at = (value) => { stage = value; progress.stage = value; };
   try {
     await io.preflight(context);
     if (!await io.claim(context)) return { duplicate: true }; // Includes same-run reruns; no lease expiry.
-    claimed = true;
+    claimed = true; progress.claimed = true;
     await io.state("running", "building", 0);
-    stage = "build"; await io.build(context); // API bundle and Pages assets before data/code mutation.
-    stage = "maintenance"; await io.state("running", "maintenance", 1); maintenance = true;
+    at("build"); await io.build(context); // API bundle and Pages assets before data/code mutation.
+    at("maintenance"); await io.state("running", "maintenance", 1); maintenance = true;
     await io.drain();
-    stage = "checkpoint"; const recovery = await io.checkpoint(context);
+    at("checkpoint"); const recovery = await io.checkpoint(context);
     if (!recovery?.databaseBookmark || !recovery?.workerVersionIds?.length || !recovery?.pagesDeploymentId) throw new Error("checkpoint_required");
     await io.saveRecovery(recovery);
-    stage = "migrations"; await io.state("running", stage, 1); mutation = true;
+    // Checked and set with no await in between, so a cancellation either stops the run here or sees that a mutation
+    // may be starting and leaves the request for recovery.
+    if (progress.interrupted) throw new Error("interrupted");
+    progress.mutationStarting = true;
+    at("migrations"); await io.state("running", stage, 1); mutation = true;
     await io.migrate(context); // Compatible forward-only migrations. Never restore D1.
-    stage = "api_deployment"; await io.state("running", stage, 1); await io.deployApi(context);
-    stage = "pages_deployment"; await io.state("running", stage, 1); await io.deployPages(context);
-    stage = "health"; await io.state("verifying", stage, 1); await io.health(context);
+    at("api_deployment"); await io.state("running", stage, 1); await io.deployApi(context);
+    at("pages_deployment"); await io.state("running", stage, 1); await io.deployPages(context);
+    at("health"); await io.state("verifying", stage, 1); await io.health(context);
     await io.state("succeeded", "complete", 0);
     return { succeeded: true };
   } catch {
@@ -136,6 +149,48 @@ export async function executeWebUpgrade(context, io) {
     // Sanitized stage only; subprocess/provider errors may contain sensitive data.
     throw new Error(`${stage}_failed`);
   }
+}
+
+/** Request stages written before any migration or deployment: a run stopped in one of them changed nothing. */
+export const unchangedStages = Object.freeze(["preflight", "building", "maintenance"]);
+/**
+ * A cancelled or timed-out run (GitHub sends SIGINT, then SIGTERM) never reaches executeWebUpgrade's catch block. If the
+ * request is claimed and no mutation can have started, clear maintenance and fail the request instead of leaving the
+ * installation paused for recovery although nothing changed. Returns "not_claimed" (nothing to release), "released",
+ * or "mutation_possible": the run is left to continue until it is killed, and then to recovery.
+ */
+export async function interruptUnchanged(io, progress) {
+  progress.interrupted = true;
+  if (!progress.claimed) return "not_claimed";
+  if (progress.mutationStarting) return "mutation_possible";
+  await io.releaseUnchanged(progress.stage ?? "preflight");
+  return "released";
+}
+
+/** Post-deployment health of exactly this deployment: the composed module set and this run's deployment marker. */
+export function deployedHealthMatches({ api, pages, proxy, version, expectedModules, marker }) {
+  const modules = Array.isArray(api?.modules) ? api.modules : [];
+  const sameModules = modules.length === new Set(modules).size && modules.length === expectedModules.length && expectedModules.every((id) => modules.includes(id));
+  return api?.ok === true && api.mode === "ready" && api.releaseVersion === version && sameModules && typeof marker === "string" && api.deployment === marker
+    && pages?.releaseVersion === version && proxy?.ok === true && proxy.releaseVersion === version;
+}
+/** Pages serves this run's deployment: its commit, and a canonical deployment other than the checkpointed one. */
+export function assertNewPagesDeployment(project, checkpoint, sha) {
+  const canonical = project?.canonical_deployment;
+  if (canonical?.deployment_trigger?.metadata?.commit_hash !== sha) throw new Error("pages_commit_mismatch");
+  if (!canonical?.id || !checkpoint?.pagesDeploymentId || canonical.id === checkpoint.pagesDeploymentId) throw new Error("pages_deployment_unchanged");
+}
+
+/**
+ * First-party module IDs of this checkout, read before composition writes plugin manifests, so plugin code is never
+ * imported into the controller process. Refuses a checkout whose generated manifests are not the committed defaults.
+ */
+export async function firstPartyModuleIds(source) {
+  const { defaultGeneratedContent, generatedFiles } = await import("./compose-modules.mjs");
+  const manifests = (await readFile(resolve(source, generatedFiles.manifests.path), "utf8")).replaceAll("\r\n", "\n");
+  if (manifests !== defaultGeneratedContent("manifests")) throw new Error("module_defaults_required");
+  const { firstPartyModules } = await import("../packages/shared/src/module-platform.ts");
+  return firstPartyModules.map((module) => module.id);
 }
 
 async function jsonGet(url, headers = {}) {
@@ -190,12 +245,16 @@ export async function composeUpdateModules({ selectionPath, environment, compose
 }
 
 export async function createLiveUpgradeIO(context, environment, sourceDirectory, controllerDirectory = "deployment-control") {
-  let composedModules = [];
+  let composedModules = []; let firstPartyModules = []; let checkpointed;
+  // A fresh value per run, deployed as a Worker variable and reported by /health, so health can tell this deployment
+  // from a previous one that is still propagating. Plugin changes keep the release version, so the version cannot.
+  const deploymentMarker = randomUUID();
   const source = resolve(sourceDirectory); const configPath = resolve(source, ".provision/wrangler.json");
   const databaseName = resolveDatabaseName(context.slug, context.databaseName);
   const config = buildProvisionConfig(context.slug, [{ name: databaseName, uuid: context.databaseId }], context.tag.slice(1), databaseName).config;
   config.vars.UPDATE_REPOSITORY = context.repository;
   config.vars.UPDATE_WORKFLOW_URL = `https://github.com/${context.repository}/actions/workflows/upgrade-web.yml`;
+  config.vars.DEPLOYMENT_MARKER = deploymentMarker;
   await mkdir(resolve(source, ".provision"), { recursive: true });
   await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
   const processEnvironment = { ...environment, CI: "true", WRANGLER_SEND_METRICS: "false", WRANGLER_WRITE_LOGS: "false", WRANGLER_LOG_SANITIZE: "true" };
@@ -222,6 +281,12 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
     const result = await sql(`UPDATE web_update_requests SET state = ?, stage = ?, maintenance = ?, error_code = ?, updated_at = ? WHERE ${owned} AND state NOT IN ('succeeded','failed','expired')`, [state, stage, maintenance, error, new Date().toISOString(), context.requestId, context.runId]);
     if (result[0]?.meta?.changes !== 1) throw new Error("request_state_conflict");
     console.log(`Web update stage: ${stage}; state: ${state}`);
+  };
+  // Only while the stored stage proves nothing was migrated or deployed. Never touches a request in a later stage.
+  const releaseUnchanged = async (stage) => {
+    const placeholders = unchangedStages.map(() => "?").join(",");
+    const result = await sql(`UPDATE web_update_requests SET state = 'failed', maintenance = 0, error_code = ?, updated_at = ? WHERE ${owned} AND state NOT IN ('succeeded','failed','expired','recovery_required') AND stage IN (${placeholders})`, [`${stage}_cancelled`, new Date().toISOString(), context.requestId, context.runId, ...unchangedStages]);
+    if (result[0]?.meta?.changes !== 1) throw new Error("request_state_conflict");
   };
   return {
     async preflight() {
@@ -266,6 +331,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
       // out of them with "officialModules": false. lancerlogin.plugin-sources.json beside the selection in the controller
       // checkout limits the selected sources; a forbidden source or an invalid file refuses the update here.
       const selection = resolve(controllerDirectory, "lancerlogin.modules.json");
+      firstPartyModules = await firstPartyModuleIds(source);
       composedModules = await preflightModules({ pinnedSelectionSha: request.module_selection_sha, selectionPath: selection,
         compose: () => composeUpdateModules({ selectionPath: existsSync(selection) ? selection : undefined, environment }),
         query: async (query, params = []) => (await sql(query, params))[0]?.results ?? [],
@@ -276,6 +342,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
       return result[0]?.meta?.changes === 1;
     },
     state: updateState,
+    releaseUnchanged,
     async build() {
       await wrangler(["deploy", "--dry-run", "--outdir", ".provision/api-build"]);
       await command(process.platform === "win32" ? "npm.cmd" : "npm", ["--workspace", "@lancerlogin/dashboard", "run", "build"], source, { ...processEnvironment, VITE_API_BASE_URL: "/api" });
@@ -293,6 +360,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
         pagesDeploymentId: pages.canonical_deployment?.id, resultingSchemaCompatibility: "requires_review", automaticDatabaseRestore: false };
     },
     async saveRecovery(recovery) {
+      checkpointed = recovery;
       const result = await sql(`UPDATE web_update_requests SET recovery_json = ?, updated_at = ? WHERE ${owned}`, [JSON.stringify(recovery), new Date().toISOString(), context.requestId, context.runId]);
       if (result[0]?.meta?.changes !== 1) throw new Error("checkpoint_save_failed");
     },
@@ -316,13 +384,15 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
           const api = await jsonGet(`${context.apiUrl}/health?update=${context.requestId}`);
           const pages = await jsonGet(`${context.dashboardUrl}/__lancerlogin-release?update=${context.requestId}`);
           const proxy = await jsonGet(`${context.dashboardUrl}/api/health?update=${context.requestId}`);
-          if (api.ok === true && api.mode === "ready" && api.releaseVersion === context.tag.slice(1) && composedModules.every((id) => api.modules?.includes(id)) && pages.releaseVersion === context.tag.slice(1) && proxy.ok === true && proxy.releaseVersion === context.tag.slice(1)) { healthy = true; break; }
+          // Exactly the composed set: a removed plugin must be gone too, which a still-propagating old Worker would fail.
+          if (deployedHealthMatches({ api, pages, proxy, version: context.tag.slice(1), expectedModules: [...firstPartyModules, ...composedModules], marker: deploymentMarker })) { healthy = true; break; }
         } catch { /* Bounded propagation retry. Never finalizes from dispatch/run success. */ }
         await new Promise((done) => setTimeout(done, 5_000));
       }
       if (!healthy) throw new Error("health_mismatch");
       const pages = await cf(`/pages/projects/${context.slug}-dashboard`);
-      if (pages.canonical_deployment?.deployment_trigger?.metadata?.commit_hash !== context.sha) throw new Error("pages_commit_mismatch");
+      // A plugin-changes deploy keeps the commit, so the canonical deployment must also differ from the checkpointed one.
+      assertNewPagesDeployment(pages, checkpointed, context.sha);
       const settings = await cf(`/workers/scripts/${context.slug}-api/settings`);
       if (!settings.bindings?.some((binding) => binding.name === "DB" && binding.id === context.databaseId)) throw new Error("postdeploy_database_mismatch");
       if (!dashboardOrigin || retainedDashboardOrigin(settings, pages) !== dashboardOrigin) throw new Error("postdeploy_origin_mismatch");
@@ -338,11 +408,24 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
 }
 
 async function main() {
-  const context = validateUpgradeEnvironment(process.env);
+  const validateOnly = process.argv.includes("--validate");
+  const context = validateUpgradeEnvironment(process.env, { credentials: !validateOnly });
   await validateOfficialSource(context, jsonGet);
-  if (process.argv.includes("--validate")) return;
+  if (validateOnly) return;
   const io = await createLiveUpgradeIO(context, process.env, "lancerlogin-source");
-  const result = await executeWebUpgrade(context, io);
+  const progress = {};
+  // GitHub cancellation and timeout-minutes send SIGINT, then SIGTERM, and kill the job seconds later.
+  let interruption;
+  const interrupted = () => {
+    interruption ??= interruptUnchanged(io, progress).then((outcome) => {
+      // A deployment step may be running: keep going until GitHub kills the job, then leave it to recovery.
+      if (outcome === "mutation_possible") { console.error("Web update interrupted after a deployment step may have started; the request is left for recovery."); return; }
+      console.error(outcome === "released" ? "Web update cancelled before any change. Maintenance was cleared and the request marked failed." : "Web update cancelled before it claimed the installation. Nothing changed.");
+      process.exit(1);
+    }, () => { console.error("Web update cancelled; the request state could not be updated and is left for reconciliation."); process.exit(1); });
+  };
+  process.on("SIGINT", interrupted); process.on("SIGTERM", interrupted);
+  const result = await executeWebUpgrade(context, io, progress);
   if (result.duplicate) console.log("Request already claimed; deployment mutation skipped.");
 }
 if (process.argv[1]?.endsWith("run-web-upgrade.mjs")) main().catch(() => { console.error("Web upgrade stopped. Inspect the durable request stage and recovery record; no automatic D1 restore was attempted."); process.exitCode = 1; });

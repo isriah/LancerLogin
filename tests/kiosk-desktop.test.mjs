@@ -6,7 +6,7 @@ import { once } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createDesktopControl } from "../apps/kiosk/src/desktop-control.mjs";
-import { createDesktopLauncherClient, kioskBrowserArguments, superviseKioskBrowser } from "../apps/kiosk/src/desktop-launcher.mjs";
+import { createDesktopLauncherClient, kioskBrowserArguments, kioskWaitingUrl, registrationRetryDelay, superviseKioskBrowser } from "../apps/kiosk/src/desktop-launcher.mjs";
 
 const instance = () => ({ input: { instanceId: randomUUID() }, secret: randomBytes(32).toString("base64url") });
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -170,4 +170,48 @@ test("lease recovery waits for a competing owner without taking over or acceptin
   assert.equal(await client.poll(), null);
   assert.equal(control.status().exitPending, false);
   await client.detach();
+});
+
+const idleChild = () => spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+
+test("offline boot shows a static waiting page, retries registration with backoff and then opens attendance", async context => {
+  let failures = 0, waiting, real, waitingStoppedBeforeReal = false;
+  const abort = new AbortController();
+  const client = { register: async () => { if (failures++ < 6) throw Object.assign(new Error("Service still starting"), { status: 503 }); },
+    poll: async () => null, acknowledge: async () => {}, detach: async () => {} };
+  const running = superviseKioskBrowser({ client, signal: abort.signal, registrationAttempts: 2, pollIntervalMs: 2, retryDelayMs: 2, maxRetryDelayMs: 8, graceMs: 500,
+    launchWaiting: () => { assert.equal(waiting, undefined, "only one waiting page"); waiting = idleChild(); return waiting; },
+    launch: () => { waitingStoppedBeforeReal = waiting.exitCode !== null || waiting.signalCode !== null; real = idleChild(); return real; } });
+  context.after(() => { abort.abort(); waiting?.kill(); real?.kill(); });
+  for (let attempts = 0; !real && attempts < 400; attempts++) await delay(5);
+  assert.ok(waiting, "waiting page opened while the service was unavailable");
+  assert.ok(real, "attendance page opened after registration");
+  assert.equal(waitingStoppedBeforeReal, true);
+  assert.equal(failures, 7);
+  abort.abort(); assert.deepEqual(await running, { exited: true });
+});
+
+test("waiting page stops on a competing owner or when it is closed, and backoff is capped", async context => {
+  let waiting, calls = 0;
+  await assert.rejects(superviseKioskBrowser({ registrationAttempts: 1, retryDelayMs: 1, graceMs: 500,
+    client: { register: async () => { if (calls++ < 2) throw Object.assign(new Error("starting"), { status: 503 }); throw Object.assign(new Error("Competing owner"), { status: 409 }); } },
+    launchWaiting: () => { waiting = idleChild(); return waiting; }, launch: () => assert.fail("No attendance page for a competing owner") }), { status: 409 });
+  assert.ok(waiting.exitCode !== null || waiting.signalCode !== null, "waiting page closed");
+  let closed;
+  const running = superviseKioskBrowser({ registrationAttempts: 1, retryDelayMs: 1, maxRetryDelayMs: 2, graceMs: 500,
+    client: { register: async () => { throw Object.assign(new Error("starting"), { status: 503 }); } },
+    launchWaiting: () => { closed = idleChild(); return closed; }, launch: () => assert.fail("Service never registered") });
+  context.after(() => closed?.kill());
+  for (let attempts = 0; !closed && attempts < 100; attempts++) await delay(5);
+  closed.kill();
+  await assert.rejects(running, { status: 503 });
+  assert.deepEqual([0, 1, 2, 5, 40].map(failures => registrationRetryDelay(failures, { retryDelayMs: 1000, maxRetryDelayMs: 30_000 })), [1000, 2000, 4000, 30_000, 30_000]);
+});
+
+test("waiting page is static local content and only fixed pages can be opened", () => {
+  const profile = join(tmpdir(), "lancerlogin-profile");
+  assert.equal(kioskBrowserArguments(profile, kioskWaitingUrl).at(-1), kioskWaitingUrl);
+  assert.match(kioskWaitingUrl, /^data:text\/html;charset=utf-8,/);
+  assert.doesNotMatch(decodeURIComponent(kioskWaitingUrl), /<script|https?:/i);
+  assert.throws(() => kioskBrowserArguments(profile, "https://example.test/"), /Unsupported/);
 });

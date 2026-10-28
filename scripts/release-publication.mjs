@@ -11,8 +11,12 @@ const shaPattern = /^[0-9a-f]{40}$/;
 const digestPattern = /^[0-9a-f]{64}$/;
 const validRun = (value) => /^[1-9][0-9]{0,15}$/.test(String(value)) && Number.isSafeInteger(Number(value));
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const browserShards = 6;
-const requiredJobs = ["actionlint", "verify", "dependency-audit", "browser-smoke", ...Array.from({ length: browserShards }, (_, index) => `Browser shard ${index + 1}/${browserShards}`)];
+// The release-gate browser suite runs in three groups (tests-browser/groups.json): Core plugin-free, and the plugin and
+// integration groups with the official plugins composed. Each count must match its matrix in .github/workflows/ci.yml.
+export const browserShardCounts = Object.freeze({ core: 4, plugin: 1, integration: 1 });
+const shardNames = (label, count) => Array.from({ length: count }, (_, index) => `${label} ${index + 1}/${count}`);
+export const requiredJobs = Object.freeze(["actionlint", "verify", "dependency-audit", "browser-smoke", ...shardNames("Core browser shard", browserShardCounts.core),
+  ...shardNames("Plugin browser shard", browserShardCounts.plugin), ...shardNames("Integration browser shard", browserShardCounts.integration)]);
 export function assetNames(tag) {
   releasePublicationPolicy(tag);
   return ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => {

@@ -22,6 +22,11 @@ test("live adapter keeps Worker configuration out of the actual Pages CLI invoca
     const isolatedEnv = { CI: "true", PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
       TEMP: source, TMP: source, HOME: source, USERPROFILE: source, XDG_CONFIG_HOME: source,
       WRANGLER_HOME: source, WRANGLER_SEND_METRICS: "false", WRANGLER_WRITE_LOGS: "false",
+      // The banner starts an npm registry update check and waits only 100 ms for it. The commands below then fail fast,
+      // so wrangler exited with that request in flight, which crashes Node 24.14 on Windows (0xC0000409, libuv
+      // UV_HANDLE_CLOSING assertion; not seen on the pinned 24.21.0). Hiding the banner skips the check, so the CLI
+      // makes no network request at all.
+      WRANGLER_HIDE_BANNER: "true",
       CLOUDFLARE_API_BASE_URL: "http://127.0.0.1:1" };
     const context = validateUpgradeEnvironment(env);
     const io = await createLiveUpgradeIO(context, isolatedEnv, source);
@@ -254,4 +259,51 @@ test("the optional plugin selection credential is verified, distinct from the di
     assert.match(workflow, /MODULE_SELECTION_TOKEN_EXPIRES_AT: \$\{\{ vars\.MODULE_SELECTION_TOKEN_EXPIRES_AT \}\}/);
   }
   assert.doesNotMatch(await readFile(".github/workflows/upgrade-web.yml", "utf8"), /MODULE_SELECTION_TOKEN/, "the upgrade workflow never receives the selection credential");
+});
+
+test("the --validate step needs no secrets, while every mutating run requires the scoped credentials", () => {
+  const withoutSecrets = { ...env }; delete withoutSecrets.CLOUDFLARE_API_TOKEN; delete withoutSecrets.CLOUDFLARE_ACCOUNT_ID;
+  assert.equal(validateUpgradeEnvironment(withoutSecrets, { credentials: false }).tag, "v1.0.0");
+  assert.throws(() => validateUpgradeEnvironment(withoutSecrets), /scoped_account_credential_required/);
+  assert.throws(() => validateUpgradeEnvironment({ ...withoutSecrets, API_URL: "https://another-api.account.workers.dev" }, { credentials: false }), /fixed_api_origin_required/);
+});
+
+test("post-deployment health requires exactly the composed modules and this run's deployment marker", async () => {
+  const { deployedHealthMatches, assertNewPagesDeployment } = await import("../scripts/run-web-upgrade.mjs");
+  const marker = "33333333-3333-4333-8333-333333333333";
+  const healthy = { api: { ok: true, mode: "ready", releaseVersion: "2.0.0", modules: ["attendance", "hour-tracking"], deployment: marker }, pages: { releaseVersion: "2.0.0" }, proxy: { ok: true, releaseVersion: "2.0.0" }, version: "2.0.0", expectedModules: ["attendance", "hour-tracking"], marker };
+  assert.equal(deployedHealthMatches(healthy), true);
+  // A plugin removed by a same-release plugin change: the old Worker still reports it.
+  assert.equal(deployedHealthMatches({ ...healthy, api: { ...healthy.api, modules: ["attendance", "hour-tracking", "carpool"] } }), false);
+  assert.equal(deployedHealthMatches({ ...healthy, api: { ...healthy.api, modules: ["attendance"] } }), false);
+  assert.equal(deployedHealthMatches({ ...healthy, api: { ...healthy.api, modules: ["attendance", "attendance"] }, expectedModules: ["attendance", "hour-tracking"] }), false);
+  // Same modules and version, but the previous deployment (another marker, or none).
+  assert.equal(deployedHealthMatches({ ...healthy, api: { ...healthy.api, deployment: "44444444-4444-4444-8444-444444444444" } }), false);
+  assert.equal(deployedHealthMatches({ ...healthy, api: { ...healthy.api, deployment: null }, marker: undefined }), false);
+  assert.equal(deployedHealthMatches({ ...healthy, pages: { releaseVersion: "1.9.0" } }), false);
+  const project = (id) => ({ canonical_deployment: { id, deployment_trigger: { metadata: { commit_hash: "b".repeat(40) } } } });
+  assertNewPagesDeployment(project("new-pages"), { pagesDeploymentId: "old-pages" }, "b".repeat(40));
+  assert.throws(() => assertNewPagesDeployment(project("old-pages"), { pagesDeploymentId: "old-pages" }, "b".repeat(40)), /pages_deployment_unchanged/);
+  assert.throws(() => assertNewPagesDeployment(project("new-pages"), undefined, "b".repeat(40)), /pages_deployment_unchanged/);
+  assert.throws(() => assertNewPagesDeployment(project("new-pages"), { pagesDeploymentId: "old-pages" }, "c".repeat(40)), /pages_commit_mismatch/);
+});
+
+// Steps are split the way GitHub lists them; job-level env is everything before the first step.
+const stepsOf = (workflow) => workflow.replace(/\r\n/g, "\n").split(/\n(?= {6}- )/);
+test("installation and update workflows give secrets only to the steps that use them", async () => {
+  for (const name of ["upgrade-web", "refresh-web-update-credential", "provision-template"]) {
+    const [job, ...steps] = stepsOf(await readFile(`.github/workflows/${name}.yml`, "utf8"));
+    assert.doesNotMatch(job, /\$\{\{\s*secrets\./, `${name} sets no secret at job level`);
+    for (const step of steps) {
+      if (/\bnpm ci\b|run-web-upgrade\.mjs --validate|npm --workspace @lancerlogin\/dashboard run build|wrangler deploy --dry-run|compose-modules\.mjs/.test(step)) {
+        const secrets = [...step.matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1]);
+        // Composition receives only the optional read-only plugin token, which it needs to fetch private plugins.
+        assert.deepEqual(secrets.filter((secret) => !(secret === "LANCERLOGIN_PLUGIN_TOKEN" && /compose-modules\.mjs/.test(step))), [], `${name}: ${step.split("\n")[0].trim()}`);
+      }
+    }
+  }
+  const upgrade = await readFile(".github/workflows/upgrade-web.yml", "utf8");
+  const final = stepsOf(upgrade).find((step) => /node lancerlogin-source\/scripts\/run-web-upgrade\.mjs\s*$/m.test(step));
+  assert.match(final, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
+  assert.match(final, /CLOUDFLARE_ACCOUNT_ID: \$\{\{ secrets\.CLOUDFLARE_ACCOUNT_ID \}\}/);
 });

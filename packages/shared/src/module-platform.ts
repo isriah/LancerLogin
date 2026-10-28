@@ -378,6 +378,9 @@ export const attendanceModule = freeze<ModuleDefinition>({
     { path: "/admin/simulator", match: "prefix", access: "workspace" },
     { path: "/communications/email", match: "exact", access: "workspace" },
     { path: "/calendars/sync", match: "exact", access: "workspace" },
+    // Google returns the browser here cross-site, without the SameSite=Strict session cookie. The handler authenticates
+    // the Admin through its signed, purpose-bound state instead, so this one path is a service route.
+    { path: "/admin/integrations/google-calendar/callback", match: "exact", access: "service" },
     { path: "^/admin/integrations/(google-calendar|discord/(calendar|channel-manager|anomaly-reports|label-roles|label-role-jobs))", match: "pattern", access: "workspace" },
     { path: "/discord/contests", match: "prefix", access: "workspace" },
     { path: "/discord/calendar", match: "exact", access: "workspace" },

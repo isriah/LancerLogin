@@ -45,3 +45,16 @@ test("Admin can leave unfinished Attendance setup, reach Settings, and continue 
   await expect(navigation).toBeVisible();
   await expect(notice).toBeVisible();
 });
+
+test("the Roster link inside required Attendance setup opens Roster and keeps setup available to continue", async ({ page }) => {
+  await attendanceSetupWithoutInput(page);
+  await page.goto("/dashboard");
+  await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toBeVisible();
+  await page.getByRole("button", { name: "Roster", exact: true }).click();
+  await expect(page).toHaveURL(/\/roster$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Primary dashboard navigation" })).toBeVisible();
+  const notice = page.getByRole("region", { name: "Attendance setup is not finished" });
+  await notice.getByRole("button", { name: "Continue Attendance setup" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toBeVisible();
+});

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
+import { browserGroups, parsePart, partitionGroup, specsForGroup } from "./browser-groups.mjs";
 import { prepareTestComposition, readTestSelection } from "./test-plugin-sources.mjs";
 
 const workspace = process.cwd();
@@ -10,12 +11,37 @@ const playwrightCli = join(workspace, "node_modules", "playwright", "cli.js");
 
 // --compose-selection <file> composes a test plugin selection (file:// sources allowed) into this checkout before the run
 // and restores the plugin-free defaults afterwards, so specs exercise the dashboard exactly as a composed build serves it.
-// Private https pins need LANCERLOGIN_PLUGIN_TOKEN or a local plugin checkout (see test-plugin-sources.mjs).
-const args = process.argv.slice(2);
-const selectionIndex = args.indexOf("--compose-selection");
-const selection = selectionIndex >= 0 ? args[selectionIndex + 1] : undefined;
-if (selectionIndex >= 0 && (!selection || selection.startsWith("--"))) throw new Error("--compose-selection needs a selection file");
-const playwrightArgs = selectionIndex >= 0 ? args.filter((_, index) => index !== selectionIndex && index !== selectionIndex + 1) : args;
+// Public https pins are fetched anonymously; private ones need LANCERLOGIN_PLUGIN_TOKEN or a local plugin checkout (see test-plugin-sources.mjs).
+//
+// --group <core|plugin|integration> runs one release-gate group from tests-browser/groups.json (see browser-groups.mjs).
+// core must run plugin-free; plugin and integration must run composed, so their plugin specs can never skip silently.
+const takeOption = (args, name) => {
+  const index = args.indexOf(name);
+  if (index < 0) return { args, value: undefined };
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) throw new Error(`${name} needs a value`);
+  if (args.indexOf(name, index + 1) >= 0) throw new Error(`${name} may be given once`);
+  return { args: args.filter((_, position) => position !== index && position !== index + 1), value };
+};
+const composeOption = takeOption(process.argv.slice(2), "--compose-selection");
+const groupOption = takeOption(composeOption.args, "--group");
+const selection = composeOption.value;
+const group = groupOption.value;
+if (group) {
+  if (!Object.hasOwn(browserGroups, group)) throw new Error(`Unknown browser group ${group}; use ${Object.keys(browserGroups).join(", ")}`);
+  if (browserGroups[group].composed && !selection) throw new Error(`The ${group} browser group runs composed; add --compose-selection tests/fixtures/carpool.modules.json`);
+  if (!browserGroups[group].composed && selection) throw new Error(`The ${group} browser group runs plugin-free; remove --compose-selection`);
+}
+// --part i/n (with --group) runs one of n file-level parts balanced by measured seconds; the gate's shards use it.
+const partOption = takeOption(groupOption.args, "--part");
+if (partOption.value && !group) throw new Error("--part needs --group");
+if (partOption.value && partOption.args.some((arg) => arg === "--shard" || arg.startsWith("--shard="))) throw new Error("--part replaces --shard; use one of them");
+const groupSpecs = () => {
+  if (!partOption.value) return specsForGroup(group, workspace);
+  const { part, parts } = parsePart(partOption.value);
+  return partitionGroup(group, parts, workspace)[part - 1].files;
+};
+const playwrightArgs = group ? [...partOption.args, ...groupSpecs()] : partOption.args;
 const compose = (extra, env = process.env) => spawnSync(process.execPath, ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", join(workspace, "scripts", "compose-modules.mjs"), ...extra], { stdio: "inherit", env });
 if (selection) {
   const { modules, officialModules } = readTestSelection(selection, workspace);

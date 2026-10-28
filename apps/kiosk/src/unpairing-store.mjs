@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readdir, realpath, rename, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rename, rm, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -8,10 +8,13 @@ const privateMode = entry => process.platform === "win32" || ((Number(entry.mode
 const samePath = (a, b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 const safeName = name => /^[A-Za-z0-9._-]{1,128}$/.test(name) && ![".", ".."].includes(name);
 const controlName = "reassociation";
+const archiveName = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const purgingName = /^purging-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+export const archiveRetentionMs = 30 * 24 * 60 * 60_000;
 
 // A local, confirmed installation switch archives state instead of copying it
 // into the new pairing. There is no reader operation or automatic restore here.
-export function createUnpairingStore(root, { pinPath, statePaths = [], move = rename } = {}) {
+export function createUnpairingStore(root, { pinPath, statePaths = [], move = rename, now = Date.now } = {}) {
   root = resolve(root);
   if (dirname(root) === root) return failure();
   const pinName = pinPath ? basename(pinPath) : "network-pin.json";
@@ -88,8 +91,44 @@ export function createUnpairingStore(root, { pinPath, statePaths = [], move = re
     await persist({ ...state, phase: "complete", completedAt: new Date().toISOString() });
     return { unpaired: true, archiveId: state.archiveId, readerTemplatesRetained: true, localPinRetained: true };
   }
+  // Archived installations hold the old credential, roster, mappings and
+  // fingerprint state. They are deleted after the retention window, and all of
+  // them when the kiosk is paired again. Each archive is first renamed to
+  // purging-<id> so an interrupted deletion is finished on the next run and a
+  // half-deleted archive is never mistaken for a complete one.
+  async function purge({ all = false, olderThanMs = archiveRetentionMs } = {}) {
+    if (!await entry(root)) return { purged: [] };
+    await directory(root);
+    if (!await entry(control)) return { purged: [] };
+    await directory(control);
+    const state = await readJournal();
+    const purged = [];
+    const remove = async (path, id) => {
+      await rm(path, { recursive: true, force: true, maxRetries: 3 });
+      if (await entry(path)) return failure();
+      await syncDirectory(control);
+      purged.push(id);
+    };
+    for (const name of (await readdir(control)).sort()) {
+      const leftover = purgingName.exec(name);
+      if (leftover) { await remove(join(control, name), leftover[1]); continue; }
+      if (!archiveName.test(name)) continue;
+      // An unfinished archive transaction is never purged.
+      if (state?.phase === "archiving" && state.archiveId === name) continue;
+      const info = await entry(join(control, name));
+      if (!info || info.isSymbolicLink() || !info.isDirectory()) continue;
+      const age = now() - Number(info.mtimeMs);
+      if (!all && !(age > olderThanMs)) continue;
+      const target = join(control, `purging-${name}`);
+      await rename(join(control, name), target); await syncDirectory(control);
+      if (state?.archiveId === name && state.phase === "complete") { await unlink(journal).catch(error => { if (error.code !== "ENOENT") throw error; }); await syncDirectory(control); }
+      await remove(target, name);
+    }
+    return { purged };
+  }
   return {
     inspect: () => exclusive(async () => { const state = await readJournal(); return { recoveryPending: Boolean(state?.phase === "archiving") }; }),
+    purgeArchives: options => exclusive(async () => { try { return await purge(options); } catch { return failure(); } }),
     unpair: () => exclusive(async () => {
       try {
         if (!supported) return failure();

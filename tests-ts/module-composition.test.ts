@@ -10,6 +10,7 @@ import {
   CompositionError, checkImportSpecifier, composeModules, defaultGeneratedContent, fetchPinnedPlugin, generatedFiles, gitEnvironment, importSpecifiers, inspectPlugin,
   installPluginDependencies, moduleDataContent, moduleDataFile, parseModuleSelection, restoreModuleDefaults, runCommand, satisfiesCoreRange, scanPluginSources, validateModuleSet, validatePluginPackage, verifyPinnedCheckout,
   checkPeerDependencies, coreProvidedPackages, effectiveSelection, enforceSourceAllowlist, ownSetupProgressStep, parseSelectionFile, satisfiesPeerRange,
+  compositionEnvironment, inspectionEnvironment, pluginTokenHosts,
 } from "../scripts/compose-modules.mjs";
 import { attendanceModule, bundledModuleRegistry, createModuleRegistry } from "../packages/shared/src/module-platform.ts";
 import { moduleContractVersion, moduleSdkPackageName, supportedModuleContractVersions } from "../packages/shared/src/module-contract.ts";
@@ -18,13 +19,14 @@ import { createModuleDiscordDispatcher } from "../apps/api/src/module-discord.ts
 import { createModuleReportDispatcher } from "../apps/api/src/module-reporting.ts";
 import { createTestD1Database } from "./fixtures/d1-database.ts";
 import { prepareTestComposition } from "../scripts/test-plugin-sources.mjs";
+import { isolatedGitEnv } from "../scripts/git-env.mjs";
 
 const fixture = "tests/fixtures/module-plugins/example";
 const corePackage = JSON.parse(readFileSync("package.json", "utf8"));
 const sha = (content: string) => createHash("sha256").update(content.replaceAll("\r\n", "\n")).digest("hex");
 const rejects = (pattern: RegExp) => (error: unknown) => error instanceof CompositionError && pattern.test(error.message);
 const git = (cwd: string, ...args: string[]) => {
-  const result = spawnSync("git", ["-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
+  const result = spawnSync("git", ["-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", env: isolatedGitEnv() });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 };
@@ -166,14 +168,14 @@ test("plugin packages declare their module, contract, Core range, prefix and in-
   assert.throws(() => validate(undefined, "example", "3.0.0"), rejects(/this Core is 3\.0\.0/));
 });
 
-test("plugin sources may import only their own files, declared dependencies, built-ins and the SDK", async (t) => {
+test("plugin sources may import only their own files, declared dependencies, Node built-ins and the SDK", async (t) => {
   assert.deepEqual(importSpecifiers(`import a from "./a.ts"; import type { B } from '@lancerlogin/module-sdk';\nimport "./side.ts";\nexport { c } from "./c.ts"; export * from "dep/sub";\nconst d = await import("./d.ts"); // import x from "../../commented.ts"\n/* import y from "../../block.ts" */ const url = "https://example.invalid/x"; const r = require("node:fs");\nimport.meta.url; thing.require(name);`).sort(),
     ["./a.ts", "./c.ts", "./d.ts", "./side.ts", "@lancerlogin/module-sdk", "dep/sub", "node:fs"]);
   assert.throws(() => importSpecifiers("const name = './x.ts'; await import(name);"), /string literal/);
   const pluginRoot = temporary(t, "imports");
   const file = join(pluginRoot, "src/api.ts");
   const check = (specifier: string) => checkImportSpecifier(specifier, { file, pluginRoot, dependencies: new Set(["dep", "@scope/dep"]) });
-  for (const specifier of ["./items.ts", "../migrations/x.sql", "dep", "dep/sub/path.js", "@scope/dep/x", "@lancerlogin/module-sdk", "@lancerlogin/module-sdk/dashboard", "node:crypto", "cloudflare:workers"]) assert.doesNotThrow(() => check(specifier), specifier);
+  for (const specifier of ["./items.ts", "../migrations/x.sql", "dep", "dep/sub/path.js", "@scope/dep/x", "@lancerlogin/module-sdk", "@lancerlogin/module-sdk/dashboard", "node:crypto"]) assert.doesNotThrow(() => check(specifier), specifier);
   const cases: [string, RegExp][] = [
     ["../../apps/api/src/index.ts", /stay inside the plugin/],
     ["../../../../packages/shared/src/module-platform.ts", /stay inside the plugin/],
@@ -188,6 +190,10 @@ test("plugin sources may import only their own files, declared dependencies, bui
     ["file:///abs/path.ts", /absolute/],
     ["https://example.invalid/x.js", /absolute/],
     ["#internal", /package-internal/],
+    // cloudflare:workers exposes the Worker environment and its secrets, which Core withholds from external modules.
+    ["cloudflare:workers", /Cloudflare runtime modules are not available to plugins, because cloudflare:workers exposes the Worker environment/],
+    ["cloudflare:sockets", /Cloudflare runtime modules are not available to plugins/],
+    ["cloudflare:email", /Cloudflare runtime modules are not available to plugins/],
   ];
   for (const [specifier, pattern] of cases) assert.throws(() => check(specifier), rejects(pattern), specifier);
   cpSync(fixture, join(pluginRoot, "plugin"), { recursive: true });
@@ -195,6 +201,49 @@ test("plugin sources may import only their own files, declared dependencies, bui
   await scanPluginSources(join(pluginRoot, "plugin"), pkg);
   writeFileSync(join(pluginRoot, "plugin/tsconfig.json"), "{ \"compilerOptions\": { \"paths\": { \"core/*\": [\"../../apps/*\"] } } }");
   await assert.rejects(scanPluginSources(join(pluginRoot, "plugin"), pkg), rejects(/must not remap module resolution/));
+});
+
+test("development dependencies are importable only from files composition does not bundle", async (t) => {
+  const pluginRoot = join(temporary(t, "dev-dependencies"), "plugin");
+  cpSync(fixture, pluginRoot, { recursive: true });
+  const pkg = { ...JSON.parse(readFileSync(`${fixture}/package.json`, "utf8")), devDependencies: { "dev-tool": "1.0.0", react: "^19.1.1" }, dependencies: { "runtime-dep": "1.0.0" } };
+  const entries = ["src/manifest.ts", "src/api.ts", "src/dashboard.tsx"].map((path) => join(pluginRoot, path));
+  // The plugin's own tests and scripts may import development dependencies; composed files may import runtime ones.
+  mkdirSync(join(pluginRoot, "tests"), { recursive: true }); mkdirSync(join(pluginRoot, "scripts"), { recursive: true });
+  writeFileSync(join(pluginRoot, "tests/items.test.ts"), "import tool from \"dev-tool\";\nimport { countOpenItems } from \"../src/items.ts\";\n");
+  writeFileSync(join(pluginRoot, "scripts/release.mjs"), "import tool from \"dev-tool\";\n");
+  writeFileSync(join(pluginRoot, "src/runtime.ts"), "export { default } from \"runtime-dep\";\n");
+  writeFileSync(join(pluginRoot, "src/api.ts"), `${readFileSync(join(pluginRoot, "src/api.ts"), "utf8")}\nimport "./runtime.ts";\n`);
+  const { composedFiles } = await scanPluginSources(pluginRoot, pkg, entries);
+  assert.deepEqual(composedFiles, ["src/api.ts", "src/dashboard.tsx", "src/items.ts", "src/manifest.ts", "src/runtime.ts"]);
+  // Without entries every file counts as composed, so a test's development import is refused too.
+  await assert.rejects(scanPluginSources(pluginRoot, pkg), rejects(/(tests\/items\.test\.ts|scripts\/release\.mjs) imports "dev-tool": dev-tool is only a devDependency/));
+
+  // A composed file, directly or through relative imports (with or without an extension), must not use one.
+  const refused = async (file: string, content: string, pattern: RegExp) => {
+    const original = readFileSync(join(pluginRoot, file), "utf8");
+    writeFileSync(join(pluginRoot, file), `${original}\n${content}\n`);
+    try { await assert.rejects(scanPluginSources(pluginRoot, pkg, entries), rejects(pattern), content); } finally { writeFileSync(join(pluginRoot, file), original); }
+  };
+  await refused("src/items.ts", "import tool from \"dev-tool\";", /src\/items\.ts imports "dev-tool": dev-tool is only a devDependency, but this file is part of the composed module/);
+  await refused("src/dashboard.tsx", "import { useState } from \"react\";", /react is only a devDependency/);
+  await refused("src/items.ts", "import \"../scripts/release.mjs\";", /scripts\/release\.mjs imports "dev-tool": dev-tool is only a devDependency/);
+  writeFileSync(join(pluginRoot, "src/helper.js"), "export { default } from \"dev-tool/sub\";\n");
+  await refused("src/items.ts", "export * from \"./helper\";", /src\/helper\.js imports "dev-tool\/sub": dev-tool is only a devDependency/);
+  mkdirSync(join(pluginRoot, "src/lib"), { recursive: true }); writeFileSync(join(pluginRoot, "src/lib/index.ts"), "const tool = await import(\"dev-tool\");\n");
+  await refused("src/manifest.ts", "import \"./lib\";", /src\/lib\/index\.ts imports "dev-tool": dev-tool is only a devDependency/);
+  // A peer gets the peer range check, so declaring React as a peer is the way to use Core's copy.
+  assert.ok(await scanPluginSources(pluginRoot, { ...pkg, peerDependencies: { react: "^19.1.1" } }, entries));
+
+  // Through composition, the refusal happens before anything is installed or written.
+  const repository = pluginRepository(t, (directory) => {
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(directory, "package.json"), "utf8")), devDependencies: { react: "^17.0.0" } }, null, 2));
+    writeFileSync(join(directory, "src/items.ts"), `import { version } from "react";\n${readFileSync(join(directory, "src/items.ts"), "utf8")}`);
+  });
+  const output = outputRoot(t); let installed = false;
+  await assert.rejects(compose(t, [{ id: "example", source: repository.source, commit: repository.commit }], { output, installCommand: async () => { installed = true; return { stdout: "", stderr: "" }; } }), rejects(/src\/items\.ts imports "react": react is only a devDependency/));
+  assert.equal(installed, false);
+  assert.equal(generated(output, "manifests"), undefined);
 });
 
 test("collisions with first-party or other plugins are refused through the Core registry", async (t) => {
@@ -241,8 +290,8 @@ test("collisions with first-party or other plugins are refused through the Core 
   const probe = join(temporary(t, "probe"), "probe");
   cpSync(fixture, probe, { recursive: true });
   writeFileSync(join(probe, "src/manifest.ts"), "export default { environment: Object.keys(process.env) };\n");
-  const seen = await inspectPlugin({ pluginRoot: probe, entries: { manifest: join(probe, "src/manifest.ts"), api: join(probe, "src/api.ts") }, env: { ...process.env, CLOUDFLARE_API_TOKEN: "synthetic-deployment-secret", LANCERLOGIN_PLUGIN_TOKEN: "synthetic-plugin-token", WEB_UPDATE_TOKEN: "synthetic" } });
-  assert.equal(seen.manifest.environment.some((name: string) => /TOKEN|SECRET|KEY|CLOUDFLARE/i.test(name)), false, seen.manifest.environment.join(","));
+  const seen = await inspectPlugin({ pluginRoot: probe, entries: { manifest: join(probe, "src/manifest.ts"), api: join(probe, "src/api.ts") }, env: { ...process.env, CLOUDFLARE_API_TOKEN: "synthetic-deployment-secret", LANCERLOGIN_PLUGIN_TOKEN: "synthetic-plugin-token", WEB_UPDATE_TOKEN: "synthetic", HTTPS_PROXY: "http://user:synthetic@proxy.invalid:8080", ACTIONS_ID_TOKEN_REQUEST_URL: "https://synthetic.invalid" } });
+  assert.equal(seen.manifest.environment.some((name: string) => /TOKEN|SECRET|KEY|CLOUDFLARE|PROXY|ACTIONS/i.test(name)), false, seen.manifest.environment.join(","));
 });
 
 test("a composed plugin is pinned, checked, generated by relative import and works through the contracts", async (t) => {
@@ -430,11 +479,56 @@ test("a checkout must be exactly the pinned commit without links or submodules",
   await assert.rejects(verifyPinnedCheckout({ directory, commit: repository.commit, env: process.env }), rejects(/differs from the commit/));
   await assert.rejects(fetchPinnedPlugin({ source: repository.source, commit: repository.commit, directory: join(temporary(t, "blocked"), "example"), env: process.env, allowFileSources: false }), rejects(/transport 'file' not allowed/));
   const linked = pluginRepository(t, () => {});
-  const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: linked.directory, input: "../../apps", encoding: "utf8" }).stdout.trim();
+  const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: linked.directory, input: "../../apps", encoding: "utf8", env: isolatedGitEnv() }).stdout.trim();
   git(linked.directory, "update-index", "--add", "--cacheinfo", `120000,${blob},src/core`);
   git(linked.directory, "commit", "--quiet", "-m", "Link outside the plugin");
   const linkedCommit = git(linked.directory, "rev-parse", "HEAD");
   await assert.rejects(fetchPinnedPlugin({ source: linked.source, commit: linkedCommit, directory: join(temporary(t, "linked"), "example"), env: process.env, allowFileSources: true }), rejects(/symbolic links or submodules/));
+});
+
+test("composition passes no credentials to child processes, and inspection gets no proxy settings", () => {
+  const environment = {
+    PATH: "/bin", HOME: "/home/runner", TEMP: "/tmp", npm_execpath: "/npm-cli.js", HTTPS_PROXY: "http://user:synthetic@proxy.invalid:8080",
+    LANCERLOGIN_PLUGIN_TOKEN: "plugin", CLOUDFLARE_API_TOKEN: "cf", CLOUDFLARE_ACCOUNT_ID: "account", WEB_UPDATE_TOKEN: "update", GITHUB_TOKEN: "gh",
+    SESSION_KEY: "key", FINGERPRINT_VAULT_KEY: "vault", MODULE_SELECTION_TOKEN: "selection", ACTIONS_RUNTIME_TOKEN: "runtime", ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.invalid",
+    RUNNER_TRACKING_ID: "runner", NPM_CONFIG__AUTH: "npm", NODE_AUTH_TOKEN: "node", DEPLOY_PASSWORD: "password", SSH_PRIVATE_KEY_PATH: "/key", SIGNING_KEY_ID: "id", SETUP_CODE: "code", AWS_SECRET_ACCESS_KEY: "aws", CREDENTIALS_JSON: "{}",
+  };
+  assert.deepEqual(compositionEnvironment(environment), { PATH: "/bin", HOME: "/home/runner", TEMP: "/tmp", npm_execpath: "/npm-cli.js", HTTPS_PROXY: "http://user:synthetic@proxy.invalid:8080", LANCERLOGIN_PLUGIN_TOKEN: "plugin" });
+  assert.deepEqual(inspectionEnvironment(environment), { PATH: "/bin", HOME: "/home/runner", TEMP: "/tmp" });
+});
+
+test("the plugin token goes only to github.com and hosts the installation lists in its source allowlist", async (t) => {
+  const env = { PATH: process.env.PATH, LANCERLOGIN_PLUGIN_TOKEN: "ghp_syntheticTokenValue" };
+  const header = (source: string, options?: { tokenHosts?: Set<string> }) => gitEnvironment(env, source, options).GIT_CONFIG_KEY_0;
+  assert.equal(header("https://github.com/example-owner/private-plugin.git"), "http.https://github.com/.extraHeader");
+  for (const source of ["https://collector.example/x/y.git", "https://gitlab.com/owner/plugin.git", "https://api.github.com/owner/plugin.git", "https://github.com.collector.example/owner/plugin.git"]) {
+    const gitEnv = gitEnvironment(env, source);
+    assert.equal(gitEnv.GIT_CONFIG_COUNT, undefined, source);
+    assert.doesNotMatch(JSON.stringify(gitEnv), /ghp_syntheticTokenValue|eC1hY2Nlc3MtdG9rZW46/, source);
+  }
+  assert.equal(header("https://git.example.org/owner/plugin.git", { tokenHosts: new Set(["git.example.org"]) }), "http.https://git.example.org/.extraHeader");
+  assert.deepEqual([...pluginTokenHosts(undefined)], ["github.com"]);
+  assert.deepEqual([...pluginTokenHosts(JSON.stringify({ format: 1, allowedSources: ["github.com/trusted-org", "git.example.org/team", "code.example.net"] }))].sort(), ["code.example.net", "git.example.org", "github.com"]);
+  assert.deepEqual([...pluginTokenHosts("not json")], ["github.com"], "an invalid allowlist adds no host (and refuses composition anyway)");
+
+  // Through composition: a selection naming another host is fetched without the token unless the allowlist lists that host.
+  const commit = "a".repeat(40);
+  const attempt = async (source: string, allowlistText?: string) => {
+    const directory = temporary(t, "token-selection");
+    const selectionPath = join(directory, "lancerlogin.modules.json");
+    writeFileSync(selectionPath, JSON.stringify({ format: 1, modules: [{ id: "remote", source, commit }] }));
+    if (allowlistText !== undefined) writeFileSync(join(directory, "lancerlogin.plugin-sources.json"), allowlistText);
+    let fetchEnv: Record<string, string> | undefined;
+    const runCommand = async (_command: string, args: string[], options: { env: Record<string, string> }) => { if (args.includes("fetch")) { fetchEnv = options.env; throw new CompositionError("fetch reached"); } return { stdout: "", stderr: "" }; };
+    await assert.rejects(composeModules({ selectionPath, outputRoot: outputRoot(t), workDirectory: join(temporary(t, "token-work"), "plugins"), officialModules: false, env, log: () => {}, runCommand }), rejects(/^fetch reached$/));
+    return fetchEnv!;
+  };
+  assert.equal((await attempt("https://collector.example/x/y.git")).GIT_CONFIG_COUNT, undefined, "without an allowlist only github.com receives the token");
+  assert.equal((await attempt("https://github.com/owner/private-plugin.git")).GIT_CONFIG_KEY_0, "http.https://github.com/.extraHeader");
+  const listed = await attempt("https://git.example.org/team/plugin.git", JSON.stringify({ format: 1, allowedSources: ["git.example.org/team"] }));
+  assert.equal(listed.GIT_CONFIG_KEY_0, "http.https://git.example.org/.extraHeader");
+  assert.equal(listed.GIT_CONFIG_VALUE_0, `Authorization: Basic ${Buffer.from("x-access-token:ghp_syntheticTokenValue").toString("base64")}`);
+  assert.equal((await attempt("https://github.com/trusted-org/plugin.git", JSON.stringify({ format: 1, allowedSources: ["github.com/trusted-org"] }))).GIT_CONFIG_KEY_0, "http.https://github.com/.extraHeader");
 });
 
 test("private plugin tokens travel only as a transient host-scoped header and installs never run scripts", async (t) => {

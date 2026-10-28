@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./dashboard-api";
+import { visiblePoll } from "./visible-poll";
 import { createSingleFlight, releaseCacheForChannel, releaseCacheKeyForChannel, type ReleaseSnapshot } from "./update-release";
 import type { UpdateChannel } from "../../../packages/shared/src/release-policy.mjs";
 export type UpdateChannelSetting = { channel: UpdateChannel; revision: number };
@@ -15,11 +16,13 @@ export function announceUpdateChannelChange() {
   try { localStorage.setItem(channelNoticeKey, crypto.randomUUID()); } catch { /* Storage is optional. */ }
   window.dispatchEvent(new Event(channelNoticeEvent));
 }
-export function useReleaseCheck() {
+/** Track the latest release on the installation's update track. Polls serially and pauses while the tab is hidden. */
+export function useReleaseCheck(enabled = true) {
   const [channel, setChannel] = useState<UpdateChannel>();
   const [state, setState] = useState<ReleaseSnapshot>({ checking: true, fresh: false });
   const cache = releaseCacheForChannel(channel ?? "stable");
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
     const update = () => { if (active && channel) setState(cache.snapshot()); };
     const refresh = async () => {
@@ -36,10 +39,10 @@ export function useReleaseCheck() {
       else if (channel && event.key === releaseCacheKeyForChannel(channel)) { cache.sync(); update(); }
     };
     window.addEventListener("storage", onStorage); window.addEventListener(channelNoticeEvent, changed);
-    const unsubscribe = cache.subscribe(update); void refresh();
-    const timer = window.setInterval(() => void refresh(), 30_000);
-    return () => { active = false; unsubscribe(); window.removeEventListener("storage", onStorage); window.removeEventListener(channelNoticeEvent, changed); window.clearInterval(timer); };
-  }, [channel, cache]);
+    const unsubscribe = cache.subscribe(update);
+    const stop = visiblePoll(refresh, 30_000, undefined, true);
+    return () => { active = false; unsubscribe(); window.removeEventListener("storage", onStorage); window.removeEventListener(channelNoticeEvent, changed); stop(); };
+  }, [channel, cache, enabled]);
   return { ...state, channel, check: async (force = false) => {
     const setting = await readUpdateChannelSetting();
     if (channel !== setting.channel) { setState({ checking: true, fresh: false }); setChannel(setting.channel); }

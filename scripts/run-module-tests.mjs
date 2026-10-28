@@ -115,7 +115,7 @@ export function runModuleTests({ root = process.cwd(), mode, moduleId, execute =
   const composeScript = [`--experimental-strip-types`, "--disable-warning=ExperimentalWarning", join(root, "scripts", "compose-modules.mjs")];
   const composed = Boolean(manifest.pluginSelection) && (selection.browser.length + selection.typecheckWorkspaces.length + selection.buildWorkspaces.length) > 0;
   if (composed) {
-    // Private https pins compose with LANCERLOGIN_PLUGIN_TOKEN or a local plugin checkout; a plugin repository's CI
+    // https pins compose with LANCERLOGIN_PLUGIN_TOKEN, a local plugin checkout or an anonymous fetch of a public repository; a plugin repository's CI
     // overrides the plugin under test with LANCERLOGIN_<NAME>_PLUGIN_SOURCE/COMMIT (see test-plugin-sources.mjs).
     const { modules, officialModules } = readTestSelection(manifest.pluginSelection, root);
     const prepared = prepareTestComposition({ modules, officialModules, root });

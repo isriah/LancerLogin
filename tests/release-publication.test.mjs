@@ -4,12 +4,13 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assetNames, assertCompleteVerify, createBundle, publishRelease, resolveRelease, validateBundle } from "../scripts/release-publication.mjs";
+import { assetNames, assertCompleteVerify, browserShardCounts, createBundle, requiredJobs, publishRelease, resolveRelease, validateBundle } from "../scripts/release-publication.mjs";
 
 const sha = "a".repeat(40), producerSha = "b".repeat(40);
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const notes = Buffer.from("# Synthetic release\n\nBugs fixed\n\nNone.\n");
-const jobs = ["actionlint", "verify", "dependency-audit", "browser-smoke", ...[1, 2, 3, 4, 5, 6].map((n) => `Browser shard ${n}/6`)].map((name) => ({ name, conclusion: "success" }));
+const jobs = ["actionlint", "verify", "dependency-audit", "browser-smoke", ...[1, 2, 3, 4].map((n) => `Core browser shard ${n}/4`),
+  "Plugin browser shard 1/1", "Integration browser shard 1/1"].map((name) => ({ name, conclusion: "success" }));
 async function fixture(tag = "v1.2.6", changes = {}) {
   const root = await mkdtemp(join(tmpdir(), "release-publisher-test-"));
   const source = join(root, "source"), bundle = join(root, "bundle");
@@ -76,7 +77,23 @@ test("trusted release requires every exact source-branch job", () => {
   for (const bad of [{ ...run, event: "pull_request" }, { ...run, event: "schedule" }, { ...run, head_sha: producerSha }, { ...run, head_branch: "modular" },
     { ...run, event: "workflow_dispatch", head_sha: producerSha }, { ...run, conclusion: "cancelled" }]) assert.throws(() => assertCompleteVerify(bad, jobs, sha, "main"));
   for (const bad of [jobs.slice(1), jobs.map((item, index) => index ? item : { ...item, conclusion: "skipped" }),
-    jobs.map((item) => ({ ...item, name: item.name.replace("/6", "/4") }))]) assert.throws(() => assertCompleteVerify(run, bad, sha, "main"));
+    jobs.map((item) => ({ ...item, name: item.name.replace("/4", "/5") }))]) assert.throws(() => assertCompleteVerify(run, bad, sha, "main"));
+  // Every browser group is part of the complete gate: a run without the plugin or integration shards, with one skipped,
+  // with a different shard count, or still listing the old ungrouped browser shards is not complete evidence.
+  const coreOnly = jobs.filter((item) => !/^(?:Plugin|Integration) browser shard/.test(item.name));
+  assert.equal(coreOnly.length, 8);
+  for (const bad of [coreOnly, jobs.filter((item) => !item.name.startsWith("Integration browser shard")),
+    jobs.map((item) => item.name === "Plugin browser shard 1/1" ? { ...item, conclusion: "skipped" } : item),
+    jobs.map((item) => item.name === "Integration browser shard 1/1" ? { ...item, conclusion: "failure" } : item),
+    jobs.map((item) => ({ ...item, name: item.name.replace(/^Integration browser shard 1\/1$/, "Integration browser shard 1/2") })),
+    [...coreOnly, ...[1, 2, 3].map((n) => ({ name: `Plugin browser shard ${n}/3`, conclusion: "success" })), { name: "Integration browser shard 1/1", conclusion: "success" }],
+    jobs.map((item) => ({ ...item, name: item.name.replace(/^Core browser shard/, "Browser shard") })),
+    [...jobs, { name: "Private browser shard 1/6", conclusion: "skipped" }]])
+    assert.throws(() => assertCompleteVerify(run, bad, sha, "main"), /complete_trusted_branch_verify_required/);
+  assert.deepEqual({ ...browserShardCounts }, { core: 4, plugin: 1, integration: 1 });
+  assert.equal(requiredJobs.length, 10);
+  assert.deepEqual(requiredJobs, jobs.map((item) => item.name));
+  assert.ok(Object.isFrozen(requiredJobs));
 });
 test("a dispatched exact-commit Verify satisfies the tag gate only when the commit is on the trusted branch", async () => {
   const dispatched = { event: "workflow_dispatch", head_branch: "codex/release-v2.0.0-beta.9" };
@@ -159,4 +176,35 @@ test("bundle source and notes are independently verified", async () => {
     await writeFile(join(f.bundle, "artifacts", "extra"), "unexpected");
     await assert.rejects(validateBundle(f.bundle, { tag: "v1.2.6", sha }, f.run, notes), /exactly_six/);
   } finally { await f.cleanup(); }
+});
+
+// The release gate counts every job GitHub lists for a Verify run, including skipped ones, so the exported public ci.yml
+// must define exactly the required jobs. Private-only jobs (named private-*) are removed by the public export; any other
+// job, or a required job that a renamed matrix no longer produces, fails here before a release is blocked.
+function workflowJobs(text) {
+  const body = text.replace(/\r\n/g, "\n").split(/^jobs:\n/m)[1] ?? "";
+  return body.split(/^(?=  [a-z0-9-]+:\n)/m).filter((chunk) => /^  [a-z0-9-]+:\n/.test(chunk)).map((chunk) => {
+    const id = chunk.match(/^  ([a-z0-9-]+):/)[1];
+    const name = chunk.match(/^    name: (.+)$/m)?.[1].trim() ?? id;
+    const shards = chunk.match(/^\s+shard: \[([^\]]+)\]$/m)?.[1].split(",").map((value) => value.trim());
+    const needsLine = chunk.match(/^    needs: (.+)$/m)?.[1] ?? "";
+    const needs = needsLine.startsWith("[") ? needsLine.slice(1, -1).split(",").map((value) => value.trim()) : needsLine ? [needsLine.trim()] : [];
+    const names = name.includes("${{ matrix.shard }}") ? (shards ?? []).map((shard) => name.replace("${{ matrix.shard }}", shard)) : [name];
+    return { id, names, needs };
+  });
+}
+test("the exported Verify workflow reports exactly the jobs the release gate requires", async () => {
+  const jobs = workflowJobs(await readFile(".github/workflows/ci.yml", "utf8"));
+  assert.ok(jobs.length >= 5, "ci.yml jobs could not be read");
+  const privateIds = new Set(jobs.filter((job) => job.id.startsWith("private-")).map((job) => job.id));
+  const exported = jobs.filter((job) => !privateIds.has(job.id));
+  assert.deepEqual(exported.flatMap((job) => job.names).sort(), [...requiredJobs].sort());
+  for (const job of exported) assert.deepEqual(job.needs.filter((need) => privateIds.has(need)), [], `${job.id} must not need a private-only job`);
+  // Private-only jobs exist only in private repositories; the export removes them before a public Verify run.
+  for (const id of privateIds) assert.match(id, /^private-(browser-shard|acceptance)$/);
+  // Skipped private jobs left in a public run are not ignored: an extra job, even skipped, fails the gate.
+  const run = { head_sha: sha, head_branch: "main", event: "push", status: "completed", conclusion: "success" };
+  const passed = exported.flatMap((job) => job.names).map((name) => ({ name, conclusion: "success" }));
+  assertCompleteVerify(run, passed, sha, "main");
+  assert.throws(() => assertCompleteVerify(run, [...passed, { name: "private-acceptance", conclusion: "skipped" }], sha, "main"), /complete_trusted_branch_verify_required/);
 });

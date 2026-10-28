@@ -5,15 +5,15 @@
 //   - `@lancerlogin/module-sdk` resolves to this Core's SDK, as composition guarantees for builds;
 //   - `@lancerlogin-test/<alias>/<path>` resolves to a file in the composed checkout of the plugin with that alias.
 // A process composes once: import one fixture (carpool-plugin.ts or outreach-plugin.ts) first, then import test bodies and
-// application modules dynamically. When a plugin source is unavailable (for example on CI without LANCERLOGIN_PLUGIN_TOKEN
-// or a local plugin checkout), `available` is false and callers register a skipped test that names the reason; the named environment switch fails instead.
+// application modules dynamically. When a plugin source is unavailable (for example a private plugin without
+// LANCERLOGIN_PLUGIN_TOKEN or a local plugin checkout, or no network), `available` is false and callers register a skipped test that names the reason; the named environment switch fails instead.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { prepareTestComposition } from "../../scripts/test-plugin-sources.mjs";
+import { prepareTestComposition, unreachablePinAdvice } from "../../scripts/test-plugin-sources.mjs";
 
 const coreRoot = fileURLToPath(new URL("../../", import.meta.url));
 type Pin = { readonly id: string; readonly source: string; readonly commit: string };
@@ -60,15 +60,18 @@ export function composeTestPlugins(input: { readonly selection: readonly Pin[]; 
 function compose(selection: readonly Pin[], name: string): ComposedPlugins {
   const scratch = mkdtempSync(join(tmpdir(), `lancerlogin-${name}-plugins-`));
   process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
-  // Private https pins compose with LANCERLOGIN_PLUGIN_TOKEN when it is set, otherwise from a local development checkout
-  // (see scripts/test-plugin-sources.mjs); otherwise the reason names what is missing.
+  // https pins compose with LANCERLOGIN_PLUGIN_TOKEN when it is set, otherwise from a local development checkout, otherwise
+  // anonymously, which is enough for public plugins (see scripts/test-plugin-sources.mjs). A failure names what is missing.
   const prepared = prepareTestComposition({ modules: selection, scratch });
   if ("reason" in prepared) return { available: false, reason: prepared.reason as string };
   const output = join(scratch, "output");
   mkdirSync(join(output, "apps/dashboard/src"), { recursive: true });
   writeFileSync(join(output, "apps/dashboard/src/module-contributions.ts"), "export type DashboardModuleContribution = unknown;\n");
   const result = spawnSync(process.execPath, ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", join(coreRoot, "scripts/compose-modules.mjs"), ...prepared.args, "--output-root", output, "--work-directory", join(scratch, "plugins")], { cwd: coreRoot, encoding: "utf8", env: prepared.env });
-  if (result.status !== 0) throw new Error(`Plugin composition failed: ${result.stderr}${result.stdout}`);
+  if (result.status !== 0) {
+    const remote = (prepared.modules as Pin[]).filter((pin) => pin.source.startsWith("https:")).map((pin) => unreachablePinAdvice(pin));
+    throw new Error(`Plugin composition failed: ${result.stderr}${result.stdout}${remote.length ? `\n${remote.join("\n")}` : ""}`);
+  }
   const modules = prepared.modules as Pin[];
   return { available: true, output, roots: Object.fromEntries(modules.map((pin) => [pin.id, join(scratch, "plugins", pin.id)])), modules };
 }

@@ -10,11 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { prepareTestComposition } from "../scripts/test-plugin-sources.mjs";
+import { isolatedGitEnv } from "../scripts/git-env.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "lancerlogin-plugin-worker-"));
 process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
 const git = (cwd: string, ...args: string[]) => {
-  const result = spawnSync("git", ["-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
+  const result = spawnSync("git", ["-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", env: isolatedGitEnv() });
   if (result.status !== 0) throw new Error(result.stderr);
   return result.stdout.trim();
 };
@@ -142,4 +143,35 @@ test("a composed plugin is migrated, registered, enabled, served, scheduled, bac
   assert.equal(db.count("SELECT COUNT(*) AS n FROM example_items") + db.count("SELECT COUNT(*) AS n FROM example_requests"), 0);
   assert.equal(db.count("SELECT COUNT(*) AS n FROM platform_modules WHERE module_id='example' AND phase='deleted'"), 1);
   assert.equal(db.count("SELECT COUNT(*) AS n FROM members"), 1);
+});
+
+test("first-Admin setup registers composed plugins at once, after earlier requests found no installation", async () => {
+  const db = new PluginDatabase();
+  // A new installation: the migrated database without the fixture's installation or any installation-scoped row.
+  db.raw.exec("PRAGMA foreign_keys=OFF");
+  for (const { name } of db.rows<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'd1_migrations'")) db.raw.exec(`DELETE FROM "${name}"`);
+  db.raw.exec("PRAGMA foreign_keys=ON");
+  assert.equal(db.count("SELECT COUNT(*) AS n FROM platform_module_administration"), 0);
+  const setupCode = "synthetic setup code";
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(setupCode)));
+  const env = { DB: db, SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, APP_MODE: "configured", ALLOWED_ORIGIN: origin, BOOTSTRAP_CODE_HASH: Buffer.from(digest).toString("base64url") };
+  const fetch = (path: string, init?: RequestInit) => worker.fetch(new Request(`https://api.example.test${path}`, init), env as never, { waitUntil() {}, passThroughOnException() {} } as never);
+
+  // Requests before setup reconcile nothing, because there is no installation yet.
+  assert.equal((await fetch("/health")).status, 200);
+  assert.equal((await fetch("/setup/status")).status, 200);
+  assert.equal(db.count("SELECT COUNT(*) AS n FROM platform_module_catalog"), 0);
+
+  const created = await fetch("/setup/bootstrap", { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ setupCode, organizationName: "Synthetic", timeZone: "UTC", authMode: "local", localUsername: "admin", localPassword: "synthetic password 1234" }) });
+  assert.equal(created.status, 201, await created.clone().text());
+  // Setup itself applies the plugin's migration and records the catalog; no scheduled pass is needed.
+  assert.deepEqual(db.rows("SELECT module_id, name FROM platform_module_migrations WHERE module_id='example'"), [{ module_id: "example", name: "0001_create_example_tables.sql" }]);
+  assert.deepEqual(db.rows("SELECT origin, source_commit, installed FROM platform_module_catalog WHERE module_id='example'"), [{ origin: "external", source_commit: pin.commit, installed: 1 }]);
+  assert.deepEqual(db.rows("SELECT phase FROM platform_modules WHERE module_id='example'"), [{ phase: "disabled" }]);
+  assert.equal(db.count("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('example_items','example_requests')"), 2);
+
+  // If setup's own reconciliation had failed, the next request in the same isolate would still record the modules.
+  db.raw.exec("DELETE FROM platform_module_catalog");
+  assert.equal((await fetch("/health")).status, 200);
+  assert.equal(db.count("SELECT COUNT(*) AS n FROM platform_module_catalog WHERE module_id='example'"), 1);
 });

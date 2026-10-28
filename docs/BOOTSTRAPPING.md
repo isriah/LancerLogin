@@ -32,7 +32,7 @@ Use `resume` only after an interrupted initial setup with the same slug. Use `up
 3. Create the installation. Community telemetry is disabled.
 4. If you use Google sign-in, copy the exact redirect URI shown by the dashboard into the Google OAuth client. Do not guess or edit the URL. See [Integrations](INTEGRATIONS.md).
 
-The bootstrap route closes after the installation record exists. If sign-in configuration needs recovery later, use the documented local recovery procedure rather than trying to reopen first-Admin setup.
+The bootstrap route closes after the installation record exists, and each setup code creates one installation. After **Delete installation**, only the browser that deleted it can run first-Admin setup again with the same code, within one hour. Anyone else, or that browser later, needs a rotated setup code: set the `BOOTSTRAP_CODE_HASH` Worker secret to the hash of a new code, computed the same way as the install workflow, before creating the installation again. If sign-in configuration needs recovery later, use the documented local recovery procedure rather than trying to reopen first-Admin setup.
 
 ## Complete Guided Setup
 

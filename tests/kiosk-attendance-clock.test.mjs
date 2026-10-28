@@ -71,12 +71,13 @@ test("a persisted prior-boot anchor can resolve saved scans after another boot s
 test("resolved time is durable before delivery and unchanged after a lost acknowledgement", async t => {
   const f = await fixture(t); await f.queue.enqueue(await f.event("retry"));
   f.state.synchronized = true; f.state.wallMs = Date.parse("2026-10-24T11:00:00Z"); await f.clock.refresh();
-  let deliveredTime;
+  let deliveredTime, durable;
   await f.queue.flush(async event => {
-    const durable = JSON.parse(await readFile(f.queuePath, "utf8"))[0];
-    assert.equal(durable.clock.verified, true); assert.equal(durable.occurredAt, event.occurredAt);
+    // A separate reader sees only what is on disk (snapshot plus journal).
+    durable = (await createFileQueue(f.queuePath).pending())[0];
     deliveredTime = event.occurredAt; throw Error("Acknowledgement lost");
   }, { prepare: f.clock.prepare });
+  assert.equal(durable.clock.verified, true); assert.equal(durable.occurredAt, deliveredTime);
   f.state.bootId = "synthetic-boot-b"; f.state.wallMs += 86400000; await f.clock.refresh();
   await createFileQueue(f.queuePath).flush(async event => { assert.equal(event.occurredAt, deliveredTime); return { duplicate: true }; }, { prepare: f.clock.prepare });
 });

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInstallationActivities, createUnpairingStore } from "./unpairing-store.mjs";
-import { completeKioskCommand, fetchKioskCommand, fetchKioskConfiguration, fetchKioskEnrollment, fetchKioskRoster, pairInstallation, sendAttendance, sendHeartbeat, sendKioskEnrollmentProgress, sendScanReviews } from "./cloud-client.mjs";
+import { completeKioskCommand, createDeliveryBackoff, fetchKioskCommand, fetchKioskConfiguration, fetchKioskEnrollment, fetchKioskRoster, pairInstallation, sendAttendance, sendHeartbeat, sendKioskEnrollmentProgress, sendScanReviews } from "./cloud-client.mjs";
 import { createDashboardEnrollment } from "./dashboard-enrollment.mjs";
 import { dashboardEnrollmentApp } from "./dashboard-enrollment-ui.mjs";
 import { createKioskPollClient, createKioskPollScheduler } from "./kiosk-poll.mjs";
@@ -41,6 +41,7 @@ import { kioskState, kioskStates } from "./kiosk-states.mjs";
 import { createIdentityScanner } from "./scanner.mjs";
 import { createNetworkManager } from "./network-manager.mjs";
 import { createNetworkPinStore } from "./network-pin.mjs";
+import { createHostAllowlist, createSetupCode, isLoopbackAddress } from "./local-access.mjs";
 import { networkApp, networkStyles } from "./network-ui.mjs";
 import { dashboardEnrollmentStyles, maintenanceApp, maintenanceHtml, maintenanceLayoutStyles, maintenanceStyles } from "./maintenance-ui.mjs";
 import { recoveryApp } from "./recovery-ui.mjs";
@@ -120,11 +121,17 @@ async function saveKioskName(config, name) {
 async function loadBranding() { try { branding = { ...branding, ...JSON.parse(await readFile(brandingPath, "utf8")) }; } catch { /* Defaults remain available before the first cloud sync. */ } }
 async function saveBranding(value) { const safe = { organizationName: String(value?.organizationName || "LancerLogin").slice(0, 100), subtitle: String(value?.subtitle || "").slice(0, 140), logoData: typeof value?.logoData === "string" ? value.logoData : "", primaryColor: /^#[0-9a-f]{6}$/i.test(value?.primaryColor) ? value.primaryColor : "#7c3aed", secondaryColor: /^#[0-9a-f]{6}$/i.test(value?.secondaryColor) ? value.secondaryColor : "#0f766e", logoBackdrop: ["auto", "light", "dark", "none"].includes(value?.logoBackdrop) ? value.logoBackdrop : "auto" }; const temporary = `${brandingPath}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify(safe)}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, brandingPath); await chmod(brandingPath, 0o600); branding = safe; }
 let attendanceFlush;
+const deliveryBackoff = createDeliveryBackoff();
 function flushAttendance(config) {
   if (!attendanceFlush) attendanceFlush = (async () => {
     const acknowledgements = [];
+    // Scans stay durably queued during the backoff; only replay is deferred.
+    if (deliveryBackoff.blocked()) return { delivered: [], acknowledgements, deferred: true };
     const delivered = await queue.flush(async (event) => {
-      const result = await sendAttendance(config, event, { fetchImpl: boundedCloudFetch });
+      let result;
+      try { result = await sendAttendance(config, event, { fetchImpl: boundedCloudFetch }); }
+      catch (error) { deliveryBackoff.failed(error); throw error; }
+      deliveryBackoff.succeeded();
       acknowledgements.push({ eventId: event.eventId, ...result });
       return result;
     }, { prepare: async event => {
@@ -227,6 +234,12 @@ async function assertFingerprintMutationAllowed() {
 }
 async function testSensor() { readerObserved = true; if (!sensor) { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } try { const status = await useSensor(() => sensor.status()); state.readerOnline = status.connected; return { readerOnline: status.connected, templateCount: status.templateCount }; } catch { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } }
 async function testAuthenticator() { if (authenticationMethod === "fingerprint") return testSensor(); state.readerOnline = true; return { readerOnline: true, authenticationMethod }; }
+// Archives of earlier pairings expire after 30 days. The window is measured
+// with the wall clock, so it is applied only while the clock is confirmed.
+function purgeExpiredArchives() {
+  if (unpairingBusy || pairingRecovery || !attendanceClock.isVerified()) return;
+  void unpairingStore.purgeArchives().catch(() => undefined);
+}
 let heartbeatRunning;
 const scanReviewSync = createScanReviewSync({ queue, send: (config, records) => sendScanReviews(config, records, { fetchImpl: boundedCloudFetch }) });
 function heartbeat() {
@@ -375,8 +388,11 @@ async function checkFingerRemoval() {
   await removalCheck;
 }
 async function body(request, limit = 65_536) { const chunks = []; let size = 0; for await (const chunk of request) { size += chunk.length; if (size > limit) throw new Error("Request body is too large"); chunks.push(chunk); } return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
-function trusted(request) { const origin = request.headers.origin; const host = request.headers.host; return !origin || Boolean(host && origin === `http://${host}`); }
-function localRequest(request) { const address = request.socket.remoteAddress ?? ""; return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1"; }
+const hostAllowlist = createHostAllowlist({ port: () => server.address()?.port ?? port });
+const setupCode = createSetupCode();
+// Host must name this kiosk (DNS rebinding defence) and a browser Origin must match it.
+function trusted(request) { const origin = request.headers.origin; const host = request.headers.host; return hostAllowlist.allowed(host) && (!origin || origin === `http://${host}`); }
+function localRequest(request) { return isLoopbackAddress(request.socket.remoteAddress ?? ""); }
 async function requireNetworkSession() { const access = await networkPin.status(); if (!access.authorized) throw new Error("Unlock network settings first"); }
 
 async function handleRequest(request, response) {
@@ -460,7 +476,12 @@ async function handleRequest(request, response) {
     } catch { response.statusCode = 409; response.end(JSON.stringify({ error: "Kiosk page session unavailable. Close unused pages, then retry attendance." })); }
     return;
   }
-  if (pathname === "/health" && request.method === "GET") { await loadPairing(); const attendance = changing ? undefined : await queue.diagnostics(); response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", ...state, ...(changing ? { paired: false, kioskName: undefined, cloudOnline: false } : {}), setupReady: !changing, authenticationMethod, pendingEvents: attendance?.pending, attendance, clock: await attendanceClock.status(), fingerprintSync: changing ? undefined : await fingerprintDiagnostics() })); return; }
+  if (pathname === "/health" && request.method === "GET" && !localRequest(request)) {
+    // Other devices on the LAN see only what the setup page needs.
+    const paired = Boolean(await loadPairing()) && !changing;
+    response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", paired, setupReady: !changing, setupCodeRequired: !paired })); return;
+  }
+  if (pathname === "/health" && request.method === "GET") { await loadPairing(); const attendance = changing ? undefined : await queue.diagnostics(); response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", ...state, ...(changing ? { paired: false, kioskName: undefined, cloudOnline: false } : {}), setupReady: !changing, authenticationMethod, pendingEvents: attendance?.pending, attendance, clock: await attendanceClock.status(), fingerprintSync: changing ? undefined : await fingerprintDiagnostics(), ...(!state.paired && !changing ? { setupCode: setupCode.current() } : {}) })); return; }
   if (pathname === "/display-state" && request.method === "GET") { const attendance = changing ? undefined : await queue.diagnostics(); const clock = await attendanceClock.status(); response.end(JSON.stringify({ display: changing ? kioskState("unpaired", { message: "Finish unpairing", detail: "Open local maintenance to complete the installation switch." }) : currentDisplay(), branding, kioskName: changing ? undefined : state.kioskName, readerOnline: state.readerOnline, authenticationMethod, cloudOnline: changing ? false : state.cloudOnline, networkType: state.networkType, pendingEvents: attendance?.pending, attendance, clock, uptimeSeconds: Math.floor(process.uptime()), releaseVersion, displayReloadToken, enrollment: dashboardEnrollment.active() ? { id: dashboardEnrollment.snapshot().id } : null })); return; }
   if (pathname === "/maintenance/pairing" && request.method === "GET") {
     try { await requireNetworkSession(); } catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock local settings before unpairing" })); return; }
@@ -526,7 +547,14 @@ async function handleRequest(request, response) {
     catch { response.statusCode = 500; response.end(JSON.stringify({ error: "Scan review could not be saved" })); }
     return;
   }
-  if (pathname === "/pair" && request.method === "POST") { try { if (await loadPairing()) throw new Error("This kiosk is already paired"); const input = await body(request); const pairing = decodePairingKey(input.pairingKey); const config = await pairInstallation(pairing); await savePairing(config); response.statusCode = 201; response.end(JSON.stringify({ paired: true, kioskName: config.kioskName })); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Pairing failed" })); } return; }
+  if (pathname === "/pair" && request.method === "POST") { try { if (await loadPairing()) throw new Error("This kiosk is already paired"); const input = await body(request);
+    // A LAN pairing must show the code from the kiosk's own screen, so nobody
+    // else on the network can point an unpaired kiosk at their own server.
+    if (!localRequest(request)) { const check = setupCode.verify(input.setupCode); if (!check.ok) { response.statusCode = check.locked ? 429 : 403; response.end(JSON.stringify({ error: check.locked ? "Too many setup code attempts. Read the new code on the kiosk screen and try again in a minute." : "Enter the setup code shown on the kiosk screen" })); return; } }
+    const pairing = decodePairingKey(input.pairingKey); const config = await pairInstallation(pairing); await savePairing(config); setupCode.rotate();
+    // The new pairing replaces the old installation: delete archived state now.
+    void unpairingStore.purgeArchives({ all: true }).catch(() => undefined);
+    response.statusCode = 201; response.end(JSON.stringify({ paired: true, kioskName: config.kioskName })); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Pairing failed" })); } return; }
   if (pathname === "/identity" && request.method === "POST") {
     const inputGeneration = attendanceInputGeneration;
     try {
@@ -659,14 +687,20 @@ if (process.env.NODE_ENV !== "test") {
       await scanner.suspend("shutdown");
       await closed;
       await Promise.all([...directAttendanceCommits]);
+      // Fold the attendance journal into its snapshot files. Not required for
+      // safety (the journal is replayed on start) but keeps an older release,
+      // reinstalled after this one, able to read every saved scan.
+      if (!unpairingBusy && !pairingRecovery) await queue.compact().catch(() => undefined);
       const config = await loadPairing();
       if (config?.pairingId && !unpairingBusy && !pairingRecovery) await presenceRestart.save(operatorPresence.checkpoint(), presenceBinding(config));
       clearTimeout(deadline); process.exit(0);
     })().catch(() => process.exit(1));
   });
   server.listen(port, process.env.LANCERLOGIN_KIOSK_HOST ?? "0.0.0.0", () => console.log(`LancerLogin kiosk service listening on port ${port}`));
-  void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod(), attendanceClock.refresh().catch(() => undefined)]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, 60_000).unref(); setInterval(pollCloud, 5_000).unref();
+  void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod(), attendanceClock.refresh().catch(() => undefined)]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); purgeExpiredArchives(); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, 60_000).unref(); setInterval(pollCloud, 5_000).unref();
   setInterval(() => { void dashboardEnrollment.expire(); void refreshCapturePermission(); void checkFingerRemoval(); }, 250).unref();
+  // Apply attendance retention and keep the journal short even on a quiet kiosk.
+  setInterval(() => { void installationActivities.run(() => queue.compact()).catch(() => undefined); purgeExpiredArchives(); }, 6 * 60 * 60_000).unref();
 }
 
 export { server, network };

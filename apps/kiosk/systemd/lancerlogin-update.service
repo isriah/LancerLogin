@@ -8,5 +8,9 @@ Type=oneshot
 User=root
 Group=root
 ExecStart=/usr/local/sbin/lancerlogin-install-release
+# A stalled download or install must not leave the unit activating forever and block later updates.
+TimeoutStartSec=20min
+StateDirectory=lancerlogin-update
+StateDirectoryMode=0700
 PrivateTmp=true
 ProtectHome=true

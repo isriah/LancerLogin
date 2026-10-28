@@ -1,7 +1,8 @@
 import { inactiveAt, inactivePeriodsUpdateSql, validateInactivePeriods } from "./member-participation.ts";
 import { meetingDeletion, restoreMeetingDeletion } from "./meeting-deletion.ts";
 import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough.ts";
-import { createSessionCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
+import { createSessionCodec, createSignedStateCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
+import { authRateLimits, bootstrapClaimKey, clearFailedLogins, consumeAuthRateLimit, lockActive, pruneAuthProtection, recordFailedLogin, setupResetCookie, setupResetGrantKey, setupResetGrantMs } from "./auth-protection.ts";
 import { decryptIntegration, encryptIntegration, moduleCredentials } from "./integration-crypto.ts";
 import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance } from "./web-updates.ts";
 import { commitPluginChange, currentSelectionSha, lookupPluginRelease, pluginManagementState, requiredModuleMigrations, requireNoModuleMigration, reviewPluginChange, selectionCredentialState } from "./plugin-selection.ts";
@@ -41,12 +42,12 @@ import { moduleSchedulerJobs, schedulerClass, type SchedulerJob, type SchedulerN
 type ModuleProviderAuthority = () => Promise<void>;
 const moduleProviderAuthority = Symbol("module-provider-authority");
 type ProviderConfiguration = Record<string, string> & { [moduleProviderAuthority]?: ModuleProviderAuthority };
-export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; FINGERPRINT_VAULT_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DB?: D1Database; PLATFORM_SCHEDULER_MODE?: string; PLATFORM_SCHEDULER?: SchedulerNamespace; moduleProviderAuthority?: ModuleProviderAuthority; }
+export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; FINGERPRINT_VAULT_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DEPLOYMENT_MARKER?: string; DB?: D1Database; PLATFORM_SCHEDULER_MODE?: string; PLATFORM_SCHEDULER?: SchedulerNamespace; moduleProviderAuthority?: ModuleProviderAuthority; }
 type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
 type ScheduledController = { cron?: string };
 
 type Role = "admin" | "operator";
-type Principal = { userId: string; role: Role; expiresAt: number; authenticatedAt?: number };
+type Principal = { userId: string; role: Role; expiresAt: number; authenticatedAt?: number; epoch?: number };
 type AuthMode = "google" | "local" | "both";
 type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "confirm-attendance";
 type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
@@ -138,7 +139,8 @@ async function principalFor(request: Request, env: Env): Promise<Principal> {
   const token = cookie(request, "lancerlogin_session");
   const principal = token ? await createSessionCodec(env.SESSION_KEY).verify(token) : undefined;
   if (!principal) throw new HttpError(401, "Sign in required");
-  const current = await requireDatabase(env).prepare("SELECT id, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; role: Role }>();
+  // A token issued under an older session epoch was revoked by logout, password reset or deactivation.
+  const current = await requireDatabase(env).prepare("SELECT id, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND session_epoch = ?").bind(principal.userId, principal.epoch ?? 0).first<{ id: string; role: Role }>();
   if (!current) throw new HttpError(401, "Session user is unavailable");
   return { ...principal, role: current.role };
 }
@@ -191,6 +193,13 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   if (!env.BOOTSTRAP_CODE_HASH) throw new HttpError(503, "First-Admin setup protection is not configured");
   const suppliedCodeHash = await sha256(input.setupCode ?? "");
   if (!constantTimeEqual(suppliedCodeHash, env.BOOTSTRAP_CODE_HASH)) throw new HttpError(403, "The one-time setup code is invalid");
+  // A setup code that already created an installation stays used after DELETE INSTALLATION. Only the browser that
+  // deleted the installation holds a one-time reset grant; anyone else needs a rotated setup code.
+  const claimKey = await bootstrapClaimKey(env.BOOTSTRAP_CODE_HASH); const resetGrant = cookie(request, setupResetCookie);
+  const resetGrantKey = resetGrant ? await setupResetGrantKey(resetGrant) : undefined;
+  if (await db.prepare("SELECT 1 AS claimed FROM bootstrap_code_claims WHERE claim_key = ?").bind(claimKey).first()
+    && !(resetGrantKey && await db.prepare("SELECT 1 AS granted FROM bootstrap_reset_grants WHERE grant_key = ? AND expires_at > ?").bind(resetGrantKey, new Date().toISOString()).first()))
+    throw new HttpError(409, "This setup code was already used. Rotate the BOOTSTRAP_CODE_HASH Worker secret to a new setup code before creating the installation again.");
   const errors = validateBootstrap(input);
   if (errors.length) throw new HttpError(400, "Invalid setup", errors);
   if ((input.authMode === "google" || input.authMode === "both") && !env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
@@ -202,15 +211,18 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
     db.prepare("INSERT INTO organization_settings (installation_id, organization_name, time_zone) VALUES (?, ?, ?)").bind("primary", input.organizationName!.trim(), input.timeZone),
     db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, 'admin', ?)").bind(adminId, "primary", input.adminEmail?.toLowerCase() ?? null, input.localUsername?.trim().toLowerCase() ?? null, passwordHash, now),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), "primary", adminId, "installation.created", "installation", "primary", now),
-    db.prepare("INSERT INTO platform_module_administration (installation_id, revision, selection_completed) VALUES ('primary', 0, 0)"),
-    db.prepare("INSERT INTO platform_module_administration_epochs (installation_id, revision) VALUES ('primary', 0)"),
+    // Authority epochs outlive DELETE INSTALLATION by design, so setup after a deletion continues them instead of reusing old values.
+    db.prepare("INSERT INTO platform_module_administration_epochs (installation_id, revision) VALUES ('primary', 0) ON CONFLICT(installation_id) DO UPDATE SET revision = platform_module_administration_epochs.revision + 1"),
+    db.prepare("INSERT INTO platform_module_administration (installation_id, revision, selection_completed) SELECT 'primary', revision, 0 FROM platform_module_administration_epochs WHERE installation_id = 'primary'"),
     ...bundledModuleRegistry.modules.flatMap((module) => [
-      db.prepare("INSERT INTO platform_module_epochs (installation_id, module_id, generation) VALUES ('primary', ?, 1)").bind(module.id),
-      db.prepare("INSERT INTO platform_modules (installation_id, module_id, contract_version, generation, phase, setup_version, setup_complete) VALUES ('primary', ?, ?, 1, 'disabled', ?, 0)").bind(module.id, module.contractVersion, module.setup.version),
+      db.prepare("INSERT INTO platform_module_epochs (installation_id, module_id, generation) VALUES ('primary', ?, 1) ON CONFLICT(installation_id, module_id) DO UPDATE SET generation = platform_module_epochs.generation + 1").bind(module.id),
+      db.prepare("INSERT INTO platform_modules (installation_id, module_id, contract_version, generation, phase, setup_version, setup_complete) SELECT 'primary', ?1, ?2, generation, 'disabled', ?3, 0 FROM platform_module_epochs WHERE installation_id = 'primary' AND module_id = ?1").bind(module.id, module.contractVersion, module.setup.version),
     ]),
     ...apiModules.all.flatMap((module) => module.installationSeed?.(db, { installationId: "primary", now }) ?? []),
     db.prepare("INSERT INTO platform_module_assignment_epochs (installation_id, user_id, revision) VALUES ('primary', ?, 0)").bind(adminId),
     db.prepare("INSERT INTO platform_module_assignment_revisions (installation_id, user_id, revision) VALUES ('primary', ?, 0)").bind(adminId),
+    db.prepare("INSERT OR IGNORE INTO bootstrap_code_claims (claim_key, claimed_at) VALUES (?, ?)").bind(claimKey, now),
+    ...(resetGrantKey ? [db.prepare("DELETE FROM bootstrap_reset_grants WHERE grant_key = ?").bind(resetGrantKey)] : []),
   ];
   if (mode === "google" || mode === "both") {
     const encrypted = await encryptIntegration({ clientId: input.googleClientId!.trim(), clientSecret: input.googleClientSecret!.trim() }, env.INTEGRATION_KEY!);
@@ -220,7 +232,10 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
     );
   }
   await db.batch(statements);
-  return response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, telemetryAccepted: false }, 201);
+  // Apply plugin migrations and record installed modules now, so plugins are registered as soon as the installation exists.
+  // A failure retries on the next request's reconciliation or the scheduled pass.
+  try { await reconcileInstalledModules(db); } catch { /* Retried by later requests and the scheduled pass. */ }
+  return response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, telemetryAccepted: false }, 201, resetGrant ? { "set-cookie": `${setupResetCookie}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0` } : undefined);
 }
 
 async function modulePlatform(request: Request, env: Env): Promise<Response> {
@@ -308,17 +323,14 @@ async function pluginManagement(request: Request, env: Env, action: "state" | "r
   // Fresh re-authentication with the Admin's own local password replaces the session with a newly authenticated one.
   if (Object.keys(input).some((key) => key !== "password") || typeof input.password !== "string" || !input.password || input.password.length > 1_024) throw new HttpError(400, "Enter your password");
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
-  const user = await db.prepare("SELECT id, role, password_hash AS passwordHash, failed_login_count AS failedLoginCount, locked_until AS lockedUntil FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; role: Role; passwordHash: string | null; failedLoginCount: number; lockedUntil?: string }>();
+  const user = await db.prepare("SELECT id, role, password_hash AS passwordHash, locked_until AS lockedUntil, session_epoch AS sessionEpoch FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; role: Role; passwordHash: string | null; lockedUntil?: string; sessionEpoch?: number }>();
   if (!user?.passwordHash) throw new WebUpdateError(409, "password_unavailable", "This account has no LancerLogin password. Sign in with Google again instead.");
-  const locked = Boolean(user.lockedUntil && Date.parse(user.lockedUntil) > Date.now());
-  const valid = await verifyPassword(input.password, user.passwordHash);
-  if (!valid || locked) {
-    if (!locked) { const failures = Number(user.failedLoginCount ?? 0) + 1; await db.prepare("UPDATE users SET failed_login_count = ?, locked_until = ? WHERE installation_id = 'primary' AND id = ?").bind(failures, failures >= 5 ? new Date(Date.now() + 15 * 60_000).toISOString() : null, user.id).run(); }
-    throw new WebUpdateError(401, "reauthentication_failed", locked ? "Too many attempts. Try again later." : "The password is incorrect.");
-  }
-  if (user.failedLoginCount || user.lockedUntil) await db.prepare("UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE installation_id = 'primary' AND id = ?").bind(user.id).run();
+  // Check the lock before the expensive hash, and count failures atomically so parallel guesses cannot share one count.
+  if (lockActive(user.lockedUntil)) throw new WebUpdateError(401, "reauthentication_failed", "Too many attempts. Try again later.");
+  if (!await verifyPassword(input.password, user.passwordHash)) { await recordFailedLogin(db, user.id); throw new WebUpdateError(401, "reauthentication_failed", "The password is incorrect."); }
+  if (!await clearFailedLogins(db, user.id)) throw new WebUpdateError(401, "reauthentication_failed", "Too many attempts. Try again later.");
   await writeAudit(db, principal, "auth.reauthenticated", "user", user.id, { method: "password", purpose: "plugin_management" });
-  const token = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role });
+  const token = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role, epoch: Number(user.sessionEpoch ?? 0) });
   const fresh = await createSessionCodec(env.SESSION_KEY).verify(token);
   return response({ ok: true, freshUntil: fresh?.authenticatedAt ? fresh.authenticatedAt + 10 * 60_000 : null }, 200, { "set-cookie": sessionCookie(token) });
 }
@@ -326,15 +338,17 @@ async function localLogin(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); if (!env.SESSION_KEY) throw new HttpError(503, "Local authentication is not configured");
   const input = await parseJson<{ username?: string; password?: string }>(request);
   if (!input.username || !input.password) throw new HttpError(400, "Username and password are required");
-  const user = await db.prepare("SELECT id, role, debug_mode AS debugMode, password_hash AS passwordHash, failed_login_count AS failedLoginCount, locked_until AS lockedUntil FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; debugMode: number; passwordHash: string | null; failedLoginCount: number; lockedUntil?: string }>();
+  const user = await db.prepare("SELECT id, role, debug_mode AS debugMode, password_hash AS passwordHash, locked_until AS lockedUntil, session_epoch AS sessionEpoch FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; debugMode: number; passwordHash: string | null; lockedUntil?: string; sessionEpoch?: number }>();
+  // A locked account is refused before the expensive hash. Failures are counted atomically in D1, so parallel guesses
+  // cannot all read the same count; a concurrent lock also refuses a correct password that was still being checked.
+  if (lockActive(user?.lockedUntil)) throw new HttpError(401, "Invalid username or password");
   const passwordValid = await verifyPassword(input.password, user?.passwordHash ?? await timingEqualizerHash());
-  const locked = Boolean(user?.lockedUntil && Date.parse(user.lockedUntil) > Date.now());
-  if (!user?.passwordHash || !passwordValid || locked) {
-    if (user && !locked) { const failures = Number(user.failedLoginCount ?? 0) + 1; const lockedUntil = failures >= 5 ? new Date(Date.now() + 15 * 60_000).toISOString() : null; await db.prepare("UPDATE users SET failed_login_count = ?, locked_until = ? WHERE installation_id = 'primary' AND id = ?").bind(failures, lockedUntil, user.id).run(); }
+  if (!user?.passwordHash || !passwordValid) {
+    if (user) await recordFailedLogin(db, user.id);
     throw new HttpError(401, "Invalid username or password");
   }
-  if (user.failedLoginCount || user.lockedUntil) await db.prepare("UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE installation_id = 'primary' AND id = ?").bind(user.id).run();
-  const token = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role });
+  if (!await clearFailedLogins(db, user.id)) throw new HttpError(401, "Invalid username or password");
+  const token = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role, epoch: Number(user.sessionEpoch ?? 0) });
   return response({ ok: true, user: { id: user.id, role: user.role, debugMode: Boolean(user.debugMode) } }, 200, { "set-cookie": `lancerlogin_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800` });
 }
 async function authSession(request: Request, env: Env): Promise<Response> {
@@ -342,6 +356,15 @@ async function authSession(request: Request, env: Env): Promise<Response> {
   const user = await requireDatabase(env).prepare("SELECT id, email, local_username AS localUsername, role, debug_mode AS debugMode FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; email?: string; localUsername?: string; role: Role; debugMode: number }>();
   if (!user) throw new HttpError(401, "Session user is unavailable");
   return response({ authenticated: true, user: { ...user, debugMode: Boolean(user.debugMode) } });
+}
+async function logout(request: Request, env: Env): Promise<Response> {
+  // Bump the session epoch so this token, and any copy of it, stops working everywhere, not only in this browser.
+  try {
+    const token = cookie(request, "lancerlogin_session");
+    const principal = token && env.SESSION_KEY ? await createSessionCodec(env.SESSION_KEY).verify(token) : undefined;
+    if (principal && env.DB) await env.DB.prepare("UPDATE users SET session_epoch = session_epoch + 1 WHERE installation_id = 'primary' AND id = ? AND session_epoch = ?").bind(principal.userId, principal.epoch ?? 0).run();
+  } catch { /* Clearing the cookie still signs this browser out. */ }
+  return response({ ok: true }, 200, { "set-cookie": "lancerlogin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" });
 }
 async function authPreferences(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
@@ -414,7 +437,9 @@ async function branding(request: Request, env: Env): Promise<Response> {
   if (input.anomalyEarlyThresholdMinutes !== undefined && (!Number.isInteger(input.anomalyEarlyThresholdMinutes) || input.anomalyEarlyThresholdMinutes < 0 || input.anomalyEarlyThresholdMinutes > MAX_ANOMALY_THRESHOLD_MINUTES)) errors.push("Early-departure threshold must be from 0 to 1440 minutes");
   if (input.attendanceReportingStartsOn !== undefined && input.attendanceReportingStartsOn !== null && !/^\d{4}-\d{2}-\d{2}$/.test(input.attendanceReportingStartsOn)) errors.push("Attendance reporting baseline must be YYYY-MM-DD");
   if (errors.length) throw new HttpError(400, "Invalid branding", errors);
-  await assertNoMeetingOverlap(db, [], input.lateScanMinutes!);
+  // Only a longer late-scan window can make existing meetings overlap, so other branding saves skip reading every meeting.
+  const currentLateScan = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>();
+  if (!currentLateScan || input.lateScanMinutes! > currentLateScan.lateScanMinutes) await assertNoMeetingOverlap(db, [], input.lateScanMinutes!);
   await db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_data = ?, primary_color = ?, secondary_color = ?, appearance = ?, logo_backdrop = ?, late_scan_minutes = ?, discord_contest_window_hours = ?, attendance_reporting_starts_on = ?, anomaly_late_threshold_minutes = COALESCE(?, anomaly_late_threshold_minutes), anomaly_early_threshold_minutes = COALESCE(?, anomaly_early_threshold_minutes) WHERE installation_id = 'primary'")
     .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoData || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance === "themed" ? "system" : input.appearance, input.logoBackdrop, input.lateScanMinutes, input.discordContestWindowHours, input.attendanceReportingStartsOn || null, input.anomalyLateThresholdMinutes ?? null, input.anomalyEarlyThresholdMinutes ?? null).run();
   await writeAudit(db, principal, "branding.updated", "organization_settings", "primary", { attendanceReportingStartsOn: input.attendanceReportingStartsOn || null, anomalyLateThresholdMinutes: input.anomalyLateThresholdMinutes, anomalyEarlyThresholdMinutes: input.anomalyEarlyThresholdMinutes }); return response({ ok: true });
@@ -756,7 +781,7 @@ async function redeemPairingCode(request: Request, env: Env): Promise<Response> 
 async function kioskFor(request: Request, env: Env, includeRosterRevision = false): Promise<{ id: string; name: string; pairingId: string; pairingBound: boolean; configuredAuthenticationMethod: KioskAuthenticationMethod; rosterRevision?: number }> {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
-  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound, configured_authentication_method AS configuredAuthenticationMethod${includeRosterRevision ? ", (SELECT revision FROM report_data_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<{ id: string; name: string; pairingId: string; pairingBound: number; configuredAuthenticationMethod: KioskAuthenticationMethod; rosterRevision?: number }>();
+  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound, configured_authentication_method AS configuredAuthenticationMethod${includeRosterRevision ? ", (SELECT revision FROM kiosk_roster_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<{ id: string; name: string; pairingId: string; pairingBound: number; configuredAuthenticationMethod: KioskAuthenticationMethod; rosterRevision?: number }>();
   if (!kiosk) throw new HttpError(401, "Kiosk credential is invalid");
   return { ...kiosk, pairingBound: Boolean(kiosk.pairingBound) };
 }
@@ -802,7 +827,7 @@ async function kioskRoster(request: Request, env: Env): Promise<Response> {
   let initial = true;
   const members = await kioskRosterCache.read(databaseIdentity(db), "active-roster", async () => {
     if (initial) { initial = false; return kiosk.rosterRevision; }
-    const current = await db.prepare("SELECT revision FROM report_data_revision WHERE installation_id = 'primary'").first<{ revision: number }>();
+    const current = await db.prepare("SELECT revision FROM kiosk_roster_revision WHERE installation_id = 'primary'").first<{ revision: number }>();
     return current && Number.isSafeInteger(current.revision) ? current.revision : undefined;
   }, async () => (await db.prepare("SELECT id AS rosterId, external_id AS memberId, first_name AS firstName, last_name AS lastName FROM members WHERE installation_id = 'primary' AND active = 1 ORDER BY last_name, first_name").all<KioskRosterMember>()).results ?? []);
   const reply = response({ members });
@@ -943,8 +968,18 @@ function meetingOccurrences(input: MeetingInput & { startsAt: string; endsAt: st
   if (start.getTime() <= limit) throw new HttpError(400, "Recurring series is too large; shorten the date range to 500 meetings or fewer");
   return occurrences;
 }
+// Stored timestamps are ISO 8601 text, possibly with an offset or without milliseconds, so the SQL bound compares text with a
+// day of margin on each side and the exact window comparison stays in overlappingMeetingWindows.
+const meetingOverlapMarginMs = 24 * 60 * 60_000;
 async function assertNoMeetingOverlap(db: D1Database, proposed: MeetingWindowLike[], lateScanMinutes: number, excludedIds: string[] = []): Promise<void> {
-  const existing = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL").all<MeetingWindowLike>();
+  // With proposed meetings, only existing meetings whose attendance window can reach the proposed range are read. Without any
+  // (a longer late-scan window), every pair of existing meetings can newly overlap, so all are read.
+  const starts = proposed.map((meeting) => Date.parse(meeting.startsAt)); const closes = proposed.map((meeting) => Date.parse(attendanceClosesAt(meeting.endsAt, lateScanMinutes)));
+  const bounded = proposed.length > 0 && [...starts, ...closes].every(Number.isFinite);
+  const existing = bounded
+    ? await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND starts_at <= ? AND (ends_at IS NULL OR ends_at >= ?)")
+      .bind(new Date(Math.max(...closes) + meetingOverlapMarginMs).toISOString(), new Date(Math.min(...starts) - lateScanMinutes * 60_000 - meetingOverlapMarginMs).toISOString()).all<MeetingWindowLike>()
+    : await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL").all<MeetingWindowLike>();
   const excluded = new Set(excludedIds); const conflict = overlappingMeetingWindows([...(existing.results ?? []).filter((meeting) => !excluded.has(meeting.id ?? "")), ...proposed], lateScanMinutes);
   if (!conflict) return;
   const label = (meeting: MeetingWindowLike) => `${meeting.title?.trim() || "Meeting"} (${new Date(meeting.startsAt).toISOString()})`;
@@ -1103,7 +1138,7 @@ async function restoreMeetings(request: Request, env: Env, meetingId: string): P
   return response({ restored: deletion.meetingIds.length, scope: input.scope ?? "occurrence", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual" | "simulator", actorId?: string): Promise<Response> {
-  if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required");
+  if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required", undefined, "invalid_scan");
   const existing = await db.prepare("SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?").bind(input.eventId.trim()).first<{ action: AttendanceAction }>();
   if (existing) return response({ accepted: false, duplicate: true, eventId: input.eventId, action: existing.action }, 200);
   const [member, settings] = await Promise.all([
@@ -1113,25 +1148,25 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   const meeting = input.meetingId
     ? await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string; startsAt: string; endsAt: string }>()
     : await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND starts_at <= ? ORDER BY starts_at DESC LIMIT 1").bind(input.occurredAt).first<{ id: string; title: string; startsAt: string; endsAt: string }>();
-  if (!member) throw new HttpError(404, "This identity is not linked to an active roster member");
-  if (!meeting) throw new HttpError(409, "No meeting is accepting attendance scans at this time");
-  if (member.attendanceRequiredFrom && meeting.startsAt.slice(0, 10) < member.attendanceRequiredFrom) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${member.attendanceRequiredFrom}`);
+  if (!member) throw new HttpError(404, "This identity is not linked to an active roster member", undefined, "roster_inactive");
+  if (!meeting) throw new HttpError(409, "No meeting is accepting attendance scans at this time", undefined, "no_eligible_meeting");
+  if (member.attendanceRequiredFrom && meeting.startsAt.slice(0, 10) < member.attendanceRequiredFrom) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${member.attendanceRequiredFrom}`, undefined, "participation_not_started");
   const window = scanWindowState(meeting, input.occurredAt, settings?.lateScanMinutes ?? 30);
-  if (!window.accepted) throw new HttpError(409, input.meetingId ? window.reason : "No meeting is accepting attendance scans at this time");
+  if (!window.accepted) throw new HttpError(409, input.meetingId ? window.reason : "No meeting is accepting attendance scans at this time", undefined, input.meetingId ? "scan_window_closed" : "no_eligible_meeting");
   const prior = await db.prepare("SELECT id, action, occurred_at AS occurredAt FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ? ORDER BY occurred_at, id").bind(member.id, meeting.id).all<{ id: string; action: AttendanceAction; occurredAt: string }>();
   const priorEvents = prior.results ?? [];
   const transition = input.desiredAction
     ? priorEvents.some((event) => event.action === input.desiredAction) ? { status: "duplicate" as const, action: input.desiredAction } : input.desiredAction === "check_out" && !priorEvents.some((event) => event.action === "check_in") ? { status: "complete" as const } : { status: "accepted" as const, action: input.desiredAction }
     : nextAttendanceAction(priorEvents, input.occurredAt);
   if (transition.status === "duplicate") return response({ accepted: false, duplicate: true, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt }, 200);
-  if (transition.status === "complete") throw new HttpError(409, "Attendance is already complete for this member and meeting");
+  if (transition.status === "complete") throw new HttpError(409, "Attendance is already complete for this member and meeting", undefined, "attendance_complete");
   const id = crypto.randomUUID();
   const result = await db.prepare("INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by, action) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, member.id, meeting.id, source, input.occurredAt, input.eventId.trim(), actorId ?? null, transition.action).run();
   return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt, meeting: { id: meeting.id, title: meeting.title }, member: { id: member.id, externalId: member.externalId, displayName: `${member.firstName} ${member.lastName}`.trim() } }, 202);
 }
 async function kioskAttendance(request: Request, env: Env): Promise<Response> {
   const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string }>(request);
-  if ((kiosk.pairingBound || input.pairingId !== undefined) && input.pairingId !== kiosk.pairingId) throw new HttpError(409, "This queued scan belongs to a different kiosk pairing and was not attached to the current kiosk");
+  if ((kiosk.pairingBound || input.pairingId !== undefined) && input.pairingId !== kiosk.pairingId) throw new HttpError(409, "This queued scan belongs to a different kiosk pairing and was not attached to the current kiosk", undefined, "pairing_mismatch");
   return recordAttendance(requireDatabase(env), input, "kiosk");
 }
 async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
@@ -1214,11 +1249,19 @@ async function correction(request: Request, env: Env): Promise<Response> {
   const input = await parseJson<{ memberId?: string; meetingId?: string; disposition?: "present" | "absent" | "excused"; reason?: string }>(request);
   const reason = input.reason?.trim() ?? "";
   if (!input.memberId || !input.meetingId || !input.disposition || !["present", "absent", "excused"].includes(input.disposition) || (input.disposition !== "present" && !reason) || reason.length > 300) throw new HttpError(400, "Member, meeting, disposition, and a reason are required for absence or excuse corrections");
+  const target = await db.prepare("SELECT EXISTS (SELECT 1 FROM members WHERE installation_id = 'primary' AND id = ?1) AS member, (SELECT deleted_at IS NULL FROM meetings WHERE installation_id = 'primary' AND id = ?2) AS meetingActive")
+    .bind(input.memberId, input.meetingId).first<{ member: number; meetingActive: number | null }>();
+  if (!target?.member) throw new HttpError(404, "Member not found");
+  if (target.meetingActive === null || target.meetingActive === undefined) throw new HttpError(404, "Meeting not found");
+  const deletedMeeting = new HttpError(409, "This meeting was deleted. Restore it before correcting its attendance.");
+  if (!target.meetingActive) throw deletedMeeting;
+  // The insert re-checks the meeting, so one deleted after the check above is still refused; the audit row follows the correction.
   const id = crypto.randomUUID(); const now = new Date().toISOString();
-  await db.batch([
-    db.prepare("INSERT INTO attendance_corrections (id, installation_id, member_id, meeting_id, disposition, reason, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, input.memberId, input.meetingId, input.disposition, reason, principal.userId, now),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'attendance.corrected', 'attendance_correction', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ memberId: input.memberId, meetingId: input.meetingId, disposition: input.disposition }), now),
+  const [inserted] = await db.batch([
+    db.prepare("INSERT INTO attendance_corrections (id, installation_id, member_id, meeting_id, disposition, reason, created_by, created_at) SELECT ?, 'primary', ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL)").bind(id, input.memberId, input.meetingId, input.disposition, reason, principal.userId, now, input.meetingId),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, 'attendance.corrected', 'attendance_correction', ?, ?, ? WHERE EXISTS (SELECT 1 FROM attendance_corrections WHERE id = ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ memberId: input.memberId, meetingId: input.meetingId, disposition: input.disposition }), now, id),
   ]);
+  if (!inserted?.meta?.changes) throw deletedMeeting;
   return response({ correction: { id, ...input, reason, createdAt: now } }, 201);
 }
 async function cleanupAttendance(request: Request, env: Env): Promise<Response> {
@@ -1804,7 +1847,7 @@ async function googleStart(request: Request, env: Env): Promise<Response> {
   const installation = await requireDatabase(env).prepare("SELECT auth_mode AS authMode FROM installations WHERE id = 'primary'").first<{ authMode: AuthMode }>();
   if (!installation || !["google", "both"].includes(installation.authMode)) throw new HttpError(404, "Google sign-in is not enabled");
   const credentials = await googleCredentials(env); const redirectUri = googleRedirectUri(env);
-  const state = await createSessionCodec(env.SESSION_KEY).issue({ userId: crypto.randomUUID(), role: "operator" }, 10 * 60_000);
+  const state = await createSignedStateCodec(env.SESSION_KEY, "google_sign_in").issue();
   const target = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   target.search = new URLSearchParams({ client_id: credentials.clientId, redirect_uri: redirectUri, response_type: "code", scope: "openid email profile", state, prompt: "select_account" }).toString();
   const headers = new Headers({ location: target.toString(), "cache-control": "no-store" });
@@ -1817,20 +1860,20 @@ async function googleStart(request: Request, env: Env): Promise<Response> {
 async function googleCallback(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
   const url = new URL(request.url); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_oauth_state");
-  if (!code || !state || state !== savedState || !await createSessionCodec(env.SESSION_KEY).verify(state)) throw new HttpError(400, "Google sign-in state is invalid or expired");
+  if (!code || !state || state !== savedState || !await createSignedStateCodec(env.SESSION_KEY, "google_sign_in").verify(state)) throw new HttpError(400, "Google sign-in state is invalid or expired");
   const credentials = await googleCredentials(env); const redirectUri = googleRedirectUri(env);
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: credentials.clientId, client_secret: credentials.clientSecret, redirect_uri: redirectUri, grant_type: "authorization_code" }) });
   const tokens = await tokenResponse.json() as { id_token?: string }; if (!tokenResponse.ok || !tokens.id_token) throw new HttpError(401, "Google did not accept the sign-in response");
   const validationResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokens.id_token)}`, { headers: { accept: "application/json" } });
   const profile = await validationResponse.json() as { aud?: string; email?: string; email_verified?: string; iss?: string };
   if (!validationResponse.ok || profile.aud !== credentials.clientId || profile.email_verified !== "true" || !profile.email || !["https://accounts.google.com", "accounts.google.com"].includes(profile.iss ?? "")) throw new HttpError(401, "Google identity validation failed");
-  const user = await requireDatabase(env).prepare("SELECT id, role FROM users WHERE installation_id = 'primary' AND email = ? AND active = 1").bind(profile.email.toLowerCase()).first<{ id: string; role: Role }>();
+  const user = await requireDatabase(env).prepare("SELECT id, role, session_epoch AS sessionEpoch FROM users WHERE installation_id = 'primary' AND email = ? AND active = 1").bind(profile.email.toLowerCase()).first<{ id: string; role: Role; sessionEpoch?: number }>();
   if (!user) throw new HttpError(403, "This Google account is not an active LancerLogin user");
   const reauthenticating = cookie(request, "lancerlogin_oauth_reauth");
   if (reauthenticating && (decodeURIComponent(reauthenticating) !== user.id || user.role !== "admin")) throw new HttpError(403, "Sign in with the same Admin Google account to confirm your identity");
   await markIntegrationVerified(requireDatabase(env), "google", user.id, { email: profile.email.toLowerCase() });
   if (reauthenticating) await writeAudit(requireDatabase(env), { userId: user.id, role: user.role, expiresAt: 0 }, "auth.reauthenticated", "user", user.id, { method: "google", purpose: "plugin_management" });
-  const session = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role });
+  const session = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role, epoch: Number(user.sessionEpoch ?? 0) });
   const verification = cookie(request, "lancerlogin_oauth_verify") === "1";
   const headers = new Headers({ location: reauthenticating ? `${env.ALLOWED_ORIGIN}/settings/modules?reauthenticated=1` : verification ? `${env.ALLOWED_ORIGIN}/settings/integrations?verified=google` : env.ALLOWED_ORIGIN, "cache-control": "no-store" });
   headers.append("set-cookie", `lancerlogin_session=${session}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`);
@@ -1910,7 +1953,7 @@ async function googleCalendarConfiguration(request: Request, env: Env): Promise<
 }
 async function googleCalendarStart(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
-  const principal = await requireRole(request, env, ["admin"]); const { secret } = await googleCalendarSecret(env); const state = await createSessionCodec(env.SESSION_KEY).issue(principal, 10 * 60_000); const target = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  const principal = await requireRole(request, env, ["admin"]); const { secret } = await googleCalendarSecret(env); const state = await createSignedStateCodec(env.SESSION_KEY, "google_calendar_oauth").issue({ userId: principal.userId }); const target = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   target.search = new URLSearchParams({ client_id: secret.clientId, redirect_uri: googleCalendarRedirectUri(env), response_type: "code", scope: "https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events", access_type: "offline", include_granted_scopes: "true", prompt: "consent select_account", state }).toString();
   const headers = new Headers({ location: target.toString(), "cache-control": "no-store" }); headers.append("set-cookie", `lancerlogin_calendar_oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`);
   return new Response(null, { status: 302, headers });
@@ -1918,8 +1961,8 @@ async function googleCalendarStart(request: Request, env: Env): Promise<Response
 const writableCalendarRole = (value: unknown) => value === "writer" || value === "owner";
 async function googleCalendarCallback(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY || !env.INTEGRATION_KEY) throw new HttpError(503, "Google Calendar authorization is not configured");
-  const url = new URL(request.url); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_calendar_oauth_state"); const signed = state ? await createSessionCodec(env.SESSION_KEY).verify(state) : undefined;
-  if (!code || !state || state !== savedState || !signed) throw new HttpError(400, "Google Calendar authorization state is invalid or expired");
+  const url = new URL(request.url); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_calendar_oauth_state"); const signed = state ? await createSignedStateCodec(env.SESSION_KEY, "google_calendar_oauth").verify(state) : undefined;
+  if (!code || !state || state !== savedState || !signed?.userId) throw new HttpError(400, "Google Calendar authorization state is invalid or expired");
   const principal = await requireDatabase(env).prepare("SELECT id AS userId, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND role = 'admin'").bind(signed.userId).first<{ userId: string; role: Role }>();
   if (!principal) throw new HttpError(403, "Only an active Admin can authorize Google Calendar");
   const { secret } = await googleCalendarSecret(env); await requireProviderAuthority(env); const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: secret.clientId, client_secret: secret.clientSecret, redirect_uri: googleCalendarRedirectUri(env), grant_type: "authorization_code" }) });
@@ -1932,7 +1975,7 @@ async function googleCalendarCallback(request: Request, env: Env): Promise<Respo
     db.prepare("UPDATE google_calendar_authorizations SET ciphertext = ?, iv = ?, authorized_at = ?, verified_at = ?, updated_at = ? WHERE installation_id = 'primary'").bind(encrypted.ciphertext, encrypted.iv, now, verifiedAt, now),
     ...(verifiedAt ? [db.prepare("UPDATE google_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now)] : []),
   ]);
-  await writeAudit(db, { ...signed, role: "admin" }, "google_calendar.authorized", "integration", "google_calendar", { calendarReverified: Boolean(verifiedAt) });
+  await writeAudit(db, { userId: principal.userId, role: "admin", expiresAt: signed.expiresAt }, "google_calendar.authorized", "integration", "google_calendar", { calendarReverified: Boolean(verifiedAt) });
   const headers = new Headers({ location: `${env.ALLOWED_ORIGIN}/settings/integrations?${verifiedAt ? "verified" : "authorized"}=google-calendar`, "cache-control": "no-store" }); headers.append("set-cookie", "lancerlogin_calendar_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
   return new Response(null, { status: 302, headers });
 }
@@ -2131,8 +2174,10 @@ async function updateUser(request: Request, env: Env, userId: string): Promise<R
   if (input.memberId && await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND member_id = ? AND id <> ?").bind(input.memberId.trim(), userId).first()) throw new HttpError(409, "That roster member already has dashboard access");
   if (input.role === undefined && input.active === undefined && input.localPassword === undefined && input.memberId === undefined) throw new HttpError(400, "Provide a role, active status, roster link, or new local password");
   const passwordHash = input.localPassword ? await hashPassword(input.localPassword) : null; const now = new Date().toISOString();
+  // A password reset clears any failed-login lock. A reset or deactivation bumps the session epoch, revoking existing sessions.
+  const revokeSessions = passwordHash !== null || input.active === false ? 1 : 0;
   await db.batch([
-    db.prepare("UPDATE users SET role = COALESCE(?, role), active = COALESCE(?, active), password_hash = COALESCE(?, password_hash), member_id = CASE WHEN ? = 1 THEN ? ELSE member_id END WHERE installation_id = 'primary' AND id = ?").bind(input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0, passwordHash, input.memberId === undefined ? 0 : 1, input.memberId?.trim() || null, userId),
+    db.prepare("UPDATE users SET role = COALESCE(?, role), active = COALESCE(?, active), password_hash = COALESCE(?, password_hash), failed_login_count = CASE WHEN ? IS NULL THEN failed_login_count ELSE 0 END, locked_until = CASE WHEN ? IS NULL THEN locked_until ELSE NULL END, session_epoch = session_epoch + ?, member_id = CASE WHEN ? = 1 THEN ? ELSE member_id END WHERE installation_id = 'primary' AND id = ?").bind(input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0, passwordHash, passwordHash, passwordHash, revokeSessions, input.memberId === undefined ? 0 : 1, input.memberId?.trim() || null, userId),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.updated', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, userId, JSON.stringify({ role: input.role, active: input.active, passwordReset: Boolean(input.localPassword), memberId: input.memberId }), now),
   ]);
   return response({ ok: true });
@@ -3562,6 +3607,9 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
 const insertBackupRows = (db: D1Database, table: BackupTable, rows: Record<string, unknown>[]) => rows.map((row) => {
   const columns = tableColumns[table]; return db.prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`).bind(...columns.map((column) => row[column]));
 });
+const upsertBackupMeetings = (db: D1Database, rows: Record<string, unknown>[]) => rows.map((row) => {
+  const columns = tableColumns.meetings; return db.prepare(`INSERT INTO meetings (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")}) ON CONFLICT(id) DO UPDATE SET ${columns.filter((column) => column !== "id").map((column) => `${column} = excluded.${column}`).join(", ")}`).bind(...columns.map((column) => row[column]));
+});
 
 function freshAuthorityStatements(db: D1Database, tables: Record<BackupTable, Record<string, unknown>[]>): D1Statement[] {
   const administrationRevision = Number(tables.platform_module_administration_epochs[0]?.revision ?? 0);
@@ -3588,6 +3636,11 @@ function restoredModuleStateStatements(db: D1Database, table: BackupTable, rows:
   return [];
 }
 
+// The restore is one all-or-nothing D1 batch. D1 limits how long, and how much memory, a batch may take; when a very large
+// backup exceeds that, the batch is rolled back and nothing changes. Splitting it would lose that guarantee, so the Admin
+// is told to restore a smaller category or use the documented D1 restore workflow instead (docs/BACKUP-RESTORE.md).
+const restoreLimitMessage = "This backup is too large to restore from the dashboard within the database's time limit. Nothing was changed. Restore one category at a time, or use the documented D1 restore workflow.";
+const d1ResourceLimitError = (error: unknown) => error instanceof Error && /exceeded (?:its )?(?:timeout|cpu time limit|memory limit)|string or blob too big|sqlite_toobig/i.test(`${error.message} ${error.cause instanceof Error ? error.cause.message : ""}`);
 async function restoreData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: BackupScope; confirmation?: string; backup?: unknown; excludeModules?: unknown }>(request, 10_485_760); const scope = input.scope;
   if (!scope || !["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Restore scope must be meetings, roster, or installation");
@@ -3599,9 +3652,19 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
   // Excluded modules restore absent: their rows were removed from every module-keyed Core table and their section is skipped.
   const excludedModules = backup.externalModules.excluded.map(({ id, label, status, requiredBackupVersion, source, commit, rows }) => ({ id, label, status, backupVersion: requiredBackupVersion, source, commit, rows }));
   let statements: D1Statement[];
+  // Meetings that survive by ID are updated in place rather than deleted and reinserted, so live Google Calendar and Discord
+  // event mappings (operational state, not portable backup data) keep linking them to their external events. Only meetings
+  // absent from the backup are deleted, and their mappings cascade away; the response reports how many external events
+  // were detached that way.
+  const restoredMeetingIds = JSON.stringify(tables.meetings.map((row) => row.id));
+  const detachedCalendarEvents = scope === "meetings" ? Number((await db.prepare(`SELECT (SELECT COUNT(*) FROM google_calendar_event_mappings WHERE installation_id = 'primary' AND active = 1 AND meeting_id NOT IN (SELECT value FROM json_each(?1)))
+    + (SELECT COUNT(*) FROM discord_calendar_event_mappings WHERE installation_id = 'primary' AND active = 1 AND event_id IS NOT NULL AND meeting_id NOT IN (SELECT value FROM json_each(?1))) AS n`).bind(restoredMeetingIds).first<{ n: number }>())?.n ?? 0) : 0;
+  const recovery = { ...backup.recovery, ...(scope === "meetings" ? { detachedCalendarEvents } : {}) };
   if (scope === "meetings") statements = [
-    db.prepare("DELETE FROM discord_anomaly_reports WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_audience_labels WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_weight_categories WHERE installation_id = 'primary'"),
-    ...insertBackupRows(db, "meeting_weight_categories", tables.meeting_weight_categories), ...insertBackupRows(db, "meetings", tables.meetings), ...insertBackupRows(db, "meeting_audience_labels", tables.meeting_audience_labels), ...insertBackupRows(db, "meeting_templates", tables.meeting_templates), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_notifications", tables.discord_attendance_notifications), ...insertBackupRows(db, "discord_attendance_recipients", tables.discord_attendance_recipients), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests), ...insertBackupRows(db, "discord_anomaly_reports", tables.discord_anomaly_reports),
+    db.prepare("DELETE FROM discord_anomaly_reports WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_audience_labels WHERE installation_id = 'primary'"),
+    db.prepare("DELETE FROM meetings WHERE installation_id = 'primary' AND id NOT IN (SELECT value FROM json_each(?))").bind(restoredMeetingIds), db.prepare("UPDATE meetings SET weight_category_id = NULL WHERE installation_id = 'primary' AND weight_category_id IS NOT NULL"),
+    db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_weight_categories WHERE installation_id = 'primary'"),
+    ...insertBackupRows(db, "meeting_weight_categories", tables.meeting_weight_categories), ...upsertBackupMeetings(db, tables.meetings), ...insertBackupRows(db, "meeting_audience_labels", tables.meeting_audience_labels), ...insertBackupRows(db, "meeting_templates", tables.meeting_templates), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_notifications", tables.discord_attendance_notifications), ...insertBackupRows(db, "discord_attendance_recipients", tables.discord_attendance_recipients), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests), ...insertBackupRows(db, "discord_anomaly_reports", tables.discord_anomaly_reports),
   ];
   else if (scope === "roster") statements = [
     db.prepare(`UPDATE members SET inactive_periods_json = ${inactivePeriodsUpdateSql("0")}, active = 0 WHERE installation_id = 'primary' AND external_id NOT IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(tables.members.map(row => row.external_id))),
@@ -3623,12 +3686,13 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
     const restoredModules = new Set(tables.platform_modules.map((row) => String(row.module_id)));
     statements.push(...freshExternalModuleStatements(db, installedExternalBackupModules.filter(({ definition }) => !restoredModules.has(definition.id)), new Date().toISOString()), ...insertExternalModuleStatements(db, backup.externalModules.included));
   }
-  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: backup.schemaVersion, exportedAt: backup.exportedAt, recovery: backup.recovery, ...(excludedModules.length ? { excludedModules } : {}) }), now));
-  await db.batch(statements);
+  const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: backup.schemaVersion, exportedAt: backup.exportedAt, recovery, ...(excludedModules.length ? { excludedModules } : {}) }), now));
+  try { await db.batch(statements); }
+  catch (error) { if (d1ResourceLimitError(error)) throw new HttpError(503, restoreLimitMessage); throw error; }
   // An installation restore recreates the installation row, which cascades away the installed-module catalog. Record it again
   // now, so backups keep plugin sources and removed code stays deletable; a failure retries on the next scheduled pass.
   if (scope === "installation") { try { await reconcileInstalledModules(db); } catch { /* Retried by the scheduled pass. */ } }
-  return response({ restored: true, scope, recovery: backup.recovery, ...(excludedModules.length ? { excludedModules } : {}) });
+  return response({ restored: true, scope, recovery, ...(excludedModules.length ? { excludedModules } : {}) });
 }
 
 async function resetOnboarding(request: Request, env: Env): Promise<Response> {
@@ -3641,6 +3705,7 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "attendance" | "roster" | "installation"; confirmation?: string }>(request);
   const expected = input.scope === "attendance" ? "DELETE ATTENDANCE" : input.scope === "roster" ? "DELETE ROSTER" : input.scope === "installation" ? "DELETE INSTALLATION" : undefined;
   if (!expected || input.confirmation !== expected) throw new HttpError(400, `Type ${expected ?? "a valid confirmation"} exactly to continue`);
+  const setupResetGrant = input.scope === "installation" && env.BOOTSTRAP_CODE_HASH ? await recordInstallationDeletion(db, env.BOOTSTRAP_CODE_HASH) : undefined;
   if (input.scope === "attendance") await db.batch([
     db.prepare("DELETE FROM discord_anomaly_reports WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_weight_categories WHERE installation_id = 'primary'"),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.attendance_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString()),
@@ -3651,8 +3716,22 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
     if (Number(references?.count ?? 0) > 0) throw new HttpError(409, `Delete ${["Attendance", ...modules.labels].join(" and ")} participation first so historical records do not lose their roster references`);
     await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id IS NOT NULL"), db.prepare("DELETE FROM members WHERE installation_id = 'primary'"), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.roster_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString())]);
   }
-  else await db.prepare("DELETE FROM installations WHERE id = 'primary'").run();
-  return response({ deleted: true, scope: input.scope });
+  // Installed plugin tables may not cascade from the installation row, so clear them child-first in the same batch, as an
+  // installation restore does; otherwise a later first-Admin setup would inherit the deleted installation's plugin data.
+  else await db.batch([...clearExternalModuleStatements(db, installedExternalBackupModules), db.prepare("DELETE FROM installations WHERE id = 'primary'")]);
+  return response({ deleted: true, scope: input.scope }, 200, setupResetGrant ? { "set-cookie": `${setupResetCookie}=${setupResetGrant}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${setupResetGrantMs / 1000}` } : undefined);
+}
+/**
+ * Before the installation is deleted, mark the current setup code as used (installations created before this check
+ * recorded no claim), and grant the deleting Admin's browser one setup retry with the same code.
+ */
+async function recordInstallationDeletion(db: D1Database, codeHash: string): Promise<string> {
+  const grant = randomToken(); const now = Date.now();
+  await db.batch([
+    db.prepare("INSERT OR IGNORE INTO bootstrap_code_claims (claim_key, claimed_at) VALUES (?, ?)").bind(await bootstrapClaimKey(codeHash), new Date(now).toISOString()),
+    db.prepare("INSERT INTO bootstrap_reset_grants (grant_key, expires_at) VALUES (?, ?)").bind(await setupResetGrantKey(grant), new Date(now + setupResetGrantMs).toISOString()),
+  ]);
+  return grant;
 }
 
 async function moduleJobEnabled(moduleId: string, env: Env): Promise<boolean> {
@@ -3700,6 +3779,10 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   try {
     if (binding && usage && request.method !== "OPTIONS") { const current = env; await ensureModulesReconciled(usage.database, binding, () => webUpdateMaintenance(current)); }
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !["/auth/local", "/auth/logout", "/auth/google/callback"].includes(url.pathname) && await webUpdateMaintenance(env)) return withCors(response({ error: "An installation update requires temporary write suspension. Retry after recovery or completion.", code: "update_maintenance" }, 503, { "retry-after": "30" }), request, env);
+    if (request.method === "POST" && Object.hasOwn(authRateLimits, url.pathname) && env.DB) {
+      const retryAfter = await consumeAuthRateLimit(env.DB, request, url.pathname, env.SESSION_KEY ?? env.BOOTSTRAP_CODE_HASH ?? "");
+      if (retryAfter) return withCors(response({ error: "Too many attempts. Wait a few minutes and try again.", code: "rate_limited" }, 429, { "retry-after": String(retryAfter) }), request, env);
+    }
     const moduleRoute = bundledModuleRegistry.routeOwner(url.pathname);
     if (request.method !== "OPTIONS" && moduleRoute) {
       const db = requireDatabase(env);
@@ -3721,7 +3804,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     const moduleRouteHandler = moduleRoute && request.method !== "OPTIONS" ? apiModules.get(moduleRoute.module.id)?.routes?.[moduleRoute.route.path] : undefined;
     let moduleResult: Response | undefined;
     if (request.method === "OPTIONS") result = new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS", "access-control-allow-headers": "authorization, content-type", "access-control-allow-credentials": "true" } });
-    else if (url.pathname === "/health" && request.method === "GET") result = response({ ok: true, service: "lancerlogin-api", mode: env.DB ? "ready" : "unconfigured", releaseVersion: env.RELEASE_VERSION ?? "development", modules: bundledModuleRegistry.modules.map((module) => module.id) });
+    else if (url.pathname === "/health" && request.method === "GET") result = response({ ok: true, service: "lancerlogin-api", mode: env.DB ? "ready" : "unconfigured", releaseVersion: env.RELEASE_VERSION ?? "development", modules: bundledModuleRegistry.modules.map((module) => module.id), deployment: env.DEPLOYMENT_MARKER ?? null });
     else if (url.pathname === "/setup/status" && request.method === "GET") result = await setupStatus(env);
     else if (url.pathname === "/setup/bootstrap" && request.method === "POST") result = await bootstrap(request, env);
     else if (url.pathname === "/admin/update-info" && request.method === "GET") result = await updateInfo(request, env);
@@ -3736,7 +3819,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (/^\/auth\/walkthroughs\/[^/]+$/.test(url.pathname) && ["GET", "PATCH"].includes(request.method)) result = await authWalkthrough(request, env, url.pathname.slice("/auth/walkthroughs/".length));
     else if (url.pathname === "/auth/preferences" && request.method === "PATCH") result = await authPreferences(request, env);
     else if (url.pathname === "/admin/preferences" && ["GET", "PUT"].includes(request.method)) result = await adminPreferences(request, env);
-    else if (url.pathname === "/auth/logout" && request.method === "POST") result = response({ ok: true }, 200, { "set-cookie": "lancerlogin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" });
+    else if (url.pathname === "/auth/logout" && request.method === "POST") result = await logout(request, env);
     else if (url.pathname === "/auth/google/start" && request.method === "GET") result = await googleStart(request, env);
     else if (url.pathname === "/auth/google/callback" && request.method === "GET") result = await googleCallback(request, env);
     else if (url.pathname === "/platform/modules" && request.method === "GET") result = await modulePlatform(request, env);
@@ -3915,9 +3998,12 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);
     else result = response({ error: "Not found" }, 404);
   } catch (error) {
-    const status = error instanceof HttpError || error instanceof WebUpdateError ? error.status : 500;
-    const detail = error instanceof HttpError ? error.details : env.APP_MODE === "unconfigured" && error instanceof Error ? [error.message] : undefined;
-    result = response({ error: error instanceof HttpError || error instanceof WebUpdateError ? error.message : "Request failed", details: detail, ...(error instanceof WebUpdateError ? { code: error.code } : {}) }, status);
+    const handled = error instanceof HttpError || error instanceof WebUpdateError;
+    const status = handled ? error.status : 500;
+    // Unexpected error text (D1, SQL or provider internals) stays in Worker logs; callers get only a correlation ID.
+    const errorId = handled ? undefined : crypto.randomUUID();
+    if (errorId) console.error(JSON.stringify({ event: "api_error", errorId, path: url.pathname, message: error instanceof Error ? error.message : String(error) }));
+    result = response({ error: handled ? error.message : "Request failed", details: error instanceof HttpError ? error.details : undefined, ...(error instanceof WebUpdateError ? { code: error.code } : error instanceof HttpError && error.code ? { code: error.code } : {}), ...(errorId ? { errorId } : {}) }, status);
   }
   if (privateModuleResponse(url.pathname)) {
     const headers = new Headers(result.headers); headers.set("cache-control", "no-store, private, max-age=0"); headers.set("pragma", "no-cache"); headers.set("expires", "0"); headers.set("x-robots-tag", "noindex, nofollow");
@@ -3930,6 +4016,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   if (await webUpdateMaintenance(env)) return;
   const db = requireDatabase(env);
   try { await reconcileInstalledModules(db); } catch { /* Reconciliation retries on the next scheduled pass. */ }
+  try { await pruneAuthProtection(db); } catch { /* Expired throttle rows are pruned on a later pass. */ }
   for (let pass = 0; pass < 8; pass += 1) { if (await webUpdateMaintenance(env)) return; const cleanup = await runModuleCleanup(db); if (cleanup.status !== "progress") break; }
   if (env.PLATFORM_SCHEDULER_MODE === "durable") return;
   if (controller.cron === "*/5 * * * *") {

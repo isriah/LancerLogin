@@ -4,7 +4,7 @@ This guide is for Administrators. Back up before a web update, bulk deletion, or
 
 ## Dashboard backups
 
-The dashboard's rejected-scan review list is an operational mirror of protected records retained on each kiosk. It is excluded from portable dashboard backups; review audits remain in audit history. Preserve kiosk state separately before recovery or replacement. Authorized kiosks periodically resend retained records, including reviewed status, but an installation restore revokes kiosk credentials and requires the documented pairing/recovery procedure. Do not assume a dashboard backup alone preserves every rejected scan.
+The dashboard's rejected-scan review list is an operational mirror of protected records retained on each kiosk. It is excluded from portable dashboard backups; review audits remain in audit history. Preserve kiosk state separately before recovery or replacement. Authorized kiosks send each retained record until the dashboard acknowledges it, then only send local review changes and check open records for dashboard reviews; records already reviewed in the cloud are not resent. An installation restore also revokes kiosk credentials and requires the documented pairing/recovery procedure. Do not assume a dashboard backup alone preserves every rejected scan.
 
 Open **Settings → Data**. Each category has separate download, restore, and typed-confirmation deletion controls.
 
@@ -54,7 +54,11 @@ Portable roster backups omit Discord role IDs. Restoring a roster keeps only exi
 
 If you restore meetings without their original roster backup, review audience labels before using attendance reports. Label assignments, attendance rules, and the recent window travel with the roster category, while each meeting's audience selection travels with the meetings category. Older backups without labels restore meetings as **All** and do not invent member labels or attendance rules.
 
+A meetings restore updates meetings that still exist by ID in place, so their live Google Calendar and Discord scheduled-event links survive and later syncs update the same external events instead of creating duplicates. These links are operational state of the running installation and are not part of the backup. Meetings absent from the backup are deleted with their links; their external events are left in place, and the restore response reports how many were detached as `recovery.detachedCalendarEvents`. Remove those events from the calendar or Discord server manually if they are no longer wanted.
+
 Operational web-update locks and recovery records are deliberately outside the dashboard category backups. They prevent an old restore from erasing an active deployment claim. Worker update credentials are secrets and are never in a backup.
+
+A dashboard restore is one all-or-nothing database transaction, limited to 150,000 records. Cloudflare D1 also limits how long a single transaction may run (about 30 seconds) and how much memory it may use. If a large backup exceeds those limits, the transaction is rolled back, nothing changes, and the restore returns HTTP 503 with an explanation. Restore one category at a time, or use the D1 restore workflow below for very large installations.
 
 Entire-installation restore validates table ownership, installation scope, module contracts, dependencies, lifecycle state, setup progress, Operator assignments, saved reports, and walkthrough progress before any destructive database statement runs. It then creates fresh local module authority instead of importing old epochs or leases.
 

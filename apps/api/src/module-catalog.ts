@@ -22,7 +22,8 @@ export type CatalogDefinition = {
   readonly migrationHead?: string | null;
 };
 type CatalogRow = { moduleId: string; definitionSha256: string; installed: number };
-export type ModuleReconciliation = { readonly changed: boolean; readonly failures: readonly { readonly moduleId: string; readonly message: string }[] };
+/** `unconfigured` means there was work to record but the installation does not exist yet (before first-Admin setup). */
+export type ModuleReconciliation = { readonly changed: boolean; readonly failures: readonly { readonly moduleId: string; readonly message: string }[]; readonly unconfigured?: true };
 type ReconcileOptions = {
   readonly migrations?: readonly ModuleMigrationPackage[];
   readonly sources?: Readonly<Record<string, { readonly source: string; readonly commit: string }>>;
@@ -69,7 +70,7 @@ export async function reconcileInstalledModules(db: D1Database, now = new Date()
   const retiredModules = extractedModules.filter((module) => !bundledModuleRegistry.get(module.id) && !recorded.has(module.id));
   if (!changedModules.length && !removed.length && !retiredModules.length) return { changed: false, failures: [] };
   const configured = await db.prepare("SELECT 1 AS configured FROM platform_module_administration WHERE installation_id=?").bind(installationId).first();
-  if (!configured) return { changed: false, failures: [] };
+  if (!configured) return { changed: false, failures: [], unconfigured: true };
 
   const timestamp = now.toISOString();
   const failures: { moduleId: string; message: string }[] = [];
@@ -110,9 +111,12 @@ const reconciliationRetryMs = 60_000;
 /**
  * Reconcile once per Worker isolate and database binding, before the first request is served. A deployment starts new
  * isolates, so a plugin's new migrations and definition are applied before its code handles a request, without waiting
- * for the scheduled pass. Skipped while an update holds maintenance; a failed attempt retries after a minute.
+ * for the scheduled pass. Skipped while an update holds maintenance; a failed attempt, including one in which a module's
+ * migrations failed and that module was left unrecorded, retries after a minute. Before
+ * first-Admin setup there is nothing to record, so the isolate keeps checking on later requests instead of waiting for
+ * the scheduled pass once the installation exists.
  */
-export function ensureModulesReconciled(db: D1Database, key: object, suspended: () => Promise<boolean>, now = () => Date.now()): Promise<void> {
+export function ensureModulesReconciled(db: D1Database, key: object, suspended: () => Promise<boolean>, now = () => Date.now(), reconcile: (db: D1Database) => Promise<ModuleReconciliation> = reconcileInstalledModules): Promise<void> {
   let state = isolateReconciliation.get(key);
   if (!state) isolateReconciliation.set(key, state = { done: false, retryAt: 0 });
   if (state.done) return Promise.resolve();
@@ -120,7 +124,12 @@ export function ensureModulesReconciled(db: D1Database, key: object, suspended: 
   if (now() < state.retryAt) return Promise.resolve();
   const current = state;
   current.pending = (async () => {
-    try { if (await suspended()) return; await reconcileInstalledModules(db); current.done = true; }
+    try {
+      if (await suspended()) return;
+      const result = await reconcile(db);
+      if (result.failures.length) current.retryAt = now() + reconciliationRetryMs;
+      else if (!result.unconfigured) current.done = true;
+    }
     catch { current.retryAt = now() + reconciliationRetryMs; }
     finally { current.pending = undefined; }
   })();

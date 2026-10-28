@@ -3,7 +3,7 @@ import { apiBaseUrl } from "./dashboard-api";
 import { readDashboardReleaseState, type DashboardReleaseState } from "./dashboard-release";
 import { useModalFocus } from "./modal-focus";
 import { WebUpdateCard } from "./web-update-card";
-import type { WebUpdateResponse } from "./web-update";
+import { diagnosticUrl, type WebUpdateResponse } from "./web-update";
 
 type Phase = "disabled" | "enabled" | "retained" | "deleting" | "deleted" | null;
 type Track = "stable" | "nightly";
@@ -112,7 +112,7 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
       <p id={`${id}-track-help`} className="field-help">Upgrade offers the newest published, immutable release on this track. Stable offers stable releases only; Nightly also offers beta and nightly prereleases.</p>
       {form.track === "nightly" && <p className="ui-status plugin-nightly-warning" data-tone="warning">{nightlyWarning}</p>}
       <div className="plugin-release-lookup"><button className="ui-button" type="button" disabled={busy || lookup.busy || !canLookup} onClick={() => void findRelease(form)}>Find newest release</button>
-        <p className="field-help" role="status" aria-live="polite">{lookupText}{offered?.url && <> <a href={offered.url} target="_blank" rel="noreferrer">Release notes</a></>}</p></div>
+        <p className="field-help" role="status" aria-live="polite">{lookupText}{diagnosticUrl(offered?.url) && <> <a href={diagnosticUrl(offered?.url)} target="_blank" rel="noreferrer">Release notes</a></>}</p></div>
       <label>Commit SHA<input className="ui-control" required value={form.commit} autoComplete="off" spellCheck={false} pattern="[0-9a-fA-F]{40}" aria-describedby={`${id}-commit-help`} data-modal-initial-focus={draft.action === "upgrade" ? "" : undefined} onChange={(event) => setForm({ ...form, commit: event.target.value })} /></label>
       <p id={`${id}-commit-help`} className="field-help">The full 40-character commit you reviewed. Branches, tags and shortened SHAs are not accepted.</p>
       <div className="module-actions"><button className="ui-button ui-button--primary primary-button" type="submit" disabled={busy}>{busy ? "Checking…" : "Review change"}</button><button className="ui-button" type="button" disabled={busy} onClick={onClose}>Cancel</button></div>

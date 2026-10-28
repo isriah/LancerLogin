@@ -38,7 +38,11 @@ export { createMeetingReferenceAccess, type MeetingReference, type MeetingRefere
 
 import type { ApiModuleContribution } from "../../../apps/api/src/module-contributions.ts";
 
-/** Identity helper that type-checks a module's Worker contribution. External modules receive no Worker environment. */
+/**
+ * Identity helper that type-checks a module's Worker contribution. External modules receive no Worker environment: Core
+ * passes them none, and composition refuses `cloudflare:` imports such as `cloudflare:workers`, which would expose it.
+ * Plugins are still fully trusted code; this keeps Core secrets out of reach by accident, not by sandboxing.
+ */
 export function defineApiModule<Environment = unknown>(contribution: ApiModuleContribution<Environment>): ApiModuleContribution<Environment> {
   return contribution;
 }

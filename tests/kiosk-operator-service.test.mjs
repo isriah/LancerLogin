@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID, randomBytes } from "node:crypto";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
+import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { for (let n = 0; n < 100; n++) { if (await check()) return; await wait(30); } assert.fail("Synthetic runtime condition did not become true"); }
@@ -163,9 +164,10 @@ test("a real kiosk synchronizes retained review evidence and applies acknowledge
   await until(() => f.reviewRequests.length === 1);
   assert.deepEqual(f.reviewRequests[0], [record]);
   await until(async () => (await (await runtime.request("/health")).json()).attendance.needsReview === 0);
-  const saved = JSON.parse(await readFile(join(f.root, "attendance-queue.json.outcomes.json"), "utf8"));
-  assert.equal(saved.rejected[0].reviewStatus, "reviewed");
-  assert.equal(saved.rejected[0].occurredAt, record.occurredAt);
+  // Read the durable state (snapshot plus journal) as a fresh process would.
+  const saved = await createFileQueue(join(f.root, "attendance-queue.json")).rejections();
+  assert.equal(saved[0].reviewStatus, "reviewed");
+  assert.equal(saved[0].occurredAt, record.occurredAt);
   assert.equal(f.attendance.length, 0);
 });
 
@@ -184,8 +186,7 @@ test("an older review API leaves attendance delivery active and reports review s
   assert.equal(health.cloudOnline, true);
   assert.equal(health.attendance.pending, 0);
   assert.equal(health.attendance.needsReview, 1);
-  const saved = JSON.parse(await readFile(join(f.root, "attendance-queue.json.outcomes.json"), "utf8"));
-  assert.deepEqual(saved.rejected, [record]);
+  assert.deepEqual(await createFileQueue(join(f.root, "attendance-queue.json")).rejections(), [record]);
 });
 
 test("a real kiosk pauses scans until the operator confirms the offline boot clock", { timeout: 15000 }, async t => {

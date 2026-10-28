@@ -1,18 +1,21 @@
 // Plugin sources for Core's own tests and test runners. Never used by installation builds or web updates.
 //
-// Official and test plugin pins name private https repositories. A test that composes or reads one uses, in order:
+// Official and test plugin pins name https repositories, public or private. A test that composes or reads one uses, in order:
 //   1. an explicit override for that module, LANCERLOGIN_<NAME>_PLUGIN_SOURCE and LANCERLOGIN_<NAME>_PLUGIN_COMMIT
 //      (NAME is OUTREACH for hour-tracking, otherwise the module ID in capitals), as a plugin repository's CI sets;
-//   2. the https source itself, when LANCERLOGIN_PLUGIN_TOKEN is set (read access to the plugin repository);
+//   2. the https source with LANCERLOGIN_PLUGIN_TOKEN, when it is set (read access to a private plugin repository);
 //   3. a local development checkout of the same repository that contains the pinned commit, found under
 //      LANCERLOGIN_PLUGIN_CHECKOUTS (directories separated by the platform path delimiter), <core>/../module-plugins or
-//      <core>/.local/module-plugins, and named after the repository (for example lancerlogin-outreach).
-// Otherwise the pin is unavailable and the reason says exactly what is missing, so callers can skip with it.
+//      <core>/.local/module-plugins, and named after the repository (for example lancerlogin-outreach);
+//   4. the https source fetched anonymously, which works for public plugin repositories such as the official ones.
+// Only an invalid or half-set pin is unavailable up front. A fetch that fails (a private repository without a token, or no
+// network) fails composition, and callers report that error with unreachablePinAdvice.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isolatedGitEnv } from "./git-env.mjs";
 
 export const coreRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const pluginTokenVariable = "LANCERLOGIN_PLUGIN_TOKEN";
@@ -31,7 +34,7 @@ export function pluginOverride(moduleId, env = process.env) {
 }
 
 const repositoryName = (source) => /\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(new URL(source).pathname)?.[1];
-const hasCommit = (directory, commit) => existsSync(join(directory, ".git")) && spawnSync("git", ["-C", directory, "cat-file", "-e", `${commit}^{commit}`], { stdio: "ignore" }).status === 0;
+const hasCommit = (directory, commit) => existsSync(join(directory, ".git")) && spawnSync("git", ["-C", directory, "cat-file", "-e", `${commit}^{commit}`], { stdio: "ignore", env: isolatedGitEnv() }).status === 0;
 
 /** Directories searched for local plugin checkouts. */
 export function localCheckoutDirectories(env = process.env, root = coreRoot) {
@@ -39,8 +42,8 @@ export function localCheckoutDirectories(env = process.env, root = coreRoot) {
 }
 
 /**
- * Resolve one pin for a test. Returns { pin, via } where pin.source may be a file:// URL (tests compose with
- * --test-allow-file-sources), or { reason } when the plugin cannot be reached.
+ * Resolve one pin for a test. Returns { pin, via } where via is "override", "file", "token", "local" or "anonymous" and
+ * pin.source may be a file:// URL (tests compose with --test-allow-file-sources), or { reason } when the pin is unusable.
  */
 export function resolveTestPin(pin, { env = process.env, root = coreRoot } = {}) {
   const override = pluginOverride(pin.id, env);
@@ -56,12 +59,19 @@ export function resolveTestPin(pin, { env = process.env, root = coreRoot } = {})
   if (url.protocol !== "https:") return { reason: `The ${pin.id} plugin source ${chosen.source} is neither https nor file` };
   if (env[pluginTokenVariable]) return { pin: chosen, via: "token" };
   const name = repositoryName(chosen.source);
-  const searched = localCheckoutDirectories(env, root);
-  for (const directory of searched) {
+  for (const directory of localCheckoutDirectories(env, root)) {
     const checkout = join(directory, name);
     if (hasCommit(checkout, chosen.commit)) return { pin: { ...chosen, source: pathToFileURL(checkout).href }, via: "local" };
   }
-  return { reason: `The ${pin.id} plugin is pinned to private ${chosen.source} at ${chosen.commit}. Set ${pluginTokenVariable} to a token with read access to that repository, or provide a local checkout named ${name} containing that commit in LANCERLOGIN_PLUGIN_CHECKOUTS or one of: ${searched.join(", ")}` };
+  // Public repositories need no token: composition fetches the pinned commit anonymously.
+  return { pin: chosen, via: "anonymous" };
+}
+
+/** What to add when an https pin could not be fetched: how to reach a private repository or work offline. */
+export function unreachablePinAdvice(pin, { env = process.env, root = coreRoot } = {}) {
+  let name;
+  try { name = repositoryName(pin.source); } catch { name = undefined; }
+  return `If ${pin.source} is private, set ${pluginTokenVariable} to a token with read access to it; otherwise provide a local checkout named ${name ?? pin.id} containing ${pin.commit} in LANCERLOGIN_PLUGIN_CHECKOUTS or one of: ${localCheckoutDirectories(env, root).join(", ")}`;
 }
 
 /** Core's official module list, parsed only as far as tests need. */

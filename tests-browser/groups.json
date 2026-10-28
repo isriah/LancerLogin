@@ -1,0 +1,325 @@
+{
+  "description": "Browser spec groups for the complete release gate. core: Core behaviour, run plugin-free. plugin: needs the Outreach or Carpool plugin and skips entirely without it, run composed only. integration: Core behaviour that changes when plugins exist, run plugin-free with core and again composed. seconds: approximate time for the file on a CI runner with one worker, used to balance the gate parts. See scripts/browser-groups.mjs; tests/browser-groups.test.mjs keeps this complete.",
+  "specs": {
+    "auth-setup-conformance.spec.ts": {
+      "group": "core",
+      "area": "Sign-in and first setup",
+      "seconds": 16
+    },
+    "beta5-meeting-calendar.spec.ts": {
+      "group": "integration",
+      "area": "Meetings with Outreach activities",
+      "seconds": 21
+    },
+    "carpool-groups.spec.ts": {
+      "group": "plugin",
+      "area": "Carpool plugin",
+      "seconds": 25
+    },
+    "carpool-locations.spec.ts": {
+      "group": "plugin",
+      "area": "Carpool plugin",
+      "seconds": 30
+    },
+    "carpool-meeting-links.spec.ts": {
+      "group": "plugin",
+      "area": "Carpool plugin",
+      "seconds": 11
+    },
+    "carpool-navigation.spec.ts": {
+      "group": "plugin",
+      "area": "Carpool plugin",
+      "seconds": 10
+    },
+    "carpool-people.spec.ts": {
+      "group": "plugin",
+      "area": "Carpool plugin",
+      "seconds": 14
+    },
+    "carpool-settings.spec.ts": {
+      "group": "plugin",
+      "area": "Carpool plugin",
+      "seconds": 7
+    },
+    "carpool-share.spec.ts": {
+      "group": "plugin",
+      "area": "Carpool plugin",
+      "seconds": 27
+    },
+    "carpool-trust.spec.ts": {
+      "group": "plugin",
+      "area": "Carpool plugin",
+      "seconds": 21
+    },
+    "carpool-workflow.spec.ts": {
+      "group": "plugin",
+      "area": "Carpool plugin",
+      "seconds": 20
+    },
+    "contest-bulk.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 19
+    },
+    "convergence-audit.spec.ts": {
+      "group": "core",
+      "area": "Dashboard shell and UI foundations",
+      "seconds": 41
+    },
+    "dashboard-layout-simulator.spec.ts": {
+      "group": "core",
+      "area": "Dashboard shell and UI foundations",
+      "seconds": 26
+    },
+    "dashboard-meeting-browser.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 25
+    },
+    "dashboard-mobile.spec.ts": {
+      "group": "core",
+      "area": "Dashboard shell and UI foundations",
+      "seconds": 32
+    },
+    "dashboard-resilience.spec.ts": {
+      "group": "integration",
+      "area": "Shell and startup",
+      "seconds": 9
+    },
+    "dashboard-smoke.spec.ts": {
+      "group": "core",
+      "area": "Dashboard shell and UI foundations",
+      "seconds": 31
+    },
+    "dashboard-startup.spec.ts": {
+      "group": "integration",
+      "area": "Shell and startup",
+      "seconds": 14
+    },
+    "dashboard-theme.spec.ts": {
+      "group": "core",
+      "area": "Dashboard shell and UI foundations",
+      "seconds": 7
+    },
+    "dashboard-walkthrough.spec.ts": {
+      "group": "core",
+      "area": "Walkthroughs",
+      "seconds": 34
+    },
+    "displaced-meeting-utilities.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 14
+    },
+    "fingerprint-reset.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 12
+    },
+    "kiosk-dashboard-enrollment.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 4
+    },
+    "kiosk-fingerprint-diagnostics.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 1
+    },
+    "kiosk-maintenance-touch.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 391
+    },
+    "kiosk-operator-presence.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 1
+    },
+    "kiosk-reassociation.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 9
+    },
+    "kiosk-smoke.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 46
+    },
+    "kiosks-conformance.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 64
+    },
+    "meeting-calendar-fixture.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 5
+    },
+    "meeting-controls.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 47
+    },
+    "meeting-deletion-undo.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 18
+    },
+    "meeting-detail.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 48
+    },
+    "meeting-weight-disclosure.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 14
+    },
+    "meeting-workspace-conformance.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 17
+    },
+    "member-detail.spec.ts": {
+      "group": "core",
+      "area": "Roster, members and reports",
+      "seconds": 14
+    },
+    "member-inactive-periods.spec.ts": {
+      "group": "core",
+      "area": "Roster, members and reports",
+      "seconds": 4
+    },
+    "mobile-polish-meetings-outreach.spec.ts": {
+      "group": "integration",
+      "area": "Meetings with Outreach activities",
+      "seconds": 8
+    },
+    "modular-reporting.spec.ts": {
+      "group": "plugin",
+      "area": "Reports with Outreach datasets",
+      "seconds": 24
+    },
+    "module-platform.spec.ts": {
+      "group": "integration",
+      "area": "Module navigation and setup",
+      "seconds": 6
+    },
+    "module-setup-finish-later.spec.ts": {
+      "group": "integration",
+      "area": "Module setup workspaces",
+      "seconds": 3
+    },
+    "module-slots.spec.ts": {
+      "group": "integration",
+      "area": "Module navigation and slots",
+      "seconds": 3
+    },
+    "onboarding-first-meeting.spec.ts": {
+      "group": "integration",
+      "area": "Module setup workspaces",
+      "seconds": 9
+    },
+    "outreach-activity-detail.spec.ts": {
+      "group": "plugin",
+      "area": "Outreach plugin",
+      "seconds": 14
+    },
+    "outreach-feedback.spec.ts": {
+      "group": "plugin",
+      "area": "Outreach plugin",
+      "seconds": 34
+    },
+    "outreach-public-privacy.spec.ts": {
+      "group": "plugin",
+      "area": "Outreach plugin",
+      "seconds": 6
+    },
+    "outreach-public-time-order.spec.ts": {
+      "group": "plugin",
+      "area": "Outreach plugin",
+      "seconds": 9
+    },
+    "outreach-settings-integration.spec.ts": {
+      "group": "plugin",
+      "area": "Outreach plugin",
+      "seconds": 8
+    },
+    "outreach-walkthrough.spec.ts": {
+      "group": "plugin",
+      "area": "Outreach plugin",
+      "seconds": 12
+    },
+    "outreach-workflow.spec.ts": {
+      "group": "plugin",
+      "area": "Outreach plugin",
+      "seconds": 21
+    },
+    "page-walkthroughs.spec.ts": {
+      "group": "core",
+      "area": "Walkthroughs",
+      "seconds": 50
+    },
+    "plugin-management.spec.ts": {
+      "group": "integration",
+      "area": "Plugin management, backup and apply",
+      "seconds": 13
+    },
+    "public-docs-conformance.spec.ts": {
+      "group": "core",
+      "area": "Public documentation",
+      "seconds": 18
+    },
+    "roster-baseline-request.spec.ts": {
+      "group": "core",
+      "area": "Roster, members and reports",
+      "seconds": 1
+    },
+    "roster-reporting-conformance.spec.ts": {
+      "group": "core",
+      "area": "Roster, members and reports",
+      "seconds": 132
+    },
+    "settings-conformance.spec.ts": {
+      "group": "integration",
+      "area": "Settings, modules, backup and restore",
+      "seconds": 106
+    },
+    "shell-conformance.spec.ts": {
+      "group": "integration",
+      "area": "Shell and navigation",
+      "seconds": 14
+    },
+    "ui-foundations.spec.ts": {
+      "group": "core",
+      "area": "Dashboard shell and UI foundations",
+      "seconds": 3
+    },
+    "update-channels.spec.ts": {
+      "group": "core",
+      "area": "Updates",
+      "seconds": 16
+    },
+    "update-notices.spec.ts": {
+      "group": "core",
+      "area": "Updates",
+      "seconds": 9
+    },
+    "updates-page.spec.ts": {
+      "group": "core",
+      "area": "Updates",
+      "seconds": 33
+    },
+    "visible-poll.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 4
+    },
+    "web-updates.spec.ts": {
+      "group": "core",
+      "area": "Updates",
+      "seconds": 61
+    }
+  }
+}

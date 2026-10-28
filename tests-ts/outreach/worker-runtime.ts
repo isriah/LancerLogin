@@ -3,7 +3,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import worker, { type Env } from "../../apps/api/src/index.ts";
-import { createSessionCodec, hashPassword } from "../../apps/api/src/runtime-security.ts";
+import { createSessionCodec, createSignedStateCodec, hashPassword } from "../../apps/api/src/runtime-security.ts";
 import { encryptIntegration } from "../../apps/api/src/integration-crypto.ts";
 import { defaultReportDefinition } from "../../apps/api/src/report-builder.ts";
 import { FakeDatabase, request, seedInstallationBackupFoundation, sessionCookie, sessionSecret, setupCode, setupCodeHash } from "../fixtures/worker-fake-database.ts";
@@ -94,9 +94,11 @@ test("local Worker bootstrap creates a salted Admin and ignores legacy telemetry
   const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Arts Club", timeZone: "America/New_York", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple", telemetryAccepted: true }), env);
   assert.equal(result.status, 201);
   assert.equal(database.batches.length, 1);
-  // Attendance and official Outreach registration; plugins register here and through reconciliation. Outreach, now a plugin,
-  // creates its default settings and labels on first enablement instead (tests-ts/outreach-fresh-installation.test.ts).
-  assert.equal(database.batches[0].length, 12);
+  // Attendance and official Outreach registration plus the setup-code claim; plugins register here and through
+  // reconciliation. Outreach, now a plugin, creates its default settings and labels on first enablement instead
+  // (tests-ts/outreach-fresh-installation.test.ts).
+  assert.equal(database.batches[0].length, 13);
+  assert.ok(database.batches[0].some((statement) => statement.sql.includes("INSERT OR IGNORE INTO bootstrap_code_claims")));
   assert.equal(database.batches[0].filter((statement) => statement.sql.includes("INSERT INTO hours_categories")).length, 0);
   assert.equal(database.batches[0].some((statement) => statement.sql.includes("INSERT INTO hours_publication_settings")), false);
   assert.deepEqual(database.batches[0].filter((statement) => statement.sql.includes("INSERT INTO platform_modules ")).map((statement) => statement.values), [["attendance", 1, 2], ["hour-tracking", 1, 1]]);
@@ -124,10 +126,19 @@ test("local login applies generic constant-work failure and temporary account lo
   const failed = await worker.fetch(request("/auth/local", { username: "director", password: "incorrect password" }), env);
   assert.equal(failed.status, 401);
   assert.equal((await failed.json() as { error: string }).error, "Invalid username or password");
-  const lock = database.calls.find((call) => call.sql.includes("UPDATE users SET failed_login_count"));
+  // The count is incremented in SQL, so concurrent failures cannot overwrite each other; the fifth one locks.
+  const lock = database.calls.find((call) => call.sql.includes("UPDATE users SET failed_login_count = failed_login_count + 1"));
   assert.ok(lock);
-  assert.equal(lock.values[0], 5);
-  assert.ok(Date.parse(String(lock.values[1])) > Date.now());
+  assert.match(lock.sql, /failed_login_count \+ 1 >= 5 THEN \? ELSE locked_until/);
+  assert.ok(Date.parse(String(lock.values[0])) > Date.now());
+  assert.equal(lock.values[1], "admin-1");
+
+  const lockedDatabase = new FakeDatabase();
+  lockedDatabase.user = { id: "admin-1", role: "admin", passwordHash: "scrypt$unused", lockedUntil: new Date(Date.now() + 60_000).toISOString() };
+  const locked = await worker.fetch(request("/auth/local", { username: "director", password: "correct horse battery staple" }), { ...env, DB: lockedDatabase } as unknown as Env);
+  assert.equal(locked.status, 401);
+  assert.equal((await locked.json() as { error: string }).error, "Invalid username or password");
+  assert.equal(lockedDatabase.calls.some((call) => call.sql.startsWith("UPDATE users")), false, "a locked account is refused before hashing or counting");
 
   const unknownDatabase = new FakeDatabase();
   const unknown = await worker.fetch(request("/auth/local", { username: "unknown", password: "incorrect password" }), { ...env, DB: unknownDatabase } as unknown as Env);
@@ -772,6 +783,7 @@ test("Operator can create meetings and reasoned attendance corrections", async (
   const meeting = await worker.fetch(request("/meetings", { title: "Rehearsal", startsAt: "2026-09-01T20:00:00.000Z", endsAt: "2026-09-01T22:00:00.000Z", required: true }, { cookie: operator }), env);
   assert.equal(meeting.status, 201);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("meeting.created")));
+  database.rows.set("AS meetingActive", { member: 1, meetingActive: 1 });
   const corrected = await worker.fetch(request("/attendance/corrections", { memberId: "member-1", meetingId: "meeting-1", disposition: "excused", reason: "School event" }, { cookie: operator }), env);
   assert.equal(corrected.status, 201);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("attendance.corrected")));
@@ -1766,7 +1778,8 @@ test("Google OAuth uses signed state and validates identity before issuing a ses
   assert.equal(location.toString().includes("client-secret"), false);
   assert.match(started.headers.get("set-cookie") ?? "", /Path=\/;/);
   const oauthCookie = started.headers.get("set-cookie")!.split(";")[0];
-  assert.ok(await createSessionCodec(sessionSecret).verify(state));
+  assert.ok(await createSignedStateCodec(sessionSecret, "google_sign_in").verify(state));
+  assert.equal(await createSessionCodec(sessionSecret).verify(state), undefined, "the sign-in state is never a session token");
 
   const originalFetch = globalThis.fetch;
   let calls = 0; let tokenRequestBody = "";

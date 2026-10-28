@@ -42,8 +42,8 @@ jobs:
       DATABASE_ID: ${{ vars.LANCERLOGIN_DATABASE_ID }}
       API_URL: ${{ vars.LANCERLOGIN_API_URL }}
       WEB_UPDATE_TOKEN_EXPIRES_AT: ${{ vars.WEB_UPDATE_TOKEN_EXPIRES_AT }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Secrets are not set here. Only the final step receives them, so the validation step and npm ci (with its
+      # dependency lifecycle scripts) never run with Cloudflare or plugin credentials in their environment.
       WRANGLER_SEND_METRICS: "false"
       WRANGLER_WRITE_LOGS: "false"
       WRANGLER_LOG_SANITIZE: "true"
@@ -55,8 +55,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24.21.0
+          node-version: 24.22.1
       - name: Validate fixed resources and official release before checkout
+        # No secrets: --validate checks the request, fixed resources and the public release only.
         run: node deployment-control/scripts/run-web-upgrade.mjs --validate
       - name: Check out the exact official release commit
         uses: actions/checkout@v7
@@ -70,6 +71,8 @@ jobs:
         run: npm ci --no-audit
       - name: Claim, checkpoint, upgrade and verify retained installation
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # The runner composes the release's official modules and this repository's lancerlogin.modules.json in preflight.
           # Optional read-only token for private plugin repositories in lancerlogin.modules.json.
           LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}

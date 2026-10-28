@@ -92,7 +92,7 @@ class Database {
   sqlite = new DatabaseSync(":memory:");
   pairingRace?: { reads: number; ready: Promise<void>; release(): void };
   constructor(legacySchema = false) {
-    for (const name of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql") && (!legacySchema || (Number.parseInt(name, 10) <= 53 || name.startsWith("0073_")))).sort()) {
+    for (const name of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql") && (!legacySchema || (Number.parseInt(name, 10) <= 53 || name.startsWith("0073_") || name.startsWith("0081_")))).sort()) {
       this.sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
     }
     this.sqlite.exec(`
@@ -223,7 +223,10 @@ test("real SQLite kiosks retain independent health, commands, scan bindings and 
   assert.equal((await call(`/kiosk/commands/${command.id}/result`, { success: true }, second.kioskToken)).status, 404);
   assert.equal((await call(`/kiosk/commands/${command.id}/result`, { success: true }, first.kioskToken)).status, 200);
   const event = { eventId: "synthetic-scan", memberId: "SYN-001", occurredAt: "2026-09-30T12:00:00Z", pairingId: first.pairingId };
-  assert.equal((await call("/kiosk/attendance", event, second.kioskToken)).status, 409);
+  const mismatch = await call("/kiosk/attendance", event, second.kioskToken);
+  assert.equal(mismatch.status, 409);
+  // Kiosks key permanent rejection on this stable code, not on the message text.
+  assert.equal((await mismatch.json() as { code?: string }).code, "pairing_mismatch");
   assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM attendance_events").get()?.n, 0);
   assert.equal((await call("/kiosk/attendance", event, first.kioskToken)).status, 202);
   assert.equal((await call("/kiosk/attendance", event, first.kioskToken)).status, 200);

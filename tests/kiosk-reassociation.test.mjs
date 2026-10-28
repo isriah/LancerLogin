@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,17 +11,37 @@ import { createIdentityScanner } from "../apps/kiosk/src/scanner.mjs";
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
 
+// One after hook runs every cleanup step, newest first, and a failed step never skips the rest. Node runs t.after hooks
+// in registration order and stops at the first one that throws. A separate rm hook registered before the runtime's kill
+// hooks could fail while a live kiosk service was still writing into the directory, skip the kills, and leave that
+// service running; its open pipes then kept this file's test process alive until the CI job timed out.
+function cleanupStack(t) {
+  const steps = [];
+  t.after(async () => {
+    const errors = [];
+    for (const step of steps.reverse()) { try { await step(); } catch (error) { errors.push(error); } }
+    if (errors.length) throw new AggregateError(errors, "Test cleanup failed");
+  });
+  return (step) => { steps.push(step); };
+}
+async function stopChild(child) {
+  if (child.exitCode === null && child.signalCode === null) { const exited = once(child, "exit"); child.kill("SIGKILL"); await exited; }
+  child.stdout?.destroy(); child.stderr?.destroy();
+}
+
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "lancerlogin-reassociate-test-"));
   await chmod(root, 0o700);
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const cleanup = cleanupStack(t);
+  // Registered first, so it runs last, after every kiosk service has exited.
+  cleanup(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const pinPath = join(root, "network-pin.json");
   await writeFile(pinPath, "synthetic-local-pin", { mode: 0o600 });
   await writeFile(join(root, "pairing.json"), "synthetic-old-pairing", { mode: 0o600 });
   await writeFile(join(root, "slot-mappings.json"), "synthetic-old-mapping", { mode: 0o600 });
   await mkdir(join(root, "fingerprint-sync"), { mode: 0o700 });
   await writeFile(join(root, "fingerprint-sync", "trust.json"), "synthetic-old-trust", { mode: 0o600 });
-  return { root, pinPath };
+  return { root, pinPath, cleanup };
 }
 
 test("unpair archives installation state privately and retains the local PIN", async t => {
@@ -42,6 +62,50 @@ test("unpair archives installation state privately and retains the local PIN", a
   assert.notEqual(next.archiveId, result.archiveId);
   assert.equal(await readFile(join(archive, "pairing.json"), "utf8"), "synthetic-old-pairing");
   assert.equal(await readFile(join(root, "reassociation", next.archiveId, "pairing.json"), "utf8"), "synthetic-new-pairing");
+});
+
+test("archived installations expire after 30 days and are all deleted on re-pair", async t => {
+  const { root, pinPath } = await fixture(t);
+  let clock = Date.now();
+  const store = createUnpairingStore(root, { pinPath, now: () => clock });
+  const first = await store.unpair();
+  await writeFile(join(root, "pairing.json"), "synthetic-second-pairing", { mode: 0o600 });
+  await mkdir(join(root, "fingerprint-vault"), { mode: 0o700 });
+  await writeFile(join(root, "fingerprint-vault", "templates.bin"), "synthetic-encrypted-template", { mode: 0o600 });
+  const second = await store.unpair();
+  const control = join(root, "reassociation");
+  const old = new Date(clock - 31 * 24 * 60 * 60_000);
+  await utimes(join(control, first.archiveId), old, old);
+  assert.deepEqual(await store.purgeArchives(), { purged: [first.archiveId] });
+  assert.deepEqual((await readdir(control)).sort(), [second.archiveId, "current.json"].sort());
+  assert.deepEqual(await store.inspect(), { recoveryPending: false });
+  // Nothing else is old enough yet; a clock set far behind never purges.
+  clock -= 365 * 24 * 60 * 60_000;
+  assert.deepEqual(await store.purgeArchives(), { purged: [] });
+  clock += 365 * 24 * 60 * 60_000;
+  assert.deepEqual(await store.purgeArchives({ all: true }), { purged: [second.archiveId] });
+  assert.deepEqual(await readdir(control), [], "fingerprint and credential archives are gone, with their journal");
+  assert.equal(await readFile(pinPath, "utf8"), "synthetic-local-pin");
+  // A later unpair still works after a purge.
+  await writeFile(join(root, "pairing.json"), "synthetic-third-pairing", { mode: 0o600 });
+  assert.ok((await createUnpairingStore(root, { pinPath }).unpair()).archiveId);
+});
+
+test("an interrupted purge is finished and an unfinished archive transaction is never purged", async t => {
+  const { root, pinPath } = await fixture(t);
+  let moves = 0;
+  const interrupted = createUnpairingStore(root, { pinPath, move: async (source, target) => { if (++moves === 2) throw new Error("synthetic interruption"); await rename(source, target); } });
+  await assert.rejects(interrupted.unpair(), /protected local-state recovery/);
+  const control = join(root, "reassociation");
+  const leftover = join(control, "purging-00000000-0000-4000-8000-000000000000");
+  await mkdir(join(leftover, "fingerprint-vault"), { recursive: true, mode: 0o700 });
+  await writeFile(join(leftover, "fingerprint-vault", "templates.bin"), "synthetic-half-deleted", { mode: 0o600 });
+  const store = createUnpairingStore(root, { pinPath });
+  assert.deepEqual(await store.purgeArchives({ all: true }), { purged: ["00000000-0000-4000-8000-000000000000"] });
+  assert.deepEqual(await store.inspect(), { recoveryPending: true }, "the in-progress archive is kept for recovery");
+  const result = await store.unpair();
+  assert.deepEqual(await store.inspect(), { recoveryPending: false });
+  assert.deepEqual(await store.purgeArchives({ all: true }), { purged: [result.archiveId] });
 });
 
 test("an interrupted archive resumes the same transaction without restoring old state", async t => {
@@ -106,7 +170,7 @@ test("scanner pause waits for the current scan to be durably queued", async () =
 });
 
 async function runtime(t, { pending = false } = {}) {
-  const { root, pinPath } = await fixture(t);
+  const { root, pinPath, cleanup } = await fixture(t);
   await createNetworkPinStore(pinPath).set("123456");
   const cloud = createServer(async (request, response) => {
     response.setHeader("content-type", "application/json");
@@ -115,7 +179,7 @@ async function runtime(t, { pending = false } = {}) {
     else response.end(JSON.stringify({ settings: {} }));
   });
   await new Promise(resolve => cloud.listen(0, "127.0.0.1", resolve));
-  t.after(() => { cloud.closeAllConnections(); cloud.close(); });
+  cleanup(() => { cloud.closeAllConnections(); cloud.close(); });
   const apiUrl = `http://127.0.0.1:${cloud.address().port}`;
   await writeFile(join(root, "pairing.json"), JSON.stringify({ apiUrl, kioskId: "synthetic-old-kiosk", pairingId: "synthetic-old-pairing", kioskToken: "synthetic-old-token", kioskName: "Old installation" }), { mode: 0o600 });
   await writeFile(join(root, "roster-cache.json"), JSON.stringify({ version: 1, members: [{ memberId: "synthetic-old-member" }] }), { mode: 0o600 });
@@ -125,7 +189,9 @@ async function runtime(t, { pending = false } = {}) {
   for (const [key, name] of Object.entries({ CONFIG: "pairing.json", NETWORK_PIN: "network-pin.json", QUEUE: "attendance-queue.json", MAPPINGS: "slot-mappings.json", BRANDING: "branding.json", AUTHENTICATION: "authentication.json", CREDENTIAL_MAPPINGS: "credential-mappings.json", ROSTER_CACHE: "roster-cache.json", FINGERPRINT_SYNC: "fingerprint-sync", FINGERPRINT_VAULT: "fingerprint-vault", FINGERPRINT_RESET: "fingerprint-reset", FINGERPRINT_REVIEW: "fingerprint-review" })) env[`LANCERLOGIN_${key}`] = join(root, name);
   async function start() {
     const child = spawn(process.execPath, ["--input-type=module", "--eval", `import { server } from ${JSON.stringify(new URL("../apps/kiosk/src/service.mjs", import.meta.url).href)}; server.listen(0,"127.0.0.1",()=>console.log(server.address().port));`], { env, stdio: ["ignore", "pipe", "pipe"] });
-    t.after(() => { if (child.exitCode === null) child.kill(); });
+    cleanup(() => stopChild(child));
+    // Drain stderr so the service can never block on a full pipe (pipe writes are synchronous on Linux).
+    child.stderr.resume();
     const port = await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error("Runtime startup timed out")), 5000); child.stdout.once("data", data => { clearTimeout(timer); resolve(Number(data.toString().trim())); }); child.once("exit", code => { clearTimeout(timer); reject(new Error(`Runtime exited before startup: ${code}`)); }); });
     const url = `http://127.0.0.1:${port}`;
     const request = (path, method = "GET", input, headers = {}) => fetch(url + path, { method, ...(input ? { body: JSON.stringify(input) } : {}), headers: { "content-type": "application/json", ...headers }, signal: AbortSignal.timeout(10000) });

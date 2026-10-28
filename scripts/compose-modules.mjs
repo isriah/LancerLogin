@@ -15,8 +15,12 @@
 //
 // Allowed sources: lancerlogin.plugin-sources.json beside the selection file, when present, limits the sources the
 // selection may name, with the Worker's rules. Core's official pins are not checked. An invalid file refuses composition.
+// LANCERLOGIN_PLUGIN_TOKEN is sent only to github.com and to hosts that file lists.
+//
+// Trust: selected plugins are fully trusted code. Inspection imports plugin code as the same operating system user as
+// this process, so the environment filtering here keeps credentials out of child environments but is not a sandbox.
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,9 +177,10 @@ export function validatePluginPackage(pkg, { moduleId, pluginRoot, coreVersion }
   return { moduleId, contract: field.contract, core: field.core, tablePrefix, entries, migrations, adoptedCoreMigrations: adopted };
 }
 
-// Plugin source scanning. Plugins import only their own files, their declared dependencies, Node or Cloudflare
-// built-ins and the module SDK. Anything reaching into Core is refused. This is a development guard for trusted
-// code, not a sandbox.
+// Plugin source scanning. Plugins import only their own files, their declared dependencies, Node built-ins and the
+// module SDK. Anything reaching into Core is refused, and so are Cloudflare runtime modules: cloudflare:workers exposes the
+// Worker environment, which Core withholds from external modules. This is a development guard for trusted code, not a
+// sandbox.
 const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 /**
  * Blank comments while keeping every position, and mark the interior of single- and double-quoted strings, so text such
@@ -218,9 +223,15 @@ export function importSpecifiers(source) {
   return found;
 }
 
-export function checkImportSpecifier(specifier, { file, pluginRoot, dependencies }) {
+/**
+ * Check one import. `dependencies` are the packages the file may import. For a file that composition bundles (reachable
+ * from an entry), these are only runtime, optional and peer dependencies; `developmentDependencies`, when given, are the
+ * packages that only the plugin's own tests and tools may import, and naming one gives a specific error.
+ */
+export function checkImportSpecifier(specifier, { file, pluginRoot, dependencies, developmentDependencies = new Set() }) {
   const where = `${posixPath(relative(pluginRoot, file))} imports ${JSON.stringify(specifier)}`;
-  if (specifier.startsWith("node:") || specifier.startsWith("cloudflare:")) return;
+  if (specifier.startsWith("cloudflare:")) fail(`${where}: Cloudflare runtime modules are not available to plugins, because cloudflare:workers exposes the Worker environment and its secrets; use the services and settings the module SDK provides`);
+  if (specifier.startsWith("node:")) return;
   if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(specifier) || specifier.startsWith("/") || specifier.includes("\\") || specifier.startsWith("#")) fail(`${where}: absolute, URL and package-internal (#) specifiers are not allowed`);
   if (specifier === "." || specifier === ".." || specifier.startsWith("./") || specifier.startsWith("../")) {
     if (!inside(pluginRoot, resolve(dirname(file), specifier))) fail(`${where}: relative imports must stay inside the plugin`);
@@ -230,7 +241,17 @@ export function checkImportSpecifier(specifier, { file, pluginRoot, dependencies
   const packageName = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
   if (packageName === moduleSdkPackageName) return;
   if (packageName.startsWith("@lancerlogin/")) fail(`${where}: Core packages are internal; use ${moduleSdkPackageName}`);
-  if (!dependencies.has(packageName)) fail(`${where}: ${packageName} is not a declared dependency of the plugin`);
+  if (dependencies.has(packageName)) return;
+  if (developmentDependencies.has(packageName)) fail(`${where}: ${packageName} is only a devDependency, but this file is part of the composed module; declare it in dependencies with a lockfile, or as a peer dependency when Core provides it`);
+  fail(`${where}: ${packageName} is not a declared dependency of the plugin`);
+}
+
+/** Resolve a relative import to a plugin source file, as the bundler would, or undefined for non-source files such as CSS or SQL. */
+function resolveSourceImport(file, specifier) {
+  const base = resolve(dirname(file), specifier.replace(/[?#].*$/, ""));
+  const swapped = { ".js": [".ts", ".tsx"], ".jsx": [".tsx"], ".mjs": [".mts"], ".cjs": [".cts"] }[extname(base)] ?? [];
+  const candidates = [base, ...swapped.map((extension) => base.slice(0, -extname(base).length) + extension), ...[...sourceExtensions].map((extension) => `${base}${extension}`), ...[...sourceExtensions].map((extension) => join(base, `index${extension}`))];
+  return candidates.find((candidate) => sourceExtensions.has(extname(candidate)) && existsSync(candidate) && statSync(candidate).isFile());
 }
 
 async function walkPlugin(pluginRoot, directory = pluginRoot, files = []) {
@@ -245,16 +266,47 @@ async function walkPlugin(pluginRoot, directory = pluginRoot, files = []) {
   return files;
 }
 
-export async function scanPluginSources(pluginRoot, pkg) {
-  const dependencies = new Set(["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"].flatMap((key) => isObject(pkg[key]) ? Object.keys(pkg[key]) : []));
+const declaredPackages = (pkg, keys) => new Set(keys.flatMap((key) => isObject(pkg[key]) ? Object.keys(pkg[key]) : []));
+/** Package fields a plugin may use in composed code: the packages composition installs or Core provides as peers. */
+export const runtimeDependencyFields = Object.freeze(["dependencies", "optionalDependencies", "peerDependencies"]);
+
+/**
+ * Scan every plugin source file. Files reachable from `entries` (absolute entry paths) through relative imports are
+ * composed into the build, so they may import only runtime, optional and peer dependencies: development dependencies are
+ * never installed, and would otherwise resolve to whatever version Core happens to have, without the peer range check.
+ * Other files, such as the plugin's own tests and release scripts, may also import development dependencies. Without
+ * `entries`, every file is treated as composed. Returns the composed files, relative to the plugin root.
+ */
+export async function scanPluginSources(pluginRoot, pkg, entries) {
+  const runtime = declaredPackages(pkg, runtimeDependencyFields);
+  const development = declaredPackages(pkg, ["devDependencies"]);
+  const allDeclared = new Set([...runtime, ...development]);
+  const scanned = new Map();
   for (const file of await walkPlugin(pluginRoot)) {
     const name = file.slice(pluginRoot.length + 1);
     if (/(^|[\\/])(tsconfig[^\\/]*|jsconfig)\.json$/.test(name) && /"(paths|baseUrl|rootDirs)"\s*:/.test(await readFile(file, "utf8"))) fail(`Plugin ${posixPath(name)} must not remap module resolution (paths, baseUrl or rootDirs)`);
     if (!sourceExtensions.has(extname(file))) continue;
     let specifiers;
     try { specifiers = importSpecifiers(await readFile(file, "utf8")); } catch (error) { fail(`${posixPath(name)}: ${error.message}`); }
-    for (const specifier of specifiers) checkImportSpecifier(specifier, { file, pluginRoot, dependencies });
+    scanned.set(resolve(file), specifiers);
   }
+  const composed = new Set();
+  const pending = entries ? [...entries].map((entry) => resolve(entry)) : [...scanned.keys()];
+  while (pending.length) {
+    const file = pending.pop();
+    if (composed.has(file) || !scanned.has(file)) continue;
+    composed.add(file);
+    for (const specifier of scanned.get(file)) {
+      if (!specifier.startsWith(".")) continue;
+      const target = resolveSourceImport(file, specifier);
+      if (target && inside(pluginRoot, target)) pending.push(resolve(target));
+    }
+  }
+  for (const [file, specifiers] of scanned) {
+    const options = composed.has(file) ? { dependencies: runtime, developmentDependencies: development } : { dependencies: allDeclared };
+    for (const specifier of specifiers) checkImportSpecifier(specifier, { file, pluginRoot, ...options });
+  }
+  return { composedFiles: [...composed].map((file) => posixPath(relative(pluginRoot, file))).sort() };
 }
 
 // External API routes live under the module's own namespace so they cannot shadow Core or another module.
@@ -341,6 +393,17 @@ export async function validateModuleSet(firstParty, externals) {
   return registry;
 }
 
+/**
+ * Names that are never passed into composition: Cloudflare, GitHub and Actions variables and anything that looks like a
+ * credential. LANCERLOGIN_PLUGIN_TOKEN is the one exception, and it reaches only git, as a host-scoped header.
+ */
+const credentialName = /(CLOUDFLARE|TOKEN|SECRET|PASSW|CREDENTIAL|AUTH|PRIVATE|COOKIE|SESSION|_KEY$|_KEY_|^KEY$|_CODE$|^GITHUB_|^ACTIONS_|^RUNNER_)/i;
+
+/** The environment composition may use: the caller's environment without credentials, keeping only the plugin token. */
+export function compositionEnvironment(env) {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => name === pluginTokenVariable || !credentialName.test(name)));
+}
+
 // Child processes get only what they need. Deployment credentials in this process's environment stay here.
 function minimalEnvironment(env) {
   const keep = ["PATH", "PATHEXT", "SystemRoot", "ComSpec", "windir", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"];
@@ -349,12 +412,32 @@ function minimalEnvironment(env) {
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => typeof value === "string" && allowed.has(key.toUpperCase())));
 }
 
-/** Git environment for one source. A private-repository token travels only as a transient, host-scoped header. */
-export function gitEnvironment(env, source) {
+/** Hosts that receive LANCERLOGIN_PLUGIN_TOKEN without being listed in lancerlogin.plugin-sources.json. */
+export const defaultPluginTokenHosts = Object.freeze(["github.com"]);
+
+/**
+ * The hosts that may receive LANCERLOGIN_PLUGIN_TOKEN: github.com, plus every host an installation lists in
+ * lancerlogin.plugin-sources.json (the text of that file, or undefined without it). The dashboard cannot edit that file,
+ * so a selection that names some other host is fetched anonymously and never receives the token.
+ */
+export function pluginTokenHosts(allowlistText) {
+  const hosts = new Set(defaultPluginTokenHosts);
+  if (allowlistText !== undefined) {
+    const allowlist = parseAllowlist(allowlistText);
+    if (allowlist.state === "configured") for (const entry of allowlist.sources) hosts.add(entry.host);
+  }
+  return hosts;
+}
+
+/**
+ * Git environment for one source. A private-repository token travels only as a transient, host-scoped header, and only
+ * to a host in `tokenHosts` (github.com by default).
+ */
+export function gitEnvironment(env, source, { tokenHosts = new Set(defaultPluginTokenHosts) } = {}) {
   const result = { ...minimalEnvironment(env), GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" };
   const token = env[pluginTokenVariable];
   const url = new URL(source);
-  if (token && url.protocol === "https:") {
+  if (token && url.protocol === "https:" && tokenHosts.has(url.hostname.toLowerCase())) {
     if (!/^[\x21-\x7e]{1,1024}$/.test(token)) fail(`${pluginTokenVariable} contains unsupported characters`);
     Object.assign(result, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `http.${url.origin}/.extraHeader`, GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}` });
   }
@@ -381,8 +464,8 @@ export function runCommand(command, args, { cwd, env, timeout = 300_000, redactF
 }
 
 /** Fetch exactly the pinned commit into an empty directory with no hooks, templates or submodules. */
-export async function fetchPinnedPlugin({ source, commit, directory, env, allowFileSources, run = runCommand }) {
-  const gitEnv = gitEnvironment(env, source);
+export async function fetchPinnedPlugin({ source, commit, directory, env, allowFileSources, tokenHosts, run = runCommand }) {
+  const gitEnv = gitEnvironment(env, source, { tokenHosts });
   const protocols = ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always", ...allowFileSources ? ["-c", "protocol.file.allow=always"] : []];
   const options = { env: gitEnv, redactFrom: env };
   await run("git", ["init", "--quiet", "--template=", directory], { ...options, cwd: dirname(directory) });
@@ -472,10 +555,19 @@ export function checkPeerDependencies(pkg, moduleId, provided) {
   }
 }
 
+/**
+ * The inspection child runs plugin code, which needs no network, so it does not get proxy settings either (a proxy URL can
+ * carry credentials). This keeps secrets out of the child's environment; it is not a sandbox. The child runs as the same
+ * operating system user as this process and its parent, so a plugin is fully trusted code.
+ */
+export function inspectionEnvironment(env) {
+  return Object.fromEntries(Object.entries(minimalEnvironment(env)).filter(([name]) => !/_PROXY$/i.test(name)));
+}
+
 /** Import the manifest and API entries in a child with a minimal environment and read back their declarations. */
 export async function inspectPlugin({ pluginRoot, entries, env, run = runCommand }) {
   const script = join(coreRoot, "scripts/inspect-module-plugin.mjs");
-  const { stdout } = await run(process.execPath, ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", script, entries.manifest, entries.api], { cwd: pluginRoot, env: minimalEnvironment(env), timeout: 60_000 });
+  const { stdout } = await run(process.execPath, ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", script, entries.manifest, entries.api], { cwd: pluginRoot, env: inspectionEnvironment(env), timeout: 60_000 });
   try { return JSON.parse(stdout); } catch { fail("Plugin inspection returned invalid output"); }
 }
 
@@ -576,14 +668,18 @@ export async function composeModules(options = {}) {
   // null means there is no selection file: compose the official modules alone.
   const selectionPath = options.selectionPath === null ? undefined : resolve(options.selectionPath ?? join(root, selectionFileName));
   const workDirectory = resolve(options.workDirectory ?? join(outputRoot, defaultWorkDirectory));
-  const env = options.env ?? process.env; const log = options.log ?? ((line) => console.log(line));
+  // Whatever the caller passes, composition and its children never receive deployment credentials.
+  const env = compositionEnvironment(options.env ?? process.env); const log = options.log ?? ((line) => console.log(line));
   const allowFileSources = options.allowFileSources === true;
   if (inside(workDirectory, outputRoot) || inside(workDirectory, root)) fail("The plugin work directory must be a dedicated subdirectory");
 
   const official = options.officialModules ? parseSelectionFile(await readFile(resolve(options.officialModulesPath ?? join(root, officialModulesFile)), "utf8"), { allowFileSources, name: "official-modules.json", official: true }) : undefined;
   const selected = selectionPath && existsSync(selectionPath) ? parseSelectionFile(await readFile(selectionPath, "utf8"), { allowFileSources }) : undefined;
   // The allowlist sits beside the selection file in the private deployment repository; without it any source is allowed.
-  if (selectionPath) enforceSourceAllowlist(selected, await readAllowlistText(join(dirname(selectionPath), allowlistFileName)), log);
+  // It also names the hosts, besides github.com, that may receive the plugin token.
+  const allowlistText = selectionPath ? await readAllowlistText(join(dirname(selectionPath), allowlistFileName)) : undefined;
+  if (selectionPath) enforceSourceAllowlist(selected, allowlistText, log);
+  const tokenHosts = pluginTokenHosts(allowlistText);
   if (!selected && !official?.modules.length) {
     log(`No ${selectionFileName} found${official ? " and no official modules are pinned" : ""}; composing first-party modules only. Generated module files were left unchanged.`);
     for (const kind of ["manifests", "api"]) if (await normalized(join(outputRoot, generatedFiles[kind].path)) !== defaultGeneratedContent(kind)) log(`${generatedFiles[kind].path} is not the committed default; run npm run compose:modules -- --restore`);
@@ -604,12 +700,12 @@ export async function composeModules(options = {}) {
     const pluginRoot = join(workDirectory, entry.id);
     log(`Fetching module ${entry.id} at ${entry.commit}`);
     await rm(pluginRoot, { recursive: true, force: true });
-    await fetchPinnedPlugin({ source: entry.source, commit: entry.commit, directory: pluginRoot, env, allowFileSources, run: options.runCommand });
+    await fetchPinnedPlugin({ source: entry.source, commit: entry.commit, directory: pluginRoot, env, allowFileSources, tokenHosts, run: options.runCommand });
     let pkg;
     try { pkg = JSON.parse(await readFile(join(pluginRoot, "package.json"), "utf8")); } catch { fail(`Module ${entry.id} has no readable package.json at its repository root`); }
     const plugin = validatePluginPackage(pkg, { moduleId: entry.id, pluginRoot, coreVersion });
     for (const [name, path] of Object.entries(plugin.entries)) if (!existsSync(path)) fail(`Module ${entry.id} entry ${name} does not exist`);
-    await scanPluginSources(pluginRoot, pkg);
+    await scanPluginSources(pluginRoot, pkg, Object.values(plugin.entries));
     checkPeerDependencies(pkg, entry.id, providedPackages);
     await installPluginDependencies({ pluginRoot, pkg, env, run: options.installCommand ?? options.runCommand });
     const inspected = await inspectPlugin({ pluginRoot, entries: plugin.entries, env, run: options.runCommand });
@@ -676,8 +772,7 @@ async function main() {
     return;
   }
   // Plugin fetching and installation never see deployment credentials; only the optional plugin token passes.
-  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name === pluginTokenVariable || !/(CLOUDFLARE|TOKEN|SECRET|PASSWORD|_KEY$|_CODE$|^GITHUB_)/i.test(name)));
-  await composeModules({ ...options, env });
+  await composeModules({ ...options, env: compositionEnvironment(process.env) });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -1,5 +1,6 @@
 polkit.addRule(function(action, subject) {
-  if (subject.user === "lancerlogin" && action.id === "org.freedesktop.systemd1.manage-units" && action.lookup("unit") === "lancerlogin-update.service") {
+  // The kiosk service may only start the fixed update unit. Stopping or restarting it could interrupt an install.
+  if (subject.user === "lancerlogin" && action.id === "org.freedesktop.systemd1.manage-units" && action.lookup("unit") === "lancerlogin-update.service" && action.lookup("verb") === "start") {
     return polkit.Result.YES;
   }
 });

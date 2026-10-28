@@ -4,13 +4,15 @@ LancerLogin stores organization configuration, roster, meeting, attendance, audi
 
 ## Kiosk identity and attendance data
 
-Retained rejected scans also synchronize to the kiosk's existing paired installation for Administrator review. This includes member and event IDs, recorded time, rejection reason, optional meeting/pairing references, and clock-verification evidence. It does not include biometric data or raw credentials. The kiosk keeps its original protected records; dashboard review adds an audit entry and synchronizes reviewed status back to the device. Recorded device time can be unverified and is not silently converted into attendance.
+Retained rejected scans also synchronize to the kiosk's existing paired installation for Administrator review. This includes member and event IDs, recorded time, rejection reason, optional meeting/pairing references, and clock-verification evidence. It does not include biometric data or raw credentials. The kiosk keeps its original protected records until the dashboard has acknowledged them, then removes them locally after 30 days (or earlier, oldest first, beyond 1,000 acknowledged records); dashboard review adds an audit entry and synchronizes reviewed status back to the device. Recorded device time can be unverified and is not silently converted into attendance.
 
 Fingerprint templates remain in the attached R503 sensor by default. Optional cloud storage changes this boundary as described below. LancerLogin does not capture or upload raw fingerprint images. RFID, NFC, and QR values are transformed by HMAC-SHA256 with a kiosk-local owner-only secret; only the keyed digest and member mapping are retained locally. Raw badge and QR values, local digests, and the transform secret are not sent to the Worker, stored in D1, logged, placed in fixtures, or included in portable dashboard backups.
 
 Member ID entry is checked against an owner-only local active-roster cache. Badge and QR mappings also require the mapped member to remain active. The kiosk sends only the resolved member ID and operational attendance fields through the existing queue. Local queued attendance events are retained until they can be delivered or handled through the documented recovery process.
 
 Server-side retirement or Attendance disablement does not remotely erase local mappings or sensor templates. Authorized staff must use the kiosk's PIN-protected **Authentication maintenance** page to remove local mappings before a device is repurposed or decommissioned.
+
+Unpairing archives the previous installation's local state (credential, roster cache, mappings, attendance history and fingerprint sharing state) in owner-only storage on the kiosk. The kiosk deletes those archives when it is paired again and 30 days after unpairing. Reader templates are not part of the archive and stay on the sensor. File deletion on flash storage does not guarantee physical erasure of the card.
 
 ### Retired peer fingerprint sharing
 
@@ -35,6 +37,8 @@ Members re-enroll through the kiosk's PIN-protected Authentication maintenance p
 Resetting all fingerprint mappings deletes live cloud copies, disables sharing, and requests removal of fingerprint member-to-slot associations on all currently active paired kiosks. It retains reader templates and unrelated roster, attendance, pairing and authentication data. Offline devices retain their old associations until reconnect and acknowledgement. The dashboard lists this pending state. Reset is not remote sensor erasure and does not remove copies from historical backups.
 
 ## Dashboard and integrations
+
+To slow password and setup-code guessing, local sign-in, first-Admin setup and kiosk pairing count attempts per client network address. D1 stores only a keyed hash of the route and address, a window start and a count, never the address itself, and the scheduled pass deletes these rows after a day.
 
 ### Public Outreach forms
 

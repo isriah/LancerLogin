@@ -83,22 +83,57 @@ export async function sendKioskEnrollmentProgress(config, sessionId, progress, {
   return value.session;
 }
 
+// Reasons the API uses to reject a scan on its merits. Only these stop delivery;
+// the scan is then retained locally for review. Anything else (a bare 404 from a
+// misrouted deploy or proxy, 405, 410, 413, an HTML error page) is treated as
+// transient, so the scan stays queued and is retried with backoff.
+export const permanentScanRejections = new Set(["roster_inactive", "no_eligible_meeting", "attendance_complete", "participation_not_started", "pairing_mismatch", "scan_window_closed", "invalid_scan"]);
+
+// Older APIs send no code. Recognize only their exact semantic messages.
+function legacyRejectionCode(status, error) {
+  if (status === 404 && /(?:fingerprint|identity) is not linked to an active roster member/i.test(error)) return "roster_inactive";
+  if (status === 409 && /No meeting is accepting/i.test(error)) return "no_eligible_meeting";
+  if (status === 409 && /already complete/i.test(error)) return "attendance_complete";
+  if (status === 409 && /begins on/i.test(error)) return "participation_not_started";
+  if (status === 409 && /different kiosk pairing/i.test(error)) return "pairing_mismatch";
+  if (status === 409 && /(?:meeting has not started|Attendance is closed for this meeting)/i.test(error)) return "scan_window_closed";
+  if (status === 400 && /eventId, memberId, and a valid occurredAt timestamp are required/i.test(error)) return "invalid_scan";
+  return undefined;
+}
+
+export class TransientDeliveryError extends Error {
+  constructor(status, message) { super(message || `LancerLogin API returned ${status}; the scan stays queued`); this.status = status; this.transient = true; }
+}
+
+// Unexpected HTTP rejections (not plain connectivity loss) pause replay with
+// capped exponential backoff so a misrouted API is not hammered by every scan.
+export function createDeliveryBackoff({ now = Date.now, baseMs = 30_000, maxMs = 15 * 60_000 } = {}) {
+  let failures = 0, until = 0;
+  return {
+    blocked: () => now() < until,
+    retryAt: () => until > now() ? until : null,
+    succeeded() { failures = 0; until = 0; },
+    failed(error) {
+      if (!error?.transient) return;
+      failures = Math.min(failures + 1, 32);
+      until = now() + Math.min(maxMs, baseMs * 2 ** (failures - 1));
+    },
+  };
+}
+
 export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) {
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/attendance`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
     body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt, ...(event.pairingId ? { pairingId: event.pairingId } : {}) }),
   });
-  if (response.status >= 400 && response.status < 500 && ![401, 403, 408, 425, 429].includes(response.status)) {
-    const body = await response.json().catch(() => ({}));
-    const error = typeof body.error === "string" ? body.error : "The scan was not accepted";
-    const code = response.status === 404 && /(?:fingerprint|identity) is not linked to an active roster member/i.test(error) ? "roster_inactive"
-      : response.status === 409 && /No meeting is accepting/i.test(error) ? "no_eligible_meeting"
-      : response.status === 409 && /already complete/i.test(error) ? "attendance_complete"
-      : response.status === 409 && /begins on/i.test(error) ? "participation_not_started"
-      : response.status === 409 && /different kiosk pairing/i.test(error) ? "pairing_mismatch"
-      : response.status === 400 ? "invalid_scan" : `http_${response.status}`;
-    return { accepted: false, rejected: true, status: response.status, code, error };
+  if (response.status >= 400 && response.status < 500) {
+    const contentType = response.headers.get("content-type") ?? "";
+    const body = /^application\/json(?:\s*;|\s*$)/i.test(contentType) ? await response.json().catch(() => ({})) : (await response.body?.cancel(), {});
+    const error = typeof body?.error === "string" ? body.error.slice(0, 300) : "";
+    const code = typeof body?.code === "string" && permanentScanRejections.has(body.code) ? body.code : legacyRejectionCode(response.status, error);
+    if (code) return { accepted: false, rejected: true, status: response.status, code, error };
+    throw new TransientDeliveryError(response.status, error);
   }
   const result = await parseResponse(response);
   if (result?.eventId !== event.eventId || (result.accepted !== true && result.duplicate !== true)) throw new Error("The attendance response did not confirm this scan");

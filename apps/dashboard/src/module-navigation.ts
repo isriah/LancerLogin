@@ -1,40 +1,51 @@
 import { useEffect, useState } from "react";
-import type { ModulePlatformSnapshot, ModuleSnapshotItem } from "../../../packages/shared/src/module-platform.ts";
-import { api } from "./dashboard-api";
+import type { ModuleSnapshotItem } from "../../../packages/shared/src/module-platform.ts";
+import { api, ApiError } from "./dashboard-api";
 import { readModuleSnapshot } from "./module-client";
+import { moduleFailureForStatus, moduleRefreshIntervalMs, nextModuleAccess, type ModuleAccessState, type ModuleNavigationResult } from "./module-access";
 
-export type ModuleNavigationResult = { receivedAt: number } & ({ snapshot: ModulePlatformSnapshot; error?: false } | { snapshot?: undefined; error: true });
+export type { ModuleAccessFailure, ModuleNavigationResult } from "./module-access";
 
 export async function loadModuleNavigation(): Promise<ModuleNavigationResult> {
-  try { return { snapshot: readModuleSnapshot(await api<unknown>("/platform/modules")), receivedAt: Date.now() }; }
-  catch { return { error: true, receivedAt: Date.now() }; }
+  let value: unknown;
+  try { value = await api<unknown>("/platform/modules"); }
+  catch (error) { return { error: true, reason: moduleFailureForStatus(error instanceof ApiError ? error.status : undefined), receivedAt: Date.now() }; }
+  try { return { snapshot: readModuleSnapshot(value), receivedAt: Date.now() }; }
+  catch { return { error: true, reason: "unverified", receivedAt: Date.now() }; }
 }
 
 export function useModuleNavigation(initialRequest?: Promise<ModuleNavigationResult>) {
-  const [snapshot, setSnapshot] = useState<ModulePlatformSnapshot>();
+  const [state, setState] = useState<ModuleAccessState>({ stale: false });
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
   const [version, setVersion] = useState(0);
   useEffect(() => {
-    let active = true; let sequence = 0;
+    let active = true; let running = false; let queued = false;
     const load = async (initial = false) => {
-      const request = ++sequence;
+      // One request at a time. A refresh requested meanwhile runs once the current one finishes.
+      if (running) { queued = true; return; }
+      running = true;
       if (initial) setLoading(true);
       try {
-        let next = await (initial && version === 0 && initialRequest ? initialRequest : loadModuleNavigation());
-        if (initial && initialRequest && Date.now() - next.receivedAt >= 5_000) next = await loadModuleNavigation();
-        if (active && request === sequence) { setSnapshot(next.snapshot); setError(Boolean(next.error)); }
+        const preloaded = initial && version === 0 && initialRequest;
+        let next = await (preloaded ? initialRequest : loadModuleNavigation());
+        if (preloaded && Date.now() - next.receivedAt >= 5_000) next = await loadModuleNavigation();
+        if (active) setState((current) => nextModuleAccess(current, next));
       } catch {
-        if (active && request === sequence) { setSnapshot(undefined); setError(true); }
-      } finally { if (active && request === sequence) setLoading(false); }
+        if (active) setState((current) => nextModuleAccess(current, { error: true, reason: "unavailable", receivedAt: Date.now() }));
+      } finally {
+        running = false;
+        if (active) { if (initial) setLoading(false); if (queued) { queued = false; void load(); } }
+      }
     };
     const refreshVisible = () => { if (document.visibilityState === "visible") void load(); };
     void load(true);
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void load(); }, 5_000);
+    // Hidden tabs do not poll; they refresh as soon as they are shown again.
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible" && !running) void load(); }, moduleRefreshIntervalMs);
     window.addEventListener("focus", refreshVisible);
     document.addEventListener("visibilitychange", refreshVisible);
     return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", refreshVisible); document.removeEventListener("visibilitychange", refreshVisible); };
   }, [version]);
+  const { snapshot, failure, stale } = state;
   const module = (moduleId: string): ModuleSnapshotItem | undefined => snapshot?.modules.find((item) => item.id === moduleId);
-  return { snapshot, module, loading, error, reload: () => setVersion((value) => value + 1) };
+  return { snapshot, module, loading, error: !snapshot && Boolean(failure), failure, stale, reload: () => setVersion((value) => value + 1) };
 }

@@ -215,3 +215,16 @@ test("schema 41 backups restore as before and leave installed plugins fresh and 
   assert.deepEqual(db.rows("SELECT module_id, generation FROM platform_module_epochs WHERE module_id LIKE 'synthetic-%' ORDER BY module_id"), [{ module_id: "synthetic-addon", generation: 3 }, { module_id: "synthetic-notes", generation: 5 }], "each restore advances absent plugin authority");
   const snapshot = await client.call("/platform/modules"); assert.equal(snapshot.status, 200, await snapshot.clone().text());
 });
+
+test("DELETE INSTALLATION clears installed plugin tables, including ones that do not cascade from the installation", async (t) => {
+  const { db, client } = pluginDatabase(); t.after(() => db.raw.close());
+  await client.call("/health");
+  const { createSessionCodec } = await import("../apps/api/src/runtime-security.ts");
+  const { sessionSecret } = await import("./fixtures/backup-database.ts");
+  const cookie = "lancerlogin_session=" + await createSessionCodec(sessionSecret).issue({ userId: "admin", role: "admin" });
+  const env = { DB: db, SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, APP_MODE: "configured" };
+  const deleted = await worker.fetch(new Request("https://fixture.test/admin/data", { method: "DELETE", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ scope: "installation", confirmation: "DELETE INSTALLATION" }) }), env);
+  assert.equal(deleted.status, 200, await deleted.clone().text());
+  assert.equal(db.count("SELECT COUNT(*) AS n FROM installations"), 0);
+  for (const table of ["synthetic_notes_entries", "synthetic_notes_tags", "synthetic_notes_jobs", "synthetic_notes_tokens", "synthetic_addon_items"]) assert.equal(db.count(`SELECT COUNT(*) AS n FROM ${table}`), 0, `${table} is cleared`);
+});

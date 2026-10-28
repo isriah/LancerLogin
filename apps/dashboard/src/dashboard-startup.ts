@@ -1,11 +1,12 @@
-import { api, apiBaseUrl } from "./dashboard-api";
+import { api, apiBaseUrl, transientApiFailure } from "./dashboard-api";
 import { loadModuleNavigation } from "./module-navigation";
 
 export type DashboardSession = { id: string; role: "admin" | "operator"; debugMode: boolean };
 
+/** The signed-in user, or undefined when signed out. A transient failure (network, rate limit, server error) rejects, so a valid session is not mistaken for a sign-out. */
 export async function loadDashboardSession(): Promise<DashboardSession | undefined> {
   try { return (await api<{ user: DashboardSession }>("/auth/session")).user; }
-  catch { return undefined; }
+  catch (error) { if (transientApiFailure(error)) throw error; return undefined; }
 }
 
 // These are independent authenticated reads. Only the entry component that has
@@ -14,9 +15,12 @@ export async function loadDashboardSession(): Promise<DashboardSession | undefin
 export function startDashboardEntry<T>() {
   const setup = api<T>("/setup/status");
   const protectedEntry = Boolean(apiBaseUrl) && window.location.pathname !== "/submit-hours";
+  const session = protectedEntry ? loadDashboardSession() : undefined;
+  // The entry may be discarded unconsumed (first setup, public pages); its consumer still sees the rejection.
+  session?.catch(() => undefined);
   return {
     setup,
-    session: protectedEntry ? loadDashboardSession() : undefined,
+    session,
     modules: protectedEntry ? loadModuleNavigation() : undefined,
   };
 }

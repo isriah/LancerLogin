@@ -1,13 +1,23 @@
-// Retained records rotate through bounded batches, including reviewed records,
-// so it can rebuild a lost cloud mirror while the pairing remains valid. A record
-// the cloud has acknowledged is skipped until its local review changes or the
-// periodic refresh, so a settled history costs no cloud reads on every heartbeat.
+// Incremental review sync. Retained records rotate through bounded batches.
+// The cloud acknowledgement of each record is persisted by the queue (when it
+// supports recordCloudReviews), so a restart does not resend settled history:
+// - a record the cloud reports as reviewed is final and never resent;
+// - a record the cloud holds as open is polled again only after refreshMs, so
+//   a dashboard review still reaches the kiosk;
+// - a local review the cloud has not seen yet is sent on the next heartbeat.
 export function createScanReviewSync({ queue, send, refreshMs = 60 * 60_000, now = Date.now }) {
-  let cursor = 0, running, singleRecord = false, refreshedAt = now();
-  const failed = new Set(), acknowledged = new Map();
-  const settled = record => acknowledged.get(record.eventId) === "reviewed" || acknowledged.get(record.eventId) === "open" && record.reviewStatus !== "reviewed";
+  let cursor = 0, running, singleRecord = false, loaded = false;
+  const startedAt = now();
+  const failed = new Set(), acknowledged = new Map(), acknowledgedAt = new Map();
+  const persistent = typeof queue.recordCloudReviews === "function" && typeof queue.cloudReviews === "function";
+  function settled(record) {
+    const cloud = acknowledged.get(record.eventId);
+    if (cloud === "reviewed") return true;
+    if (cloud !== "open" || record.reviewStatus === "reviewed") return false;
+    return now() - (acknowledgedAt.get(record.eventId) ?? startedAt) < refreshMs;
+  }
   async function synchronize(config) {
-    if (now() - refreshedAt >= refreshMs) { acknowledged.clear(); refreshedAt = now(); }
+    if (persistent && !loaded) { for (const [eventId, status] of await queue.cloudReviews()) acknowledged.set(eventId, status); loaded = true; }
     const records = await queue.rejections();
     if (!records.length) { cursor = 0; return; }
     cursor %= records.length;
@@ -28,10 +38,10 @@ export function createScanReviewSync({ queue, send, refreshMs = 60 * 60_000, now
       }
       // Validate the entire response before recording any acknowledgement. Local
       // review is monotonic; an open cloud record never reopens local history.
-      for (const review of result.reviews) {
-        if (review.reviewStatus === "reviewed") await queue.markReviewed(review.eventId);
-        acknowledged.set(review.eventId, review.reviewStatus);
-      }
+      if (persistent) await queue.recordCloudReviews(result.reviews.map(({ eventId, reviewStatus }) => ({ eventId, reviewStatus })));
+      else for (const review of result.reviews) if (review.reviewStatus === "reviewed") await queue.markReviewed(review.eventId);
+      const at = now();
+      for (const review of result.reviews) { acknowledged.set(review.eventId, review.reviewStatus); acknowledgedAt.set(review.eventId, at); }
       for (const record of batch) failed.delete(record.eventId);
     } catch (error) {
       if ([400, 409].includes(error?.status)) singleRecord = true;

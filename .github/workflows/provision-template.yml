@@ -36,10 +36,9 @@ jobs:
   provision:
     runs-on: ubuntu-latest
     environment: production
+    # Secrets are set only on the steps that use them. npm ci (with dependency lifecycle scripts), module composition and
+    # the builds run without Cloudflare, setup or update credentials in their environment.
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
       INPUT_OPERATION: ${{ inputs.operation }}
       RELEASE_SELECTION: ${{ inputs.release }}
       TEMPLATE_RELEASE: v1.0.5
@@ -48,10 +47,7 @@ jobs:
       REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
       LANCERLOGIN_UPDATE_WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/workflows/provision-template.yml
       LANCERLOGIN_UPDATE_REPOSITORY: ${{ github.repository }}
-      LANCERLOGIN_WEB_UPDATE_TOKEN: ${{ secrets.LANCERLOGIN_WEB_UPDATE_TOKEN }}
       WEB_UPDATE_TOKEN_EXPIRES_AT: ${{ vars.WEB_UPDATE_TOKEN_EXPIRES_AT }}
-      # Optional: separate Contents-write token for dashboard plugin management (lancerlogin.modules.json only).
-      LANCERLOGIN_MODULE_SELECTION_TOKEN: ${{ secrets.LANCERLOGIN_MODULE_SELECTION_TOKEN }}
       MODULE_SELECTION_TOKEN_EXPIRES_AT: ${{ vars.MODULE_SELECTION_TOKEN_EXPIRES_AT }}
       WEB_UPDATE_CONFIG: .provision/wrangler.json
       WRANGLER_SEND_METRICS: "false"
@@ -72,6 +68,10 @@ jobs:
       - name: Validate deployment request
         shell: bash
         working-directory: .
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
         run: |
           if ! printf '%s' "$INPUT_OPERATION" | grep -Eq '^(create|resume|upgrade)$'; then
             echo "Choose create, resume, or upgrade." >&2
@@ -125,7 +125,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24.22.1
           cache: npm
           cache-dependency-path: lancerlogin-source/package-lock.json
       - name: Verify the checked-out release identity
@@ -138,9 +138,16 @@ jobs:
           fi
       - run: npm ci
       - name: Verify the private dispatch credential before any cloud mutation
+        env:
+          LANCERLOGIN_WEB_UPDATE_TOKEN: ${{ secrets.LANCERLOGIN_WEB_UPDATE_TOKEN }}
+          # Optional: separate Contents-write token for dashboard plugin management. See docs/MODULE-PLUGINS.md for its scope.
+          LANCERLOGIN_MODULE_SELECTION_TOKEN: ${{ secrets.LANCERLOGIN_MODULE_SELECTION_TOKEN }}
         run: node scripts/refresh-web-update-credential.mjs --verify-only
       - name: Verify the scoped token and selected Cloudflare account
         shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           mkdir -p .provision
           echo "::add-mask::$CLOUDFLARE_ACCOUNT_ID"
@@ -156,6 +163,9 @@ jobs:
           fi
           node -e 'const d=require("./.provision/token.json"); if(d.success!==true||d.result?.status!=="active") process.exit(1)'
       - name: Discover D1 resources in that account
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler d1 list --json > .provision/d1-list.json
       - name: Prepare account-neutral Worker configuration
         id: d1
@@ -166,6 +176,9 @@ jobs:
       - name: Check for resource collisions
         id: resources
         shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           status=$(curl --silent --show-error --proto '=https' --tlsv1.2 \
             --output .provision/pages-list.json --write-out '%{http_code}' \
@@ -201,6 +214,9 @@ jobs:
           fi
       - name: Create D1 database
         if: inputs.operation == 'create'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           npx wrangler d1 create "${DATABASE_NAME:-$INSTALLATION_SLUG-data}" --binding DB --update-config --config .provision/wrangler.json
           npx wrangler d1 list --json > .provision/d1-list.json
@@ -233,6 +249,20 @@ jobs:
             echo "This release predates module plugins; building its built-in modules without composition."
             if [ -f ../deployment-control/lancerlogin.modules.json ]; then echo "::warning::lancerlogin.modules.json is ignored by this release, which predates module plugins."; fi
           fi
+      - name: Refuse an upgrade that would drop a module that moved into a plugin
+        if: inputs.operation != 'create'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Reads D1 only. The same check the web update controller runs before it claims an update.
+          # Releases before plugin support have no extracted modules and no check.
+          if [ -f scripts/check-provision-modules.mjs ]; then
+            node scripts/check-provision-modules.mjs
+          else
+            echo "LancerLogin $RELEASE_TAG has no modules that moved into plugins."
+          fi
       - name: Build dashboard before migration or deployment
         env:
           VITE_API_BASE_URL: /api
@@ -240,10 +270,15 @@ jobs:
       - name: Build API before migration or deployment
         run: npx wrangler deploy --dry-run --outdir .provision/api-build --config .provision/wrangler.json
       - name: Apply D1 migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler d1 migrations apply "${DATABASE_NAME:-$INSTALLATION_SLUG-data}" --remote --config .provision/wrangler.json
       - name: Generate installation secrets
         if: steps.resources.outputs.worker_secrets == 'missing'
         shell: bash
+        env:
+          LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
         run: |
           SESSION_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
           INTEGRATION_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
@@ -262,13 +297,15 @@ jobs:
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: lancerlogin-source
           command: deploy --config .provision/wrangler.json
       - name: Upload generated Worker secrets
         if: steps.resources.outputs.worker_secrets == 'missing'
         shell: bash
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SESSION_KEY: ${{ env.SESSION_KEY }}
           INTEGRATION_KEY: ${{ env.INTEGRATION_KEY }}
           BOOTSTRAP_CODE_HASH: ${{ env.BOOTSTRAP_CODE_HASH }}
@@ -281,11 +318,14 @@ jobs:
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: lancerlogin-source
           command: deploy --config .provision/wrangler.json
       - name: Prepare or retain the separate fingerprint storage key
         shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           # Stable releases before the separate fingerprint storage key do not include this script or use the key.
           if [ -f scripts/ensure-fingerprint-vault-key.mjs ]; then
@@ -294,6 +334,11 @@ jobs:
             echo "LancerLogin $RELEASE_TAG does not use a separate fingerprint storage key."
           fi
       - name: Install or refresh the private dispatch credential without rotating installation secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          LANCERLOGIN_WEB_UPDATE_TOKEN: ${{ secrets.LANCERLOGIN_WEB_UPDATE_TOKEN }}
+          LANCERLOGIN_MODULE_SELECTION_TOKEN: ${{ secrets.LANCERLOGIN_MODULE_SELECTION_TOKEN }}
         run: node scripts/refresh-web-update-credential.mjs
       - name: Select Worker deployment URL
         id: deploy-api
@@ -309,12 +354,15 @@ jobs:
         run: node scripts/prepare-pages-proxy.mjs "${{ steps.deploy-api.outputs.deployment-url }}"
       - name: Create Pages project
         if: steps.resources.outputs.pages == 'missing'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler pages project create "$INSTALLATION_SLUG-dashboard" --production-branch main
       - name: Deploy Pages dashboard
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: lancerlogin-source
           command: pages deploy apps/dashboard/dist --project-name=${{ inputs.installation_slug }}-dashboard --branch=main
       - name: Publish setup links

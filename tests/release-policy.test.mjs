@@ -1,18 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseReleaseVersion, kioskReleaseTransition, compareReleaseVersions, completeOfficialRelease, newestOfficialRelease, releaseAllowed, pluginReleaseKind, pluginTrackOffers, newestPluginRelease } from "../packages/shared/src/release-policy.mjs";
+import { parseReleaseVersion, kioskReleaseTransition, compareReleaseVersions, completeKioskRelease, officialAssetDigest, completeOfficialRelease, newestOfficialRelease, releaseAllowed, pluginReleaseKind, pluginTrackOffers, newestPluginRelease } from "../packages/shared/src/release-policy.mjs";
 import { githubRepository, resolveSelection } from "../scripts/resolve-plugin-releases.mjs";
 import { releasePublicationPolicy, assertLatestPromotion } from "../scripts/release-channel.mjs";
 import { validateMigrationPolicy } from "../scripts/run-web-upgrade.mjs";
-import { resolveKioskRelease } from "../apps/kiosk/src/resolve-kiosk-release.mjs";
+import { consumeUpdateCommand, resolveKioskRelease } from "../apps/kiosk/src/resolve-kiosk-release.mjs";
 import { prepareVerifiedKioskUpdate } from "../apps/kiosk/src/update-command.mjs";
 const release = (tag) => ({ tag_name: tag, draft: false, prerelease: tag.includes("-beta."), immutable: true, assets: ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => {
   const archive = `lancerlogin-kiosk-${tag.slice(1)}-linux-${arch}.tar.gz`; return [archive, `${archive}.sha256`];
-})].map((name) => ({ name })) });
+})].map((name, index) => ({ name, digest: `sha256:${index.toString(16).repeat(64)}` })) });
 test("canonical stable and beta ordering never downgrades on opt-out", () => {
   for (const value of ["v01.2.3", "1.2", "v2.0.0-beta.01", "v2.0.0-rc.1", "v2.0.0+build", "v2.0.0-beta.1\n", "v2.0.0/evil", "vv2.0.0"]) assert.equal(parseReleaseVersion(value), undefined, value);
   for (const [a, b] of [["2.0.0-beta.1", "1.2.6"], ["2.0.0-beta.10", "2.0.0-beta.9"], ["2.0.0", "2.0.0-beta.99"], ["2.1.0-beta.1", "2.0.0"]]) { assert.equal(compareReleaseVersions(a, b), 1); assert.equal(compareReleaseVersions(b, a), -1); }
@@ -105,19 +105,46 @@ test("reviewed independent bridge permits only the unchanged ordinary migration 
 test("physical updater revalidates exact official tag and commit, consent and expiry", async () => {
   const calls = []; const tag = "v2.0.0-beta.1"; const sha = "b".repeat(40); const now = Date.now();
   const fetcher = async (url, init) => { calls.push(url); assert.equal(init.redirect, "error"); return Response.json(url.includes("/commits/") ? { sha } : release(tag)); };
-  const request = { targetTag: tag, targetCommit: sha, channel: "beta", expiresAt: new Date(now + 60_000).toISOString() };
+  const request = { targetTag: tag, targetCommit: sha, channel: "beta", expiresAt: new Date(now + 60_000).toISOString(), commandId: "11111111-2222-4333-8444-555555555555" };
   assert.equal((await resolveKioskRelease({ request, installedVersion: "1.2.6", fetcher, now })).version, "2.0.0-beta.1");
   assert.deepEqual(calls, [`https://api.github.com/repos/isriah/LancerLogin/releases/tags/${tag}`, `https://api.github.com/repos/isriah/LancerLogin/commits/${tag}`]);
-  for (const invalid of [{ ...request, channel: "stable" }, { ...request, expiresAt: new Date(now).toISOString() }, { ...request, url: "https://evil.test" }]) await assert.rejects(resolveKioskRelease({ request: invalid, installedVersion: "1.2.6", fetcher, now }), /invalid_update_request/);
+  for (const invalid of [{ ...request, channel: "stable" }, { ...request, expiresAt: new Date(now).toISOString() }, { ...request, expiresAt: new Date(now + 16 * 60_000).toISOString() }, { ...request, url: "https://evil.test" }, { ...request, commandId: undefined }, { ...request, commandId: "../../evil" }]) await assert.rejects(resolveKioskRelease({ request: invalid, installedVersion: "1.2.6", fetcher, now }), /invalid_update_request/);
   await assert.rejects(resolveKioskRelease({ request: { ...request, targetCommit: "c".repeat(40) }, installedVersion: "1.2.6", fetcher, now }), /release_commit_mismatch/);
   await assert.rejects(resolveKioskRelease({ request, installedVersion: "2.0.0", fetcher, now }), /newer_official_release_required/);
   assert.equal((await resolveKioskRelease({ request, installedVersion: "2.0.0-dev.kiosk-list.fe4c8f2", fetcher, now })).version, "2.0.0-beta.1");
   await assert.rejects(resolveKioskRelease({ installedVersion: "2.0.0-dev.kiosk-list.fe4c8f2", fetcher, now }), /newer_official_release_required/);
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-target-test-")); const path = join(directory, "request.json");
   try {
-    await prepareVerifiedKioskUpdate({ ...request, createdAt: new Date(now - 1_000).toISOString() }, path);
+    const command = { id: "11111111-2222-4333-8444-555555555555", targetTag: tag, targetCommit: sha, channel: "beta" };
+    await prepareVerifiedKioskUpdate({ ...command, createdAt: new Date(now - 1_000).toISOString() }, path);
     assert.equal(JSON.parse(await readFile(path, "utf8")).targetCommit, sha);
+    assert.equal(JSON.parse(await readFile(path, "utf8")).commandId, command.id);
     await prepareVerifiedKioskUpdate({ type: "install_latest" }, path); await assert.rejects(readFile(path), /ENOENT/);
+    // The window starts at local receipt, so a kiosk clock behind (or ahead of) the server still accepts a fresh
+    // command, and the root resolver accepts the written expiry against the same local clock.
+    for (const skew of [-6 * 60 * 60_000, -20 * 60_000, 20 * 60_000, 6 * 24 * 60 * 60_000]) {
+      const local = now + skew;
+      await prepareVerifiedKioskUpdate({ ...command, createdAt: new Date(now).toISOString() }, path, { now: () => local });
+      const written = JSON.parse(await readFile(path, "utf8"));
+      assert.equal(Date.parse(written.expiresAt), local + 15 * 60_000);
+      assert.equal((await resolveKioskRelease({ request: written, installedVersion: "1.2.6", fetcher, now: local + 5_000 })).version, "2.0.0-beta.1");
+    }
+    for (const invalid of [{ ...command, createdAt: new Date(now - 8 * 24 * 60 * 60_000).toISOString() }, { ...command, createdAt: "never" }, { ...command, id: undefined, createdAt: new Date(now).toISOString() }, { ...command, id: "../evil", createdAt: new Date(now).toISOString() }]) {
+      await assert.rejects(prepareVerifiedKioskUpdate(invalid, path, { now: () => now }), /invalid or expired|no valid creation time/);
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("root resolver consumes each update command id once", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-ledger-test-")); const ledger = join(directory, "state/consumed-commands.json");
+  try {
+    await consumeUpdateCommand(ledger, "11111111-2222-4333-8444-555555555555");
+    await consumeUpdateCommand(ledger, "66666666-2222-4333-8444-555555555555");
+    await assert.rejects(consumeUpdateCommand(ledger, "11111111-2222-4333-8444-555555555555"), /update_request_replayed/);
+    await assert.rejects(consumeUpdateCommand(ledger, "short"), /invalid_update_request/);
+    assert.deepEqual(JSON.parse(await readFile(ledger, "utf8")).map((entry) => entry.id), ["11111111-2222-4333-8444-555555555555", "66666666-2222-4333-8444-555555555555"]);
+    await writeFile(ledger, "{not json");
+    await assert.rejects(consumeUpdateCommand(ledger, "77777777-2222-4333-8444-555555555555"), /update_ledger_invalid/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -128,4 +155,17 @@ test("kiosk development replacement permits only official same-base or newer tar
   for (const installed of ["unknown", "development", "2.0.0-dev.bad", "02.0.0-dev.foo.abcdef0"]) assert.equal(kioskReleaseTransition("2.0.0", installed), "unavailable");
   assert.equal(kioskReleaseTransition("2.0.0-beta.5", "2.0.0-beta.4"), "upgrade");
   assert.equal(kioskReleaseTransition("2.0.0-beta.4", "2.0.0"), "current");
+});
+
+test("kiosk releases on every track need immutability and GitHub asset digests", () => {
+  for (const [tag, channel] of [["v2.0.0", "stable"], ["v2.0.0-beta.1", "beta"]]) {
+    const value = release(tag);
+    assert.deepEqual(completeKioskRelease(value, channel)?.digests, { installer: "0".repeat(64), arm64: "2".repeat(64), armv7: "4".repeat(64) });
+    // Stable is no longer exempt from immutability for kiosk installs.
+    assert.equal(completeKioskRelease({ ...value, immutable: false }, channel), undefined);
+    assert.equal(completeKioskRelease({ ...value, assets: value.assets.map((asset) => ({ name: asset.name })) }, channel), undefined);
+  }
+  assert.equal(officialAssetDigest(release("v2.0.0"), "install-lancerlogin.sh"), "0".repeat(64));
+  for (const digest of [undefined, "sha256:" + "A".repeat(64), "sha256:" + "a".repeat(63), "md5:" + "a".repeat(32)]) assert.equal(officialAssetDigest({ assets: [{ name: "x", digest }] }, "x"), undefined);
+  assert.equal(officialAssetDigest({ assets: [{ name: "x", digest: "sha256:" + "a".repeat(64) }, { name: "x", digest: "sha256:" + "a".repeat(64) }] }, "x"), undefined);
 });

@@ -35,8 +35,12 @@ export async function verifyPassword(password: string, encoded: string): Promise
   return constantTimeEqual(actual, expected);
 }
 
-/** authenticatedAt records when the user last proved their identity (sign-in or re-authentication); older sessions omit it. */
-export type SessionPrincipal = { userId: string; role: "admin" | "operator"; expiresAt: number; authenticatedAt?: number };
+/**
+ * authenticatedAt records when the user last proved their identity (sign-in or re-authentication); older sessions omit it.
+ * epoch is the user's session epoch when the token was issued. Bumping users.session_epoch revokes every older token.
+ * Tokens issued before epochs existed omit it and count as epoch 0, so a deploy does not sign anyone out.
+ */
+export type SessionPrincipal = { userId: string; role: "admin" | "operator"; expiresAt: number; authenticatedAt?: number; epoch?: number };
 
 export function createSessionCodec(secret: string, now = () => Date.now()) {
   const keyBytes = decodeBase64Url(secret);
@@ -55,8 +59,45 @@ export function createSessionCodec(secret: string, now = () => Date.now()) {
       const valid = await crypto.subtle.verify("HMAC", await importKey(), asArrayBuffer(decodeBase64Url(signature)), encoder.encode(payload));
       if (!valid) return undefined;
       try {
-        const principal = JSON.parse(new TextDecoder().decode(decodeBase64Url(payload))) as SessionPrincipal;
+        const principal = JSON.parse(new TextDecoder().decode(decodeBase64Url(payload))) as SessionPrincipal & { purpose?: unknown };
+        // A purpose-bound token (such as an OAuth state) is never a session, even if it were signed with the session key.
+        if ("purpose" in principal || (principal.epoch !== undefined && (!Number.isSafeInteger(principal.epoch) || principal.epoch < 0))) return undefined;
         return principal.expiresAt > now() && ["admin", "operator"].includes(principal.role) && principal.userId ? principal : undefined;
+      } catch { return undefined; }
+    },
+  };
+}
+
+export type SignedState = { purpose: string; nonce: string; expiresAt: number; userId?: string };
+
+/**
+ * Short-lived signed values that travel in URLs, such as OAuth `state`. Each purpose signs with its own key derived from
+ * SESSION_KEY (HMAC of a purpose label), and the payload names the purpose, so a state can never verify as a session
+ * token or as a state for another purpose, and a session token can never verify as a state.
+ */
+export function createSignedStateCodec(secret: string, purpose: string, now = () => Date.now()) {
+  const keyBytes = decodeBase64Url(secret);
+  if (keyBytes.length < 32) throw new Error("SESSION_KEY must contain at least 32 random bytes");
+  if (!/^[a-z][a-z0-9_.-]{2,63}$/.test(purpose)) throw new Error("Signed state purpose is invalid");
+  const derivedKey = async () => {
+    const root = await crypto.subtle.importKey("raw", asArrayBuffer(keyBytes), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const derived = new Uint8Array(await crypto.subtle.sign("HMAC", root, encoder.encode(`lancerlogin:signed-state:${purpose}`)));
+    return crypto.subtle.importKey("raw", asArrayBuffer(derived), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  };
+  return {
+    async issue(values: { userId?: string } = {}, ttlMs = 10 * 60_000): Promise<string> {
+      const nonce = encodeBase64Url(crypto.getRandomValues(new Uint8Array(16)));
+      const payload = encodeBase64Url(encoder.encode(JSON.stringify({ purpose, nonce, expiresAt: now() + ttlMs, ...(values.userId ? { userId: values.userId } : {}) })));
+      const signature = new Uint8Array(await crypto.subtle.sign("HMAC", await derivedKey(), encoder.encode(payload)));
+      return `${payload}.${encodeBase64Url(signature)}`;
+    },
+    async verify(token: string): Promise<SignedState | undefined> {
+      const [payload, signature, extra] = token.split(".");
+      if (!payload || !signature || extra !== undefined) return undefined;
+      try {
+        if (!await crypto.subtle.verify("HMAC", await derivedKey(), asArrayBuffer(decodeBase64Url(signature)), encoder.encode(payload))) return undefined;
+        const state = JSON.parse(new TextDecoder().decode(decodeBase64Url(payload))) as SignedState;
+        return state.purpose === purpose && typeof state.nonce === "string" && typeof state.expiresAt === "number" && state.expiresAt > now() ? state : undefined;
       } catch { return undefined; }
     },
   };

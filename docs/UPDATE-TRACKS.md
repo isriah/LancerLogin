@@ -54,6 +54,6 @@ From the reviewed publication-tools checkout, a maintainer with an existing GitH
 
 For an existing verified tag whose packaging run failed, run **Build LancerLogin release** manually from `main` with that exact `release_tag`. This rebuilds its accepted source without moving the tag. Use the resulting run ID for the maintainer command. Published releases are never replaced. An uncertain publication result requires checking the release before any retry; the command refuses to overwrite a published release.
 
-Beta releases are GitHub prereleases and never GitHub Latest. Stable publication advances Latest only to a higher stable version. Track discovery accepts only complete official releases with matching canonical tags and prerelease flags; beta releases must also be immutable.
+Beta releases are GitHub prereleases and never GitHub Latest. Stable publication advances Latest only to a higher stable version. Track discovery accepts only complete official releases with matching canonical tags and prerelease flags; beta releases must also be immutable. Physical kiosks require an immutable release on every track, stable included, and verify the installer and archives against GitHub's recorded asset digests, so publish kiosk releases only through the immutable-release command above.
 
 Publication does not deploy an installation or update a Pi. Keep live acceptance separately authorized. See [web updates](WEB-UPDATES.md) and [kiosk operations](KIOSK.md).

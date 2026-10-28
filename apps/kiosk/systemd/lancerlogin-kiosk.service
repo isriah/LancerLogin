@@ -1,19 +1,21 @@
 [Unit]
 Description=LancerLogin local kiosk service
-After=network-online.target
-Wants=network-online.target
+# The kiosk works offline and queues scans locally. Waiting for
+# network-online.target can delay an offline boot by minutes, so start as soon
+# as basic networking (loopback) is configured.
+After=network.target
 
 [Service]
 Type=simple
 User=lancerlogin
 Group=lancerlogin
 SupplementaryGroups=dialout
-WorkingDirectory=/opt/lancerlogin
+WorkingDirectory=/opt/lancerlogin/current
 Environment=NODE_ENV=production
 Environment=LANCERLOGIN_CONFIG=/var/lib/lancerlogin/pairing.json
 Environment=LANCERLOGIN_SENSOR_PATH=/dev/serial0
 ExecStartPre=/bin/sh -c 'if [ "${LANCERLOGIN_SENSOR_PATH}" != disabled ] && [ -e "${LANCERLOGIN_SENSOR_PATH}" ]; then exec /bin/stty -F "${LANCERLOGIN_SENSOR_PATH}" 57600 cs8 -cstopb -parenb raw -echo; fi'
-ExecStart=/usr/bin/node /opt/lancerlogin/src/service.mjs
+ExecStart=/usr/bin/node /opt/lancerlogin/current/src/service.mjs
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

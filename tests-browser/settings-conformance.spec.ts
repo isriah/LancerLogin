@@ -32,7 +32,9 @@ const routes = [
   ["/settings/updates", "Updates"],
 ] as const;
 
-async function openSettingsNavigation(page: Page) { const button = page.locator(".settings-navigation-toggle"); if (await button.isVisible() && await button.getAttribute("aria-expanded") !== "true") await button.click(); }
+// The settings toolbar mounts after the asynchronous session and module bootstrap. Checking the toggle before it
+// mounts misses the collapsed narrow-width menu (same pattern as setDashboardTheme).
+async function openSettingsNavigation(page: Page) { await expect(page.locator(".settings-toolbar")).toBeVisible(); const button = page.locator(".settings-navigation-toggle"); if (await button.isVisible() && await button.getAttribute("aria-expanded") !== "true") await button.click(); }
 
 async function useSettingsContext(page: Page, role: "admin" | "operator" = "admin") {
   await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot() }));
@@ -764,8 +766,10 @@ for (const theme of ["light", "dark"] as const) test(`Settings keeps approved co
     await expectResponsiveFit(page);
     if (path === "/settings/modules") {
       const row = page.locator(".module-setting-choice").first();
-      const title = await row.locator("strong").boundingBox(), toggle = await row.getByRole("switch").boundingBox();
-      expect(Math.abs(title!.y + title!.height / 2 - toggle!.y - toggle!.height / 2)).toBeLessThan(2);
+      // Measure both boxes in one layout pass: content above the list can still settle, moving the whole row between
+      // two separate boundingBox() round trips while the title and toggle stay aligned with each other.
+      const [title, toggle] = await row.evaluate(element => [element.querySelector("strong")!, element.querySelector("[role=switch]")!].map(item => { const { y, height } = item.getBoundingClientRect(); return { y, height }; }));
+      expect(Math.abs(title.y + title.height / 2 - toggle.y - toggle.height / 2)).toBeLessThan(2);
     }
     await page.screenshot({ path: test.info().outputPath(`${path.split("/").pop()}-${theme}-320.png`), fullPage: true });
   }

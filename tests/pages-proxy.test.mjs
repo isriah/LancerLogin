@@ -44,3 +44,38 @@ test("Pages proxy serves the app shell for deep-link navigation", async () => {
   assert.deepEqual(requested, ["/settings/data", "/index.html"]);
   assert.equal(await response.text(), "app shell");
 });
+
+async function proxyRequest(url, init) {
+  const module = await import(`data:text/javascript,${encodeURIComponent(buildPagesProxy("https://api.example.test"))}`);
+  const forwarded = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (request) => { forwarded.push(request.url); return new Response("upstream"); };
+  try {
+    const response = await module.default.fetch(new Request(url, init), { ASSETS: { fetch: () => Promise.resolve(new Response("asset")) } });
+    return { response, forwarded };
+  } finally { globalThis.fetch = originalFetch; }
+}
+
+test("Pages proxy never forwards API paths to another host", async () => {
+  for (const url of ["https://dash.example.test/api//attacker.example/x", "https://dash.example.test/api/\\attacker.example/x", "https://dash.example.test/api/\\\\attacker.example/x", "https://dash.example.test/api/\\/attacker.example/x", "https://dash.example.test/api///attacker.example/x"]) {
+    const { response, forwarded } = await proxyRequest(url, { headers: { cookie: "lancerlogin_session=opaque" } });
+    assert.equal(response.status, 400, url);
+    assert.deepEqual(forwarded, [], url);
+  }
+  for (const url of ["https://dash.example.test/api/%2F%2Fattacker.example/x", "https://dash.example.test/api/%5Cattacker.example/x", "https://dash.example.test/api/%2f%2fattacker.example/x"]) {
+    const { forwarded } = await proxyRequest(url);
+    assert.equal(forwarded.length, 1, url);
+    assert.equal(new URL(forwarded[0]).origin, "https://api.example.test", url);
+  }
+  const { forwarded } = await proxyRequest("https://dash.example.test/api");
+  assert.deepEqual(forwarded, ["https://api.example.test/"]);
+});
+
+test("Pages proxy forbids framing of dashboard responses but not API responses", async () => {
+  const asset = await proxyRequest("https://dash.example.test/assets/app.js");
+  assert.equal(asset.response.headers.get("x-frame-options"), "DENY");
+  assert.equal(asset.response.headers.get("content-security-policy"), "frame-ancestors 'none'");
+  assert.equal(await asset.response.text(), "asset");
+  const api = await proxyRequest("https://dash.example.test/api/auth/session");
+  assert.equal(api.response.headers.get("x-frame-options"), null);
+});

@@ -156,7 +156,7 @@ export function matchDashboardPath(pattern: string, path: string): DashboardPath
   return actual.length === expected.length ? params : undefined;
 }
 
-/** Decode matched parameters for a page. Malformed escapes throw, as the hand-written routes did. */
+/** Decode matched parameters for a page. Malformed escapes throw; the shell checks the whole path first and shows Page unavailable instead. */
 export function decodeDashboardPathParams(params: DashboardPathParams): DashboardPathParams {
   return Object.fromEntries(Object.entries(params).map(([name, value]) => [name, decodeURIComponent(value)]));
 }

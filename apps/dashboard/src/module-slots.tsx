@@ -1,4 +1,5 @@
 import { createContext, useContext, useLayoutEffect, useState, type ComponentType, type ReactNode } from "react";
+import { ErrorBoundary, ModuleErrorFallback } from "./error-boundary";
 import { dashboardSlotContributors, dashboardSlots, type DashboardDataSlotId, type DashboardModuleSet, type DashboardRenderSlotId, type DashboardSlotProps } from "./module-contributions.ts";
 
 type ModuleRuntime = { readonly modules: DashboardModuleSet; readonly ready: (moduleId: string) => boolean };
@@ -11,9 +12,9 @@ const SlotDataContext = createContext<SlotDataValues>({});
 /** Core provides the installed modules and their current readiness to host slots. */
 export const DashboardModuleRuntime = ModuleRuntimeContext.Provider;
 
-/** The element that marks a module's rendered UI and scopes its stylesheet. It generates no box of its own. */
+/** The element that marks a module's rendered UI and scopes its stylesheet. It generates no box of its own. A render error inside it stays inside it. */
 export function ModuleRoot({ moduleId, inline = false, children }: { moduleId: string; inline?: boolean; children: ReactNode }) {
-  const content = <ModuleIdentityContext.Provider value={moduleId}>{children}</ModuleIdentityContext.Provider>;
+  const content = <ModuleIdentityContext.Provider value={moduleId}><ErrorBoundary fallback={({ retry }) => <ModuleErrorFallback retry={retry} inline={inline} />}>{children}</ErrorBoundary></ModuleIdentityContext.Provider>;
   return inline ? <span className="module-root" data-module={moduleId}>{content}</span> : <div className="module-root" data-module={moduleId}>{content}</div>;
 }
 

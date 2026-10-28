@@ -413,10 +413,27 @@ for(const viewport of dashboardConformanceReferences.viewports) {
   }
 }
 
+test("Browse reports popup follows its trigger when web fonts finish loading after it opens",async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("lancerlogin-reports-view",JSON.stringify({ meetingType: "optional",roster: "all" })));
+  await useReferenceContext(page);
+  let releaseFonts!: () => void; const fontsHeld=new Promise<void>((resolve) => { releaseFonts=resolve; });
+  await page.route(/\.woff2?(\?.*)?$/,async (route) => { await fontsHeld; await route.continue(); });
+  await page.goto("/reports");
+  await page.getByText("Browse reports",{ exact: true }).click();
+  await expect(page.getByRole("button",{ name: "Attendance dates personal",exact: true })).toBeVisible();
+  const geometry=() => page.evaluate(() => ({ fonts: document.fonts.status,trigger: document.querySelector(".report-browser > summary")!.getBoundingClientRect().left,popup: document.querySelector(".report-browser-popover")!.getBoundingClientRect().left }));
+  expect((await geometry()).fonts).toBe("loading");
+  releaseFonts(); await page.evaluate(() => document.fonts.ready);
+  await expect.poll(async () => { const { fonts,trigger,popup }=await geometry(); return fonts==="loaded"&&Math.abs(popup-trigger)<=1; }).toBe(true);
+});
+
 test("saved report tabs, imported drafts, configurable columns, and exports remain operable",async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("lancerlogin-reports-view",JSON.stringify({ meetingType: "optional",roster: "all" })));
   await useReferenceContext(page);
   await page.goto("/reports");
+  // The popup is placed from the trigger when it opens. Let web fonts finish first so a later font swap does not
+  // move the trigger beside the report tabs after the popup position was taken.
+  await page.evaluate(() => document.fonts.ready);
   await page.getByText("Browse reports",{ exact: true }).click();
   await expect(page.getByRole("button",{ name: /Imported browser view/ })).toBeVisible();
   await expect(page.getByRole("button",{ name: "Attendance dates personal",exact: true })).toBeVisible();

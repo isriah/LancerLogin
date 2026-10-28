@@ -36,6 +36,8 @@ export const WEB_UPDATE_WORKFLOW = "upgrade-web.yml";
 export function fixedWorkflowPath(path: unknown): boolean { return path === `.github/workflows/${WEB_UPDATE_WORKFLOW}` || path === `.github/workflows/${WEB_UPDATE_WORKFLOW}@main`; }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const terminal = new Set(["succeeded", "failed", "expired"]);
+/** Stages the update controller records before any migration or deployment (scripts/run-web-upgrade.mjs unchangedStages). */
+export const unchangedStages: readonly string[] = ["preflight", "building", "maintenance"];
 export const updateCredentialMinimumValidityMs = 24 * 60 * 60_000;
 function fail(status: number, code: string, message: string): never { throw new WebUpdateError(status, code, message); }
 function db(env: WebUpdateEnv): Database { return env.DB ?? fail(503, "not_configured", "D1 is not linked."); }
@@ -206,7 +208,13 @@ export async function webUpdateStatus(env: WebUpdateEnv) {
     const run = await result.json() as { status?: string; conclusion?: string; path?: string; display_title?: string; event?: string };
     if (!fixedWorkflowPath(run.path) || run.display_title !== `LancerLogin web update ${row.id}` || run.event !== "workflow_dispatch") fail(503, "run_mismatch", "The workflow run identity could not be verified.");
     const latest = await requestRow(env, row.id);
-    if (!terminal.has(latest.state) && latest.state !== "recovery_required") {
+    // A claimed run that stopped (cancelled, timed out or crashed) while the request was still in a stage written before
+    // any migration or deployment changed nothing. Clear maintenance and fail it rather than requiring recovery.
+    const stoppedUnchanged = run.status === "completed" && run.conclusion !== "success" && Boolean(latest.executor_run_id) && unchangedStages.includes(latest.stage);
+    if (stoppedUnchanged && !terminal.has(latest.state) && latest.state !== "recovery_required") {
+      await db(env).prepare(`UPDATE web_update_requests SET state = 'failed', maintenance = 0, error_code = 'workflow_stopped_unchanged', updated_at = ? WHERE installation_id = 'primary' AND id = ? AND executor_run_id IS NOT NULL AND stage IN (${unchangedStages.map(() => "?").join(",")}) AND state NOT IN ('succeeded','failed','expired','recovery_required')`)
+        .bind(now, row.id, ...unchangedStages).run();
+    } else if (!terminal.has(latest.state) && latest.state !== "recovery_required") {
       const state = run.status === "completed" ? !latest.executor_run_id && run.conclusion !== "success" ? "failed" : "recovery_required" : run.status === "waiting" ? "awaiting_approval" : run.status === "in_progress" ? "running" : "queued";
       // Workflow success alone never proves app health. Only its verified D1 finalization succeeds.
       // A current controller fails the request itself when it refuses before claim. An earlier one only recorded the

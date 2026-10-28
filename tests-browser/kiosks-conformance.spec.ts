@@ -36,6 +36,7 @@ async function useKioskContext(page: Page, { role = "admin", state = "healthy", 
   await page.route("**/admin/update-channel", route => route.fulfill({ json: { channel: "stable", revision: 0 } }));
   await page.route("**/admin/kiosks/scan-reviews?**", route => route.fulfill({ json: { records: [], hasMore: false } }));
   await page.route("**/admin/kiosks/fingerprint-sync", route => route.fulfill({ json: { enabled: false } }));
+  await page.route("**/admin/kiosks/fingerprint-match", route => route.fulfill({ json: { minimumScore: 0, recent: { days: 30, scans: 0, lowest: null, below50: 0, below100: 0, below150: 0, below200: 0 } } }));
   await page.route("**/admin/kiosks/fingerprint-vault", route => route.fulfill({ json: { enabled: false, keyStatus: "ready", storedFingerprints: 0, serverManagedKeys: true } }));
   await page.route("**/setup/status", (route) => route.fulfill({
     status: 200,
@@ -276,6 +277,36 @@ for (const state of ["degraded", "offline", "unpaired"] as const) {
   });
 }
 
+test("Kiosks names each reported cause of a degraded kiosk without opening diagnostics", async ({ page }) => {
+  await useKioskContext(page, { state: "degraded" });
+  const [kiosk] = kioskFor("degraded");
+  await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: [{ ...kiosk, readerOnline: 1, pendingEvents: 0, configuredAuthenticationMethod: "fingerprint", scansNeedReview: 4, clockConfirmed: 1, clockPendingScans: 0, reviewSyncFailing: 0 }, retiredKiosk], authenticationMethod: "fingerprint" } }));
+  await page.goto("/kiosks");
+  await expect(page.getByText("Needs attention", { exact: true })).toBeVisible();
+  await expect(page.getByText("4 scans rejected and not yet reviewed. Review them under Rejected scans; the kiosk clears this within two minutes.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Saved scans need attention.", { exact: false })).toHaveCount(0);
+  await expectResponsiveFit(page);
+});
+
+test("Admins see recent fingerprint match scores and save a minimum score for kiosks", async ({ page }) => {
+  await useKioskContext(page);
+  let saved: unknown;
+  const recent = { days: 30, scans: 200, lowest: 38, below50: 2, below100: 9, below150: 40, below200: 120 };
+  await page.route("**/admin/kiosks/fingerprint-match", async route => {
+    if (route.request().method() === "PUT") saved = route.request().postDataJSON();
+    await route.fulfill({ json: { minimumScore: saved ? 80 : 0, recent } });
+  });
+  await page.goto("/kiosks");
+  const card = page.getByRole("region", { name: "Fingerprint matching" });
+  await expect(card.getByText("9 (5%)", { exact: true })).toBeVisible();
+  await expect(card.getByText("38", { exact: true })).toBeVisible();
+  await card.getByLabel("Minimum match score").fill("80");
+  await card.getByRole("button", { name: "Save minimum score" }).click();
+  await expect(card.getByText("Saved. Kiosks ask for a rescan below 80 within a minute.", { exact: true })).toBeVisible();
+  expect(saved).toEqual({ minimumScore: 80 });
+  await expectResponsiveFit(page);
+});
+
 test("multiple active kiosks remain independently selectable and manageable", async ({ page }) => {
   await useKioskContext(page);
   const frontDesk = kioskFor("healthy")[0]!;
@@ -449,6 +480,34 @@ for (const { theme, width } of pairedViews) {
     await page.screenshot({ path: test.info().outputPath(`enrollment-retirement-${theme}-${width}.png`), fullPage: true });
   });
 }
+
+test("unlinked reader fingerprints are shown and erased only after confirmation, and only on kiosks that report them", async ({ page }) => {
+  await useKioskContext(page);
+  const writes: unknown[] = [];
+  let counts: Record<string, number | null> = { readerTemplates: 190, linkedTemplates: 113 };
+  await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: kioskFor("healthy").map(kiosk => ({ ...kiosk, ...counts })), authenticationMethod: "fingerprint" } }));
+  await page.route("**/admin/kiosks/kiosk-1/commands", route => {
+    if (route.request().method() === "POST") writes.push(route.request().postDataJSON());
+    return route.fulfill({ status: 202, json: { command: { id: "synthetic-erase" } } });
+  });
+  await page.goto("/kiosks/kiosk-1/manage");
+  await page.getByText("Diagnostics", { exact: true }).click();
+  await expect(page.getByText("190 of 200 stored", { exact: false })).toBeVisible();
+  await expect(page.getByText("113 linked to members, 77 unlinked", { exact: true })).toBeVisible();
+  await page.getByText("Device maintenance", { exact: true }).click();
+  const erase = page.getByRole("button", { name: "Erase unlinked fingerprints", exact: true });
+  page.once("dialog", dialog => dialog.dismiss()); await erase.click();
+  expect(writes).toEqual([]);
+  page.once("dialog", dialog => { expect(dialog.message()).toContain("Erase up to 77 fingerprints"); expect(dialog.message()).toContain("cannot be recovered"); return dialog.accept(); });
+  await erase.click();
+  await expect.poll(() => writes).toEqual([{ command: "erase_unlinked_fingerprints" }]);
+  await expectResponsiveFit(page);
+  counts = { readerTemplates: null, linkedTemplates: null };
+  await page.reload();
+  await page.getByText("Device maintenance", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Reload display", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Erase unlinked fingerprints", exact: true })).toHaveCount(0);
+});
 
 test("development kiosk replacement requires confirmation and sends only consent", async ({ page }) => {
   await useKioskContext(page);

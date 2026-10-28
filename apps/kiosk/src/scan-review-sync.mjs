@@ -52,5 +52,9 @@ export function createScanReviewSync({ queue, send, refreshMs = 60 * 60_000, now
   return { tick(config) {
     if (!running) running = synchronize(config).finally(() => { running = undefined; });
     return running;
-  }, hasFailures: () => failed.size > 0 };
+  },
+  // The heartbeat reports fewer open reviews in the cloud than this kiosk holds:
+  // a dashboard review happened, so poll cloud-open records on the next tick.
+  refreshOpen() { for (const [eventId, status] of acknowledged) if (status === "open") acknowledgedAt.set(eventId, -Infinity); },
+  hasFailures: () => failed.size > 0 };
 }

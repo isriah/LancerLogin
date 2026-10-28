@@ -1,4 +1,5 @@
 import { KioskScanReviews } from "./kiosk-scan-reviews";
+import { KioskFingerprintMatch } from "./kiosk-fingerprint-match";
 import { visiblePoll } from "./visible-poll";
 import { RouteLink, usePath } from "./router";
 import "./mobile-kiosks.css";
@@ -13,10 +14,10 @@ import { useReleaseCheck } from "./use-release-check";
 import { diagnosticUrl } from "./web-update";
 import { KioskEnrollmentDialog, type EnrollmentSession } from "./kiosk-enrollment-dialog";
 
-type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; readerOnline?: number; authenticationMethod?: KioskAuthenticationMethod; configuredAuthenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string; pendingEvents?: number; lastSyncAt?: string; errorCategory?: string; pairedAt: string };
+type Kiosk = { id: string; name: string; active: number; lastSeenAt?: string; readerOnline?: number; authenticationMethod?: KioskAuthenticationMethod; configuredAuthenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string; pendingEvents?: number; lastSyncAt?: string; errorCategory?: string; scansNeedReview?: number | null; clockConfirmed?: number | null; clockPendingScans?: number | null; reviewSyncFailing?: number | null; weakMatches?: number | null; readerTemplates?: number | null; linkedTemplates?: number | null; pairedAt: string };
 type Simulator = { name: string; active: number; online: number; lastSeenAt?: string; readerOnline: false; releaseVersion: string };
 type Pairing = { code: string; expiresAt: string; workerApiUrl: string; kioskName: string };
-type KioskCommand = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
+type KioskCommand = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest" | "erase_unlinked_fingerprints";
 type KioskAuthenticationMethod = "fingerprint" | "rfid" | "nfc" | "member_id" | "qr";
 type Notice = { message: string; tone: "neutral" | "success" | "error" };
 const authenticationMethodLabels: Record<KioskAuthenticationMethod, string> = { fingerprint: "Fingerprint", rfid: "RFID badge", nfc: "NFC badge", member_id: "Member ID entry", qr: "QR code" };
@@ -32,6 +33,20 @@ function kioskHealth(kiosk?: Kiosk) {
   const healthy = Boolean(kiosk && online && kiosk.readerOnline && kiosk.networkType !== "offline" && (kiosk.pendingEvents ?? 0) === 0 && !kiosk.errorCategory);
   const health = !kiosk ? "unpaired" : !online ? "offline" : healthy ? "healthy" : "degraded";
   return { online, health, label: health === "unpaired" ? "Not paired" : health[0].toUpperCase() + health.slice(1) };
+}
+
+const scans = (count: number) => `${count} ${count === 1 ? "scan" : "scans"}`;
+// Why a kiosk reports an issue. Kiosks before 2.0.0-beta.14 send only the category, so they keep the general advice.
+function kioskIssues(kiosk: Kiosk) {
+  if (!kiosk.errorCategory) return [];
+  const issues: string[] = [], detailed = typeof kiosk.clockConfirmed === "number";
+  if (!detailed) return [kiosk.errorCategory === "offline_queue" ? "Saved scans need attention. Open maintenance on this kiosk to check its clock and review rejected scans." : kiosk.errorCategory.replaceAll("_", " ")];
+  if (kiosk.reviewSyncFailing) issues.push("Rejected scans could not be sent for review. The kiosk retries every minute.");
+  if (kiosk.clockConfirmed === 0) issues.push("Clock not confirmed. Reconnect the kiosk to the network, or open maintenance on the kiosk to confirm the date and time.");
+  if (kiosk.clockPendingScans) issues.push(`${scans(kiosk.clockPendingScans)} saved while the clock was unconfirmed.`);
+  if (kiosk.scansNeedReview) issues.push(`${scans(kiosk.scansNeedReview)} rejected and not yet reviewed. Review them under Rejected scans; the kiosk clears this within two minutes.`);
+  if (kiosk.pendingEvents) issues.push(`${scans(kiosk.pendingEvents)} waiting to upload.`);
+  return issues.length ? issues : [kiosk.errorCategory.replaceAll("_", " ")];
 }
 
 function PairKioskDialog({ onClose, onPaired }: { onClose: () => void; onPaired: () => Promise<void> }) {
@@ -118,6 +133,9 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
     pairedAt: "2026-01-01T12:00:00Z", lastSeenAt: new Date().toISOString(), lastSyncAt: new Date().toISOString(), releaseVersion: "1.0.0",
   } : undefined);
   const health = kioskHealth(active);
+  const issues = active && health.online ? kioskIssues(active) : [];
+  // Fingerprints the reader stores that no member is linked to; only kiosks from 2.0.0-beta.14 report the counts.
+  const unlinkedTemplates = typeof active?.readerTemplates === "number" && typeof active.linkedTemplates === "number" ? Math.max(0, active.readerTemplates - active.linkedTemplates) : 0;
   const { online } = health;
   const configuredAuthenticationMethod = active?.configuredAuthenticationMethod ?? "fingerprint";
   useEffect(() => { setAuthenticationMethod(configuredAuthenticationMethod); }, [active?.id, configuredAuthenticationMethod]);
@@ -168,9 +186,9 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
         {!active && <p data-walkthrough="kiosk-status">{managing ? "This kiosk is unavailable or retired." : "No kiosk paired"}</p>}
 
         {active ? <>
-          <dl className="kiosk-diagnostics kiosk-summary" data-walkthrough="kiosk-diagnostics"><div><dt>Authentication</dt><dd>{authenticationMethodLabels[activeAuthenticationMethod]}{configuredAuthenticationMethod !== activeAuthenticationMethod && <small>{authenticationMethodLabels[configuredAuthenticationMethod]} configured - waiting for kiosk sync</small>}</dd></div><div><dt>{activeAuthenticationMethod === "fingerprint" ? "Fingerprint reader" : "Input service"}</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Installed release</dt><dd>{active.releaseVersion ?? "Unknown"}</dd></div><div><dt>{release.channel === "stable" ? "Latest stable release" : release.channel === "beta" ? "Latest beta release" : "Latest release"}</dt><dd>{latestRelease || "Unavailable"}{!release.fresh && latestRelease ? <small>Previously checked; confirmation required</small> : release.fresh && kioskUpdateTransition(release.release, active.releaseVersion ?? "") === "replace-development" ? <small>Replace development build with confirmation</small> : release.fresh && hasComparableStableVersions(release.release, active.releaseVersion ?? "") ? <small>{releaseCurrent ? "Up to date" : "Update available"}</small> : null}</dd></div></dl>
+          <dl className="kiosk-diagnostics kiosk-summary" data-walkthrough="kiosk-diagnostics"><div><dt>Authentication</dt><dd>{authenticationMethodLabels[activeAuthenticationMethod]}{configuredAuthenticationMethod !== activeAuthenticationMethod && <small>{authenticationMethodLabels[configuredAuthenticationMethod]} configured - waiting for kiosk sync</small>}</dd></div><div><dt>{activeAuthenticationMethod === "fingerprint" ? "Fingerprint reader" : "Input service"}</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Installed release</dt><dd>{active.releaseVersion ?? "Unknown"}</dd></div><div><dt>{release.channel === "stable" ? "Latest stable release" : release.channel === "beta" ? "Latest beta release" : "Latest release"}</dt><dd>{latestRelease || "Unavailable"}{!release.fresh && latestRelease ? <small>Previously checked; confirmation required</small> : release.fresh && kioskUpdateTransition(release.release, active.releaseVersion ?? "") === "replace-development" ? <small>Replace development build with confirmation</small> : release.fresh && hasComparableStableVersions(release.release, active.releaseVersion ?? "") ? <small>{releaseCurrent ? "Up to date" : "Update available"}</small> : null}</dd></div>{issues.length > 0 && <div className="kiosk-diagnostic-error"><dt>Needs attention</dt><dd>{issues.length === 1 ? issues[0] : <ul className="kiosk-issues">{issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}</dd></div>}</dl>
           {!managing && !example && <RouteLink className="ui-button kiosk-manage-link" href={`/kiosks/${encodeURIComponent(active.id)}/manage`} currentPath={path} navigate={navigate}>Manage kiosk</RouteLink>}
-          {(managing || walkthroughOpen) && <details className="kiosk-management-section" open={walkthroughOpen || undefined}><summary>Diagnostics</summary><dl className="kiosk-diagnostics"><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div><div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div>{active.errorCategory && <div className="kiosk-diagnostic-error"><dt>Reported issue</dt><dd>{active.errorCategory === "offline_queue" ? "Saved scans need attention. Open maintenance on this kiosk to check its clock and review rejected scans." : active.errorCategory.replaceAll("_", " ")}</dd></div>}</dl></details>}
+          {(managing || walkthroughOpen) && <details className="kiosk-management-section" open={walkthroughOpen || undefined}><summary>Diagnostics</summary><dl className="kiosk-diagnostics"><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div>{typeof active.readerTemplates === "number" && typeof active.linkedTemplates === "number" && <div><dt>Reader fingerprints</dt><dd>{active.readerTemplates} of 200 stored<small>{active.linkedTemplates} linked to members{unlinkedTemplates ? `, ${unlinkedTemplates} unlinked` : ""}</small></dd></div>}{typeof active.weakMatches === "number" && <div><dt>Weak matches asked to rescan</dt><dd>{active.weakMatches}<small>Since the kiosk last started</small></dd></div>}<div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div></dl></details>}
           {role === "admin" && !releaseCurrent && <div className="kiosk-update-action"><button className="primary-button" type="button" data-walkthrough="kiosk-update" disabled={example || !online || release.checking || !release.fresh || !["upgrade", "replace-development"].includes(kioskUpdateTransition(release.release, active.releaseVersion ?? ""))} onClick={() => void command("install_latest", "Kiosk update")}>Update kiosk</button></div>}
           {role === "admin" && (managing || walkthroughOpen) && <>
             <details className="kiosk-management-section" open={walkthroughOpen || undefined}><summary>Authentication settings</summary>
@@ -184,6 +202,7 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
               <button type="button" disabled={example} data-walkthrough="kiosk-reload" onClick={() => void command("reload_display", "Display reload")}>Reload display</button>
               <button type="button" disabled={example} data-walkthrough="kiosk-restart" onClick={() => void command("restart_service", "Software restart")}>Restart software</button>
               <button type="button" disabled={example} data-walkthrough="kiosk-reboot" onClick={() => void command("reboot", "Device reboot", `Reboot ${active.name}? Attendance scanning will pause while the Pi restarts.`)}>Reboot Pi</button>
+              {unlinkedTemplates > 0 && <button type="button" disabled={example} onClick={() => void command("erase_unlinked_fingerprints", "Unlinked fingerprint erase", `Erase up to ${unlinkedTemplates} fingerprints stored on ${active.name}'s reader that no member is linked to? These are retired or replaced fingerprints and cannot be recovered. Linked fingerprints are kept, and scanning pauses for a few seconds.`)}>Erase unlinked fingerprints</button>}
               <button type="button" disabled={example} data-walkthrough="kiosk-network-pin" onClick={() => void command("reset_network_pin", "Network PIN reset", `Reset the local settings PIN on ${active.name}? Anyone at the kiosk can then create a new PIN.`)}>Reset network PIN</button>
 
 
@@ -198,6 +217,7 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
       {role === "admin" && !managing && <article className="task-card kiosk-simulator-card" data-walkthrough="kiosk-simulator"><h2>Browser simulator</h2><div className="kiosk-state"><strong>{simulator?.name ?? "Not configured"}</strong><span className="status-pill ui-status" data-tone={simulator?.active && simulator.online ? "success" : simulator?.active ? "error" : "neutral"}>{simulator?.active ? simulator.online ? "Online" : "Offline" : "Not paired"}</span></div><p>Uses the kiosk scan surface with browser-selected simulated reads. Events are audited and do not count as physical kiosk activity.</p>{simulator?.active !== 1 && <RouteLink className="secondary-button action-link" href="/settings/guided-setup" currentPath={path} navigate={navigate}>Set up browser simulator</RouteLink>}{simulator?.active === 1 && <div className="kiosk-actions"><a className="primary-button action-link" href="/simulator">Open simulator</a><button type="button" onClick={() => void stopSimulator()}>Stop simulator</button></div>}</article>}
     </div>
     {role === "admin" && !managing && <KioskScanReviews />}
+    {role === "admin" && !managing && <KioskFingerprintMatch />}
     {pairing && <PairKioskDialog onClose={() => setPairing(false)} onPaired={load} />}
     {enrolling && <KioskEnrollmentDialog kiosk={enrolling.kiosk} initial={enrolling.session} onClose={() => setEnrolling(undefined)} />}
   </section>;

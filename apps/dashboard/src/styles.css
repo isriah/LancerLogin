@@ -547,6 +547,7 @@ main[aria-busy="true"] .setup-progress { display: none; }
 .kiosk-diagnostics dd small { color: var(--ui-text-muted); font-size: var(--text-caption); }
 .kiosk-diagnostics .kiosk-diagnostic-error { grid-column: 1 / -1; border-color: color-mix(in srgb,var(--ui-error) 35%,var(--ui-border)); }
 .kiosk-diagnostic-error dd { color: var(--ui-error); }
+.kiosk-issues { display: grid; gap: var(--space-1); margin: 0; padding-left: var(--space-4); text-align: left; }
 .kiosk-discord-status { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin-top: var(--space-4); padding: var(--space-4); border: 1px solid var(--ui-border); background: var(--ui-surface-subtle); border-radius: var(--radius-card); }
 .kiosk-discord-status h3,.kiosk-discord-status p { margin: 0; }
 .kiosk-discord-status p { margin-top: var(--space-1); color: var(--ui-text-muted); font-size: var(--text-small); }

@@ -35,6 +35,7 @@ import { createFingerprintCloudClient } from "./fingerprint-cloud-client.mjs";
 import { createFingerprintSync } from "./fingerprint-sync.mjs";
 import { createFingerprintVaultClient } from "./fingerprint-vault-client.mjs";
 import { createFingerprintVault } from "./fingerprint-vault.mjs";
+import { eraseUnlinkedTemplates } from "./reader-cleanup.mjs";
 import { createFingerprintResetClient } from "./fingerprint-reset-client.mjs";
 import { createFingerprintReset } from "./fingerprint-reset.mjs";
 import { kioskState, kioskStates } from "./kiosk-states.mjs";
@@ -57,12 +58,15 @@ export function localReleaseVersion(value) {
 
 const port = Number(process.env.LANCERLOGIN_KIOSK_PORT ?? 8788);
 const configPath = process.env.LANCERLOGIN_CONFIG ?? "/var/lib/lancerlogin/pairing.json";
+const fingerprintVaultPath = process.env.LANCERLOGIN_FINGERPRINT_VAULT ?? `${dirname(configPath)}/fingerprint-vault`;
+const fingerprintSyncPath = process.env.LANCERLOGIN_FINGERPRINT_SYNC ?? `${dirname(configPath)}/fingerprint-sync`;
 let shuttingDown = false;
 const presenceRestart = createPresenceRestartStore(`${configPath}.presence-restart.json`);
 const presenceBinding = config => createHash("sha256").update(JSON.stringify([config?.apiUrl ?? null, config?.kioskId ?? null, config?.pairingId ?? null])).digest("hex");
 const brandingPath = process.env.LANCERLOGIN_BRANDING ?? "/var/lib/lancerlogin/branding.json";
 const networkPinPath = process.env.LANCERLOGIN_NETWORK_PIN ?? "/var/lib/lancerlogin/network-pin.json";
 const authenticationPath = process.env.LANCERLOGIN_AUTHENTICATION ?? "/var/lib/lancerlogin/authentication.json";
+const fingerprintMatchPath = join(dirname(authenticationPath), "fingerprint-match.json");
 const credentialPath = process.env.LANCERLOGIN_CREDENTIAL_MAPPINGS ?? "/var/lib/lancerlogin/credential-mappings.json";
 const rosterPath = process.env.LANCERLOGIN_ROSTER_CACHE ?? "/var/lib/lancerlogin/roster-cache.json";
 const queue = createFileQueue(process.env.LANCERLOGIN_QUEUE ?? "/var/lib/lancerlogin/attendance-queue.json");
@@ -111,6 +115,17 @@ function currentDisplay() {
 }
 async function loadAuthenticationMethod() { try { authenticationMethod = normalizeIdentityMethod(JSON.parse(await readFile(authenticationPath, "utf8")).authenticationMethod); } catch { authenticationMethod = "fingerprint"; } return authenticationMethod; }
 async function saveAuthenticationMethod(value) { const next = normalizeIdentityMethod(value); if (next === authenticationMethod) return; attendanceInputGeneration++; await mkdir(dirname(authenticationPath), { recursive: true, mode: 0o700 }); const temporary = `${authenticationPath}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify({ authenticationMethod: next })}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, authenticationPath); await chmod(authenticationPath, 0o600); authenticationMethod = next; identityInput.clear(); if (next === "fingerprint") { requireFingerRemoval(); } state.readerOnline = next === "fingerprint" ? false : true; display = readyDisplay(); }
+// Matches scoring below the Admin's minimum are asked to rescan instead of being recorded. 0 accepts every match the
+// reader reports. Persisted so an offline restart keeps the last setting.
+let fingerprintMinimumScore = 0, weakMatches = 0;
+const validMinimumScore = value => Number.isInteger(value) && value >= 0 && value <= 1000;
+async function loadFingerprintMatch() { try { const value = JSON.parse(await readFile(fingerprintMatchPath, "utf8")).minimumScore; if (validMinimumScore(value)) fingerprintMinimumScore = value; } catch { /* Accept every reader match until the first cloud sync. */ } }
+async function saveFingerprintMatch(value) {
+  if (!validMinimumScore(value) || value === fingerprintMinimumScore) return;
+  await mkdir(dirname(fingerprintMatchPath), { recursive: true, mode: 0o700 }); const temporary = `${fingerprintMatchPath}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify({ minimumScore: value })}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, fingerprintMatchPath);
+  fingerprintMinimumScore = value;
+}
 async function loadPairing() { await pairingBoundary; if (unpairingBusy || pairingRecovery) return undefined; return pairingCache.load(); }
 async function savePairing(config) { return pairingCache.save(config); }
 async function saveKioskName(config, name) {
@@ -178,7 +193,7 @@ async function resetController() {
       // Initialize local peer-state recovery too, even when sharing is off or
       // the reader is disconnected. Disabling local keys needs no reader I/O.
       if (!fingerprintSync) fingerprintSync = createFingerprintSync({
-        directory: `${process.env.LANCERLOGIN_FINGERPRINT_SYNC ?? `${dirname(configPath)}/fingerprint-sync`}${localResetEpoch ? `/after-reset-${localResetEpoch}` : ""}`,
+        directory: `${fingerprintSyncPath}${localResetEpoch ? `/after-reset-${localResetEpoch}` : ""}`,
         config, client: createFingerprintCloudClient(config), sensor, mappings, withSensor: useSensor,
       });
       await fingerprintSync.stopForReset(); await fingerprintVault?.stopForReset();
@@ -208,7 +223,7 @@ async function vaultController() {
   if (!fingerprintVault) {
     fingerprintPairing = binding;
     fingerprintVault = createFingerprintVault({
-      directory: process.env.LANCERLOGIN_FINGERPRINT_VAULT ?? `${dirname(configPath)}/fingerprint-vault`, config,
+      directory: fingerprintVaultPath, config,
       client: createFingerprintVaultClient(config), sensor, mappings, withSensor: useSensor,
       templates: createR503TemplateTransfer(createR503Transaction(process.env.LANCERLOGIN_SENSOR_PATH ?? "/dev/serial0")),
       fetchRoster: () => fetchFingerprintRoster(config),
@@ -240,7 +255,7 @@ function purgeExpiredArchives() {
   if (unpairingBusy || pairingRecovery || !attendanceClock.isVerified()) return;
   void unpairingStore.purgeArchives().catch(() => undefined);
 }
-let heartbeatRunning;
+let heartbeatRunning, lastOpenScanReviews, readerCounts;
 const scanReviewSync = createScanReviewSync({ queue, send: (config, records) => sendScanReviews(config, records, { fetchImpl: boundedCloudFetch }) });
 function heartbeat() {
   if (!heartbeatRunning) heartbeatRunning = installationActivities.run(heartbeatNow).catch(() => undefined).finally(() => { heartbeatRunning = undefined; });
@@ -249,7 +264,7 @@ function heartbeat() {
 const boundedCloudFetch = (url, options) => fetch(url, { ...options, redirect: "error", signal: AbortSignal.timeout(8000) });
 async function applyRemoteConfiguration(config, remote) {
   const previousMethod = authenticationMethod;
-  if (remote.settings) { await saveBranding(remote.settings); await saveAuthenticationMethod(remote.settings.authenticationMethod); }
+  if (remote.settings) { await saveBranding(remote.settings); await saveAuthenticationMethod(remote.settings.authenticationMethod); await saveFingerprintMatch(remote.settings.fingerprintMinimumScore ?? 0); }
   await testAuthenticator();
   if (authenticationMethod !== "fingerprint" && (authenticationMethod !== previousMethod || Date.now() - rosterCachedAt >= 5 * 60_000)) {
     rosterCachedAt = Date.now();
@@ -269,10 +284,20 @@ async function heartbeatNow() {
     let reviewSyncFailed = false;
     await scanReviewSync.tick(config).catch(() => { reviewSyncFailed = true; });
     if (sync.acknowledgements.some(item => item.accepted || item.duplicate)) state.lastSyncAt = new Date().toISOString();
-    await testAuthenticator();
+    const authenticator = await testAuthenticator();
+    // Reader slots in use versus linked to members; the difference is what the reader cleanup can erase.
+    if (authenticationMethod === "fingerprint" && sensor && state.readerOnline && Number.isInteger(authenticator.templateCount)) readerCounts = { stored: authenticator.templateCount, linked: Object.keys(await mappings.read().catch(() => ({}))).length };
+    else readerCounts = undefined;
     const attendance = await queue.diagnostics();
-    state.errorCategory = reviewSyncFailed || scanReviewSync.hasFailures() ? "cloud_sync" : !attendanceClock.isVerified() || attendance.needsReview || attendance.clockPending ? "offline_queue" : attendance.pending ? "cloud_sync" : undefined;
-    await sendHeartbeat(config, { fetchImpl: boundedCloudFetch, readerOnline: state.readerOnline, authenticationMethod, releaseVersion, updatePolicyVersion: await kioskUpdatePolicyVersion(), uptimeSeconds: Math.floor(process.uptime()), networkType: networkDiagnostics.type, networkSignal: networkDiagnostics.signal, lastWifiScanAt: state.lastWifiScanAt ?? null, pendingEvents: attendance.pending, lastSyncAt: state.lastSyncAt, errorCategory: state.errorCategory ?? null }); state.cloudOnline = true;
+    const reviewSyncFailing = reviewSyncFailed || scanReviewSync.hasFailures(), clockConfirmed = attendanceClock.isVerified();
+    state.errorCategory = reviewSyncFailing ? "cloud_sync" : !clockConfirmed || attendance.needsReview || attendance.clockPending ? "offline_queue" : attendance.pending ? "cloud_sync" : undefined;
+    const reply = await sendHeartbeat(config, { fetchImpl: boundedCloudFetch, readerOnline: state.readerOnline, authenticationMethod, releaseVersion, updatePolicyVersion: await kioskUpdatePolicyVersion(), uptimeSeconds: Math.floor(process.uptime()), networkType: networkDiagnostics.type, networkSignal: networkDiagnostics.signal, lastWifiScanAt: state.lastWifiScanAt ?? null, pendingEvents: attendance.pending, lastSyncAt: state.lastSyncAt, errorCategory: state.errorCategory ?? null,
+      attention: { scansNeedReview: attendance.needsReview, clockConfirmed, clockPendingScans: attendance.clockPending, reviewSyncFailing, weakMatches, ...(readerCounts ? { readerTemplates: readerCounts.stored, linkedTemplates: readerCounts.linked } : {}) } }); state.cloudOnline = true;
+    // Fewer open reviews in the cloud than unreviewed scans here means an Admin reviewed some in the dashboard.
+    // Poll them on the next heartbeat; react once per change so a persistent mismatch cannot resend every minute.
+    const openScanReviews = Number.isSafeInteger(reply?.openScanReviews) ? reply.openScanReviews : undefined;
+    if (openScanReviews !== undefined && openScanReviews < attendance.needsReview && openScanReviews !== lastOpenScanReviews) scanReviewSync.refreshOpen();
+    lastOpenScanReviews = openScanReviews;
   } catch { state.cloudOnline = false; state.errorCategory = "cloud_sync"; }
 }
 let cloudPolling;
@@ -302,11 +327,30 @@ async function runKioskCommand(command, config) {
   if (command.type === "reset_network_pin") { await networkPin.reset(); return { message: "Local settings PIN reset" }; }
   if (command.type === "restart_service") return { message: "Service restart requested", afterComplete: () => setTimeout(() => process.exit(1), 250).unref() };
   if (command.type === "reboot") return { message: "Device reboot requested", afterComplete: () => setTimeout(() => { const child = spawn("/usr/bin/systemctl", ["reboot"], { detached: true, stdio: "ignore" }); child.unref(); }, 250).unref() };
+  if (command.type === "erase_unlinked_fingerprints") return { message: await eraseUnlinkedFingerprints() };
   if (command.type === "install_latest") {
     await prepareVerifiedKioskUpdate(command);
     return { message: "Verified kiosk update started", afterComplete: () => setTimeout(() => startVerifiedKioskUpdate({ onFailure: (message) => completeKioskCommand(config, command.id, { success: false, message }) }), 250).unref() };
   }
   throw new Error("Unsupported kiosk command");
+}
+// Retired and replaced fingerprints stay on the reader after their member link is removed, filling its 200 slots.
+// Enrollment, cloud import and reset recovery are held off while unlinked templates are erased.
+async function eraseUnlinkedFingerprints() {
+  if (!sensor || authenticationMethod !== "fingerprint") throw new Error("This kiosk is not using its fingerprint reader.");
+  if (enrollmentInProgress || unpairingBusy || pairingRecovery) throw new Error("Finish enrollment or pairing changes before erasing unlinked fingerprints.");
+  const config = await loadPairing(); if (!config?.pairingId) throw new Error("Pair this kiosk first.");
+  enrollmentInProgress = true;
+  try {
+    while (fingerprintPolling) await fingerprintPolling.catch(() => undefined);
+    let release; fingerprintPolling = new Promise(resolve => { release = resolve; });
+    try {
+      await assertFingerprintMutationAllowed();
+      const result = await useSensor(() => eraseUnlinkedTemplates({ sensor, mappings, journalRoots: [fingerprintVaultPath, fingerprintSyncPath], vaultRoot: fingerprintVaultPath, binding: config }));
+      readerCounts = { stored: result.stored, linked: result.linked };
+      return `Erased ${result.erased} unlinked ${result.erased === 1 ? "fingerprint" : "fingerprints"}. The reader now stores ${result.stored} of 200, ${result.linked} linked to members.`;
+    } finally { fingerprintPolling = undefined; release(); }
+  } finally { enrollmentInProgress = false; await refreshCapturePermission(); }
 }
 async function pollCommandsNow(suppliedCommand, expectedConfig) {
   if (commandPolling) return; commandPolling = true;
@@ -326,9 +370,11 @@ async function captureIdentity() {
   if (!observation || observation.status === "no_finger") return { status: "idle" };
   if (observation.status === "not_found") return { status: "unknown", ...identityUnknownState("fingerprint") };
   if (observation.status !== "match") return { status: "idle" };
+  // A weak match can be someone else's finger; a rescan is cheaper than checking the wrong member in or out.
+  if (fingerprintMinimumScore > 0 && !(observation.score >= fingerprintMinimumScore)) { weakMatches++; return { status: "unknown", message: "Try again", detail: "Place your finger flat on the reader and hold it still." }; }
   const memberId = await mappings.memberForSlot(observation.slot);
   if (!memberId) return { status: "unknown", detail: "This fingerprint is not linked to an active roster member" };
-  return { status: "identified", memberId, identityKey: `fingerprint:${observation.slot}` };
+  return { status: "identified", memberId, identityKey: `fingerprint:${observation.slot}`, ...(Number.isInteger(observation.score) ? { matchScore: observation.score } : {}) };
 }
 const scanner = createIdentityScanner({ captureIdentity, captureTime: () => attendanceClock.capture(), now: () => performance.now(), captureAllowed: () => !shuttingDown && attendanceClock.isVerified() && !operatorPresence.status().captureSuspended && !fingerRemovalRequired, setFeedback, queue, loadPairing, flushAttendance, onDisplay: showDisplay, onInput: (online) => { readerObserved = true; state.readerOnline = online; }, onCloud: (online) => { state.cloudOnline = online; if (online) { state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; } else state.errorCategory = "cloud_sync"; } });
 const operatorPresence = createOperatorPresence({ restored: await presenceRestart.take(presenceBinding(await loadPairing().catch(() => undefined))), onSuspend: () => { attendanceInputGeneration++; identityInput.clear(); requireFingerRemoval(); void scanner.suspend("operator"); } });
@@ -697,7 +743,7 @@ if (process.env.NODE_ENV !== "test") {
     })().catch(() => process.exit(1));
   });
   server.listen(port, process.env.LANCERLOGIN_KIOSK_HOST ?? "0.0.0.0", () => console.log(`LancerLogin kiosk service listening on port ${port}`));
-  void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod(), attendanceClock.refresh().catch(() => undefined)]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); purgeExpiredArchives(); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, 60_000).unref(); setInterval(pollCloud, 5_000).unref();
+  void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod(), loadFingerprintMatch(), attendanceClock.refresh().catch(() => undefined)]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); purgeExpiredArchives(); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, 60_000).unref(); setInterval(pollCloud, 5_000).unref();
   setInterval(() => { void dashboardEnrollment.expire(); void refreshCapturePermission(); void checkFingerRemoval(); }, 250).unref();
   // Apply attendance retention and keep the journal short even on a quiet kiosk.
   setInterval(() => { void installationActivities.run(() => queue.compact()).catch(() => undefined); purgeExpiredArchives(); }, 6 * 60 * 60_000).unref();

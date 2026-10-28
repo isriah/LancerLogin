@@ -129,6 +129,15 @@ export function createFingerprintJournal(path, binding, { allowSuperseded = fals
       if (state.records.length >= 1024) return fail();
       state.records.push(record); return record;
     }),
+    // After the reader cleanup erased retired templates, drop superseded records for slots that are now empty so
+    // cloud imports can reuse them. A record still owning a slot (any other phase) keeps every record for that slot.
+    forgetSuperseded: (emptySlots) => mutate(state => {
+      if (!allowSuperseded || !Array.isArray(emptySlots) || !emptySlots.every(slot => Number.isInteger(slot) && slot >= 0 && slot < 1024)) return fail();
+      const empty = new Set(emptySlots), owned = new Set(state.records.filter(record => record.phase !== "superseded").map(record => record.slot));
+      const before = state.records.length;
+      state.records = state.records.filter(record => record.phase !== "superseded" || !empty.has(record.slot) || owned.has(record.slot));
+      return { forgotten: before - state.records.length };
+    }),
     advance: (transferId, expectedPhase, nextPhase) => mutate((state) => {
       const record = state.records.find((item) => item.transferId === transferId);
       if (!record || !phases.includes(expectedPhase) || (nextPhase !== "needs_review" && phases.indexOf(nextPhase) !== phases.indexOf(expectedPhase) + 1)) return fail();

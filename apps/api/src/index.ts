@@ -21,6 +21,7 @@ import { HttpError } from "./http-error.ts";
 import { fingerprintVaultRoute } from "./fingerprint-vault.ts";
 import { kioskPoll } from "./kiosk-poll.ts";
 import { syncKioskScanReviews, listKioskScanReviews, markKioskScanReviewed, markKioskScansReviewed } from "./kiosk-scan-reviews.ts";
+import { fingerprintMinimumScore, readFingerprintMatch, recordScanMatch, saveFingerprintMinimumScore, validateMinimumScore } from "./fingerprint-match.ts";
 import { readKioskEnrollment, startKioskEnrollment, selectEnrollmentMember, cancelKioskEnrollment, progressKioskEnrollment } from "./kiosk-enrollment.ts";
 import { fingerprintResetRoute } from "./fingerprint-reset.ts";
 import { bundledModuleRegistry } from "../../../packages/shared/src/module-platform.ts";
@@ -60,7 +61,7 @@ type RecurrenceFrequency = "daily" | "weekly" | "biweekly" | "monthly";
 type MeetingInput = { meetingId?: string; title?: string; startsAt?: string; endsAt?: string | null; required?: boolean; notes?: string | null; weightCategoryId?: string | null; audienceMode?: "all" | "labels"; audienceLabelIds?: string[]; impactToken?: string; recurrence?: { frequency?: RecurrenceFrequency; until?: string } };
 type MeetingWeightCategory = { id: string; name: string; weight: number; minimumDurationMinutes?: number | null; position: number; active: number | boolean };
 type MeetingWeightCategoryInput = { name?: string; weight?: number; minimumDurationMinutes?: number | null; active?: boolean };
-type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest";
+type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest" | "erase_unlinked_fingerprints";
 type KioskAuthenticationMethod = "fingerprint" | "rfid" | "nfc" | "member_id" | "qr";
 const kioskAuthenticationMethods = new Set<KioskAuthenticationMethod>(["fingerprint", "rfid", "nfc", "member_id", "qr"]);
 async function latestCompatibleKioskRelease(env: Env, channel: "stable" | "beta") {
@@ -785,15 +786,33 @@ async function kioskFor(request: Request, env: Env, includeRosterRevision = fals
   if (!kiosk) throw new HttpError(401, "Kiosk credential is invalid");
   return { ...kiosk, pairingBound: Boolean(kiosk.pairingBound) };
 }
+type KioskAttention = { scansNeedReview: number; clockConfirmed: boolean; clockPendingScans: number; reviewSyncFailing: boolean; weakMatches?: number; readerTemplates?: number; linkedTemplates?: number };
+// The causes behind a kiosk's error category, plus fingerprint matches below the minimum score that it asked to
+// rescan since it started. Optional: kiosks before 2.0.0-beta.14 do not send it.
+function kioskAttention(value: unknown): KioskAttention | undefined {
+  if (value === undefined || value === null) return undefined;
+  const input = value as Record<string, unknown>; const count = (item: unknown) => Number.isInteger(item) && Number(item) >= 0 && Number(item) <= 100_000;
+  if (typeof value !== "object" || Array.isArray(value) || Object.keys(input).some(key => !["scansNeedReview", "clockConfirmed", "clockPendingScans", "reviewSyncFailing", "weakMatches", "readerTemplates", "linkedTemplates"].includes(key))
+    || !count(input.scansNeedReview) || typeof input.clockConfirmed !== "boolean" || !count(input.clockPendingScans) || typeof input.reviewSyncFailing !== "boolean"
+    || input.weakMatches !== undefined && !count(input.weakMatches)
+    || (input.readerTemplates === undefined) !== (input.linkedTemplates === undefined) || input.readerTemplates !== undefined && (!count(input.readerTemplates) || Number(input.readerTemplates) > 1024 || !count(input.linkedTemplates) || Number(input.linkedTemplates) > 1024)) throw new HttpError(400, "Invalid kiosk attention details");
+  return { scansNeedReview: Number(input.scansNeedReview), clockConfirmed: input.clockConfirmed, clockPendingScans: Number(input.clockPendingScans), reviewSyncFailing: input.reviewSyncFailing,
+    ...(input.weakMatches === undefined ? {} : { weakMatches: Number(input.weakMatches) }),
+    ...(input.readerTemplates === undefined ? {} : { readerTemplates: Number(input.readerTemplates), linkedTemplates: Number(input.linkedTemplates) }) };
+}
 async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; authenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; updatePolicyVersion?: number; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string | null; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null }>(request);
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; authenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; updatePolicyVersion?: number; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string | null; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null; attention?: unknown }>(request);
+  const attention = kioskAttention(input.attention);
   if (input.updatePolicyVersion !== undefined && ![1, 2].includes(input.updatePolicyVersion)) throw new HttpError(400, "Unsupported kiosk update policy");
   const pendingEvents = input.pendingEvents ?? 0;
   if (typeof input.readerOnline !== "boolean" || input.authenticationMethod !== undefined && !kioskAuthenticationMethods.has(input.authenticationMethod) || !input.releaseVersion?.trim() || input.releaseVersion.length > 40 || input.uptimeSeconds !== undefined && (!Number.isInteger(input.uptimeSeconds) || input.uptimeSeconds < 0 || input.uptimeSeconds > 2_147_483_647) || input.networkType !== undefined && !["wifi", "ethernet", "offline"].includes(input.networkType) || input.networkSignal !== undefined && input.networkSignal !== null && (!Number.isInteger(input.networkSignal) || input.networkSignal < 0 || input.networkSignal > 100) || input.lastWifiScanAt && !validTimestamp(input.lastWifiScanAt) || !Number.isInteger(pendingEvents) || pendingEvents < 0 || pendingEvents > 100_000 || input.lastSyncAt && !validTimestamp(input.lastSyncAt) || input.errorCategory && !["cloud_sync", "reader", "offline_queue"].includes(input.errorCategory)) throw new HttpError(400, "Authentication input status and approved operational diagnostics are required");
   const now = new Date().toISOString();
   const db = requireDatabase(env); const reportedRelease = input.releaseVersion.trim();
   await db.prepare("UPDATE kiosks SET update_policy_version = ? WHERE installation_id = 'primary' AND id = ?").bind(input.updatePolicyVersion ?? 1, kiosk.id).run();
-  await db.prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, authentication_method = COALESCE(?, authentication_method), release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.authenticationMethod ?? null, reportedRelease, input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, input.errorCategory || null, kiosk.id).run();
+  await db.prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, authentication_method = COALESCE(?, authentication_method), release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ?, scans_need_review = ?, clock_confirmed = ?, clock_pending_scans = ?, review_sync_failing = ?, weak_matches = ?, reader_templates = ?, linked_templates = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.authenticationMethod ?? null, reportedRelease, input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, input.errorCategory || null, attention?.scansNeedReview ?? null, attention ? Number(attention.clockConfirmed) : null, attention?.clockPendingScans ?? null, attention ? Number(attention.reviewSyncFailing) : null, attention?.weakMatches ?? null, attention?.readerTemplates ?? null, attention?.linkedTemplates ?? null, kiosk.id).run();
+  // A kiosk holding unreviewed rejected scans learns how many are still open in the cloud, so a dashboard review
+  // reaches it on its next heartbeat instead of its hourly refresh. Kiosks with nothing to review cost no read.
+  const openScanReviews = attention?.scansNeedReview ? (await db.prepare("SELECT COUNT(*) AS count FROM kiosk_scan_reviews WHERE installation_id = 'primary' AND review_status = 'open' AND kiosk_id = ?").bind(kiosk.id).first<{ count: number }>())?.count ?? 0 : undefined;
   const update = await db.prepare("SELECT id, completed_at AS completedAt, requested_release_version AS requestedReleaseVersion, release_version_before AS releaseVersionBefore FROM kiosk_commands WHERE installation_id = 'primary' AND kiosk_id = ? AND command_type = 'install_latest' AND completed_at IS NOT NULL AND success = 1 AND resolution_status IS NULL ORDER BY created_at DESC LIMIT 1").bind(kiosk.id).first<{ id: string; completedAt: string; requestedReleaseVersion?: string; releaseVersionBefore?: string }>();
   if (update?.requestedReleaseVersion) {
     const normalizedReported = reportedRelease.replace(/^v/, ""); const normalizedRequested = update.requestedReleaseVersion.replace(/^v/, ""); const normalizedBefore = update.releaseVersionBefore?.replace(/^v/, "");
@@ -805,17 +824,17 @@ async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContex
   }
   const statusUpdate = syncDiscordKioskStatus(env).catch(() => undefined);
   if (context) context.waitUntil(statusUpdate); else await statusUpdate;
-  return response({ ok: true, kioskId: kiosk.id, receivedAt: now });
+  return response({ ok: true, kioskId: kiosk.id, receivedAt: now, ...(openScanReviews === undefined ? {} : { openScanReviews }) });
 }
 async function kioskStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]);
   const db = requireDatabase(env);
-  const result = await db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, configured_authentication_method AS configuredAuthenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
+  const result = await db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, configured_authentication_method AS configuredAuthenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, scans_need_review AS scansNeedReview, clock_confirmed AS clockConfirmed, clock_pending_scans AS clockPendingScans, review_sync_failing AS reviewSyncFailing, weak_matches AS weakMatches, reader_templates AS readerTemplates, linked_templates AS linkedTemplates, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
   return response({ kiosks: result.results ?? [] });
 }
 async function kioskConfiguration(request: Request, env: Env): Promise<Response> {
   const kiosk = await kioskFor(request, env); const settings = await requireDatabase(env).prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop FROM organization_settings WHERE installation_id = 'primary'").first();
-  return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings: settings ? { ...settings, authenticationMethod: kiosk.configuredAuthenticationMethod } : null });
+  return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings: settings ? { ...settings, authenticationMethod: kiosk.configuredAuthenticationMethod, fingerprintMinimumScore: await fingerprintMinimumScore(requireDatabase(env)).catch(() => 0) } : null });
 }
 type KioskRosterMember = { rosterId: string; memberId: string; firstName: string; lastName: string };
 const kioskRosterCache = new ReportDataCache<KioskRosterMember[]>();
@@ -899,10 +918,12 @@ async function kioskEnrollmentProgress(request: Request, env: Env, sessionId: st
 async function queueKioskCommand(request: Request, env: Env, kioskId: string): Promise<Response> {
   if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Kiosk commands require the dashboard origin");
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ command?: KioskCommandType; replaceDevelopmentBuild?: boolean }>(request);
-  const supported: KioskCommandType[] = ["reload_display", "restart_service", "reboot", "reset_network_pin", "install_latest"];
+  const supported: KioskCommandType[] = ["reload_display", "restart_service", "reboot", "reset_network_pin", "install_latest", "erase_unlinked_fingerprints"];
   if (!isObject(input) || Object.keys(input).some((key) => key !== "command" && key !== "replaceDevelopmentBuild") || input.replaceDevelopmentBuild !== undefined && (input.command !== "install_latest" || input.replaceDevelopmentBuild !== true) || !input.command || !supported.includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command without additional arguments");
-  const kiosk = await db.prepare("SELECT id, name, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string; releaseVersion?: string; updatePolicyVersion?: number }>();
+  const kiosk = await db.prepare("SELECT id, name, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, reader_templates AS readerTemplates FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string; releaseVersion?: string; updatePolicyVersion?: number; readerTemplates?: number | null }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
+  // Kiosks before 2.0.0-beta.14 reject unknown command types; only kiosks reporting reader counts understand this one.
+  if (input.command === "erase_unlinked_fingerprints" && typeof kiosk.readerTemplates !== "number") throw new HttpError(409, "Update this kiosk to 2.0.0-beta.14 or later, and connect its fingerprint reader, before erasing unlinked fingerprints.");
   let requestedReleaseVersion: string | null = null;
   const setting = await readUpdateChannel(env);
   const target = input.command === "install_latest" ? await latestCompatibleKioskRelease(env, setting.channel) : undefined;
@@ -1165,9 +1186,12 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt, meeting: { id: meeting.id, title: meeting.title }, member: { id: member.id, externalId: member.externalId, displayName: `${member.firstName} ${member.lastName}`.trim() } }, 202);
 }
 async function kioskAttendance(request: Request, env: Env): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string }>(request);
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string; matchScore?: unknown }>(request);
   if ((kiosk.pairingBound || input.pairingId !== undefined) && input.pairingId !== kiosk.pairingId) throw new HttpError(409, "This queued scan belongs to a different kiosk pairing and was not attached to the current kiosk", undefined, "pairing_mismatch");
-  return recordAttendance(requireDatabase(env), input, "kiosk");
+  const db = requireDatabase(env);
+  // Recorded whatever the outcome, so rejected scans show their match confidence too. Diagnostics never block attendance.
+  if (input.matchScore !== undefined) await recordScanMatch(db, kiosk.id, input.eventId, input.matchScore).catch(() => undefined);
+  return recordAttendance(db, input, "kiosk");
 }
 async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -3861,6 +3885,11 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/kiosks/fingerprint-vault" || url.pathname.startsWith("/admin/kiosks/fingerprint-vault/enrollments")) {
       const principal = await requireRole(request, env, ["admin"]);
       result = await fingerprintVaultRoute(request, { db: requireDatabase(env), actor: { kind: "admin", userId: principal.userId }, secret: env.FINGERPRINT_VAULT_KEY, readJson: parseJson, respond: response });
+    }
+    else if (url.pathname === "/admin/kiosks/fingerprint-match" && ["GET", "PUT"].includes(request.method)) {
+      const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+      if (request.method === "PUT") { const minimumScore = validateMinimumScore(await parseJson(request)); await saveFingerprintMinimumScore(db, minimumScore); await writeAudit(db, principal, "kiosk.fingerprint_minimum_score_changed", "kiosk", null, { minimumScore }); }
+      result = response(await readFingerprintMatch(db));
     }
     else if (url.pathname === "/admin/kiosks/fingerprint-sync") {
       await requireRole(request, env, ["admin"]);

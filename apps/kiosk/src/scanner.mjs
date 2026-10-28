@@ -3,7 +3,7 @@ import { kioskDisplayForQueuedScan } from "./kiosk-presentation.mjs";
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export function createIdentityScanner({ captureIdentity, captureAllowed = () => true, captureTime, setFeedback = async () => undefined, queue, loadPairing, flushAttendance, onDisplay, onInput = () => undefined, onCloud, now = () => Date.now(), delay = wait, eventId = () => crypto.randomUUID(), debounceMs = 8_000, flushWaitMs = 1_000 }) {
-  let stopped = false; let paused = false; let lastIdentity; let lastIdentityAt = 0; let lastUnknownAt = 0;
+  let stopped = false; let paused = false; let lastIdentity; let lastIdentityAt = 0; let lastUnknownAt = -Infinity;
   async function show(id, overrides) { await onDisplay(id, overrides); try { await setFeedback(id); } catch { /* Screen feedback remains available if optional hardware feedback fails. */ } }
   let currentTick, currentCommit, captureGeneration = 0;
   const suspensions = new Set();
@@ -35,7 +35,7 @@ export function createIdentityScanner({ captureIdentity, captureAllowed = () => 
     let event;
     let queuedDisplay;
     try {
-      event = { eventId: eventId(), memberId: observation.memberId, ...(captureTime ? await captureTime() : { occurredAt: new Date(timestamp).toISOString() }), ...(config.pairingId ? { pairingId: config.pairingId } : {}) };
+      event = { eventId: eventId(), memberId: observation.memberId, ...(captureTime ? await captureTime() : { occurredAt: new Date(timestamp).toISOString() }), ...(config.pairingId ? { pairingId: config.pairingId } : {}), ...(Number.isInteger(observation.matchScore) ? { matchScore: observation.matchScore } : {}) };
       queuedDisplay = kioskDisplayForQueuedScan(observation.memberId, await queue.pending());
       if (!valid()) return;
       lastIdentity = identityKey; lastIdentityAt = timestamp;

@@ -410,6 +410,21 @@
       "name": "0082_kiosk_roster_revision.sql",
       "sha256": "aee4ee101332377382570c140251e05631548ee1f3367a0e4ade220741799bf6",
       "forwardCompatible": true
+    },
+    {
+      "name": "0083_kiosk_attention.sql",
+      "sha256": "647db983e77985c33b19f6af05e3df3ef95e3aa35d38f049a92c2bcbf720f954",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0084_fingerprint_match_scores.sql",
+      "sha256": "2e3d0b828d8a7244db11df036c002498d1e56eb4b975e323c919e245b63372f6",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0085_reader_cleanup.sql",
+      "sha256": "7614a9f7315dcea696790be1d2c494016b7f71be0ed9ba20679a54e2246f74bb",
+      "forwardCompatible": true
     }
   ]
 }

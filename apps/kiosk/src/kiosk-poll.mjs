@@ -45,7 +45,7 @@ export function createKioskPollClient(config, { fetchImpl = fetch, now = Date.no
       if ([404, 405].includes(response.status)) { await response.body?.cancel(); invalidate(); return { unsupported: true }; }
       if (!response.ok) { await response.body?.cancel(); const error = unavailable(); error.status = response.status; error.reasonCode = [401, 403].includes(response.status) ? "authentication_failed" : "network_unavailable"; throw error; }
       const result = await readBounded(response);
-      if (result?.protocol !== 1 || !Object.hasOwn(result, "command") || result.command !== null && (!identifier(result.command?.id) || !["reload_display", "reset_network_pin", "restart_service", "reboot", "install_latest"].includes(result.command.type))) throw unavailable();
+      if (result?.protocol !== 1 || !Object.hasOwn(result, "command") || result.command !== null && (!identifier(result.command?.id) || !["reload_display", "reset_network_pin", "restart_service", "reboot", "install_latest", "erase_unlinked_fingerprints"].includes(result.command.type))) throw unavailable();
       const output = { command: result.command };
       if (enrollment) {
         if (enrollmentSupported && Object.hasOwn(result, "enrollment")) output.enrollment = structuredClone(result.enrollment);

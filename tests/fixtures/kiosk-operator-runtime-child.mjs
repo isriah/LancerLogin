@@ -28,6 +28,7 @@ const sensor = {
   fingerPresent: async () => present,
   scan: async () => present ? { status: "match", slot, score: 100 } : { status: "no_finger" },
   led: async () => {},
+  deleteTemplate: async slot => { occupied.delete(slot); },
   enroll: async (nextSlot, { onProgress, checkActive = () => {}, beforeStore = async () => {} }) => {
     enrollCalls++;
     await onProgress("enroll_wait_first");
@@ -52,11 +53,12 @@ process.on("message", message => {
   if (message.crashStop) { process.exit(99); return; }
   if (message.present !== undefined) present = message.present;
   if (message.slot !== undefined) slot = message.slot;
+  for (const extra of message.occupy ?? []) occupied.add(extra);
   if (message.holdEnrollment !== undefined) holdEnrollment = message.holdEnrollment;
   if (message.releaseEnrollment) { releaseEnrollment?.(); releaseEnrollment = undefined; }
   if (message.holdIdentity !== undefined) holdIdentity = message.holdIdentity;
   if (message.releaseIdentity) { releaseIdentity?.(); releaseIdentity = undefined; }
-  process.send({ id: message.id, enrollCalls, present, slot, identityCalls });
+  process.send({ id: message.id, enrollCalls, present, slot, identityCalls, occupied: [...occupied].sort((a, b) => a - b) });
 });
 const { server } = await import("../../apps/kiosk/src/service.mjs");
 if (!server.listening) await once(server, "listening");

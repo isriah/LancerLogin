@@ -45,7 +45,8 @@ export async function kioskPoll(request: Request, { db, credentialHash, secret, 
         'targetCommit',c.requested_release_sha,'channel',c.update_channel) FROM kiosk_commands c
         WHERE c.installation_id='primary' AND c.kiosk_id=k.id AND c.completed_at IS NULL AND c.created_at>=? ORDER BY c.created_at LIMIT 1) AS command
       ${configuration ? `,(SELECT json_object('organizationName',organization_name,'subtitle',subtitle,'logoData',logo_data,
-        'primaryColor',primary_color,'secondaryColor',secondary_color,'logoBackdrop',logo_backdrop,'authenticationMethod',k.authenticationMethod)
+        'primaryColor',primary_color,'secondaryColor',secondary_color,'logoBackdrop',logo_backdrop,'authenticationMethod',k.authenticationMethod,
+        'fingerprintMinimumScore',COALESCE((SELECT minimum_score FROM kiosk_fingerprint_match_settings WHERE installation_id='primary'),0))
         FROM organization_settings WHERE installation_id='primary') AS configuration` : ""}
       ${fingerprints ? `,EXISTS(SELECT 1 FROM maintenance_lock) AS maintenance,
       (SELECT json_object('id',id,'createdAt',createdAt,'kind','reset_fingerprint_mappings') FROM pending_reset) AS reset,

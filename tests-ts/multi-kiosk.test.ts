@@ -235,6 +235,92 @@ test("real SQLite kiosks retain independent health, commands, scan bindings and 
   assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM kiosks WHERE active = 1").get()?.n, 1);
 });
 
+test("heartbeat attention details reach the Kiosks page and report open cloud reviews only when the kiosk has some", async context => {
+  const { database, call, pair } = await fixture(context);
+  const device = await pair("Front entrance");
+  const heartbeat = (attention?: unknown) => call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "2.0.0-beta.14", errorCategory: "offline_queue", ...(attention === undefined ? {} : { attention }) }, device.kioskToken);
+  const insert = database.sqlite.prepare("INSERT INTO kiosk_scan_reviews(installation_id,kiosk_id,event_id,record_json,received_at,review_status) VALUES ('primary',?,?,'{}','2026-10-27T00:00:00Z',?)");
+  for (const [eventId, status] of [["synthetic-a", "reviewed"], ["synthetic-b", "open"], ["synthetic-c", "reviewed"]]) insert.run(device.kioskId, eventId, status);
+  const attention = { scansNeedReview: 3, clockConfirmed: false, clockPendingScans: 2, reviewSyncFailing: false };
+  const reply = await heartbeat(attention); assert.equal(reply.status, 200, await reply.clone().text());
+  assert.equal((await reply.json() as { openScanReviews?: number }).openScanReviews, 1, "two of the kiosk's three were reviewed in the dashboard");
+  const listed = (await (await call("/admin/kiosks")).json() as { kiosks: Array<Record<string, unknown>> }).kiosks[0];
+  assert.deepEqual([listed.scansNeedReview, listed.clockConfirmed, listed.clockPendingScans, listed.reviewSyncFailing], [3, 0, 2, 0]);
+  const clear = await heartbeat({ ...attention, scansNeedReview: 0 });
+  assert.equal("openScanReviews" in (await clear.json() as object), false, "nothing to review costs no cloud read");
+  const legacy = await heartbeat(); assert.equal(legacy.status, 200);
+  assert.equal("openScanReviews" in (await legacy.json() as object), false);
+  const unknown = (await (await call("/admin/kiosks")).json() as { kiosks: Array<Record<string, unknown>> }).kiosks[0];
+  assert.deepEqual([unknown.scansNeedReview, unknown.clockConfirmed, unknown.clockPendingScans, unknown.reviewSyncFailing], [null, null, null, null], "older kiosks report no details");
+  for (const invalid of [{ ...attention, scansNeedReview: -1 }, { ...attention, clockConfirmed: "no" }, { ...attention, extra: 1 }, [attention]]) assert.equal((await heartbeat(invalid)).status, 400);
+});
+
+test("fingerprint match scores are recorded for every uploaded scan and the minimum score reaches kiosks", async context => {
+  const { database, call, pair } = await fixture(context);
+  const device = await pair("Front entrance");
+  const match = async () => await (await call("/admin/kiosks/fingerprint-match")).json() as { minimumScore: number; recent: { scans: number; lowest: number | null; below150: number } };
+  assert.equal((await match()).minimumScore, 0, "every reader match is accepted until an Admin sets a minimum");
+  for (const invalid of [{ minimumScore: -1 }, { minimumScore: 1001 }, { minimumScore: 1.5 }, { minimumScore: 120, extra: 1 }, {}]) assert.equal((await call("/admin/kiosks/fingerprint-match", invalid, undefined, "PUT")).status, 400);
+  const saved = await call("/admin/kiosks/fingerprint-match", { minimumScore: 120 }, undefined, "PUT"); assert.equal(saved.status, 200, await saved.clone().text());
+  assert.equal((await match()).minimumScore, 120);
+  assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action='kiosk.fingerprint_minimum_score_changed'").get()?.n, 1);
+  const polled = await (await call("/kiosk/poll?v=1&config=1", undefined, device.kioskToken)).json() as { configuration: { settings: { fingerprintMinimumScore: number } } };
+  assert.equal(polled.configuration.settings.fingerprintMinimumScore, 120);
+  const legacy = await (await call("/kiosk/config", undefined, device.kioskToken)).json() as { settings: { fingerprintMinimumScore: number } };
+  assert.equal(legacy.settings.fingerprintMinimumScore, 120);
+  const scan = (eventId: string, memberId: string, matchScore?: unknown) => call("/kiosk/attendance", { eventId, memberId, occurredAt: "2026-09-30T12:00:00Z", pairingId: device.pairingId, ...(matchScore === undefined ? {} : { matchScore }) }, device.kioskToken);
+  assert.equal((await scan("synthetic-accepted", "SYN-001", 143)).status, 202);
+  assert.equal((await scan("synthetic-unknown", "SYN-NOT-ON-ROSTER", 61)).status, 404, "a rejected scan keeps its rejection");
+  assert.equal((await scan("synthetic-invalid-score", "SYN-001", "high")).status, 200, "an invalid score never refuses the scan");
+  assert.equal((await scan("synthetic-no-score", "SYN-001")).status, 200);
+  assert.deepEqual(database.sqlite.prepare("SELECT kiosk_event_id AS eventId,match_score AS score,kiosk_id AS kioskId FROM kiosk_scan_matches ORDER BY kiosk_event_id").all().map(row => ({ ...row })),
+    [{ eventId: "synthetic-accepted", score: 143, kioskId: device.kioskId }, { eventId: "synthetic-unknown", score: 61, kioskId: device.kioskId }]);
+  const recent = (await match()).recent; assert.deepEqual([recent.scans, recent.lowest, recent.below150], [2, 61, 2]);
+  const attention = { scansNeedReview: 0, clockConfirmed: true, clockPendingScans: 0, reviewSyncFailing: false };
+  assert.equal((await call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "2.0.0-beta.14", attention: { ...attention, weakMatches: 3 } }, device.kioskToken)).status, 200);
+  const listed = await (await call("/admin/kiosks")).json() as { kiosks: Array<{ weakMatches: number | null }> };
+  assert.equal(listed.kiosks[0].weakMatches, 3);
+  assert.equal((await call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "2.0.0-beta.14", attention: { ...attention, weakMatches: -1 } }, device.kioskToken)).status, 400);
+});
+
+test("the reader cleanup command is queued only for kiosks that report reader counts", async context => {
+  const { database, call, pair } = await fixture(context);
+  const device = await pair("Front entrance");
+  const erase = () => call(`/admin/kiosks/${device.kioskId}/commands`, { command: "erase_unlinked_fingerprints" });
+  const refused = await erase(); assert.equal(refused.status, 409, "a kiosk before 2.0.0-beta.14 would reject the unknown command");
+  assert.match((await refused.json() as { error: string }).error, /2.0.0-beta.14/);
+  const attention = { scansNeedReview: 0, clockConfirmed: true, clockPendingScans: 0, reviewSyncFailing: false, weakMatches: 0 };
+  const heartbeat = (extra: Record<string, unknown>) => call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "2.0.0-beta.14", attention: { ...attention, ...extra } }, device.kioskToken);
+  for (const invalid of [{ readerTemplates: 190 }, { readerTemplates: 190, linkedTemplates: -1 }, { readerTemplates: 2000, linkedTemplates: 1 }]) assert.equal((await heartbeat(invalid)).status, 400);
+  assert.equal((await heartbeat({ readerTemplates: 190, linkedTemplates: 113 })).status, 200);
+  const listed = await (await call("/admin/kiosks")).json() as { kiosks: Array<{ readerTemplates: number; linkedTemplates: number }> };
+  assert.deepEqual([listed.kiosks[0].readerTemplates, listed.kiosks[0].linkedTemplates], [190, 113]);
+  const queued = await erase(); assert.equal(queued.status, 202, await queued.clone().text());
+  const polled = await (await call("/kiosk/poll?v=1", undefined, device.kioskToken)).json() as { command: { type: string } };
+  assert.equal(polled.command.type, "erase_unlinked_fingerprints");
+  assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM kiosk_commands WHERE command_type='erase_unlinked_fingerprints'").get()?.n, 1);
+});
+
+test("migration 0085 keeps kiosk command history while allowing the reader cleanup command", () => {
+  const sqlite = new DatabaseSync(":memory:");
+  const files = readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql")).sort();
+  for (const name of files.filter(name => name < "0085")) sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
+  sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES ('primary','2026-01-01','local');
+    INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('admin','primary','admin','admin','2026-01-01');
+    INSERT INTO pairing_codes(id,installation_id,code_hash,expires_at,created_by,created_at,purpose) VALUES ('code','primary','code-hash','2026-01-02','admin','2026-01-01','hardware');
+    INSERT INTO kiosks(id,installation_id,pairing_code_id,name,token_hash,active,created_at) VALUES ('kiosk','primary','code','Front','hash',1,'2026-01-01');
+    INSERT INTO kiosk_commands(id,installation_id,kiosk_id,command_type,created_by,created_at,completed_at,success,result_message,requested_release_version,update_channel,requested_release_sha)
+      VALUES ('history','primary','kiosk','install_latest','admin','2026-10-01','2026-10-01',1,'Verified kiosk update started','v2.0.0-beta.13','beta','synthetic-sha');`);
+  assert.throws(() => sqlite.exec("INSERT INTO kiosk_commands(id,installation_id,kiosk_id,command_type,created_by,created_at) VALUES ('early','primary','kiosk','erase_unlinked_fingerprints','admin','2026-10-02')"));
+  for (const name of files.filter(name => name >= "0085")) sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
+  assert.deepEqual({ ...sqlite.prepare("SELECT command_type,result_message,requested_release_version,update_channel,requested_release_sha FROM kiosk_commands WHERE id='history'").get() },
+    { command_type: "install_latest", result_message: "Verified kiosk update started", requested_release_version: "v2.0.0-beta.13", update_channel: "beta", requested_release_sha: "synthetic-sha" });
+  sqlite.exec("INSERT INTO kiosk_commands(id,installation_id,kiosk_id,command_type,created_by,created_at) VALUES ('erase','primary','kiosk','erase_unlinked_fingerprints','admin','2026-10-02')");
+  assert.throws(() => sqlite.exec("INSERT INTO kiosk_commands(id,installation_id,kiosk_id,command_type,created_by,created_at) VALUES ('bad','primary','kiosk','format_disk','admin','2026-10-02')"));
+  assert.ok(sqlite.prepare("SELECT name FROM sqlite_master WHERE name='idx_kiosk_commands_pending'").get());
+  sqlite.close();
+});
+
 test("append-only upgrade retains the legacy kiosk credential and its queued scan compatibility", async (context) => {
   const { database, call, pair } = await fixture(context, true);
   const first = await pair("Existing entrance");

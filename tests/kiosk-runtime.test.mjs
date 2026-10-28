@@ -1238,6 +1238,14 @@ test("heartbeat authenticates with the kiosk token and reports only operational 
   assert.deepEqual(JSON.parse(request.body), { readerOnline: true, authenticationMethod: "nfc", releaseVersion: "1.0.0", uptimeSeconds: 3_600, networkType: "wifi", networkSignal: 82, lastWifiScanAt: "2026-09-02T20:00:00.000Z", pendingEvents: 0, lastSyncAt: null, errorCategory: null });
 });
 
+test("attendance upload carries the reader's match score only when the scan has one", async () => {
+  const bodies = [];
+  const fetchImpl = async (_url, init) => { const body = JSON.parse(init.body); bodies.push(body); return new Response(JSON.stringify({ accepted: true, eventId: body.eventId }), { status: 202, headers: { "content-type": "application/json" } }); };
+  const config = { apiUrl: "https://api.example.test", kioskToken: "secret" };
+  for (const matchScore of [143, undefined, "143", 1.5]) await sendAttendance(config, { eventId: "event-1", memberId: "member-1", occurredAt: "2026-09-01T20:00:00Z", matchScore }, { fetchImpl });
+  assert.deepEqual(bodies.map(body => body.matchScore), [143, undefined, undefined, undefined]);
+});
+
 test("heartbeat reports the installed update policy and omits unrecognized values", async () => {
   const bodies = [];
   const fetchImpl = async (_url, init) => { bodies.push(JSON.parse(init.body)); return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }); };
@@ -1700,6 +1708,16 @@ test("R503 semantic display states control only the reader aura LED", async () =
   await sensor.led({ color: 2, mode: 1, speed: 128, cycles: 0 });
   assert.equal(packet[9], 0x35);
   assert.deepEqual([...packet.slice(10, 14)], [1, 128, 2, 0]);
+});
+
+test("R503 erases exactly one requested template slot and reports reader failures", async () => {
+  let packet;
+  const sensor = createR503(async (value) => { packet = value; return acknowledgement(0); });
+  await sensor.deleteTemplate(130);
+  assert.equal(packet[9], 0x0c);
+  assert.deepEqual([...packet.slice(10, 14)], [0, 130, 0, 1], "page 130, one template");
+  for (const slot of [-1, 200, 1.5]) await assert.rejects(sensor.deleteTemplate(slot), /slot must be between/);
+  await assert.rejects(createR503(async () => acknowledgement(0x10)).deleteTemplate(3));
 });
 
 test("continuous scanner records a mapped match without a meeting ID", async () => {

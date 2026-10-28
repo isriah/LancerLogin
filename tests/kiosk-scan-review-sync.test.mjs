@@ -141,3 +141,22 @@ test("review sync shares in-flight work and uses only the paired authenticated e
   resolve(); await first;
   assert.equal(requests, 1);
 });
+
+test("a dashboard review signalled by the heartbeat is polled on the next tick instead of the hourly refresh", async () => {
+  let clock = 0;
+  const records = [{ eventId: "open-a", reviewStatus: "open" }, { eventId: "open-b", reviewStatus: "open" }];
+  const cloud = new Map([["open-a", "open"], ["open-b", "open"]]), batches = [];
+  const sync = createScanReviewSync({ now: () => clock, queue: { rejections: async () => records, markReviewed: async () => {} }, send: async (_, batch) => {
+    batches.push(batch.map(record => record.eventId));
+    return { reviews: batch.map(({ eventId }) => ({ eventId, reviewStatus: cloud.get(eventId) })) };
+  } });
+  await sync.tick({});
+  cloud.set("open-b", "reviewed");
+  clock += 60_000; await sync.tick({});
+  assert.equal(batches.length, 1, "without a signal the open record waits for the hourly refresh");
+  sync.refreshOpen();
+  await sync.tick({});
+  assert.deepEqual(batches[1], ["open-a", "open-b"]);
+  clock += 60_000; await sync.tick({});
+  assert.equal(batches.length, 2, "the refresh is one poll, not a poll every heartbeat");
+});

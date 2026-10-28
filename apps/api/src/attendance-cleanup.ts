@@ -52,6 +52,8 @@ export const attendanceCleanupSteps: readonly CleanupStep[] = [
   { kind: "delete", table: "kiosk_fingerprint_vault_enrollments" },
   { kind: "delete", table: "kiosk_fingerprint_vault_retirements" },
   { kind: "delete", table: "kiosk_scan_reviews" },
+  { kind: "delete", table: "kiosk_scan_matches" },
+  { kind: "delete", table: "kiosk_fingerprint_match_settings" },
 ];
 
 /** In-flight Attendance delivery work that must drain before deletion. Binds the installation three times. */

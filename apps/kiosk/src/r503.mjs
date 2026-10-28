@@ -67,6 +67,11 @@ export function createR503(exchange, { capacity = 200, password = 0 } = {}) {
       const found = await send(0x04, [0x01, 0x00, 0x00, (capacity >> 8) & 0xff, capacity & 0xff]); if (found.confirmation === 0x09) return { status: "not_found" };
       const result = requireSuccess(found, "template search"); return { status: "match", slot: ((result[0] ?? 0) << 8) | (result[1] ?? 0), score: ((result[2] ?? 0) << 8) | (result[3] ?? 0) };
     },
+    // Erases one stored template (DeletChar). Callers decide which slots are safe to erase.
+    async deleteTemplate(slot) {
+      if (!Number.isInteger(slot) || slot < 0 || slot >= capacity) throw new Error(`R503 slot must be between 0 and ${capacity - 1}`);
+      requireSuccess(await send(0x0c, [(slot >> 8) & 0xff, slot & 0xff, 0x00, 0x01]), "template deletion");
+    },
     async match() {
       const result = await reader.scan(); return result.status === "match" ? { slot: result.slot, score: result.score } : undefined;
     },

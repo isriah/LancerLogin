@@ -12,12 +12,13 @@ import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { for (let n = 0; n < 100; n++) { if (await check()) return; await wait(30); } assert.fail("Synthetic runtime condition did not become true"); }
-async function fixture(t, { method = "fingerprint", modern = false, holdConfiguration = false, holdCommand = false, enrollment = false, confirmClock = true, reviewUnavailable = false } = {}) {
+async function fixture(t, { method = "fingerprint", modern = false, holdConfiguration = false, holdCommand = false, enrollment = false, confirmClock = true, reviewUnavailable = false, minimumScore, commandType } = {}) {
   const root = await mkdtemp(join(tmpdir(), "kiosk-operator-service-")); await chmod(root, 0o700);
   let rosterMode = "valid", heartbeats = 0, configurationStarted = false, commandStarted = false, releaseConfiguration, releaseCommand;
   const attendance = [];
   const reviewRequests = [];
   const heartbeatReports = [];
+  const commandResults = []; let commandQueued = false;
   let enrollmentSession = enrollment ? { id: "synthetic-session", pairingId: "synthetic-pairing", expiresAt: new Date(Date.now() + 300000).toISOString(), state: "ready", progress: "awaiting_confirmation", member: { memberId: "synthetic-member", rosterId: "synthetic-roster", firstName: "Sample", lastName: "Member" } } : null;
   const enrollmentProgress = [];
   const cloud = createServer(async (request, response) => {
@@ -25,7 +26,7 @@ async function fixture(t, { method = "fingerprint", modern = false, holdConfigur
     let data = {};
     if (request.url?.startsWith("/kiosk/poll?")) {
       if (!modern) { response.statusCode = 404; data = { error: "Not found" }; }
-      else data = { protocol: 1, command: holdCommand ? { id: "synthetic-command", type: "reload_display" } : null, ...(enrollment ? { enrollment: enrollmentSession } : {}),
+      else data = { protocol: 1, command: holdCommand ? { id: "synthetic-command", type: "reload_display" } : commandType && commandQueued && !commandResults.length ? { id: "synthetic-command", type: commandType } : null, ...(enrollment ? { enrollment: enrollmentSession } : {}),
         configuration: { kiosk: { id: "synthetic-kiosk", name: "Dashboard configured name" }, settings: { authenticationMethod: method } },
         fingerprints: { reset: { status: "ok", commands: [] }, roster: { status: "ok", revision: 1, notModified: false, members: [{ memberId: "synthetic-member", rosterId: "synthetic-roster" }] }, peer: { status: "ok", enabled: false, syncId: null, deliveries: [] }, vault: { status: "ok", enabled: false, vaultId: null, catalogRevision: null } } };
     }
@@ -38,10 +39,11 @@ async function fixture(t, { method = "fingerprint", modern = false, holdConfigur
     else if (request.url === "/kiosk/config") {
       configurationStarted = true;
       if (holdConfiguration) await new Promise(resolve => { releaseConfiguration = resolve; });
-      data = { settings: { authenticationMethod: method }, kiosk: { name: "Dashboard configured name" } };
+      data = { settings: { authenticationMethod: method, ...(minimumScore === undefined ? {} : { fingerprintMinimumScore: minimumScore }) }, kiosk: { name: "Dashboard configured name" } };
     } else if (request.url === "/kiosk/commands/synthetic-command/result") {
       commandStarted = true;
       if (holdCommand) await new Promise(resolve => { releaseCommand = resolve; });
+      const chunks = []; for await (const chunk of request) chunks.push(chunk); commandResults.push(JSON.parse(Buffer.concat(chunks).toString()));
       data = { completed: true };
     }
     else if (request.url === "/kiosk/scan-reviews") {
@@ -96,7 +98,7 @@ async function fixture(t, { method = "fingerprint", modern = false, holdConfigur
     async function stop(orderly = true) { const done = once(child, "exit"); child.send(orderly ? { orderlyStop: true } : { crashStop: true }); await done; }
     return { child, request, reader, presence, stop };
   }
-  return { root, start, attendance, reviewRequests, heartbeatReports, enrollmentProgress, roster: mode=>{rosterMode=mode;}, heartbeats:()=>heartbeats,
+  return { root, start, attendance, reviewRequests, heartbeatReports, commandResults, queueCommand: () => { commandQueued = true; }, enrollmentProgress, roster: mode=>{rosterMode=mode;}, heartbeats:()=>heartbeats,
     configurationStarted: () => configurationStarted, commandStarted: () => commandStarted,
     releaseConfiguration: () => { holdConfiguration = false; releaseConfiguration?.(); }, releaseCommand: () => { holdCommand = false; releaseCommand?.(); },
   };
@@ -180,6 +182,7 @@ test("an older review API leaves attendance delivery active and reports review s
   await until(() => f.heartbeatReports.length > 0);
   assert.equal(f.attendance.length, 1);
   assert.equal(f.heartbeatReports[0].errorCategory, "cloud_sync");
+  assert.deepEqual({ ...f.heartbeatReports[0].attention, clockConfirmed: undefined }, { scansNeedReview: 1, clockConfirmed: undefined, clockPendingScans: 0, reviewSyncFailing: true, weakMatches: 0, readerTemplates: 1, linkedTemplates: 1 });
   // The real service always reports its installed update policy; this host has no root update helper.
   assert.equal(f.heartbeatReports[0].updatePolicyVersion, 1);
   const health = await (await runtime.request("/health")).json();
@@ -322,4 +325,39 @@ for (const section of ["configuration", "command"]) test(`unpair drains detached
   f.releaseConfiguration(); f.releaseCommand();
   assert.equal((await unpair).status, 200);
   await assert.rejects(readFile(join(f.root, "pairing.json"), "utf8"), { code: "ENOENT" });
+});
+
+test("a real kiosk records the match score with each scan and asks for a rescan below the Admin's minimum", { timeout: 20000 }, async t => {
+  for (const minimumScore of [undefined, 100, 150]) {
+    const f = await fixture(t, { minimumScore }), runtime = await f.start();
+    await until(() => f.heartbeats() > 0);
+    await runtime.presence("attendance"); await wait(350);
+    await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+    if (minimumScore === 150) {
+      await until(async () => (await (await runtime.request("/display-state")).json()).display.message === "Try again");
+      await wait(500);
+      assert.equal(f.attendance.length, 0, "a match scoring 100 is not recorded below a minimum of 150");
+      assert.deepEqual(JSON.parse(await readFile(join(f.root, "fingerprint-match.json"), "utf8")), { minimumScore: 150 });
+    } else {
+      await until(() => f.attendance.length === 1);
+      assert.equal(f.attendance[0].matchScore, 100, "a match at or above the minimum is recorded with its score");
+    }
+    assert.equal(f.heartbeatReports[0].attention.weakMatches, 0);
+    await runtime.stop();
+  }
+});
+
+test("a real kiosk erases only unlinked reader fingerprints on the dashboard command and reports reader counts", { timeout: 20000 }, async t => {
+  const f = await fixture(t, { modern: true, commandType: "erase_unlinked_fingerprints" });
+  const runtime = await f.start();
+  await runtime.reader({ occupy: [3, 7] }); f.queueCommand();
+  // Commands arrive with the next five-second cloud poll.
+  for (let n = 0; n < 400 && !f.commandResults.length; n++) await wait(30);
+  assert.equal(f.commandResults.length, 1);
+  assert.equal(f.commandResults[0].success, true, f.commandResults[0].message);
+  assert.match(f.commandResults[0].message, /^Erased 2 unlinked fingerprints. The reader now stores 1 of 200, 1 linked to members.$/);
+  assert.deepEqual((await runtime.reader()).occupied, [0], "the linked fingerprint in slot 0 is kept");
+  await until(() => f.heartbeatReports.length > 0);
+  assert.equal(f.heartbeatReports[0].attention.linkedTemplates, 1);
+  assert.ok(Number.isInteger(f.heartbeatReports[0].attention.readerTemplates));
 });

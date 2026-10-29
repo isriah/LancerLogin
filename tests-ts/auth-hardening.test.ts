@@ -238,6 +238,27 @@ test("first-Admin setup with a local password signs the Admin in with the local 
   assert.equal((await call(env, "/auth/session", { cookie: setCookie(created, "lancerlogin_session") })).status, 401);
 });
 
+test("first-Admin setup stores the release colors, or the development colors when DEFAULT_THEME is development", async (context) => {
+  quietErrors(context);
+  const input = { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple" };
+  for (const [extra, expected] of [
+    [{}, { primaryColor: "#b80100", secondaryColor: "#eeb822" }],
+    [{ DEFAULT_THEME: "production" }, { primaryColor: "#b80100", secondaryColor: "#eeb822" }],
+    [{ DEFAULT_THEME: "development" }, { primaryColor: "#7c3aed", secondaryColor: "#0f766e" }],
+  ] as const) {
+    const db = new Database(false); const env = environment(db, { APP_MODE: "unconfigured", ...extra });
+    const before = await (await call(env, "/setup/status")).json() as { configured: boolean; defaultTheme: { primary: string; secondary: string } };
+    assert.deepEqual(before, { configured: false, defaultTheme: { primary: expected.primaryColor, secondary: expected.secondaryColor } });
+    const created = await call(env, "/setup/bootstrap", { body: input });
+    assert.equal(created.status, 201, await created.clone().text());
+    assert.deepEqual({ ...db.value<{ primaryColor: string; secondaryColor: string }>("SELECT primary_color AS primaryColor, secondary_color AS secondaryColor FROM organization_settings WHERE installation_id = 'primary'") }, expected);
+    const status = await (await call(env, "/setup/status")).json() as { settings: { primaryColor: string; secondaryColor: string }; defaultTheme: { primary: string } };
+    assert.equal(status.settings.primaryColor, expected.primaryColor);
+    assert.equal(status.settings.secondaryColor, expected.secondaryColor);
+    assert.equal(status.defaultTheme.primary, expected.primaryColor);
+  }
+});
+
 test("first-Admin setup issues no session for Google-only setup or a Worker without a session key", async (context) => {
   quietErrors(context);
   const google = new Database(false);

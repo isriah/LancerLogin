@@ -1,6 +1,6 @@
 # Member labels and attendance policies
 
-Administrators define labels and requirements in **Settings → Attendance**. Admin and Operator dashboard access roles are separate from member labels. Members can hold several descriptive labels, including several labels with attendance rules. Every active rule is evaluated independently. Operators can view assignments and attendance; only Administrators can change labels or rules.
+Administrators define labels and requirements in **Settings > Modules > Attendance > Attendance rules**. Admin and Operator dashboard access roles are separate from member labels. Members can hold several descriptive labels, including several labels with attendance rules. Every active rule is evaluated independently. Operators can view assignments and attendance; only Administrators can change labels or rules.
 
 ## Configure labels and rules
 
@@ -9,7 +9,7 @@ Create labels first. A label may have no attendance rule, one standing rule, and
 - **Weighted percentage** sets a threshold from greater than 0% through 100%. Completed, required meetings count when the member is in the meeting audience. Each meeting uses its saved attendance weight. Optional meetings stay out of the rate. Choose whether excused meetings leave the policy denominator or count as missed. Existing and new rules default to excluding them. The system compares the unrounded rate with the threshold, then rounds the displayed rate. There is no status when no eligible opportunity exists.
 - **Meetings per week** sets a whole-number target. Each completed meeting in the member's audience counts once, including optional meetings and meetings reached through any label the member holds. Meeting weight does not affect this count. The requirement cannot exceed available opportunities. Excused opportunities reduce the requirement. Extra attendance does not carry into another week. An unsettled current week is pending; weeks with no due opportunities are not applicable. A dated rule change within a Monday-to-Sunday week creates two separately evaluated partial weeks.
 
-The organization-wide recent window starts at 30 calendar days and can be changed in Settings → Attendance. It controls current percentage compliance. Weekly current compliance uses the current week. Existing meeting-weight controls are on the same Settings page.
+The organization-wide recent window starts at 30 calendar days and can be changed in Settings > Modules > Attendance > Attendance rules. It controls current percentage compliance. Weekly current compliance uses the current week. Existing meeting-weight controls are on the same Settings page.
 
 ## Configure a Class policy
 

@@ -5,36 +5,51 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>LancerLogin technical reference</title>
+  <meta name="description" content="LancerLogin architecture, security model, and links to the detailed reference documents.">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html">Releases</a><a href="technical.html" aria-current="page">Technical</a></nav></header>
-<header class="page-header"><div><p class="eyebrow">Reference</p><h1>Architecture and security</h1></div></header>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Install</a><a href="first-run.html">First sign-in</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="updates.html">Update</a><a href="troubleshooting.html">Troubleshoot</a><a href="technical.html" aria-current="page">Reference</a></nav></header>
+<header class="page-header"><div><p class="eyebrow">Reference</p><h1>Architecture and security</h1><p>How an installation is built and protected, with links to the detailed reference in the repository.</p></div></header>
 <main id="main" class="page">
-  <h2>Components</h2>
+  <h2 id="components">Components</h2>
   <div class="task-grid">
-    <article class="task-card"><span>P</span><h3>Cloudflare Pages</h3><p>Static React dashboard plus a same-origin <code>/api</code> proxy. It holds no Cloudflare token, and browser credentials stay on the adopter’s Pages origin.</p></article>
-    <article class="task-card"><span>W</span><h3>Worker + D1</h3><p>Authorization, validation, scrypt auth, AES-GCM integration secrets, audit trails, attendance, exports, and provider calls.</p></article>
-    <article class="task-card"><span>π</span><h3>Raspberry Pi + R503</h3><p>LAN-limited first pairing, loopback-only operational tools, serial sensor I/O, local mappings, atomic offline queue, protected networking/maintenance, and hashed bearer pairing.</p></article>
+    <article class="task-card"><span>P</span><h3>Cloudflare Pages</h3><p>The React dashboard plus a same-origin <code>/api</code> proxy, so sign-in cookies stay on your dashboard's own address. Pages holds no Cloudflare token.</p></article>
+    <article class="task-card"><span>W</span><h3>Worker and D1</h3><p>The API Worker handles authorization, validation, attendance, reports, exports, integrations, and scheduled work. D1 stores the installation's data.</p></article>
+    <article class="task-card"><span>K</span><h3>Raspberry Pi kiosks</h3><p>Each kiosk reads its input device, keeps its pairing, local links, and offline queue on the Pi, and sends scans to the Worker.</p></article>
   </div>
-  <h2>Security invariants</h2>
+  <p>Modules add pages, routes, settings, and data to this structure. Attendance is built in; plugins are composed into the dashboard and Worker when the installation is built.</p>
+
+  <h2 id="security">Security model</h2>
   <ul>
-    <li>Every organization query is scoped to installation <code>primary</code>.</li>
-    <li>Admin and Operator permissions are enforced by Worker routes, not only hidden in UI.</li>
-    <li>Sessions are HMAC-signed, HTTP-only, Secure, SameSite cookies with an eight-hour lifetime; protected requests reload active status and role from D1.</li>
-    <li>Google OAuth uses signed ten-minute state and validates issuer, audience, verified email, and active user membership.</li>
-    <li>Local passwords use salted scrypt (N=32768, r=8, p=1).</li>
-    <li>Integration credentials use AES-256-GCM with a per-installation Worker secret.</li>
-    <li>Provider verification challenges expire after ten minutes and store only SHA-256 hashes; unverified credentials cannot run operational email or Discord workflows.</li>
-    <li>Pairing codes and kiosk credentials are stored remotely only as SHA-256 hashes.</li>
-    <li>Meeting windows cannot overlap, allowing the Worker to resolve a kiosk scan to at most one meeting.</li>
-    <li>Remote kiosk recovery accepts four enumerated, device-scoped commands and no shell text or arbitrary arguments.</li>
-    <li>CSV export neutralizes spreadsheet formula prefixes before quoting cells.</li>
+    <li>Admin and Operator permissions are enforced by the Worker on every request, not only hidden in the dashboard.</li>
+    <li>Sessions are signed, HTTP-only, Secure, SameSite=Strict cookies. Each protected request rechecks the account, role, and session.</li>
+    <li>Local passwords use salted scrypt hashes. Five wrong passwords pause sign-in to that account for 15 minutes.</li>
+    <li>Google sign-in validates the issuer, audience, verified email, and an active LancerLogin account.</li>
+    <li>Integration secrets are encrypted with AES-256-GCM using an installation-specific key and are never returned to the browser.</li>
+    <li>Pairing codes and kiosk credentials are stored only as hashes.</li>
+    <li>Meeting attendance windows cannot overlap, so each scan matches at most one meeting.</li>
+    <li>Kiosks accept six fixed, kiosk-specific commands from the dashboard and never a shell command or arbitrary argument.</li>
+    <li>Kiosk maintenance is available only on the kiosk's own screen, behind a rate-limited local PIN.</li>
+    <li>Dashboard updates install only complete official releases, pinned to an exact commit, after an entire-installation backup.</li>
+    <li>CSV exports store values that look like spreadsheet formulas as text.</li>
   </ul>
-  <h2>Verification and source reference</h2>
-  <p>CI runs workspace typechecks, Node unit tests, Worker runtime tests, production builds, dependency auditing, and sanitizer checks. Read <code>docs/ARCHITECTURE.md</code>, <code>docs/SECURITY.md</code>, and <code>docs/BACKUP-RESTORE.md</code> in the repository for durable technical detail.</p>
+  <p>Plugins run with the same access as LancerLogin itself. Add only plugins whose source you trust.</p>
+
+  <h2 id="reference">Detailed reference</h2>
+  <p>These documents in the repository describe behavior in more depth. Task instructions live on this site.</p>
+  <ul>
+    <li><a href="https://github.com/isriah/LancerLogin/blob/main/docs/ARCHITECTURE.md">Architecture</a> and <a href="https://github.com/isriah/LancerLogin/blob/main/docs/SECURITY.md">security model</a></li>
+    <li><a href="https://github.com/isriah/LancerLogin/blob/main/docs/PRIVACY.md">Privacy reference</a> and the plain-language <a href="privacy.html">privacy notice</a></li>
+    <li><a href="https://github.com/isriah/LancerLogin/blob/main/docs/BACKUP-RESTORE.md">Backup and restore</a>, including D1 export and restore commands</li>
+    <li><a href="https://github.com/isriah/LancerLogin/blob/main/docs/KIOSK.md">Kiosk reference</a></li>
+    <li><a href="https://github.com/isriah/LancerLogin/blob/main/docs/WEB-UPDATES.md">Web update reference</a> and <a href="https://github.com/isriah/LancerLogin/blob/main/docs/UPDATE-TRACKS.md">update tracks</a></li>
+    <li><a href="https://github.com/isriah/LancerLogin/blob/main/docs/MODULE-PLUGINS.md">Module plugins</a> and <a href="https://github.com/isriah/LancerLogin/blob/main/docs/PLUGIN-AUTHORING.md">writing a plugin</a></li>
+    <li><a href="https://github.com/isriah/LancerLogin/blob/main/docs/INTEGRATIONS.md">Integrations</a> and <a href="https://github.com/isriah/LancerLogin/blob/main/docs/ATTENDANCE-POLICIES.md">labels and attendance policies</a></li>
+    <li><a href="releases.html">Release notes</a></li>
+  </ul>
 </main>
-<footer><div><a href="index.html">Documentation home</a> · Apache-2.0</div></footer>
+<footer><div><a href="index.html">Documentation home</a> · <a href="privacy.html">Privacy</a> · <a href="releases.html">Releases</a> · Apache-2.0</div></footer>
 </body>
 </html>

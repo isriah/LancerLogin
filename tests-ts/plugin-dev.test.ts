@@ -165,6 +165,7 @@ test("the local Worker configuration uses a local database, the dashboard origin
   const runtime = await developmentRuntime({ stateDirectory: state, apiPort: 8788, dashboardPort: 5174 });
   const config = JSON.parse(readFileSync(runtime.configPath, "utf8"));
   assert.equal(config.vars.ALLOWED_ORIGIN, "http://localhost:5174");
+  assert.equal(config.vars.DEFAULT_THEME, "development", "local previews keep the purple development palette");
   assert.equal(runtime.apiUrl, "http://localhost:8788");
   assert.equal(config.d1_databases.length, 1);
   assert.equal(config.d1_databases[0].binding, "DB");

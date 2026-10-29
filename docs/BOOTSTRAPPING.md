@@ -1,43 +1,25 @@
-# Installation setup
+# Installation reference
 
-This guide is for the Administrator creating a new organization-owned LancerLogin installation. It describes a fresh installation, not a migration or a recovery. Start with the current official stable release, then review [update tracks](UPDATE-TRACKS.md) before opting in to Beta.
+Step-by-step instructions are on the documentation site: [Install](https://isriah.github.io/LancerLogin/setup.html) and [First sign-in and setup](https://isriah.github.io/LancerLogin/first-run.html). This page records how the installation workflow and first-Admin setup behave.
 
-## Before you start
+## Installation workflow
 
-- Create an organization-owned GitHub account or confirm that you can administer a private repository and its `production` environment.
-- Confirm that you are a Super Administrator in the Cloudflare account that will own the Worker, D1 database, and Pages dashboard.
-- Choose a lowercase installation slug made of letters, numbers, and hyphens. Keep the slug with the private deployment repository record.
-- Store generated secrets in a password manager. Do not put them in a repository file, issue, dashboard form, or chat.
+**Install or upgrade LancerLogin** (`.github/workflows/provision-template.yml`) runs in the private deployment repository's `production` environment. It refuses to run in a public repository.
 
-## Create the private deployment repository
+| Input | Values |
+| --- | --- |
+| `operation` | `create` for a new installation, `resume` to continue an interrupted one with the same slug, `upgrade` to update an existing one. |
+| `release` | `latest stable`, the newest complete official stable release. |
+| `installation_slug` | Matches `^[a-z][a-z0-9-]{2,40}$`. |
 
-1. Open [isriah/LancerLogin](https://github.com/isriah/LancerLogin), select **Use this template**, and create a **private** repository in the adopter's GitHub account. Do not fork the public repository for an installation.
-2. In the private repository, open **Settings → Environments**, create the `production` environment, and add a required reviewer if the GitHub plan supports it.
-3. Follow [Cloudflare linking](CLOUDFLARE-LINKING.md) to create the account-owned token and add the three required environment secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `LANCERLOGIN_SETUP_CODE`.
-4. Before provisioning, set up the separate web-update credential and installation variables described in [web updates](WEB-UPDATES.md). This keeps routine web updates scoped to the private deployment repository.
+Required environment secrets are `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `LANCERLOGIN_SETUP_CODE` (at least 16 characters). `LANCERLOGIN_WEB_UPDATE_TOKEN` and `LANCERLOGIN_MODULE_SELECTION_TOKEN` are optional; see [web updates](WEB-UPDATES.md) and [module plugins](MODULE-PLUGINS.md#plugin-selection-credential).
 
-## Run the installation workflow
+Before creating anything, a read-only preflight verifies the account token against the account ID, checks each required token permission, checks that the account has a `workers.dev` subdomain, and checks that the Pages project would get the exact address `<slug>-dashboard.pages.dev` (`pages_address_taken` otherwise). Resources are created only after the API and dashboard builds succeed, and `resume` finishes an interrupted `create`. Each failure is reported as an `::error title=<code>::` annotation; the codes and fixes are listed in [Troubleshoot the installation workflow](https://isriah.github.io/LancerLogin/troubleshooting.html#install). It creates `<slug>-api` (Worker), `<slug>-data` (D1) and `<slug>-dashboard` (Pages). Pages project names are global across Cloudflare, so a taken name stops the run and asks for another slug. The run summary lists the dashboard URL and the values for the `LANCERLOGIN_INSTALLATION_SLUG`, `LANCERLOGIN_DATABASE_ID` and `LANCERLOGIN_API_URL` environment variables used by later updates. For the Cloudflare token itself, see [Cloudflare linking](CLOUDFLARE-LINKING.md).
 
-1. In the private repository, open **Actions → Install or upgrade LancerLogin → Run workflow**.
-2. Select `create`, keep **Latest stable**, and enter the chosen `installation_slug`.
-3. Select **Run workflow**. If the `production` environment waits for approval, complete that approval in GitHub.
-4. On success, open the Pages dashboard URL in the workflow summary. The workflow checks the account-token pair and refuses resource-name collisions before it creates the installation.
+## First-Admin setup
 
-Use `resume` only after an interrupted initial setup with the same slug. Use `upgrade` for a routine web update, not a fresh installation. See [web updates](WEB-UPDATES.md).
+The dashboard's **Create your installation** form needs the setup code. The Worker stores only a hash of it as the `BOOTSTRAP_CODE_HASH` secret. The form creates the installation record and the first Admin together and signs that Admin in. After that, the bootstrap route is closed.
 
-## Create the first Administrator
+While no Admin exists, the setup code can be changed: update `LANCERLOGIN_SETUP_CODE` and run the workflow with `resume` and the same slug. After **Delete installation** in Settings, only the browser that deleted it can run first-Admin setup again with the same code, within one hour. Anyone else, or that browser later, needs a new setup code applied the same way.
 
-1. Open the dashboard URL and enter `LANCERLOGIN_SETUP_CODE`.
-2. Create the first Admin with a local password, Google sign-in, or both. The setup code is not the Admin password.
-3. Create the installation. Community telemetry is disabled.
-4. If you use Google sign-in, copy the exact redirect URI shown by the dashboard into the Google OAuth client. Do not guess or edit the URL. See [Integrations](INTEGRATIONS.md).
-
-The bootstrap route closes after the installation record exists, and each setup code creates one installation. After **Delete installation**, only the browser that deleted it can run first-Admin setup again with the same code, within one hour. Anyone else, or that browser later, needs a rotated setup code: set the `BOOTSTRAP_CODE_HASH` Worker secret to the hash of a new code, computed the same way as the install workflow, before creating the installation again. If sign-in configuration needs recovery later, use the documented local recovery procedure rather than trying to reopen first-Admin setup.
-
-## Complete Guided Setup
-
-Guided Setup is shared across Administrators. It leads through **Organization**, **Roster**, **Kiosk**, **Kiosk input test**, and **Attendance confirmation**. Each required step records who completed it and when. Optional integrations do not block completion.
-
-For the kiosk step, install the guided Pi package first. The installer starts an unpaired local service. Back in the dashboard, create a one-time pairing key and paste it into the Pi's local pairing page. The browser simulator can verify a software-only path, but it does not verify a physical reader or kiosk.
-
-When the final attendance check is complete, select **Go to Dashboard**. You can reopen the checklist later through **Settings → Guided Setup** without deleting data.
+If every Admin later loses their password, use [local recovery](LOCAL-RECOVERY.md) rather than reopening first-Admin setup.

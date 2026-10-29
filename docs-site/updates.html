@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Update LancerLogin</title><meta name="description" content="Update the LancerLogin dashboard, each kiosk, and installed plugins, and choose an update track."><link rel="stylesheet" href="styles.css"></head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Install</a><a href="first-run.html">First sign-in</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="updates.html" aria-current="page">Update</a><a href="troubleshooting.html">Troubleshoot</a><a href="technical.html">Reference</a></nav></header>
+<header class="page-header"><div><p class="eyebrow">Updates</p><h1>Update LancerLogin</h1><p>The dashboard, each kiosk, and plugins update separately. Update the dashboard first, then each kiosk.</p></div></header>
+<main id="main" class="page">
+  <div class="task-grid">
+    <article class="task-card"><span>1</span><h3>Dashboard</h3><p>The web dashboard, API, and database, updated from Settings with a backup first.</p><a href="#web-update">Update the dashboard</a></article>
+    <article class="task-card"><span>2</span><h3>Kiosks</h3><p>The software on each Raspberry Pi, updated from the Kiosks page one device at a time.</p><a href="#kiosk-updates">Update kiosks</a></article>
+    <article class="task-card"><span>3</span><h3>Plugins</h3><p>Added, upgraded, or removed in Settings, then deployed like a dashboard update.</p><a href="#plugins">Manage plugins</a></article>
+  </div>
+
+  <h2 id="web-update-token">Set up one-click updates</h2>
+  <p>One-click dashboard updates need a GitHub token that lets your installation start the update workflow in your private repository. Without it, you can still update by <a href="#manual-update">running the workflow yourself</a>.</p>
+  <ol class="steps">
+    <li>Open <a href="https://github.com/settings/personal-access-tokens/new">GitHub's new fine-grained token page</a>.</li>
+    <li>Set <strong>Resource owner</strong> to the account or organization that owns your private deployment repository.</li>
+    <li>Under <strong>Repository access</strong>, choose <strong>Only select repositories</strong> and select only your deployment repository.</li>
+    <li>Under <strong>Repository permissions</strong>, set <strong>Actions</strong> to <strong>Read and write</strong>. GitHub adds <strong>Metadata: Read-only</strong> automatically. Add nothing else.</li>
+    <li>Choose an expiration, generate the token, and copy it.</li>
+    <li>In your private repository, open <span class="ui-path">Settings <span>›</span> Environments <span>›</span> production</span> and add it as the environment secret <code>LANCERLOGIN_WEB_UPDATE_TOKEN</code>.</li>
+    <li>Run <span class="ui-path">Actions <span>›</span> Refresh web update credential <span>›</span> Run workflow</span> to give the token to your installation. The next install or upgrade run also installs it.</li>
+  </ol>
+  <figure class="annotated compact-shot"><img src="assets/github-fine-grained-token.png" alt="GitHub New fine-grained personal access token page with the token name LancerLogin web updates, a description, a Resource owner, a 7-day expiration, Repository access set to Only select repositories with one private repository selected, and the Actions permission set to Read and write."><figcaption>Limit the token to your deployment repository.</figcaption></figure>
+  <figure class="annotated compact-shot"><img src="assets/github-fine-grained-token-permissions.png" alt="GitHub token permissions with Only select repositories and one repository selected, Actions set to Access: Read and write, Metadata marked Required with Access: Read-only, and the Generate token button."><figcaption>Actions: Read and write is the only permission you add.</figcaption></figure>
+  <p>LancerLogin reads the token's expiry from GitHub, so you do not record it anywhere. <span class="ui-path">Settings <span>›</span> Updates</span> shows a <strong>Setup status</strong> panel with rows for the <strong>Dashboard update credential</strong>, the <strong>Update controller workflow</strong>, and the optional <strong>Plugin management credential</strong>. Each row shows a status such as <strong>Ready</strong>, <strong>Expiring soon</strong>, <strong>Expired</strong>, <strong>Rejected by GitHub</strong>, <strong>Not set up</strong>, <strong>Update needed</strong>, <strong>Missing</strong>, or <strong>Not checked</strong>. Until the token is installed, the page says <strong>Dashboard updates are not set up yet</strong>. A banner appears 14 days before the token expires. To replace a token, create a new one with the same settings, replace the secret, and run <strong>Refresh web update credential</strong> again.</p>
+
+  <h2 id="web-update">Update the dashboard</h2>
+  <p>An Admin sees a notice when a newer release is available on the installation's update track. Read its <a href="releases.html">release notes</a> first.</p>
+  <ol class="steps">
+    <li>Open <span class="ui-path">Settings <span>›</span> Updates</span>. The <strong>Dashboard</strong> card shows the installed and available releases.</li>
+    <li>Choose <strong>Back up and begin update</strong> and review the release notes for the update.</li>
+    <li>Choose <strong>Download entire-installation backup</strong> and save the file somewhere safe outside the installation. Then select <strong>I saved this update’s entire-installation backup file securely.</strong></li>
+    <li>Choose <strong>Start update to v&lt;version&gt;</strong> once. If your production environment has required reviewers, choose <strong>Review approval in GitHub</strong> and approve the run.</li>
+    <li>Wait while the card shows progress. Kiosks keep saving scans during the update and send them afterwards. Refreshing the page shows the same progress and never starts a second update.</li>
+    <li>When the card reports that the update is verified, choose <strong>Reload updated dashboard</strong>.</li>
+  </ol>
+  <p class="notice"><strong>If the card says recovery is required, stop.</strong> Do not start another update and do not restore the backup. Open <strong>Diagnostics and manual recovery</strong> on the card for the workflow run, then see <a href="troubleshooting.html#update">Troubleshoot an update</a>.</p>
+
+  <h2 id="manual-update">Update without the one-click token</h2>
+  <ol class="steps">
+    <li>Download an entire-installation backup from <span class="ui-path">Settings <span>›</span> Data</span> and keep it safe.</li>
+    <li>In your private repository, open <span class="ui-path">Actions <span>›</span> Install or upgrade LancerLogin <span>›</span> Run workflow</span>.</li>
+    <li>Choose operation <code>upgrade</code>, keep release <code>latest stable</code>, enter your installation slug, and select <strong>Run workflow</strong>. Approve the <code>production</code> deployment if it waits for a reviewer.</li>
+    <li>When the run succeeds, reload the dashboard and check <span class="ui-path">Settings <span>›</span> Updates</span> for the installed release.</li>
+  </ol>
+  <p>The upgrade uses the <code>LANCERLOGIN_INSTALLATION_SLUG</code>, <code>LANCERLOGIN_DATABASE_ID</code>, and <code>LANCERLOGIN_API_URL</code> environment variables you saved after installation. See <a href="setup.html#installation-variables">Save the installation variables</a>.</p>
+
+  <h2 id="kiosk-updates">Update kiosks</h2>
+  <p>Update the dashboard first. Then, for each kiosk:</p>
+  <ol class="steps">
+    <li>Open <strong>Kiosks</strong>, select the kiosk, and check that it is online.</li>
+    <li>When a newer release is offered, choose <strong>Update kiosk</strong>.</li>
+    <li>Wait for the kiosk to restart and come back online. Its status shows the installed release. Other kiosks keep working while it updates.</li>
+  </ol>
+  <p>The kiosk downloads only an official release and checks it before switching. If the new release does not start correctly, the kiosk switches back to the previous release by itself, and the dashboard reports that the update failed. Pairing, fingerprint links, the PIN, and waiting scans are kept either way. If no result appears, do not press <strong>Update kiosk</strong> repeatedly; see <a href="troubleshooting.html#kiosk">Troubleshoot a kiosk</a>.</p>
+
+  <h2 id="tracks">Choose an update track</h2>
+  <p>Open <span class="ui-path">Settings <span>›</span> Updates <span>›</span> Update track</span>. <strong>Stable</strong> is the default and offers only stable releases. <strong>Beta</strong> also offers beta releases before they become stable; choose it, confirm the warning, and choose <strong>Save update track</strong>. The track applies to the dashboard and to kiosk updates.</p>
+  <p>Changing the track never installs anything by itself. Going back to Stable does not downgrade: you stay on the installed release until a newer stable release is published.</p>
+
+  <h2 id="plugins">Add, update, or remove plugins</h2>
+  <p>Plugins are code that runs inside your installation with the same access as LancerLogin itself. Add only plugins whose source you trust.</p>
+  <ul>
+    <li><strong>Outreach Participation</strong> is an official plugin. It is included in every installation and updated with each LancerLogin release.</li>
+    <li><strong>Carpool</strong> and <strong>Guest Visits</strong> are optional plugins that you add yourself.</li>
+  </ul>
+  <p>To manage plugins from the dashboard, open <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Manage modules</span>. Adding, upgrading, or removing a plugin there commits the change to your private repository, and <strong>Apply plugin changes</strong> deploys it with the same backup-first steps as a <a href="#web-update">dashboard update</a>. A release update also deploys pending plugin changes. Remove a plugin only after turning its module off and letting its data be deleted.</p>
+  <p>Dashboard plugin management needs a separate optional GitHub token, <code>LANCERLOGIN_MODULE_SELECTION_TOKEN</code>. Without it, edit <code>lancerlogin.modules.json</code> in your private repository and run an upgrade. Both methods are described in the <a href="https://github.com/isriah/LancerLogin/blob/main/docs/MODULE-PLUGINS.md">module plugins reference</a>.</p>
+
+  <h2 id="from-v1">Upgrade from LancerLogin 1</h2>
+  <p>An existing LancerLogin 1 installation updates in place, keeping its data, accounts, and paired kiosks. Install the 1.2.6 bridge release on the dashboard and on each kiosk first, then follow the <a href="https://github.com/isriah/LancerLogin/blob/main/docs/COMMUNITY-UPGRADE.md">upgrade guide</a>.</p>
+</main>
+<footer><div><a href="index.html">Documentation home</a> · <a href="privacy.html">Privacy</a> · <a href="releases.html">Releases</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
+</body>
+</html>

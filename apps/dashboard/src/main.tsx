@@ -18,6 +18,7 @@ import { normalizePath, usePath } from "./router";
 import { WalkthroughSessionProvider } from "./page-walkthrough";
 import { AppErrorFallback, ErrorBoundary } from "./error-boundary";
 import { clearWalkthroughSession } from "./walkthrough-session";
+import { product, type ThemeColors } from "../../../packages/shared/src/product.ts";
 // Loaded last so desktop consistency rules follow every page and mobile stylesheet.
 import "./desktop-layout.css";
 
@@ -27,7 +28,9 @@ const setupGuideUrl = "https://isriah.github.io/LancerLogin/setup.html";
 const recoverAccessUrl = "https://isriah.github.io/LancerLogin/operations.html";
 
 // justCreated is client-only: this browser just ran first-Admin setup, so the sign-in form asks the new Admin to finish setup.
-type SetupStatus = { configured: boolean; installation?: { authMode: "google" | "local" | "both" }; settings?: Branding; justCreated?: boolean };
+type SetupStatus = { configured: boolean; installation?: { authMode: "google" | "local" | "both" }; settings?: Branding; justCreated?: boolean; defaultTheme?: ThemeColors };
+/** The Worker's starting organization colors, or the release colors when the Worker did not report them. */
+const startingTheme = (status: SetupStatus): ThemeColors => status.defaultTheme ?? product.defaultTheme;
 const themeStorageKey = "lancerlogin-theme";
 function savedTheme(): "light" | "dark" { try { return localStorage.getItem(themeStorageKey) === "light" ? "light" : "dark"; } catch { return "dark"; } }
 
@@ -80,7 +83,7 @@ function ProvisionedEntry({ startup, status, onConfigured, theme, onTheme }: { s
   const branding = status.configured ? status.settings : undefined;
   const style = branding ? brandTheme(branding.primaryColor, branding.secondaryColor) : undefined;
   if (status.configured && resolveDashboardPublicPage(installedDashboardModules, normalizePath(window.location.pathname))) return <PublicModuleEntry branding={branding} style={style} theme={theme} onTheme={onTheme} />;
-  return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to main content</a><div className="provisioned-main">{status.configured ? <ConfiguredInstallation initialSession={startup?.session} initialModules={startup?.modules} status={status} onStatusChange={onConfigured} theme={theme} onTheme={onTheme} /> : <><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><FirstAdminSetup onConfigured={onConfigured} /></>}</div></div>;
+  return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">Skip to main content</a><div className="provisioned-main">{status.configured ? <ConfiguredInstallation initialSession={startup?.session} initialModules={startup?.modules} status={status} onStatusChange={onConfigured} theme={theme} onTheme={onTheme} /> : <><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><FirstAdminSetup defaultTheme={startingTheme(status)} onConfigured={onConfigured} /></>}</div></div>;
 }
 
 /**
@@ -118,7 +121,7 @@ function supportedTimeZones(current: string): string[] | undefined {
   return zones.includes(current) ? zones : [current, ...zones];
 }
 
-function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus) => void }) {
+function FirstAdminSetup({ defaultTheme, onConfigured }: { defaultTheme: ThemeColors; onConfigured: (status: SetupStatus) => void }) {
   const [setupCode, setSetupCode] = useState("");
   const [authMode, setAuthMode] = useState<"google" | "local" | "both">("local");
   const [organizationName, setOrganizationName] = useState("");
@@ -143,7 +146,7 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
     const body = await response.json().catch(() => ({})) as { error?: string; details?: string[] };
     if (!response.ok) { setResult({ error: body.details?.join(" ") ?? body.error ?? (response.status >= 500 ? "Setup service unavailable. Try again; your entries are kept." : "Setup failed") }); return; }
     // A local-password setup sets the first Admin's session cookie, so the session check that follows signs them in.
-    onConfigured({ configured: true, justCreated: true, installation: { authMode }, settings: { organizationName, subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } });
+    onConfigured({ configured: true, justCreated: true, installation: { authMode }, defaultTheme, settings: { organizationName, subtitle: "", logoData: "", primaryColor: defaultTheme.primary, secondaryColor: defaultTheme.secondary, appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } });
   }
 
   const setupErrorId = result.error ? "first-admin-error" : undefined;
@@ -183,7 +186,7 @@ function ConfiguredInstallation({ initialSession, initialModules, status, onStat
   }, []);
   if (checking) return <section className="centered-state auth-check" aria-live="polite" aria-busy="true"><p className="kicker">Secure sign-in</p><h1>Checking your session…</h1><p>Confirming whether this browser already has an active dashboard session.</p></section>;
   if (sessionUnavailable) return <section className="centered-state auth-check" aria-live="polite"><p className="kicker">Secure sign-in</p><h1>Session check unavailable</h1><p>LancerLogin could not confirm your session. Check your connection and try again.</p><button className="primary-button" type="button" onClick={() => checkSession(loadDashboardSession())}>Try again</button></section>;
-  if (session) return <WalkthroughSessionProvider userId={session.id}><AppShell initialModules={moduleRequest} themeControl={<ThemeToggle theme={theme} onTheme={onTheme} />} role={session.role} debugMode={session.debugMode} onDebugModeChanged={async (debugMode) => { const response = await fetch(`${apiBaseUrl}/auth/preferences`, { method: "PATCH", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ debugMode }) }); if (!response.ok) throw new Error("Could not save Debug mode."); setSession((current) => current ? { ...current, debugMode } : current); }} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSessionExpired={() => { setModuleRequest(undefined); setSession(undefined); }} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => { clearWalkthroughSession(session.id); setModuleRequest(undefined); setSession(undefined); }); }} /></WalkthroughSessionProvider>;
+  if (session) return <WalkthroughSessionProvider userId={session.id}><AppShell initialModules={moduleRequest} themeControl={<ThemeToggle theme={theme} onTheme={onTheme} />} role={session.role} debugMode={session.debugMode} onDebugModeChanged={async (debugMode) => { const response = await fetch(`${apiBaseUrl}/auth/preferences`, { method: "PATCH", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ debugMode }) }); if (!response.ok) throw new Error("Could not save Debug mode."); setSession((current) => current ? { ...current, debugMode } : current); }} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: startingTheme(status).primary, secondaryColor: startingTheme(status).secondary, appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSessionExpired={() => { setModuleRequest(undefined); setSession(undefined); }} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => { clearWalkthroughSession(session.id); setModuleRequest(undefined); setSession(undefined); }); }} /></WalkthroughSessionProvider>;
   return <><EntryHeader branding={status.settings} theme={theme} onTheme={onTheme} /><LocalLogin status={status} onSignedIn={setSession} /></>;
 }
 

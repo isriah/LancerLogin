@@ -1,5 +1,5 @@
 import { attendanceSetupInterval } from "./attendance-setup-interval";
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ModuleSnapshotItem } from "../../../packages/shared/src/module-platform.ts";
 import { api } from "./dashboard-api";
 import type { DashboardSetupProps } from "./module-contributions.ts";
@@ -43,7 +43,7 @@ const pendingCard = (cards: SetupCard[]) => cards.findIndex((step) => (step.requ
 function stepBadge(step: SetupCard): { tone: "success" | "neutral" | "warning"; text: string } {
   if (step.valid && (step.outcome === "completed" || !step.required)) return { tone: "success", text: "Complete" };
   if (!step.required) return { tone: "neutral", text: step.outcome === "skipped" ? "Not set up" : "Optional" };
-  return step.valid ? { tone: "neutral", text: "Ready" } : { tone: "warning", text: "Action needed" };
+  return step.valid ? { tone: "success", text: "Ready" } : { tone: "warning", text: "Action needed" };
 }
 
 // Setup times use minute precision; an unchanged default keeps its exact instant.
@@ -51,6 +51,9 @@ function localInput(value: Date) {
   const offset = value.getTimezoneOffset() * 60_000;
   return new Date(value.getTime() - offset).toISOString().slice(0, 16);
 }
+
+// Meeting times are shown to the minute, like scan times elsewhere in the dashboard.
+const meetingTime = (value: string) => new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 
 const meetingInstant = (value: string, original: string) => value === localInput(new Date(original)) ? original : new Date(value).toISOString();
 
@@ -61,12 +64,17 @@ function defaultMeeting(timeZone: string) {
 
 type ModuleSetupWorkspaceProps = DashboardSetupProps;
 
+/** Lets a setup workspace tell the Core footer that every required step is saved, before the module snapshot refreshes. */
+const RequiredStepsComplete = createContext<((complete: boolean) => void) | undefined>(undefined);
+
 /** Render the guided setup contributed by the module being set up, inside its module root unless the Core shell owns it. Offer Finish setup later when the shell allows deferring it, or Close setup when it was reopened after completion. */
 export function ModuleSetupWorkspace({ setup: Setup, moduleRoot = false, onFinishLater, onClose, ...props }: ModuleSetupWorkspaceProps & { setup?: React.ComponentType<DashboardSetupProps>; moduleRoot?: boolean; onFinishLater?: () => void; onClose?: () => void }) {
-  const workspace = !Setup ? <p className="ui-status" data-tone="error" role="alert">Module setup is unavailable.</p> : moduleRoot ? <ModuleRoot moduleId={props.module.id}><Setup {...props} /></ModuleRoot> : <Setup {...props} />;
+  const [requiredComplete, setRequiredComplete] = useState(false);
+  const setup = !Setup ? <p className="ui-status" data-tone="error" role="alert">Module setup is unavailable.</p> : moduleRoot ? <ModuleRoot moduleId={props.module.id}><Setup {...props} /></ModuleRoot> : <Setup {...props} />;
+  const workspace = <RequiredStepsComplete.Provider value={setRequiredComplete}>{setup}</RequiredStepsComplete.Provider>;
   if (onClose && !onFinishLater) return <>{workspace}<div className="module-setup-later"><button type="button" onClick={onClose} aria-describedby="module-setup-close-help">Close setup</button><p id="module-setup-close-help" className="field-help">{props.module.label} setup is complete. Saved steps stay as they are.</p></div></>;
   if (!onFinishLater) return workspace;
-  return <>{workspace}<div className="module-setup-later"><button type="button" onClick={onFinishLater} aria-describedby="module-setup-later-help">Finish setup later</button><p id="module-setup-later-help" className="field-help">Your saved steps are kept. {props.module.label} becomes available once every required step is complete; continue from the notice at the top of any page.</p></div></>;
+  return <>{workspace}<div className="module-setup-later"><button type="button" onClick={onFinishLater} aria-describedby="module-setup-later-help">Finish setup later</button><p id="module-setup-later-help" className="field-help">{requiredComplete ? `Every required step is complete, so ${props.module.label} is ready to use. You can set up the optional steps now or later.` : `Your saved steps are kept. ${props.module.label} becomes available once every required step is complete; continue from the notice at the top of any page.`}</p></div></>;
 }
 
 export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSetupWorkspaceProps) {
@@ -117,6 +125,9 @@ export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSe
     if (step.id === "meeting") void api<{ meetings: Meeting[]; timeZone: string }>("/module-setup/attendance/meeting").then((result) => { if (!result.timeZone) throw new Error("The organization time zone is unavailable. Reload setup."); setMeeting((current) => current ?? defaultMeeting(result.timeZone)); setMeetings(result.meetings); setMeetingId(result.meetings[0]?.id ?? ""); setCreateAnotherMeeting(false); }).catch((error: Error) => setNotice(error.message));
     if (step.id === "input") void loadInput();
   }, [step?.id]);
+
+  const reportRequiredComplete = useContext(RequiredStepsComplete);
+  useEffect(() => { reportRequiredComplete?.(Boolean(state?.ready)); }, [state?.ready]);
 
   async function rosterChanged() { setRoster(await readRoster()); }
 
@@ -211,7 +222,7 @@ function MeetingStep({ meetings, value, onChange, createAnother, onCreateAnother
   if (!value) return <p role="status">Loading meeting defaults...</p>;
   const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const form = <><p>Create a test meeting that is happening now, so you can record a check-in in the next step. The times below already work; change them only if you need to.</p><p className="field-help" id="setup-meeting-times-help">Times are in your browser time zone ({browserZone}). A meeting must start and end on the same day{browserZone === value.timeZone ? "" : ` in the organization time zone (${value.timeZone})`}.</p><label htmlFor="setup-meeting-title">Meeting title<input id="setup-meeting-title" maxLength={120} value={value.title} onChange={(event) => onChange({ ...value, title: event.target.value })} /></label><div className="form-grid"><label htmlFor="setup-meeting-starts">Starts<input id="setup-meeting-starts" type="datetime-local" step={60} value={value.startsAt} aria-describedby="setup-meeting-times-help" onChange={(event) => onChange({ ...value, startsAt: event.target.value })} /></label><label htmlFor="setup-meeting-ends">Ends<input id="setup-meeting-ends" type="datetime-local" step={60} value={value.endsAt} aria-describedby="setup-meeting-times-help" onChange={(event) => onChange({ ...value, endsAt: event.target.value })} /></label></div><label className="checkbox-field"><input type="checkbox" checked={value.required} onChange={(event) => onChange({ ...value, required: event.target.checked })} /> Required meeting</label></>;
-  if (meetings.length) return <div><p>{meetings.length} existing meeting{meetings.length === 1 ? " is" : "s are"} available. Continue with the current schedule, or replace an unsuitable first choice by creating a different meeting now.</p><ul className="compact-list">{meetings.slice(0, 3).map((item) => <li key={item.id}><strong>{item.title}</strong> - {new Date(item.startsAt).toLocaleString()}</li>)}</ul><label className="checkbox-field"><input type="checkbox" checked={createAnother} onChange={(event) => onCreateAnother(event.target.checked)} /> Create a different meeting before continuing</label>{createAnother && form}</div>;
+  if (meetings.length) return <div><p>{meetings.length} existing meeting{meetings.length === 1 ? " is" : "s are"} available. Continue with the current schedule, or replace an unsuitable first choice by creating a different meeting now.</p><ul className="compact-list">{meetings.slice(0, 3).map((item) => <li key={item.id}><strong>{item.title}</strong> - {meetingTime(item.startsAt)}</li>)}</ul><label className="checkbox-field"><input type="checkbox" checked={createAnother} onChange={(event) => onCreateAnother(event.target.checked)} /> Create a different meeting before continuing</label>{createAnother && form}</div>;
   return <div>{form}</div>;
 }
 
@@ -235,7 +246,7 @@ function InputStep({ state, simulatorName, setSimulatorName, memberId, setMember
   const kiosks = <p className="field-help">Using a physical kiosk? Pair it from Kiosks once setup is finished. A kiosk can only connect after Attendance is ready, so this step uses the browser simulator.</p>;
   if (valid) return <div><p>A kiosk or browser simulator check-in has been verified. Continue to optional integrations.</p>{kiosks}</div>;
   if (!state) return <p role="status">Loading browser simulator choices...</p>;
-  return <div><p>Record a test check-in with the browser simulator. It uses the real attendance rules and server time. It does not test or store fingerprint data.</p><label htmlFor="setup-simulator-name">Simulator name<input id="setup-simulator-name" maxLength={80} value={simulatorName} onChange={(event) => setSimulatorName(event.target.value)} /></label>{state.members.length ? <label htmlFor="setup-input-member">Roster member<select id="setup-input-member" value={memberId} onChange={(event) => setMemberId(event.target.value)}>{state.members.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label> : <p className="warning-callout">No active members yet. Add one in the <button type="button" className="link-button" onClick={onOpenRoster}>Roster step</button>.</p>}{state.meetings.length ? <label htmlFor="setup-input-meeting">Meeting happening now<select id="setup-input-meeting" value={meetingId} onChange={(event) => setMeetingId(event.target.value)}>{state.meetings.map((item) => <option key={item.id} value={item.id}>{item.title} - {new Date(item.startsAt).toLocaleString()}</option>)}</select></label> : <p className="warning-callout">No meetings yet. Create one in the <button type="button" className="link-button" onClick={onOpenMeeting}>First meeting step</button>.</p>}{kiosks}</div>;
+  return <div><p>Record a test check-in with the browser simulator. It uses the real attendance rules and server time. It does not test or store fingerprint data.</p><label htmlFor="setup-simulator-name">Simulator name<input id="setup-simulator-name" maxLength={80} value={simulatorName} onChange={(event) => setSimulatorName(event.target.value)} /></label>{state.members.length ? <label htmlFor="setup-input-member">Roster member<select id="setup-input-member" value={memberId} onChange={(event) => setMemberId(event.target.value)}>{state.members.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label> : <p className="warning-callout">No active members yet. Add one in the <button type="button" className="link-button" onClick={onOpenRoster}>Roster step</button>.</p>}{state.meetings.length ? <label htmlFor="setup-input-meeting">Meeting happening now<select id="setup-input-meeting" value={meetingId} onChange={(event) => setMeetingId(event.target.value)}>{state.meetings.map((item) => <option key={item.id} value={item.id}>{item.title} - {meetingTime(item.startsAt)}</option>)}</select></label> : <p className="warning-callout">No meetings yet. Create one in the <button type="button" className="link-button" onClick={onOpenMeeting}>First meeting step</button>.</p>}{kiosks}</div>;
 }
 
 function IntegrationStep({ provider, valid, navigate }: { provider: string; valid: boolean; navigate: (path: string) => void }) {

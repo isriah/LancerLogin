@@ -1,36 +1,27 @@
-# Link the Cloudflare account
+# Cloudflare linking
 
-This guide is for the Administrator creating a new private deployment repository. It uses an account-owned API token in the adopter's own Cloudflare account. Cloudflare's current [account token guide](https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/) calls the path **Manage Account → Account API Tokens** and requires Super Administrator access to create or update a token.
+LancerLogin is installed in the adopter's own Cloudflare account with an account-owned API token. Follow the step-by-step instructions on the documentation site: [Create the Cloudflare API token](https://isriah.github.io/LancerLogin/setup.html#cloudflare-token).
 
-## Create the token
+## Token policy
 
-1. In the private repository, create the `production` environment under **Settings → Environments**.
-2. In Cloudflare, select the adopter-owned account. Open **Manage Account → Account API Tokens → Create Token**.
-3. Give the token a human-readable name, then use a custom policy. Limit it to the selected account and grant only:
-   - **Workers Scripts**: Edit
-   - **D1**: Edit
-   - **Pages**: Edit
-   - **Account Settings**: Read
-   Account Settings Read permits the workflow to verify the selected account.
-4. Review the policy, create the token, and copy its value immediately. Cloudflare shows the value once. Do not screenshot or record the reveal screen.
-5. Use Cloudflare's current account-ID control to copy the selected account's ID. Confirm it is the account ID, not a zone ID.
+Create the token from scratch under **Manage account > Account API tokens**, scoped to the single selected account (**Entire Account**), with exactly these permissions:
 
-The installation uses default Pages and Workers URLs. Do not add zone, DNS, billing, member, or user-management permissions.
+| Permission group | Access | Review page shows | Purpose |
+| --- | --- | --- | --- |
+| Workers Scripts (labelled "Legacy" by Cloudflare) | Edit | Workers Scripts Write | Deploy the API Worker |
+| D1 | Edit | D1 Write | Create the database and apply migrations |
+| Pages | Edit | Pages Write | Create and deploy the dashboard |
+| Account Settings | Read | Account Settings Read | Verify that the token belongs to the selected account |
 
-## Store deployment secrets
+Account-owned token values start with `cfat_`. The installation uses the default Pages and Workers URLs, so the token needs no zone, DNS, billing, member or user-management permission.
 
-In the private repository's `production` environment, add these **environment secrets**:
+## Secrets
+
+Store the values as `production` environment secrets in the private deployment repository:
 
 | Secret | Value |
 | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | The copied token value, not its Cloudflare label |
-| `CLOUDFLARE_ACCOUNT_ID` | The selected account ID |
-| `LANCERLOGIN_SETUP_CODE` | A unique password-manager-generated value of at least 16 characters |
+| `CLOUDFLARE_API_TOKEN` | The token value, not its Cloudflare name |
+| `CLOUDFLARE_ACCOUNT_ID` | The 32-character account ID, not a zone ID |
 
-Use secrets, not variables. The setup code protects first-Admin creation and is not an Administrator password.
-
-Before initial provisioning, configure the private web-update credential and the required installation variables described in [WEB-UPDATES.md](WEB-UPDATES.md). Keep account IDs, tokens, private URLs, and resource IDs out of public documentation and repository commits.
-
-## Expected result
-
-Run **Install or upgrade LancerLogin** in the private repository with `create` and **Latest stable**. The workflow verifies the selected account and token, creates the adopter-named resources, and reports the dashboard URL. If it reports a token, account, or collision error, correct that private-environment configuration and rerun only after confirming the intended account.
+The workflow calls Cloudflare's account token verification endpoint for the exact account before it creates or changes anything. Keep account IDs, tokens, private URLs and resource IDs out of public documentation and repository commits. Replace the secret before the token expires; a rejected token stops the next run before any change.

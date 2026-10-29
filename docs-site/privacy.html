@@ -5,41 +5,47 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>LancerLogin privacy</title>
+  <meta name="description" content="What a LancerLogin installation stores, where it stores it, and how optional fingerprint sharing changes that.">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html">Releases</a><a href="technical.html">Technical</a></nav></header>
-<header class="page-header"><div><p class="eyebrow">Plain-language notice</p><h1>Privacy boundaries</h1></div></header>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Install</a><a href="first-run.html">First sign-in</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="updates.html">Update</a><a href="troubleshooting.html">Troubleshoot</a><a href="technical.html">Reference</a></nav></header>
+<header class="page-header"><div><p class="eyebrow">Plain-language notice</p><h1>Privacy boundaries</h1><p>Each installation belongs to the organization that runs it. Its data stays in that organization's own Cloudflare account and kiosks.</p></div></header>
 <main id="main" class="page">
-  <h2>Stored by your installation</h2>
+  <h2 id="stored">Stored by your installation</h2>
   <ul class="privacy-list good">
-    <li>Organization configuration, users, roster, meetings, attendance, corrections, and audit records in your D1 database</li>
-    <li>Encrypted integration credentials in D1; saved values are never displayed</li>
-    <li>Sensor slot-to-member mapping, queued events, and pairing material locally on the Pi</li>
-    <li>Fingerprint templates inside the R503 by default; optional sharing boundaries are described below</li>
+    <li>Organization settings, accounts, roster, meetings, attendance, corrections, reports, and audit records, in your D1 database</li>
+    <li>Data for any plugins you turn on, such as outreach hours or carpool addresses, in the same database</li>
+    <li>Encrypted integration credentials; saved values are never displayed again</li>
+    <li>On each kiosk: its pairing, the links between members and fingerprints, badges, or QR codes, a cache of active members, and scans waiting to be sent</li>
+    <li>Fingerprint templates inside the R503 reader where they were enrolled, unless an Admin turns on cloud storage</li>
   </ul>
-  <h2>Private installation data</h2>
+  <h2 id="not-shared">Not collected or shared</h2>
   <ul class="privacy-list never">
-    <li>Organization name</li>
-    <li>Roster or personal names</li>
-    <li>Attendance records</li>
-    <li>Biometric-related data remains sensitive even when encrypted; raw fingerprint images are never captured or uploaded</li>
-    <li>Raw IP address</li>
+    <li>No usage data is sent to the LancerLogin project or anyone else</li>
+    <li>Raw fingerprint images are never captured or uploaded</li>
+    <li>Raw badge and QR values never leave the kiosk; it keeps only keyed digests</li>
+    <li>Network addresses are not stored; sign-in rate limits keep only a keyed hash for a day</li>
   </ul>
-  <h2>Community telemetry retirement</h2>
-  <p>LancerLogin does not collect or transmit Community telemetry. Historical database fields remain inert for backup compatibility.</p>
-  <h2>Optional fingerprint sharing</h2>
-  <p>Peer sync is off by default. Installation opt-in and local PIN-authorized comparison of peer device identities allow eligible new templates to be encrypted for the destination kiosk. The relay cannot decrypt those peer messages. Disabling sync is not remote erasure.</p>
-  <p>Separate <strong>Fingerprint cloud storage</strong> is Admin-controlled and off by default. The server manages a separate 32-byte encryption key and can decrypt retained templates for authorized paired kiosks. New kiosks can receive verified enrollments while all prior kiosks are offline. This is not end-to-end private from the server. Plaintext is present briefly in memory, not intentionally stored in D1, files or logs.</p>
-  <p>Cloud uploads require immutable roster identity. Older or offline mappings without that binding require re-enrollment before sharing; unknown sensor slots are untouched and imports do not overwrite occupied slots. Legacy review approvals are retired, and their cloud copies cannot supply sharing authority. Cloud copies remain until the member is deactivated or their ID changes, storage or Attendance is disabled, or the installation is restored. Source-kiosk retirement and local mapping removal do not erase retained cloud copies or other readers.</p>
-  <p>Portable dashboard backups exclude fingerprint sharing authority and templates. Infrastructure exports and Pi-state backups are sensitive and may retain deleted information. Preserve the original vault key independently for authorized infrastructure recovery; changing it cannot decrypt existing ciphertext. Review every reader when withdrawing access. See the <a href="kiosk.html">kiosk guide</a> and maintained source privacy, security and backup guides before enabling either option.</p>
-  <h2>Re-enrollment and mappings reset</h2>
-  <p>Re-enroll older fingerprints through PIN-protected Authentication maintenance while a kiosk is online. An explicit Admin mappings reset disables sharing and requests association removal on active paired kiosks, without erasing reader templates, attendance, pairing or other authentication mappings. Offline kiosks retain old associations until reconnect and acknowledgement. Historical backups can retain retired review metadata; never restore it as active authority.</p>
-  <h2>Deletion and incident contact</h2>
-  <p>Data remains in the adopter-owned installation until an Admin deletes it. Exporting creates a copy and does not remove stored records. Use the Data settings page for backup and deletion controls.</p>
-  <p>Send privacy and security questions to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. Community support is best-effort without an SLA.</p>
+  <p>Integrations you turn on send only what they need: Google Calendar and Discord receive meeting titles, notes, and times; Resend and Discord deliver the messages you configure.</p>
+
+  <h2 id="fingerprint-cloud-storage">Optional fingerprint cloud storage</h2>
+  <p><strong>Fingerprint cloud storage</strong> is off by default and only an Admin can turn it on, in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Fingerprint sharing</span>. Get your organization's permission first: fingerprint templates are biometric data.</p>
+  <p>When it is on, new enrollments upload to your installation, where the server manages a separate 32-byte encryption key and can decrypt templates for authorized paired kiosks. This is not end-to-end private from the server. Templates are briefly in memory while they are encrypted or delivered, and are not intentionally stored in plain form in D1, files, or logs. New kiosks can receive enrollments even while every earlier kiosk is offline.</p>
+  <p>Only enrollments made while a kiosk is online carry a verified link to the member. Older or offline enrollments require re-enrollment before sharing. Unknown reader slots are never read or overwritten.</p>
+  <p>Cloud copies are deleted when the member is made inactive or their member ID changes, when cloud storage or Attendance is turned off, or when the installation is restored from a backup. Turning cloud storage off does not erase templates already on readers. To remove those, reset fingerprint links and use <strong>Erase unlinked fingerprints</strong> on each kiosk.</p>
+
+  <h2 id="backups">Backups</h2>
+  <p>Portable dashboard backups exclude fingerprint templates, sharing settings, and the encryption key. They do include password hashes, encrypted integration secrets, and attendance history, so protect them like an Admin password. Raw database exports and copies of a kiosk's local files are more sensitive still and may contain information already deleted from the live installation.</p>
+
+  <h2 id="kiosk-retirement">Retiring or repurposing a kiosk</h2>
+  <p>Retiring a kiosk in the dashboard stops its credential working, but it cannot erase the Pi. Before giving a kiosk away or reusing it, remove its member links in <strong>Authentication maintenance</strong> on the kiosk and wipe or replace its SD card.</p>
+
+  <h2 id="deletion">Deletion and contact</h2>
+  <p>Data stays in your installation until an Admin deletes it in <span class="ui-path">Settings <span>›</span> Data</span>. Exporting a report or backup creates a copy and does not remove anything.</p>
+  <p>Send privacy and security questions to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. Do not include credentials, attendance records, or backups. Community support is best-effort with no response-time commitment. The full <a href="https://github.com/isriah/LancerLogin/blob/main/docs/PRIVACY.md">privacy reference</a> covers each boundary in detail.</p>
 </main>
-<footer><div><a href="index.html">Documentation home</a> · Privacy questions: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
+<footer><div><a href="index.html">Documentation home</a> · <a href="releases.html">Releases</a> · Privacy questions: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
 </body>
 </html>

@@ -65,6 +65,7 @@ test("upgrade guide links carry-over, web-first updates and restore authority bo
   assert.match(guide, /intentionally revokes kiosk and pairing authority/);
   assert.match(guide, /Do not automatically roll back code, restore D1, restore an old queue/);
   for (const match of guide.matchAll(/\]\(([^)]+)\)/g)) {
+    if (/^https:\/\/isriah\.github\.io\/LancerLogin\//.test(match[1])) continue; // the public documentation site
     await access(resolve("docs", match[1].split("#")[0]));
   }
   for (const path of ["README.md", "docs/WEB-UPDATES.md", "docs/KIOSK.md"]) {

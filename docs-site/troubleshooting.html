@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Troubleshoot LancerLogin</title><meta name="description" content="Fix common LancerLogin installation, sign-in, kiosk, integration, and update problems."><link rel="stylesheet" href="styles.css"></head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Install</a><a href="first-run.html">First sign-in</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="updates.html">Update</a><a href="troubleshooting.html" aria-current="page">Troubleshoot</a><a href="technical.html">Reference</a></nav></header>
+<header class="page-header"><div><p class="eyebrow">Troubleshoot</p><h1>Fix a problem</h1><p>Find the symptom below. When you ask for help, describe what you saw, but never send credentials, backups, or attendance records.</p></div></header>
+<main id="main" class="page">
+  <h2 id="install">Installation workflow</h2>
+  <p>When <strong>Install or upgrade LancerLogin</strong> or <strong>Refresh web update credential</strong> stops, the run's summary shows an error annotation whose title is one of these codes. Most checks run before anything is created or changed.</p>
+  <table class="credential-table">
+    <thead><tr><th scope="col">Error code</th><th scope="col">What it means</th><th scope="col">What to do</th></tr></thead>
+    <tbody>
+      <tr><td><code>private_repository_required</code></td><td>The repository is public, or the update tokens do not belong to this private repository.</td><td>Make the repository private, or create a private repository from the template. See <a href="setup.html#create-repository">Create your private repository</a>.</td></tr>
+      <tr><td><code>operation_invalid</code>, <code>release_selection_invalid</code></td><td>An input is not one of the offered choices.</td><td>Choose <code>create</code>, <code>resume</code>, or <code>upgrade</code>, keep <code>latest stable</code>, and run again.</td></tr>
+      <tr><td><code>installation_slug_invalid</code></td><td>The slug does not match the naming rule.</td><td>Use 3 to 41 lowercase letters, digits, or hyphens, starting with a letter.</td></tr>
+      <tr><td><code>setup_code_required</code>, <code>setup_code_too_short</code></td><td><code>LANCERLOGIN_SETUP_CODE</code> is missing or shorter than 16 characters.</td><td>Add or replace the production environment secret with a longer password-manager value.</td></tr>
+      <tr><td><code>cloudflare_token_required</code></td><td><code>CLOUDFLARE_API_TOKEN</code> is not set.</td><td>Create an account API token and store it as a production environment secret. See <a href="setup.html#cloudflare-token">Create the Cloudflare API token</a>.</td></tr>
+      <tr><td><code>account_token_required</code></td><td>The token is a user API token from My Profile. Account API tokens start with <code>cfat_</code>.</td><td>Create the token under <span class="ui-path">Manage account <span>›</span> Account API tokens</span> and replace the secret.</td></tr>
+      <tr><td><code>account_token_invalid</code>, <code>cloudflare_token_rejected</code></td><td>The token has expired, was revoked, or does not belong to <code>CLOUDFLARE_ACCOUNT_ID</code>.</td><td>Create a new account API token in the right account and replace the secret.</td></tr>
+      <tr><td><code>cloudflare_account_id_invalid</code></td><td><code>CLOUDFLARE_ACCOUNT_ID</code> is not a 32-character account ID; often it is a zone ID.</td><td>Copy the account ID again (<a href="setup.html#account-id">step 4</a>) and replace the secret.</td></tr>
+      <tr><td><code>cloudflare_permission_missing</code></td><td>The token lacks one of the four permissions. The message names it.</td><td>Edit the token in Cloudflare to add the named permission, then run again.</td></tr>
+      <tr><td><code>cloudflare_request_failed</code></td><td>Cloudflare did not answer a read-only check.</td><td>Check both Cloudflare secrets and run again.</td></tr>
+      <tr><td><code>workers_subdomain_required</code></td><td>The account has no <code>workers.dev</code> subdomain, so the API Worker would have no address.</td><td>In Cloudflare, open Workers &amp; Pages, set the account's <code>workers.dev</code> subdomain, and run again.</td></tr>
+      <tr><td><code>pages_address_taken</code></td><td>Another Cloudflare account already uses <code>&lt;slug&gt;-dashboard.pages.dev</code>, so Cloudflare gave the project a different address.</td><td>Delete the <code>&lt;slug&gt;-dashboard</code> Pages project in your account if the run created it, then run <code>create</code> with a different slug.</td></tr>
+      <tr><td><code>pages_project_unavailable</code></td><td>Cloudflare did not return the Pages project.</td><td>Run again with <code>resume</code> and the same slug.</td></tr>
+      <tr><td><code>installation_resources_exist</code></td><td><code>create</code> found resources for this slug already in the account.</td><td>Use <code>resume</code> to finish an interrupted installation, <code>upgrade</code> for an existing one, or another slug.</td></tr>
+      <tr><td><code>installation_not_found</code></td><td><code>resume</code> found nothing for this slug.</td><td>Check the slug, or run <code>create</code>.</td></tr>
+      <tr><td><code>installation_incomplete</code></td><td><code>upgrade</code> found the installation unfinished or missing resources.</td><td>Run <code>resume</code> with the same slug to finish setup, then upgrade.</td></tr>
+      <tr><td><code>installation_database_missing</code></td><td>The Worker exists but its D1 database was not found. A new, empty database is never created for an existing Worker.</td><td>Check <code>LANCERLOGIN_DATABASE_NAME</code> if you set it, and the slug.</td></tr>
+      <tr><td><code>release_invalid</code>, <code>release_identity_mismatch</code></td><td>The latest release could not be verified.</td><td>Run again later.</td></tr>
+      <tr><td><code>dispatch_credential_required</code>, <code>dispatch_credential_access_denied</code>, <code>dispatch_credential_rejected</code></td><td>Refresh web update credential found <code>LANCERLOGIN_WEB_UPDATE_TOKEN</code> missing, without access to this repository, or expired or revoked.</td><td>Create the token again as in <a href="updates.html#web-update-token">Set up one-click updates</a>, replace the secret, and run Refresh web update credential.</td></tr>
+      <tr><td><code>selection_credential_must_be_distinct</code>, <code>selection_credential_access_denied</code>, <code>selection_credential_rejected</code></td><td>The optional plugin management token is the same as the update token, cannot read <code>main</code>, or has expired.</td><td>Create a separate token with Contents: Read and write on only this repository and replace <code>LANCERLOGIN_MODULE_SELECTION_TOKEN</code>.</td></tr>
+      <tr><td><code>reviewed_workflow_required</code></td><td><code>.github/workflows/upgrade-web.yml</code> is missing or disabled.</td><td>Restore and enable it on <code>main</code>.</td></tr>
+      <tr><td><code>fixed_account_resources_required</code>, <code>installation_slug_required</code></td><td>The installation variables are not set.</td><td>Add <code>LANCERLOGIN_INSTALLATION_SLUG</code>, <code>LANCERLOGIN_DATABASE_ID</code>, and <code>LANCERLOGIN_API_URL</code> from the run summary. See <a href="setup.html#installation-variables">Save the installation variables</a>.</td></tr>
+      <tr><td><code>database_identity_mismatch</code>, <code>worker_database_mismatch</code>, <code>credential_target_unavailable</code></td><td>The variables do not match this installation's database and Worker.</td><td>Copy the values from the installation run summary again.</td></tr>
+      <tr><td><code>credential_upload_failed</code></td><td>Cloudflare did not accept the Worker secrets.</td><td>Check that the Cloudflare token has Workers Scripts: Edit, then run again.</td></tr>
+      <tr><td><code>token_expiration_unreadable</code></td><td>GitHub reported a token expiry in an unexpected format.</td><td>Run again later, and report it if it persists.</td></tr>
+    </tbody>
+  </table>
+  <p>If a run stopped partway through for another reason, run the workflow again with operation <code>resume</code> and the same slug. Do not use <code>create</code> again.</p>
+
+  <h2 id="sign-in">First sign-in and access</h2>
+  <table class="credential-table">
+    <thead><tr><th scope="col">What you see</th><th scope="col">What to do</th></tr></thead>
+    <tbody>
+      <tr><td>The setup code is not accepted.</td><td>Copy the <code>LANCERLOGIN_SETUP_CODE</code> value again without extra spaces. To use a new code, update the secret and run the workflow with operation <code>resume</code>. This works only while no Admin exists.</td></tr>
+      <tr><td>Google sign-in reports a redirect mismatch.</td><td>Copy the callback address from LancerLogin into the Google client's <strong>Authorized redirect URIs</strong> exactly. See <a href="setup.html#google-oauth">Google sign-in</a>.</td></tr>
+      <tr><td>An account is locked after wrong passwords.</td><td>Wait 15 minutes, or have another Admin set a new password in <span class="ui-path">Settings <span>›</span> Access</span>.</td></tr>
+      <tr><td>No Admin can sign in.</td><td>Follow <a href="operations.html#recover-access">Recover access</a>.</td></tr>
+      <tr><td>A page says <strong>Page unavailable</strong>.</td><td>The page does not exist or your role cannot open it. Sign in with an account that has access, or ask an Admin to assign you to that module.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="kiosk">Kiosks</h2>
+  <table class="credential-table">
+    <thead><tr><th scope="col">What you see</th><th scope="col">What to do</th></tr></thead>
+    <tbody>
+      <tr><td>The phone cannot open <code>http://&lt;pi-hostname&gt;.local:8788</code>.</td><td>Make sure the phone is on the same network as the Pi. Use the IP address the installer printed instead. On the Pi, <code>hostname -I</code> shows it.</td></tr>
+      <tr><td>Pairing says the key expired or the setup code is wrong.</td><td>Create a new pairing key; each is valid for ten minutes. Enter the six-digit code currently shown on the kiosk screen. After five wrong codes the kiosk shows a new one and pauses pairing for a minute.</td></tr>
+      <tr><td>The attendance screen is closed.</td><td>Open the <strong>LancerLogin Kiosk</strong> shortcut on the Pi desktop.</td></tr>
+      <tr><td>The kiosk shows offline or scans are waiting.</td><td>Check the Pi's network with the network dot. Scans stay in the queue and send when the connection returns. Try <strong>Reload display</strong>, then <strong>Restart software</strong>, from <span class="ui-path">Kiosks <span>›</span> Manage kiosk <span>›</span> Device maintenance</span>.</td></tr>
+      <tr><td>Attendance is paused and the kiosk asks for the time.</td><td>The Pi has no trusted clock. Choose <strong>Open maintenance</strong>, enter the PIN, and confirm the date and time.</td></tr>
+      <tr><td>A fingerprint is not recognized.</td><td>Check that the member is active and enrolled on this kiosk. Without fingerprint sharing, enroll the member on each fingerprint kiosk. Test the reader in <strong>Authentication maintenance</strong>.</td></tr>
+      <tr><td>A kiosk update shows no result.</td><td>Check the kiosk's status before trying again. If the new release failed to start, the kiosk has already switched back to the previous release.</td></tr>
+      <tr><td>Nobody knows the kiosk PIN.</td><td>An Admin can choose <strong>Reset network PIN</strong> for that kiosk. The next person at the kiosk creates a new PIN.</td></tr>
+    </tbody>
+  </table>
+  <p>For problems the dashboard commands cannot fix, someone with access to the Pi (in person, over SSH, or with Raspberry Pi Connect) can check the service:</p>
+  <pre><code>systemctl status lancerlogin-kiosk.service --no-pager
+journalctl -u lancerlogin-kiosk.service -n 30 --no-pager
+curl http://127.0.0.1:8788/health</code></pre>
+  <p>Keep this output private. Do not delete anything under <code>/var/lib/lancerlogin</code>, copy a queue to another kiosk, or pair a working kiosk again: waiting scans could be lost or counted twice. The <a href="https://github.com/isriah/LancerLogin/blob/main/docs/KIOSK.md">kiosk reference</a> covers recovery in more detail.</p>
+
+  <h2 id="update">Dashboard updates</h2>
+  <table class="credential-table">
+    <thead><tr><th scope="col">What you see</th><th scope="col">What to do</th></tr></thead>
+    <tbody>
+      <tr><td>Updates cannot start because the update token is missing, expired, or revoked.</td><td>Create a new token and run <strong>Refresh web update credential</strong>. See <a href="updates.html#web-update-token">Set up one-click updates</a>. You can also <a href="updates.html#manual-update">update without the token</a>.</td></tr>
+      <tr><td>The update waits for approval.</td><td>Choose <strong>Review approval in GitHub</strong> and approve the <code>production</code> deployment.</td></tr>
+      <tr><td>The update stops because a module moved into a plugin.</td><td>Follow the choices on <span class="ui-path">Settings <span>›</span> Updates</span> to keep the module by adding its plugin, or to turn it off.</td></tr>
+      <tr><td>The update failed before it changed anything.</td><td>Read the reason on the card, fix it, and <a href="updates.html#web-update">start the update again</a> with a new backup.</td></tr>
+      <tr><td>The card says recovery is required.</td><td>Stop. Do not start another update and do not restore a backup. Open <strong>Diagnostics and manual recovery</strong> for the workflow run and contact support with what it shows.</td></tr>
+      <tr><td>A notice asks you to reload.</td><td>The installation was updated. Choose <strong>Reload updated dashboard</strong>.</td></tr>
+    </tbody>
+  </table>
+
+  <h2 id="integrations">Integrations</h2>
+  <p>An integration failure never undoes a meeting or attendance change, and it never stops kiosk scans. Open the integration's card in <span class="ui-path">Settings <span>›</span> Integrations</span>, read the reason it gives, correct the setting, and retry only that step. Changing a saved credential clears its verification until you verify again.</p>
+
+  <h2 id="data">Backups and restores</h2>
+  <ul>
+    <li>A restore refuses a file from another category. Restore it on the matching card in <span class="ui-path">Settings <span>›</span> Data</span>.</li>
+    <li>A restore refuses a backup that contains a plugin this installation does not have. Add the plugin first, or confirm a restore that discards that plugin's data.</li>
+    <li>A large restore can fail with a message about database limits. Restore one category at a time, or use the D1 restore commands in the <a href="https://github.com/isriah/LancerLogin/blob/main/docs/BACKUP-RESTORE.md">backup and restore reference</a>.</li>
+    <li>After an entire-installation restore, pair every kiosk again.</li>
+  </ul>
+
+  <h2 id="support">Get help</h2>
+  <p>Email <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. Support is best-effort with no response-time commitment. Describe the symptom, the page or workflow, and the release shown in <span class="ui-path">Settings <span>›</span> Updates</span>. Do not send tokens, passwords, backups, fingerprints, or attendance records.</p>
+</main>
+<footer><div><a href="index.html">Documentation home</a> · <a href="privacy.html">Privacy</a> · <a href="releases.html">Releases</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
+</body>
+</html>

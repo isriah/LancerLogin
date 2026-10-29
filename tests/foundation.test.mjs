@@ -11,7 +11,8 @@ test("foundation documents state standalone constraints", async () => {
   const security = await readFile("docs/SECURITY.md", "utf8");
   assert.match(security, /signed interactions/i);
   assert.match(security, /HMAC-SHA256/);
-  assert.match(security, /no remote destructive wipe/i);
+  assert.match(security, /Erase unlinked fingerprints[\s\S]*erases only reader templates that no member mapping references/);
+  assert.match(security, /no remote command that wipes mappings, the queue, pairing or the Pi/);
   const privacy = await readFile("docs/PRIVACY.md", "utf8");
   assert.match(privacy, /reporting/i);
   assert.match(privacy, /raw badge and QR values, local digests, and the transform secret are not sent/i);
@@ -23,7 +24,9 @@ test("foundation documents state standalone constraints", async () => {
   const kiosk = await readFile("docs/KIOSK.md", "utf8");
   assert.match(kiosk, /new pairings start with fingerprint/);
   assert.match(kiosk, /keyboard-wedge/);
-  assert.match(kiosk, /This software acceptance does not claim live RFID, NFC, QR camera, R503, or Pi validation/);
+  assert.match(kiosk, /Validate reader models, key layouts, prefixes, suffixes and USB behavior on the installation's own hardware/);
+  assert.match(kiosk, /erase_unlinked_fingerprints/);
+  assert.match(kiosk, /rolled back automatically/);
   assert.match(kiosk, /owner-only active-roster cache/);
   assert.match(kiosk, /Authentication maintenance/);
   const license = await readFile("LICENSE", "utf8");

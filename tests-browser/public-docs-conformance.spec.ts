@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
-const pages = ["index.html", "setup.html", "kiosk.html", "operations.html", "privacy.html", "releases.html", "technical.html"];
+const pages = ["index.html", "setup.html", "first-run.html", "kiosk.html", "operations.html", "updates.html", "troubleshooting.html", "privacy.html", "releases.html", "technical.html"];
 const viewports = [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 390, height: 844 },

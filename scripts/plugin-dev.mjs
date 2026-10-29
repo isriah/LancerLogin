@@ -200,7 +200,8 @@ export async function developmentRuntime({ stateDirectory, apiPort = 8787, dashb
     name: "lancerlogin-plugin-dev",
     main: relativeToState("apps/api/src/index.ts"),
     compatibility_date: "2026-08-01",
-    vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `http://localhost:${dashboardPort}` },
+    // DEFAULT_THEME keeps local previews on the purple development palette so they are easy to tell from releases.
+    vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `http://localhost:${dashboardPort}`, DEFAULT_THEME: "development" },
     triggers: { crons: ["*/5 * * * *"] },
     d1_databases: [{ binding: "DB", database_name: "lancerlogin-plugin-dev", database_id: "00000000-0000-4000-8000-00000000d0e1", migrations_dir: relativeToState("apps/api/migrations") }],
   };

@@ -12,6 +12,8 @@ The lockfile uses Vite 7.3.7 and overrides Miniflare's Undici dependency to 7.30
 
 For a new bundled module, follow [module authoring](MODULE-AUTHORING.md) for registration, authorization, setup, jobs, persistence, backup and lifecycle requirements. To run Core with a plugin from a local folder, use `npm run plugins:dev -- --plugin <folder>`; see [writing a plugin](PLUGIN-AUTHORING.md#develop-locally).
 
+New installations start with the release organization colors, primary `#B80100` and secondary `#EEB822` (`product.defaultTheme` in `packages/shared/src/product.ts`). A development Worker can set the optional `DEFAULT_THEME` var to `development` to start with the purple development colors `#7c3aed` and `#0f766e` instead, so its dashboard is easy to tell apart from a release. `npm run plugins:dev` sets it for local previews; production Worker configuration never does. The var only affects first-Admin setup and the dashboard's fallback before branding loads. Existing installations keep their stored colors.
+
 Run the smallest command that covers the files being changed:
 
 | Area | Command | Coverage |
@@ -103,4 +105,4 @@ The packager writes portable ustar archives with explicit header modes: `0755` f
 
 Windows runs the import/HTTP tests but cannot establish Linux permission safety. The complete GitHub Verify gate additionally runs `sudo "$(command -v node)" --test tests/kiosk-artifacts.test.mjs` on Linux. Its root-owned extracted artifacts must start after the child drops to the non-root `nobody` UID/GID, explicitly re-enters the runtime directory, and asserts the code belongs to a different account. State is a separate private temporary directory owned by that account. A `0700` root must actually fail with `EACCES`; the installer's repair must restore startup. The tag workflow requires `sudo "$(command -v node)" scripts/package-kiosk.mjs <new-output-directory> --require-unprivileged` on the exact archives it publishes. This option fails unless running on Linux as root and must not be removed to bypass a failed release gate.
 
-Source-tree tests alone are insufficient evidence for kiosk releases. Keep new runtime assets in the shared packaging path and extend artifact checks when adding a new asset type, runtime subdirectory, dependency, or entry point. These checks do not establish physical UART/R503, systemd, Chromium, or installed-Pi behavior; perform the release's live checks after the separately authorized upgrade.
+Source-tree tests alone are insufficient evidence for kiosk releases. Keep new runtime assets in the shared packaging path and extend artifact checks when adding a new asset type, runtime subdirectory, dependency, or entry point. These checks do not establish physical UART/R503, systemd, Chromium, or installed-Pi behavior; check those on a physical kiosk after upgrading it.

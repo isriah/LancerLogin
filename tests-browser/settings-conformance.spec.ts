@@ -736,10 +736,24 @@ test("module draft resets with a notice when the server configuration changes", 
   await page.goto("/settings/modules");
   const attendance = page.getByRole("switch", { name: /^Attendance/ });
   await expect(attendance).toBeChecked(); await attendance.uncheck();
+  const choice = page.locator(".module-setting-choice").filter({ has: attendance });
+  await expect(choice.getByText("Turns off when you save", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Review module disable", exact: true }).click();
   snapshot = attendanceSnapshot({ revision: 5 }); await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByRole("alert").filter({ hasText: "Module settings changed elsewhere." })).toBeVisible();
   await expect(attendance).toBeChecked(); await expect(page.getByRole("region", { name: "Confirm module disable" })).toBeHidden(); expect(writes).toEqual([]);
+});
+
+test("module status follows the unsaved switch instead of the saved state", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  await page.route("**/platform/modules", route => route.fulfill({ json: attendanceSnapshot({ enabled: false }) }));
+  await page.goto("/settings/modules");
+  const attendance = page.getByRole("switch", { name: /^Attendance/ });
+  const choice = page.locator(".module-setting-choice").filter({ has: attendance });
+  await expect(attendance).not.toBeChecked(); await expect(choice.getByText("Disabled", { exact: true })).toBeVisible();
+  await attendance.check();
+  await expect(choice.getByText("Turns on when you save", { exact: true })).toBeVisible();
+  await expect(choice.getByText("Disabled", { exact: true })).toHaveCount(0);
 });
 
 test("scheduler job disclosures retain complete timestamps and provider-delivery distinction", async ({ page }) => {

@@ -5,26 +5,56 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>LancerLogin documentation</title>
-  <meta name="description" content="Task-oriented setup and operations documentation for a self-hosted LancerLogin attendance dashboard and kiosk.">
+  <meta name="description" content="Install, set up, operate, and update a self-hosted LancerLogin attendance dashboard and Raspberry Pi kiosks.">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
-  <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="releases.html">Releases</a><a href="technical.html">Technical</a></nav></header>
+  <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html" aria-current="page">LancerLogin Docs</a><a href="setup.html">Install</a><a href="first-run.html">First sign-in</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="updates.html">Update</a><a href="troubleshooting.html">Troubleshoot</a><a href="technical.html">Reference</a></nav></header>
   <main id="main">
-    <section class="hero"><div><p class="eyebrow">Stable release 1.0.3 · one kiosk</p><h1>Attendance your organization operates</h1><p>Set up LancerLogin in your own GitHub and Cloudflare accounts, pair a Raspberry Pi kiosk, and keep fingerprint templates inside the R503 by default. Review the optional sharing choices in the privacy notice.</p><div class="actions"><a class="button" href="setup.html">Start setup</a><a class="button secondary" href="privacy.html">Read the privacy notice</a></div></div></section>
+    <section class="hero"><div><p class="eyebrow">LancerLogin 2.0.0 · self-hosted attendance</p><h1>Attendance your organization operates</h1><p>LancerLogin runs in your own GitHub and Cloudflare accounts. Members check in and out at Raspberry Pi kiosks, and Administrators and Operators run meetings, rosters, and reports from a web dashboard. Fingerprint templates stay inside the reader unless an Administrator turns on cloud storage.</p><div class="actions"><a class="button" href="setup.html">Install LancerLogin</a><a class="button secondary" href="privacy.html">Read the privacy notice</a></div></div></section>
     <div class="page">
       <h2>Choose what you need to do</h2>
       <div class="task-grid">
-        <article class="task-card"><span>1</span><h3>Create an installation</h3><p>Create a private repository from the template, add a scoped Cloudflare token, and run the private installation workflow.</p><a href="setup.html">Set up LancerLogin</a></article>
-        <article class="task-card"><span>2</span><h3>Install the kiosk</h3><p>Check supported Pi hardware, run the guided installer, pair with a one-time key, and test the reader.</p><a href="kiosk.html">Open the kiosk guide</a></article>
-        <article class="task-card"><span>3</span><h3>Run attendance</h3><p>Create meetings, record corrections or excuses, send configured notices, and export CSV.</p><a href="operations.html">Open operations guidance</a></article>
+        <article class="task-card"><span>1</span><h3>Install</h3><p>Create a private repository from the template, add a Cloudflare token and three secrets, and run the installation workflow.</p><a href="setup.html">Install LancerLogin</a></article>
+        <article class="task-card"><span>2</span><h3>Sign in and set up</h3><p>Create the first Admin, choose modules, and finish Attendance setup with rules, a first meeting, and your roster.</p><a href="first-run.html">First sign-in and setup</a></article>
+        <article class="task-card"><span>3</span><h3>Add kiosks</h3><p>Assemble a Raspberry Pi kiosk, run the installer from the dashboard, and pair it with a one-time key.</p><a href="kiosk.html">Kiosk guide</a></article>
+        <article class="task-card"><span>4</span><h3>Run attendance</h3><p>Schedule meetings, correct or excuse attendance, manage the roster, and export reports.</p><a href="operations.html">Operate LancerLogin</a></article>
+        <article class="task-card"><span>5</span><h3>Update</h3><p>Update the dashboard from Settings, update each kiosk from the Kiosks page, and manage plugins.</p><a href="updates.html">Update LancerLogin</a></article>
+        <article class="task-card"><span>6</span><h3>Fix a problem</h3><p>Find the cause of common installation, sign-in, kiosk, and update problems.</p><a href="troubleshooting.html">Troubleshoot</a></article>
       </div>
-      <section class="notice"><strong>Community support is best-effort.</strong>Questions and responsible reports can be sent to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. There is no response-time or uptime SLA.</section>
+
+      <h2>Modules and plugins</h2>
+      <p>LancerLogin 2 is built from modules. Core always provides accounts, the roster, reports, integrations, backups, and updates. An Administrator chooses which modules to turn on.</p>
+      <table class="credential-table">
+        <thead><tr><th scope="col">Module</th><th scope="col">How it is included</th><th scope="col">What it does</th></tr></thead>
+        <tbody>
+          <tr><td>Attendance</td><td>Built in</td><td>Meetings, kiosk check-in and check-out, corrections, excuses, attendance rules, and kiosk management.</td></tr>
+          <tr><td>Outreach Participation</td><td>Official plugin, included by default</td><td>Outreach activities and participation hours submitted by members.</td></tr>
+          <tr><td>Carpool</td><td>Optional plugin</td><td>Ride planning to and from events.</td></tr>
+          <tr><td>Guest Visits</td><td>Optional plugin</td><td>Guest visit records, which can also be counted in Outreach once an Administrator grants access.</td></tr>
+        </tbody>
+      </table>
+      <p>Plugins are added to an installation from <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Manage modules</span> or from the installation's private repository. See <a href="updates.html#plugins">Add, update, or remove plugins</a>.</p>
+
+      <h2>How an installation fits together</h2>
+      <ul>
+        <li>Your <strong>private GitHub repository</strong> holds the deployment workflows and secrets. The public repository provides reviewed releases.</li>
+        <li>Your <strong>Cloudflare account</strong> runs the dashboard on Pages, the API on a Worker, and the data in a D1 database.</li>
+        <li>Each <strong>Raspberry Pi kiosk</strong> pairs with the dashboard and keeps an offline queue, so check-ins are saved while the network is down.</li>
+      </ul>
+
+      <section class="notice"><strong>Community support is best-effort.</strong>Questions and responsible security or privacy reports can be sent to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. There is no response-time or uptime commitment.</section>
+
       <h2>Release boundaries</h2>
-      <ul><li>One self-hosted physical kiosk is supported per installation. The browser simulator is not a physical kiosk.</li><li>Web updates and physical-kiosk updates are separate procedures.</li><li>CSV and documented D1 backup/restore are supported; PDF and spreadsheet exports are not included.</li><li>Public documentation never contains credentials, private repository details, attendance records, or backup contents.</li></ul>
+      <ul>
+        <li>An installation can pair several physical kiosks. The browser simulator is a software check, not a physical kiosk.</li>
+        <li>Dashboard updates and kiosk updates are separate steps.</li>
+        <li>Reports export as CSV. Backups are JSON files from Settings, or D1 exports for large installations.</li>
+        <li>This documentation never contains credentials, private repository details, attendance records, or backup contents.</li>
+      </ul>
     </div>
   </main>
-  <footer><div>Apache-2.0 community software · <a href="privacy.html">Privacy</a> · <a href="releases.html">Release notes</a> · <a href="technical.html">Technical reference</a></div></footer>
+  <footer><div><a href="privacy.html">Privacy</a> · <a href="releases.html">Releases</a> · <a href="technical.html">Reference</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a> · Apache-2.0</div></footer>
 </body>
 </html>

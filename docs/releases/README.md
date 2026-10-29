@@ -1,9 +1,12 @@
 # Release notes
 
-Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in this directory. The workflow publishes it as the GitHub release body. Start with a plain-English summary, followed by Bugs fixed, Features added, and Features removed. Include update or repair instructions only when specific user action is required.
+Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in this directory. The release workflow publishes it as the GitHub release body. Start with a plain-English summary, followed by Bugs fixed, Features added, and Features removed. Include update or repair instructions only when specific user action is required.
 
-> Release notes record what was true when a version shipped. For current procedures, use the linked guide rather than applying older transition steps out of context.
+> Release notes record what was true when a version shipped. For current procedures, use the [documentation site](https://isriah.github.io/LancerLogin/) rather than applying older transition steps out of context.
 
+## LancerLogin 2 beta releases
+
+- [v2.0.0-beta.18](v2.0.0-beta.18.md) - Setup completion screen, kiosk pairing screen and red and gold starting colors
 - [v2.0.0-beta.17](v2.0.0-beta.17.md) - Easier first-time setup, optional dashboard update token and clearer installer errors
 - [v2.0.0-beta.16](v2.0.0-beta.16.md) - Outreach team support for other plugins and setup notice layout fixes
 - [v2.0.0-beta.15](v2.0.0-beta.15.md) - Plugin email, plugin sub-pages and Administrator-granted access between modules
@@ -21,7 +24,10 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 - [v2.0.0-beta.3](v2.0.0-beta.3.md) - Outreach activity management and Carpool workflow improvements
 - [v2.0.0-beta.2](v2.0.0-beta.2.md) - Preserve inactive periods in attendance reporting
 - [v2.0.0-beta.1](v2.0.0-beta.1.md) - Optional modules, multiple kiosks and Beta updates
-- [v1.2.6](v1.2.6.md) - Stable and Beta update tracks with a Community upgrade bridge
+
+## LancerLogin 1
+
+- [v1.2.6](v1.2.6.md) - Stable and Beta update tracks with an upgrade bridge to LancerLogin 2
 - [v1.2.5](v1.2.5.md) - Reliable Discord absence notices for large rosters
 - [v1.2.4](v1.2.4.md) - Correct release notes and completed update notices
 - [v1.2.3](v1.2.3.md) - Reliable release checks with small clock differences
@@ -34,54 +40,16 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 - [v1.0.7](v1.0.7.md) - Roster CSV upload and spreadsheet paste
 - [v1.0.6](v1.0.6.md) - Dashboard, simulator and calendar improvements
 - [v1.0.5](v1.0.5.md) - Reliable dashboard release discovery
-- [v1.0.4](v1.0.4.md) - Stable Community source baseline
-- [v1.0.3](v1.0.3.md) - Community telemetry retirement
-- [v1.0.2](v1.0.2.md) - Reliable Community Edition updates
-- [v0.24.2](v0.24.2.md) - Reliable web update bridge
-- [v1.0.1](v1.0.1.md) - Worker-compatible Community Edition updates
-- [v0.24.1](v0.24.1.md) - Worker-compatible web update bridge
-- [v1.0.0](v1.0.0.md) - Community Edition
-- [v0.24.0](v0.24.0.md) - Safe major-version upgrades and in-app web updates
-- [v0.23.2](v0.23.2.md) - QWERTY maintenance keyboard and full roster scrolling
-- [v0.23.1](v0.23.1.md) - Cached release checks and manual refresh
-- [v0.23.0](v0.23.0.md) - Touch kiosk maintenance and dashboard refinement
-- [v0.22.6](v0.22.6.md) - Keep the kiosk accessible after updates
-- [v0.22.5](v0.22.5.md) - Complete kiosk release packages
-- [v0.22.4](v0.22.4.md) - Kiosk release lookup request repair
-- [v0.22.3](v0.22.3.md) - Dashboard and kiosk reliability
+- [v1.0.4](v1.0.4.md) - Stable source baseline
+- [v1.0.3](v1.0.3.md) - Usage reporting removed
+- [v1.0.2](v1.0.2.md) - Reliable web updates
+- [v1.0.1](v1.0.1.md) - Worker-compatible web updates
+- [v1.0.0](v1.0.0.md) - LancerLogin 1.0
 
-- [v0.22.2](v0.22.2.md) - Discord command repair for upgraded integrations
-- [v0.22.1](v0.22.1.md) - Bounded Discord calendar backfills
-- [v0.22.0](v0.22.0.md) - Reliable updates and calendar delivery
-- [v0.21.0](v0.21.0.md) - One-way Google Calendar meeting sync
-- [v0.20.0](v0.20.0.md) - Attendance insights, Discord operations, and setup guidance
-- [v0.19.0](v0.19.0.md) - Dashboard design conformance
-- [v0.18.0](v0.18.0.md) - Meeting operations and kiosk feedback
-- [v0.17.0](v0.17.0.md) - Dashboard meeting creation and kiosk version visibility
-- [v0.16.0](v0.16.0.md) - Dashboard meeting browser and update reliability
-- [v0.15.0](v0.15.0.md) - Meeting detail, integration controls, and dashboard refinement
-- [v0.14.0](v0.14.0.md) - Operations, scheduling, and Discord workflow refinement
-- [v0.13.1](v0.13.1.md) - Dashboard and kiosk reliability refinement
-- [v0.13.0](v0.13.0.md) - Roster, scheduling, and kiosk operations
-- [v0.12.8](v0.12.8.md) - Attendance reporting and dashboard operations refinement
-- [v0.12.7](v0.12.7.md) - Visible updates and reliable kiosk requests
-- [v0.12.6](v0.12.6.md) - Direct calendar-to-attendance navigation
-- [v0.12.5](v0.12.5.md) - Restored attendance history opens correctly
-- [v0.12.4](v0.12.4.md) - Clearer project guide and mobile drawer cleanup
-- [v0.12.3](v0.12.3.md) - Mobile meeting layout and safer data controls
-- [v0.12.2](v0.12.2.md) - Mobile navigation drawer
-- [v0.12.1](v0.12.1.md) - Mobile dashboard fit and reachability
-- [v0.12.0](v0.12.0.md) - Roster and attendance operations
-- [v0.11.0](v0.11.0.md) - Attendance operations and browser kiosk simulation
-- [v0.10.5](v0.10.5.md) — Meeting, attendance, and kiosk polish
-- [v0.10.4](v0.10.4.md) — Durable Discord absence contests
-- [v0.10.3](v0.10.3.md) — Verified kiosk updates and a simpler private upgrade dispatch
-- [v0.10.2](v0.10.2.md) — Readability improvements across dashboard and kiosk
-- [v0.10.1](v0.10.1.md) — Pi desktop kiosk relaunch shortcut
-- [v0.10.0](v0.10.0.md) — Physical kiosk restoration and meeting workflow cleanup
-- [v0.9.0](v0.9.0.md) — Unattended kiosk operations and protected local tools
-- [v0.8.0](v0.8.0.md) — Roster polish, organization theming, and remote kiosk pairing
-- [v0.7.0](v0.7.0.md) — Verified integrations and simplified updates
-- [v0.6.1](v0.6.1.md) — Kiosk status badge spacing
-- [v0.6.0](v0.6.0.md) — Recurring meetings and dashboard refinement
-- [v0.5.0](v0.5.0.md) — Attendance lifecycle and operations home
+## Earlier releases
+
+- [v0.24.2](v0.24.2.md) - Reliable web update bridge
+- [v0.24.1](v0.24.1.md) - Worker-compatible web update bridge
+- [v0.24.0](v0.24.0.md) - Safe major-version upgrades and in-app web updates
+
+Notes for v0.23.2 and earlier are not kept in this directory. Published releases are listed on [GitHub Releases](https://github.com/isriah/LancerLogin/releases).

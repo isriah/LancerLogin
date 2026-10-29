@@ -10,6 +10,7 @@ import { commitPluginChange, currentSelectionSha, freshUntil, lookupPluginReleas
 import { discoveryForChannel, releaseRequestHeaders, resolveOfficialRelease } from "./release-discovery.ts";
 import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
 import { kioskReleaseTransition } from "../../../packages/shared/src/release-policy.mjs";
+import { resolveDefaultTheme } from "../../../packages/shared/src/product.ts";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
 import { buildReportRows, combinedMemberDataset, defaultReportDefinition, filterAndSortReportRows, reportColumnCatalog, reportColumnId, reportColumnLabel, reportDatasetCatalog, reportDatasetDefinition, reportFieldSourceDataset, reportFilterSourceDataset, reportLabelsMatch, reportModuleFilters, resolveReportPeriod, validateReportDefinition, type NormalizedReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
@@ -45,7 +46,7 @@ import { moduleSchedulerJobs, schedulerClass, type SchedulerJob, type SchedulerN
 type ModuleProviderAuthority = () => Promise<void>;
 const moduleProviderAuthority = Symbol("module-provider-authority");
 type ProviderConfiguration = Record<string, string> & { [moduleProviderAuthority]?: ModuleProviderAuthority };
-export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; FINGERPRINT_VAULT_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DEPLOYMENT_MARKER?: string; DB?: D1Database; PLATFORM_SCHEDULER_MODE?: string; PLATFORM_SCHEDULER?: SchedulerNamespace; moduleProviderAuthority?: ModuleProviderAuthority; }
+export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; FINGERPRINT_VAULT_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DEPLOYMENT_MARKER?: string; DEFAULT_THEME?: string; DB?: D1Database; PLATFORM_SCHEDULER_MODE?: string; PLATFORM_SCHEDULER?: SchedulerNamespace; moduleProviderAuthority?: ModuleProviderAuthority; }
 type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
 type ScheduledController = { cron?: string };
 
@@ -177,9 +178,11 @@ async function writeAudit(db: D1Database, principal: Principal, action: string, 
 async function setupStatus(env: Env): Promise<Response> {
   const db = requireDatabase(env);
   const installation = await db.prepare("SELECT id, auth_mode AS authMode, telemetry_accepted_at AS telemetryAcceptedAt FROM installations WHERE id = ?").bind("primary").first<{ id: string; authMode: AuthMode; telemetryAcceptedAt?: string }>();
-  if (!installation) return response({ configured: false });
+  // Development Workers set DEFAULT_THEME=development so their dashboards keep a distinct starting palette.
+  const defaultTheme = resolveDefaultTheme(env.DEFAULT_THEME);
+  if (!installation) return response({ configured: false, defaultTheme });
   const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone, logo_backdrop AS logoBackdrop, late_scan_minutes AS lateScanMinutes, discord_contest_window_hours AS discordContestWindowHours, attendance_reporting_starts_on AS attendanceReportingStartsOn, anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes FROM organization_settings WHERE installation_id = ?").bind(installation.id).first();
-  return response({ configured: true, installation: { id: installation.id, authMode: installation.authMode, telemetryAccepted: false }, settings });
+  return response({ configured: true, installation: { id: installation.id, authMode: installation.authMode, telemetryAccepted: false }, settings, defaultTheme });
 }
 function validateBootstrap(input: BootstrapInput): string[] {
   const errors: string[] = [];
@@ -211,9 +214,11 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   const now = new Date().toISOString(); const adminId = crypto.randomUUID(); const mode = input.authMode!;
   const passwordHash = mode === "local" || mode === "both" ? await hashPassword(input.localPassword!) : null;
   const telemetryAcceptedAt = null; // Historical columns remain inert for backup compatibility.
+  // Column defaults keep the original development palette; new installations store the resolved theme explicitly.
+  const theme = resolveDefaultTheme(env.DEFAULT_THEME);
   const statements = [
     db.prepare("INSERT INTO installations (id, created_at, auth_mode, telemetry_accepted_at, telemetry_install_id, google_enabled) VALUES (?, ?, ?, ?, ?, ?)").bind("primary", now, mode, telemetryAcceptedAt, null, mode === "google" || mode === "both" ? 1 : 0),
-    db.prepare("INSERT INTO organization_settings (installation_id, organization_name, time_zone) VALUES (?, ?, ?)").bind("primary", input.organizationName!.trim(), input.timeZone),
+    db.prepare("INSERT INTO organization_settings (installation_id, organization_name, time_zone, primary_color, secondary_color) VALUES (?, ?, ?, ?, ?)").bind("primary", input.organizationName!.trim(), input.timeZone, theme.primary, theme.secondary),
     db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, 'admin', ?)").bind(adminId, "primary", input.adminEmail?.toLowerCase() ?? null, input.localUsername?.trim().toLowerCase() ?? null, passwordHash, now),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), "primary", adminId, "installation.created", "installation", "primary", now),
     // Authority epochs outlive DELETE INSTALLATION by design, so setup after a deletion continues them instead of reusing old values.

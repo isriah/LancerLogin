@@ -5,56 +5,98 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Operate LancerLogin</title>
+  <meta name="description" content="Run meetings, manage the roster and reports, configure integrations, back up data, and recover access in LancerLogin.">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Set up</a><a href="kiosk.html">Kiosk</a><a href="operations.html" aria-current="page">Operate</a><a href="releases.html">Releases</a><a href="technical.html">Technical</a></nav></header>
-<header class="page-header"><div><p class="eyebrow">Daily operations</p><h1>Run meetings from Dashboard</h1></div></header>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Install</a><a href="first-run.html">First sign-in</a><a href="kiosk.html">Kiosk</a><a href="operations.html" aria-current="page">Operate</a><a href="updates.html">Update</a><a href="troubleshooting.html">Troubleshoot</a><a href="technical.html">Reference</a></nav></header>
+<header class="page-header"><div><p class="eyebrow">Daily operations</p><h1>Operate LancerLogin</h1><p>Run meetings, keep the roster current, report on attendance, and look after the installation's data and access.</p></div></header>
 <main id="main" class="page">
-  <h2>Role boundary</h2>
-  <p><strong>Operators</strong> manage meetings, attendance, corrections, excuses, reports, kiosk status, and can view the roster. <strong>Admins</strong> can also modify the roster, grant Admin/Operator credentials, and manage organization, security, integrations, privacy, updates, and destructive configuration.</p>
-  <h2>Start on Dashboard</h2>
-  <p><strong>Dashboard</strong> is the unified place to schedule meetings and open their attendance workspaces. It replaces the retired Home, Meetings, and Attendance sections. Choose <strong>Calendar</strong> to browse a rolling five-week schedule or <strong>Table</strong> to search and manage the full meeting list. Use the <strong>Meeting</strong> picker, a calendar event, or a table row to open one meeting.</p>
-  <p>The remaining primary areas are <strong>Reports</strong>, <strong>Roster</strong>, and <strong>Kiosks</strong>. Admins also have <strong>Settings</strong>. To manage dashboard accounts and their roster links, use <strong>Settings → Access</strong>, not Roster. After setup, an Admin can reopen the shared checklist through <strong>Settings → Guided Setup → Open guided setup</strong>.</p>
-  <h2>Schedule and run a meeting</h2>
+  <h2 id="roles">Roles</h2>
+  <p><strong>Admins</strong> manage everything, including settings, access, integrations, modules, data, and updates. <strong>Operators</strong> run the modules they are assigned to: for Attendance, that means meetings, attendance corrections, reports, and kiosk status. Operators can view the roster but not change it. Being on the roster does not give anyone dashboard access.</p>
+  <p>To give someone access, open <span class="ui-path">Settings <span>›</span> Access</span>, create an Admin or Operator account, and optionally link it to their roster entry. Assign Operators to modules in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Manage modules</span>.</p>
+
+  <h2 id="navigation">Find your way around</h2>
+  <p>The primary navigation shows <strong>Meetings</strong>, a page for each plugin that is turned on, <strong>Roster</strong>, <strong>Reports</strong>, <strong>Kiosks</strong>, and <strong>Settings</strong>. Admins see these settings pages:</p>
+  <table class="credential-table">
+    <thead><tr><th scope="col">Settings page</th><th scope="col">What it controls</th></tr></thead>
+    <tbody>
+      <tr><td>Organization</td><td>Name, subtitle, logo, and colors.</td></tr>
+      <tr><td>Modules</td><td><strong>Manage modules</strong> turns modules on or off and manages plugins. <strong>Attendance</strong> has the tabs Attendance rules, Meeting configuration, Fingerprint sharing, Fingerprint recovery, and Attendance setup. Each plugin has its own page.</td></tr>
+      <tr><td>Access</td><td>Admin and Operator accounts and their roster links.</td></tr>
+      <tr><td>Integrations</td><td>Google sign-in, Google Calendar, Resend email, and Discord.</td></tr>
+      <tr><td>Data</td><td>Backups, restores, and deletion.</td></tr>
+      <tr><td>Updates</td><td>The update track and dashboard updates. See <a href="updates.html">Update LancerLogin</a>.</td></tr>
+    </tbody>
+  </table>
+  <p>Each person switches between light and dark with <strong>Light mode</strong> in the Settings bar. The choice is saved in that browser, and a new browser starts in dark.</p>
+  <p>Most pages offer a short walkthrough on your first visit. Choose <strong>Not now</strong> to see it later.</p>
+
+  <h2 id="meetings">Schedule and run a meeting</h2>
   <ol class="steps">
-    <li>On <strong>Dashboard</strong>, choose <strong>Add meeting</strong>. Enter the title, date, start time, end time, optional notes, attendance weight, and whether attendance is required. For a recurring schedule, choose daily, weekly, every two weeks, or monthly and enter a series end date. The schedule is saved only when the dialog reports that the meeting or series was created.</li>
-    <li>Open the meeting from Dashboard. Its workspace shows the meeting lifecycle, schedule, attendance requirement, weight, recurrence, notes, and the attendance table. Choose <strong>Edit</strong>, <strong>Duplicate</strong>, or <strong>Delete</strong> there when needed. For a recurring meeting, edit or delete either this occurrence or this and future occurrences. Deletion returns to Dashboard with a temporary <strong>Undo</strong> option; preserved attendance history remains available for audit.</li>
-    <li>Each attendee scans on arrival and departure. The physical kiosk resolves the eligible meeting from the scan time, so attendees do not choose a meeting. One scan is <strong>Active · not checked out</strong>; a completed arrival and departure is <strong>Present</strong>. After the meeting end plus the organization-wide late-scan allowance, an incomplete pair becomes absent unless a correction or excuse overrides it.</li>
-    <li>Use <strong>Refresh attendance</strong> to reload the current table when needed. Operators and Admins can mark an attendee present, excused, or absent. Excusing or marking absent requires a reason; marking present accepts an optional note. Admins can also use <strong>Clear</strong> to remove recorded attendance for that attendee and meeting. These changes retain their audit history.</li>
-    <li>Open <strong>Kiosks</strong> to review pairing, reader, network, pending queue, last successful sync, installed release, and heartbeat. Admins can use the available maintenance and recovery actions there. A browser simulator is not evidence of physical kiosk operation.</li>
-    <li>Open <strong>Reports</strong> to filter attendance or create a saved report. For a monthly class report, choose <strong>Current month</strong>, the class label, <strong>Current membership</strong>, and the class's <strong>Report-period policy result</strong> column. Current membership applies today's labels across the report period, so label assignments do not need backdating. Historical membership uses the labels held on each meeting date. Attendance start dates, policy rule periods, and excuse handling still apply. Use <strong>Download report CSV</strong> to export the selected columns.</li>
+    <li>On <strong>Meetings</strong>, choose <strong>Add meeting</strong>. Enter the title, date, start and end times, optional notes, attendance weight, and whether attendance is required. For a repeating schedule, choose daily, weekly, every two weeks, or monthly and an end date. Meeting attendance windows cannot overlap.</li>
+    <li>Switch between the calendar and table views to find a meeting, and select it to open its workspace. There you can choose <strong>Edit</strong>, <strong>Duplicate</strong>, or <strong>Delete meeting</strong>. For a repeating meeting, choose this occurrence or this and future occurrences.</li>
+    <li>Members scan on arrival and on departure. One scan shows as <strong>Active · not checked out</strong>; an arrival and a departure make the member <strong>Present</strong>. After the meeting ends and the late scan allowance passes, an incomplete pair becomes absent unless someone corrects or excuses it.</li>
+    <li>To correct attendance, choose <strong>Present</strong>, <strong>Excuse</strong>, or <strong>Absent</strong> for the attendee. Excusing or marking absent requires a reason. Admins can also choose <strong>Clear</strong> to remove the attendee's records for that meeting. Every change keeps its audit history.</li>
   </ol>
-  <h2>Import a roster safely</h2>
-  <p>Upload or paste CSV on Roster, select <strong>Preview roster</strong>, and inspect the parsed table. Choose <strong>Add or update</strong> to retain people not in the file, or <strong>Replace active roster</strong> to deactivate omitted people. Replacement preserves historical attendance and dashboard credentials. No roster write occurs until the confirmation button is selected.</p>
-  <h2>Optional communication workflows</h2>
+  <p>Timing rules that apply to every meeting are in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Meeting configuration</span>.</p>
+
+  <h2 id="roster">Manage the roster</h2>
+  <p>On <strong>Roster</strong>, Admins can add one member at a time or import many. To import, upload a CSV or paste spreadsheet rows. A CSV needs the columns <code>memberId</code>, <code>firstName</code>, and <code>lastName</code>; <code>email</code>, <code>discordUserId</code>, and <code>attendanceRequiredFrom</code> are optional.</p>
+  <ol class="steps">
+    <li>Choose the import behavior: <strong>Add to or update the current roster</strong> keeps people who are not in the file, and <strong>Replace the active roster</strong> makes everyone not in the file inactive.</li>
+    <li>Choose <strong>Preview roster</strong> and check every change. Nothing is saved until you confirm.</li>
+  </ol>
+  <p>Making a member inactive keeps their attendance history and any dashboard account. Meetings held while a member is inactive do not count against them.</p>
+  <p>Admins can add member labels, such as a class or team, and give a label an attendance requirement in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Attendance rules</span>. A meeting can be for all members or only for selected labels.</p>
+
+  <h2 id="reports">Report on attendance</h2>
+  <p><strong>Reports</strong> opens on the <strong>Leaderboard</strong>, with period, roster, label, and sorting controls, plus attendance alerts and contests waiting for review. Saved reports appear as tabs. Choose <strong>+</strong> to build a report: pick the period, members, meetings, and columns, then save it for yourself or share it with other staff.</p>
+  <p>For a monthly class report, choose <strong>Current month</strong>, the class label, <strong>Current membership</strong>, and the class's report-period policy result column. Choose <strong>Download report CSV</strong> to export the selected columns for every matching member. CSV exports store values that look like spreadsheet formulas as text.</p>
+
+  <h2 id="integrations">Connect optional integrations</h2>
+  <p>Open <span class="ui-path">Settings <span>›</span> Integrations</span> as an Admin. Each integration shows the console link, the exact value to copy into the provider, and a verification step. An integration shows as configured only after verification succeeds, and saved secrets are never shown again.</p>
   <div class="task-grid">
-    <article class="task-card"><span>G</span><h3>Google Calendar</h3><p>An Admin connects a writable calendar in <strong>Settings → Integrations</strong>. In a meeting workspace, choose <strong>Sync configured calendars</strong> to send that meeting's title, notes as the description, and times and review the provider result.</p></article>
-    <article class="task-card"><span>R</span><h3>Resend</h3><p>Send one idempotent missed-meeting email or an individual attendance report to the email stored in the roster.</p></article>
-    <article class="task-card"><span>D</span><h3>Discord attendance</h3><p>Linked members can privately run <code>/attendance-report</code>. Every five minutes, eligible meetings can also notify only linked absent members after scanning closes. A signed recipient button opens a contest; an Operator reviews it with a required note before attendance can change.</p></article>
-    <article class="task-card"><span>K</span><h3>Discord status/calendar</h3><p>Upsert meeting calendar events. Authenticated heartbeats maintain one persistent kiosk-status message, and a five-minute reconciliation marks stale kiosks offline without blocking attendance.</p></article>
+    <article class="task-card"><span>G</span><h3>Google Calendar</h3><p>Connect a calendar you can write to. In a meeting workspace, choose <strong>Sync configured calendars</strong> to send the meeting's title, notes, and times.</p></article>
+    <article class="task-card"><span>R</span><h3>Resend email</h3><p>Send missed-meeting emails and individual attendance reports to the email on each member's roster entry.</p></article>
+    <article class="task-card"><span>D</span><h3>Discord</h3><p>Member commands, absence notices with a contest button, meeting events, and a kiosk status message.</p></article>
   </div>
-  <figure class="annotated">
-    <img src="assets/integration-controls.png" alt="Sanitized LancerLogin Admin integrations screen showing encrypted saved values and rotate, test, and remove controls.">
-    <figcaption class="callouts">
-      <div class="callout"><span>1</span><h3>Check status, not secrets</h3><p>Configured status is visible, while saved credential values remain hidden.</p></div>
-      <div class="callout"><span>2</span><h3>Verify before relying on it</h3><p>Each provider must complete its real Google, email-code, or signed Discord proof.</p></div>
-      <div class="callout"><span>3</span><h3>Rotate in place</h3><p>Replacement values overwrite the encrypted configuration without exposing the previous one.</p></div>
-    </figcaption>
-  </figure>
-  <h2>Configure an optional integration</h2>
-  <p>Open <strong>Settings → Integrations</strong> as an Admin. Open Google OAuth, Resend, or Discord for an official console link, exact callback value, required access, and guided verification. Fields appear immediately after the copy step that uses them. Saved secret values remain hidden, and a provider shows Configured only after end-to-end verification.</p>
+  <figure class="annotated compact-shot"><img src="assets/settings-integrations.png" alt="LancerLogin Settings Integrations page, with the settings tabs Organization, Modules, Access, Integrations, Data and Updates, listing Google OAuth, Google Calendar, Resend email and Discord bot, each marked Disabled with its switch off."><figcaption>Each integration starts disabled. Turn one on to see its setup steps.</figcaption></figure>
+
   <h2 id="discord-commands">Enable the Discord member commands</h2>
-  <p>In <strong>Settings → Integrations</strong>, save the bot token, Application ID, public key, Server ID, and attendance channel ID, then choose <strong>Send Discord verification</strong>. LancerLogin validates that the bot token belongs to the saved application and server and creates or updates exactly the guild-scoped <code>/pair</code>, <code>/attendance-report</code>, <code>/label</code>, <code>/outreach-submit</code>, and <code>/outreach-correction</code> commands. No manual HTTP request or command payload is required.</p>
-  <p>Guild scope keeps these commands out of direct messages and every other server. Rerunning verification or replacing credentials reconciles the same commands without duplicates. If Discord rejects the credential, identifiers, permissions, command update, or verification message, LancerLogin remains in Verification required state and shows safe retry guidance.</p>
-  <p>Keep the exact Interactions Endpoint URL from LancerLogin in Discord's General Information page. Install the bot with only the access listed in the Integrations guide and restrict it to the attendance channel. Commands return ephemeral responses. <code>/attendance-report</code> works only for the invoking Discord account's single active roster link and never accepts another member ID. Outreach commands also require an enabled, ready Outreach module. Exact submission retries reuse the same receipt, and corrections wait for Staff review before changing totals.</p>
-  <h2>Review an available update</h2>
-  <p>An Admin-only notice appears when a newer public release is available. Open <strong>Settings → Updates</strong>. In the <strong>Dashboard</strong> card, choose <strong>Back up and begin update</strong>, review the pinned release notes, download the entire-installation backup, save it securely, and confirm that it was saved. Then choose <strong>Start update to vMAJOR.MINOR.PATCH</strong> once. Refreshing resumes progress without starting again. Review required environment approval through the displayed GitHub link, and choose <strong>Reload updated dashboard</strong> only after verified completion. <strong>Diagnostics and manual recovery</strong> contains the recovery link. If it reports recovery required, stop and obtain authorized recovery assistance. Never automatically restore D1.</p>
-  <p>The <strong>Physical kiosk</strong> card updates the Pi separately. Choose <strong>Update to latest stable</strong> only when the kiosk is online and a newer compatible stable release is shown, then wait for it to return online with an updated installed-release status. If the release lookup is unavailable or the card does not show completion, treat the result as unconfirmed rather than retrying blindly. Use the Administrator's available on-device or remote access method, such as Raspberry Pi Connect or SSH, for an approved recovery procedure.</p>
-  <h2>Back up, restore, delete, or reset</h2>
-  <p><strong>Settings → Data</strong> has independent backup, restore, and delete controls for Meetings and attendance, Roster, and Entire installation. Files restore only to their matching category. Entire-installation backups contain sensitive hashes and encrypted secrets, so protect them like administrator credentials. Reset onboarding clears only checklist progress. Attendance CSV protects spreadsheet formula markers as text. For files over 10 MiB or infrastructure recovery, use the repository’s token-neutral D1 helpers documented in <code>docs/BACKUP-RESTORE.md</code>.</p>
+  <p>In <span class="ui-path">Settings <span>›</span> Integrations</span>, save the bot token, Application ID, public key, Server ID, and attendance channel ID, then choose <strong>Send Discord verification</strong>. LancerLogin checks that the bot token belongs to that application and server and creates or updates exactly the guild-scoped <code>/pair</code>, <code>/attendance-report</code>, <code>/label</code>, <code>/outreach-submit</code>, and <code>/outreach-correction</code> commands. No manual HTTP request or command payload is required.</p>
+  <p>Copy the Interactions Endpoint URL that LancerLogin shows into Discord's General Information page. Commands work only in your server and return ephemeral responses, visible only to the member who ran them. <code>/attendance-report</code> reports only on the member's own linked roster entry. The Outreach commands need the Outreach plugin turned on and set up. Exact submission retries reuse the same receipt, and corrections wait for staff review before totals change. If commands go missing, choose <strong>Reconcile Discord commands</strong>.</p>
+
+  <h2 id="modules">Turn modules on or off</h2>
+  <p>Open <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Manage modules</span>. Turning a module on opens its setup. Turning a module off hides its pages at once and keeps its data for seven days before deleting it; turn it back on within that time to keep everything. Adding a new plugin to the installation is an update; see <a href="updates.html#plugins">Add, update, or remove plugins</a>.</p>
+  <p>Some plugins ask to use another module, for example Guest Visits recording visits as Outreach team support. Review and grant that in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Module access</span>.</p>
+
+  <h2 id="data">Back up, restore, or delete data</h2>
+  <p><span class="ui-path">Settings <span>›</span> Data</span> has separate backup, restore, and delete controls for <strong>Meetings and attendance</strong>, <strong>Roster</strong>, and <strong>Entire installation</strong>. A file restores only into its own category, and each restore or deletion asks you to type a confirmation phrase.</p>
+  <ul>
+    <li>Protect backups like an Admin password. An entire-installation backup contains password hashes, encrypted integration secrets, and attendance history.</li>
+    <li>Restoring an entire installation disconnects every kiosk. Pair each kiosk again afterwards.</li>
+    <li>Backups do not include fingerprints, kiosk queues, or the keys kiosks use locally.</li>
+    <li>Restores in the dashboard accept files up to 10 MiB. For larger installations, use the D1 export and restore commands in the <a href="https://github.com/isriah/LancerLogin/blob/main/docs/BACKUP-RESTORE.md">backup and restore reference</a>.</li>
+  </ul>
+
+  <h2 id="fingerprint-recovery">Start fingerprints over</h2>
+  <p>If fingerprint links have become unreliable, an Admin can reset them in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Fingerprint recovery</span>. <strong>Reset all fingerprint mappings</strong> removes every member-to-fingerprint link on every paired kiosk as each one reconnects, deletes cloud copies, and turns fingerprint sharing off. Members then enroll again. Roster, attendance, pairing, and badge or QR links are not changed. Reader templates stay on the readers until you use <strong>Erase unlinked fingerprints</strong> on each kiosk.</p>
+
+  <h2 id="recover-access">Recover access when every Admin is locked out</h2>
+  <p>Use this when no Admin can sign in with a password. A Google-only Admin recovers access through their Google account instead. Password recovery deliberately does not go through the dashboard. You need a computer with Node.js, a checkout of your private deployment repository, and a Cloudflare API token for the same account.</p>
+  <ol class="steps">
+    <li>Clone your private deployment repository, open a terminal in it, and run <code>npm ci</code>.</li>
+    <li>In Cloudflare, create an account API token with <strong>Account Settings: Read</strong> and <strong>D1: Edit</strong>, using the same steps as <a href="setup.html#cloudflare-token">the installation token</a>. You can reuse the installation token instead.</li>
+    <li>In that terminal only, set <code>CLOUDFLARE_API_TOKEN</code> to the token and <code>CLOUDFLARE_ACCOUNT_ID</code> to your account ID. Do not save either value in a file.</li>
+    <li>Run <code>npm run reset-password -- --database &lt;slug&gt;-data --username &lt;admin-username&gt;</code>.</li>
+    <li>Type the new password twice at the hidden prompts. It must be at least 12 characters.</li>
+    <li>The tool reports <code>passwords_reset: 1</code> when it worked. A <code>0</code> means the username was not found; check it and run the command again.</li>
+    <li>Close the terminal, or clear both variables, and sign in with the new password. The reset also clears any temporary sign-in lock.</li>
+  </ol>
+  <p>After five wrong passwords, sign-in to that account pauses for 15 minutes. Waiting is enough; you do not need this procedure for a temporary lock. Any Admin who can still sign in can set a new password for another account in <span class="ui-path">Settings <span>›</span> Access</span>.</p>
 </main>
-<footer><div><a href="index.html">Documentation home</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
+<footer><div><a href="index.html">Documentation home</a> · <a href="privacy.html">Privacy</a> · <a href="releases.html">Releases</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
 </body>
 </html>

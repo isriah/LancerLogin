@@ -1,6 +1,6 @@
 # Upgrade Community to Modular
 
-The direct path is an in-place upgrade through the v1.2.6 Community bridge. Install that stable bridge on the dashboard and each physical kiosk, review the private controller, then opt in to Beta in Settings → Updates. Only a complete published official release is an update target, never a private build or source branch. Follow [Stable and Beta update tracks](UPDATE-TRACKS.md) before preparing Modular.
+This guide is for a LancerLogin 1 (Community) installation moving to LancerLogin 2 (Modular). The direct path is an in-place upgrade through the v1.2.6 Community bridge. Install that stable bridge on the dashboard and each physical kiosk, review the private controller, then prepare the LancerLogin 2 release in **Settings > Updates** on the track that offers it (Beta for a beta release, Stable once a stable release is published). Only a complete published official release is an update target, never a private build or source branch. Follow [Stable and Beta update tracks](UPDATE-TRACKS.md#upgrading-from-lancerlogin-1) before preparing LancerLogin 2. The everyday update steps are in [Update LancerLogin](https://isriah.github.io/LancerLogin/updates.html).
 
 Update the web software first, then each kiosk. Do not create a replacement database, re-image a working kiosk, clear its reader, or import a portable backup as the normal upgrade procedure.
 
@@ -24,7 +24,7 @@ A roster export alone cannot identify fingerprints in reader slots. Keep the ori
 ## Before updating
 
 1. Review the compatible official release and its notes. Update the existing private controller to its reviewed channel-aware version while retaining exact resource identities, credentials and production approval rules.
-2. Download an entire-installation backup through **Settings → Updates**, save it securely outside the installation, and confirm that the file was saved.
+2. Download an entire-installation backup through **Settings > Updates**, save it securely outside the installation, and confirm that the file was saved.
 3. Preserve the existing D1 database name and UUID, `SESSION_KEY`, `INTEGRATION_KEY`, provider credentials, dashboard origin and deployment configuration in secure storage. Never put their values in source control, logs or support tickets.
 4. Preserve each kiosk's protected local state through an authorized secure backup procedure. Include pairing, mappings, local credential secrets, PIN, roster cache, pending scans and retained outcomes. Fingerprints remain in the R503 unless optional cloud storage is explicitly enabled. Preserve the separate 32-byte `FINGERPRINT_VAULT_KEY` independently if cloud storage has been configured; the integration key cannot decrypt that vault.
 5. Note roster counts, a known member ID, recent attendance, a saved report, kiosk names and pending-scan counts for comparison. Use a quiet period, but do not discard queued scans to make the counts zero.
@@ -42,27 +42,21 @@ A roster export alone cannot identify fingerprints in reader slots. Keep the ori
 1. Follow [Update a physical kiosk](KIOSK.md#update-a-physical-kiosk), one existing kiosk at a time. Keep its SD card, reader, pairing and local state.
 2. Wait for it to return online. Confirm its installed version and reader/input health.
 3. Allow pending scans to replay. Check their original timestamps and falling pending counts. Review rejected scans rather than blindly resubmitting or restoring an old queue.
-4. For the fingerprint upgrade path, re-enroll members through PIN-protected **Authentication maintenance** while the kiosk is online. To start over, back up protected local state, use **Kiosks → Fingerprint re-enrollment → Reset all fingerprint mappings**, and wait for every active kiosk to acknowledge before enrolling. This explicit reset disables sharing and clears fingerprint associations, not reader templates, queues, pairing or badge/QR mappings. Replace only known occupied slots deliberately; never guess an unknown slot.
+4. For the fingerprint upgrade path, re-enroll members through PIN-protected **Authentication maintenance** while the kiosk is online. To start over, back up protected local state, use **Reset all fingerprint mappings** in **Settings > Modules > Attendance > Fingerprint recovery**, and wait for every active kiosk to acknowledge before enrolling. This explicit reset disables sharing and clears fingerprint associations, not reader templates, queues, pairing or badge/QR mappings. Replace only known occupied slots deliberately; never guess an unknown slot.
 5. During an appropriate test meeting, scan a freshly enrolled member. Confirm the correct member and attendance outcome in the dashboard, then pair additional kiosks and test them independently. Enable cloud fingerprint storage only with organizational permission. Historical unverified reader slots are not automatically shared.
 
-### Optional durable cloud provisioning
+### Optional fingerprint cloud storage
 
-An Admin may separately enable **Fingerprint cloud storage** after reviewing its consent and security boundary. The server manages a separate encryption key and can decrypt these durable copies for authorized paired kiosks. This is not peer-only end-to-end encryption. Once verified fingerprints have uploaded, new kiosks can receive them even while all previous kiosks are offline.
-
-The upgrade preserves existing local mappings and reader contents without automatically blessing their biometric associations. New online enrollments and imported cloud copies retain an immutable roster ID. Older mappings without that identity, including retained Community mappings and enrollments made offline, require re-enrollment before sharing. Legacy review approvals are retired, not a migration path. Updating software alone does not clear reader contents or mappings; reset is an explicit Admin action. A current external-ID match alone is not proof of the original person. Unknown slots cannot be recovered from a roster backup and are never automatically exported or overwritten. See [Kiosk cloud provisioning](KIOSK.md#provision-new-kiosks-from-encrypted-cloud-copies).
-
-Cloud disablement deletes live cloud templates but not reader copies. Member deactivation or ID change deletes that member's live cloud templates; retiring an originating kiosk does not erase otherwise valid enrollments. Preserve the original vault key for infrastructure recovery, and do not rotate it to bypass a decryption failure. Review every reader when withdrawing access; there is no remote destructive wipe.
+The upgrade preserves existing local mappings and reader contents without treating their biometric associations as verified. Retained Community mappings and enrollments made offline lack an immutable roster identity, so they require re-enrollment before they can be shared through **Fingerprint cloud storage**. Updating software alone does not clear reader contents or mappings. Unknown slots cannot be recovered from a roster backup and are never automatically exported or overwritten. Enable cloud storage only with organizational permission; its boundary is described in [privacy](PRIVACY.md#optional-fingerprint-cloud-storage) and its kiosk behavior in the [kiosk reference](KIOSK.md#fingerprint-cloud-storage-on-kiosks).
 
 ## Optional modules and recovery
 
 Enable Outreach, or Carpool when its plugin is included, deliberately through **Modules**, complete its setup, and assign its Operator permissions. Attendance workflows remain separate. Verify optional integrations before enabling their live operations.
 
-A portable installation restore is a recovery or replacement workflow, not the in-place upgrade path. It intentionally revokes kiosk and pairing authority and disables peer fingerprint sync and cloud storage. Vault templates and authority are not portable and are cleared by restore. It does not restore Pi-local mappings, secrets, queues or reader contents. See [Backup and restore](BACKUP-RESTORE.md) before choosing that path.
+A portable installation restore is a recovery or replacement workflow, not the in-place upgrade path. It intentionally revokes kiosk and pairing authority and disables fingerprint cloud storage. Vault templates and authority are not portable and are cleared by restore. It does not restore Pi-local mappings, secrets, queues or reader contents. See [Backup and restore](BACKUP-RESTORE.md) before choosing that path.
 
 If verification fails, preserve current state and follow approved recovery. Do not automatically roll back code, restore D1, restore an old queue, rotate secrets or re-pair kiosks. Review backward code changes against the forward-migrated schema first.
 
-## Verification limits
+## What the release checks cover
 
-Local synthetic rehearsals cover Community v1.2.4, v1.2.5 and the v1.2.6 bridge migration boundaries. They compare every existing application table and column before and after migration, including inactive members, labels, policies, corrections, settings, reports, provider grants, retained kiosk credentials and update-track consent. Separate software tests cover retained local kiosk state and queued-event replay.
-
-These checks do not prove an individual installation's backups, provider permissions, resource identities or hardware. Complete its post-update checks above. Publication, release and deployment remain separate from candidate verification.
+Each release's migrations are rehearsed against synthetic Community v1.2.4, v1.2.5 and v1.2.6 databases, comparing every existing application table and column before and after migration. These checks cannot see an individual installation's backups, provider permissions, resource identities or hardware, so complete the post-update checks above on your own installation.

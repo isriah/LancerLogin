@@ -91,7 +91,9 @@ const pairingBoundary = unpairingStore.inspect().then(status => {
   if (pairingRecovery) installationActivities.pause();
 }).catch(() => { pairingRecovery = true; installationActivities.pause(); });
 let state = { paired: false, readerOnline: false, cloudOnline: false, networkType: undefined, kioskName: undefined, lastSyncAt: undefined, lastWifiScanAt: undefined, errorCategory: undefined };
-let branding = { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", logoBackdrop: "auto" };
+// Release default colors (packages/shared/src/product.ts defaultTheme) until the kiosk receives the installation's branding.
+const fallbackPrimaryColor = "#b80100"; const fallbackSecondaryColor = "#eeb822";
+let branding = { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: fallbackPrimaryColor, secondaryColor: fallbackSecondaryColor, logoBackdrop: "auto" };
 let authenticationMethod = "fingerprint";
 let rosterCachedAt = 0;
 let sensorOperation = Promise.resolve();
@@ -134,7 +136,7 @@ async function saveKioskName(config, name) {
     ? { ...current, kioskName: name } : current);
 }
 async function loadBranding() { try { branding = { ...branding, ...JSON.parse(await readFile(brandingPath, "utf8")) }; } catch { /* Defaults remain available before the first cloud sync. */ } }
-async function saveBranding(value) { const safe = { organizationName: String(value?.organizationName || "LancerLogin").slice(0, 100), subtitle: String(value?.subtitle || "").slice(0, 140), logoData: typeof value?.logoData === "string" ? value.logoData : "", primaryColor: /^#[0-9a-f]{6}$/i.test(value?.primaryColor) ? value.primaryColor : "#7c3aed", secondaryColor: /^#[0-9a-f]{6}$/i.test(value?.secondaryColor) ? value.secondaryColor : "#0f766e", logoBackdrop: ["auto", "light", "dark", "none"].includes(value?.logoBackdrop) ? value.logoBackdrop : "auto" }; const temporary = `${brandingPath}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify(safe)}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, brandingPath); await chmod(brandingPath, 0o600); branding = safe; }
+async function saveBranding(value) { const safe = { organizationName: String(value?.organizationName || "LancerLogin").slice(0, 100), subtitle: String(value?.subtitle || "").slice(0, 140), logoData: typeof value?.logoData === "string" ? value.logoData : "", primaryColor: /^#[0-9a-f]{6}$/i.test(value?.primaryColor) ? value.primaryColor : fallbackPrimaryColor, secondaryColor: /^#[0-9a-f]{6}$/i.test(value?.secondaryColor) ? value.secondaryColor : fallbackSecondaryColor, logoBackdrop: ["auto", "light", "dark", "none"].includes(value?.logoBackdrop) ? value.logoBackdrop : "auto" }; const temporary = `${brandingPath}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify(safe)}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, brandingPath); await chmod(brandingPath, 0o600); branding = safe; }
 let attendanceFlush;
 const deliveryBackoff = createDeliveryBackoff();
 function flushAttendance(config) {

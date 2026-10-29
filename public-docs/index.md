@@ -1,28 +1,24 @@
 # LancerLogin guide
 
-LancerLogin is a self-hosted attendance dashboard and one-Raspberry-Pi kiosk for an organization that manages its own GitHub and Cloudflare accounts. The current stable public release is **1.0.3**.
+LancerLogin is a self-hosted attendance dashboard with Raspberry Pi kiosks, for an organization that runs it in its own GitHub and Cloudflare accounts. The full documentation is at [isriah.github.io/LancerLogin](https://isriah.github.io/LancerLogin/).
 
 ## Start here
 
-1. Create a **private** deployment repository from the public [LancerLogin template](https://github.com/isriah/LancerLogin).
-2. Follow the [setup walkthrough](https://isriah.github.io/LancerLogin/setup.html) to configure the private deployment environment and install the dashboard.
-3. Create the first Administrator, read the privacy notice, and complete Guided Setup.
-4. Pair a Raspberry Pi kiosk with a one-time key, or use the browser simulator for a software-only check.
+1. [Install](https://isriah.github.io/LancerLogin/setup.html): create a **private** repository from the [LancerLogin template](https://github.com/isriah/LancerLogin), connect Cloudflare, and run the installation workflow.
+2. [First sign-in and setup](https://isriah.github.io/LancerLogin/first-run.html): create the first Admin, choose modules, and complete Attendance setup.
+3. [Set up kiosks](https://isriah.github.io/LancerLogin/kiosk.html): install the kiosk software and pair each Raspberry Pi with a one-time key.
 
 ## Choose a task
 
-- [Set up an installation](../docs/BOOTSTRAPPING.md)
-- [Configure the dashboard](../docs/DASHBOARD.md)
-- [Set up and operate a kiosk](../docs/KIOSK.md)
-- [Manage backups and recovery](../docs/BACKUP-RESTORE.md)
-- [Configure optional integrations](../docs/INTEGRATIONS.md)
-- [Understand privacy](../docs/PRIVACY.md)
-- [Read release notes](../docs/releases/README.md)
+- [Operate LancerLogin](https://isriah.github.io/LancerLogin/operations.html): meetings, roster, reports, integrations, backups, and access recovery
+- [Update LancerLogin](https://isriah.github.io/LancerLogin/updates.html): the dashboard, kiosks, and plugins
+- [Troubleshoot](https://isriah.github.io/LancerLogin/troubleshooting.html)
+- [Privacy notice](https://isriah.github.io/LancerLogin/privacy.html)
+- [Technical reference](https://isriah.github.io/LancerLogin/technical.html)
+- [Release notes](https://isriah.github.io/LancerLogin/releases.html)
 
-Public documentation never contains private repository details, account IDs, backup contents, credentials, attendance records, or operator output. A Raspberry Pi kiosk can be managed locally or through the access method its Administrator has configured, such as SSH or Raspberry Pi Connect. Neither remote method is required by LancerLogin.
-
-The public site uses sanitized provider screenshots and generated example values. A browser simulator demonstrates dashboard-to-kiosk behavior but is not physical kiosk evidence.
+Public documentation never contains private repository details, account IDs, backup contents, credentials, attendance records, or operator output.
 
 ## Screenshot coverage
 
-The setup walkthrough includes sanitized GitHub, Cloudflare and integration controls, with annotated dashboard and kiosk examples. Screenshots describe the documented flow and contain generated example values. They are not proof of physical kiosk behavior or a complete installation-specific credential inventory.
+Screenshots on the documentation site show the GitHub and Cloudflare controls used during installation and use generated example values. Where a screenshot of the LancerLogin dashboard or kiosk has not been captured yet, the text describes the screen instead. The browser simulator demonstrates check-in in software only; it is not a physical kiosk.

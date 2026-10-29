@@ -96,6 +96,53 @@ test("the Roster card imports a CSV through the shared roster import dialog", as
   await expect(card.getByRole("button", { name: "Import CSV", exact: true })).toBeFocused();
 });
 
+// Like the real server, the module snapshot reports setup ready as soon as the last required step is saved, while the optional steps are still on screen.
+test("first-run Attendance setup stays open through optional steps after a module refresh and ends on the completion screen", async ({ page }) => {
+  let snapshotReady = false;
+  const outcomes: Record<string, "completed" | "skipped"> = { rules: "completed", meeting: "completed" };
+  const valid = ["rules", "meeting"];
+  const meetings = [{ id: "meeting-1", title: "Test meeting A", startsAt: "2026-09-28T12:00:00.000Z", endsAt: "2026-09-28T13:00:00.000Z" }];
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot({ setupReady: snapshotReady }) }));
+  await page.route("**/admin/modules/attendance/setup", async (route) => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON() as { stepId: string; outcome: "completed" | "skipped" };
+      outcomes[body.stepId] = body.outcome;
+      if (body.stepId === "input") { valid.push("input"); snapshotReady = true; }
+    }
+    await route.fulfill({ json: attendanceSetupState(outcomes, valid) });
+  });
+  await page.route("**/admin/members", (route) => route.fulfill({ json: { members: [{ id: "member-1", memberId: "T-001", firstName: "Test Student", lastName: "A", active: true }] } }));
+  await page.route("**/module-setup/attendance/input", (route) => route.request().method() === "GET"
+    ? route.fulfill({ json: { simulator: null, members: [{ id: "member-1", label: "Test Student A" }], meetings } })
+    : route.fulfill({ status: route.request().postDataJSON().action === "scan" ? 202 : 200, json: { accepted: true, action: "check_in" } }));
+  await page.goto("/dashboard");
+
+  // The roster already has an active member, so setup opens on Verified attendance input.
+  await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();
+  await expect(page.getByLabel("Meeting happening now").locator("option")).toHaveText([/^Test meeting A - [^:]*\d{1,2}:\d{2}(?!:\d{2})/]);
+  await expect(page.locator("#module-setup-later-help")).toContainText("becomes available once every required step is complete");
+  await page.getByRole("button", { name: "Save and continue" }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "Calendar integration" })).toBeVisible();
+  await expect(page.locator("#module-setup-later-help")).toHaveText("Every required step is complete, so Attendance is ready to use. You can set up the optional steps now or later.");
+
+  // A focus refresh now reports Attendance as ready. First-run setup must not close under the Admin.
+  const refreshed = page.waitForResponse((response) => response.url().endsWith("/platform/modules"));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await refreshed;
+  await page.waitForTimeout(500);
+  await expect(page.getByRole("heading", { level: 2, name: "Calendar integration" })).toBeVisible();
+  // The refreshed snapshot marks setup complete, so the footer offers Close setup instead of Finish setup later.
+  await expect(page.getByRole("button", { name: "Close setup" })).toBeVisible();
+  await expect(page.getByText("becomes available once every required step is complete", { exact: false })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Set up later and continue" }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "Discord integration" })).toBeVisible();
+  await page.getByRole("button", { name: "Set up later and continue" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Attendance is ready" })).toBeFocused();
+  await page.getByRole("link", { name: "Go to Meetings" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Attendance is ready" })).toHaveCount(0);
+});
+
 test("finishing Attendance setup shows next steps and keeps page tours closed for this session", async ({ page }) => {
   let snapshotReady = false;
   const valid = ["rules", "meeting", "input"];

@@ -1,6 +1,6 @@
 # Privacy notice
 
-LancerLogin stores organization configuration, roster, meeting, attendance, audit, and optional integration information in the adopter's Cloudflare account until an Administrator exports or deletes it. The organization operating an installation is responsible for its own retention and access decisions.
+LancerLogin stores organization configuration, roster, meeting, attendance, audit, plugin, and optional integration information in the adopter's Cloudflare account until an Administrator exports or deletes it. The organization operating an installation is responsible for its own retention and access decisions. A plain-language summary is on the documentation site: [Privacy boundaries](https://isriah.github.io/LancerLogin/privacy.html). This page is the detailed reference.
 
 ## Kiosk identity and attendance data
 
@@ -34,7 +34,7 @@ Portable backups exclude vault enablement, identity, ciphertext and keys. Entire
 
 Members re-enroll through the kiosk's PIN-protected Authentication maintenance page after upgrading. There is no legacy identity-review workflow and no member-ID lookup that can approve an existing fingerprint. Review-derived cloud copies are revoked; independent fresh enrollments remain. A small nonportable denylist retains retired approval identifiers to prevent their reuse as new enrollment authority. Historical infrastructure and protected kiosk backups may still contain retired review metadata; protect it and do not restore it as active authority.
 
-Resetting all fingerprint mappings deletes live cloud copies, disables sharing, and requests removal of fingerprint member-to-slot associations on all currently active paired kiosks. It retains reader templates and unrelated roster, attendance, pairing and authentication data. Offline devices retain their old associations until reconnect and acknowledgement. The dashboard lists this pending state. Reset is not remote sensor erasure and does not remove copies from historical backups.
+Resetting all fingerprint mappings deletes live cloud copies, disables sharing, and requests removal of fingerprint member-to-slot associations on all currently active paired kiosks. It retains reader templates and unrelated roster, attendance, pairing and authentication data. Offline devices retain their old associations until reconnect and acknowledgement. The dashboard lists this pending state. Reset by itself is not sensor erasure and does not remove copies from historical backups. Afterwards, an Admin can use **Erase unlinked fingerprints** on an online kiosk to erase reader templates that no member mapping references; linked templates are kept.
 
 ## Dashboard and integrations
 
@@ -52,6 +52,6 @@ The installation allows up to 60 public ID checks per minute across all visitors
 
 The dashboard stores local-password hashes, encrypted optional-integration credentials, roster and attendance records, and audit history. Saved integration values are not displayed in the browser. An entire-installation backup can contain password hashes, encrypted integration ciphertext, kiosk credential hashes, and audit history. Protect it like an Administrator credential.
 
-## Community telemetry retirement
+## No usage reporting
 
-Community reporting is disabled. LancerLogin does not collect or transmit Community telemetry. Older consent inputs are ignored. Historical telemetry fields remain inert to preserve migration and backup compatibility. General attendance, backup, and security data stays within the installation.
+LancerLogin sends no usage reporting or analytics to the LancerLogin project or any other party. Attendance, backup, and security data stays within the installation. Database fields left from an earlier, retired reporting feature are unused and kept only so older backups still restore.

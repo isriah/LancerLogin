@@ -81,6 +81,8 @@ export function AppShell({ initialModules, role, branding, onBrandingChanged, on
   // Navigating away (a setup link or browser Back) closes a reopened setup so the destination page renders.
   const setupPath = useRef(path);
   useEffect(() => { if (setupPath.current !== path) { setupPath.current = path; setModuleSetupOpen(null); } }, [path]);
+  // Required setup that is on screen stays open once its required steps are saved, so a module refresh cannot close it before the optional steps and completion screen.
+  useEffect(() => { if (!selectionRequired && requiredSetup && moduleSetupOpen !== requiredSetup.id) setModuleSetupOpen(requiredSetup.id); }, [selectionRequired, requiredSetup?.id, moduleSetupOpen]);
   const finishingSetup = useRef(false);
   function deferSetup(module: { id: string; generation: number }) { const next = new Set(deferredSetups).add(setupDeferralId(module)); saveDeferredSetups(next); setDeferredSetups(next); }
   /** Leave setup for another page. Unfinished required setup is deferred, exactly as Finish setup later does. */

@@ -24,6 +24,12 @@ test("fresh Admin chooses modules before opening the workspace", async ({ page }
   const choice = page.locator(".module-choice").filter({ has: attendance });
   await expect(choice.getByText("Recommended", { exact: true })).toBeVisible();
   await expect(choice.getByText("Built-in", { exact: true })).toBeVisible();
+  // The status follows the draft switch, not the saved state.
+  await expect(choice.getByText("Turns on when you continue", { exact: true })).toBeVisible();
+  await expect(choice.getByText("Disabled", { exact: true })).toHaveCount(0);
+  await attendance.uncheck();
+  await expect(choice.getByText("Disabled", { exact: true })).toBeVisible();
+  await attendance.check();
   await page.getByRole("button", { name: "Continue" }).click();
   await expect.poll(() => saved).toEqual({ enabled: ["attendance"], revision: 0, confirmDisable: [] });
   await expect(page.getByRole("link", { name: "Meetings" })).toBeVisible();

@@ -186,6 +186,8 @@ for (const { viewport, theme } of pairedViews) {
 
     const methods = page.getByRole("radiogroup", { name: "Dashboard sign-in" });
     await expect(methods.getByRole("radio")).toHaveCount(3);
+    // Each radio is named by its visible title, never by its submitted value.
+    for (const value of ["local", "google", "both"]) await expect(methods.getByRole("radio", { name: value, exact: true })).toHaveCount(0);
     const local = methods.getByRole("radio", { name: "Username and password", exact: true });
     await expect(local).toBeChecked();
     await expect(local).toHaveAccessibleDescription("Works without an identity provider.");
@@ -233,6 +235,27 @@ test("first-Admin setup with a password signs the new Admin straight in", async 
   await expect(page.getByRole("heading", { name: "Welcome back" })).toHaveCount(0);
   expect(localSignIns).toBe(0);
   expect(payload).toMatchObject({ organizationName: "Reference Arts Collective", timeZone: "Europe/London", authMode: "local", localUsername: "director" });
+  // Without a Worker-reported default the new installation shows the release colors.
+  await expect(page.locator(".app")).toHaveCSS("--primary", "#b80100");
+  await expect(page.locator(".app")).toHaveCSS("--secondary", "#eeb822");
+});
+
+test("first-Admin setup on a development Worker shows the development colors it reports", async ({ page }) => {
+  let signedIn = false;
+  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false, defaultTheme: { primary: "#7c3aed", secondary: "#0f766e" } } }));
+  await page.route("**/setup/bootstrap", (route) => { signedIn = true; return route.fulfill({ status: 201, json: { configured: true, signedIn: true, user: { id: "admin-1", role: "admin", debugMode: false } } }); });
+  await page.route("**/auth/session", (route) => signedIn ? route.fulfill({ json: { user: { id: "admin-1", role: "admin", debugMode: false } } }) : route.fulfill({ status: 401, json: { error: "Authentication required" } }));
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot() }));
+  await page.goto("/dashboard");
+  await page.getByLabel("One-time setup code").fill("synthetic-setup-code-0001");
+  await page.getByRole("textbox", { name: "Organization name", exact: true }).fill("Test Robotics Team");
+  await page.getByRole("textbox", { name: "Admin username", exact: true }).fill("test-admin");
+  await page.getByRole("textbox", { name: "Admin password", exact: true }).fill("correct-horse-battery");
+  await page.getByRole("textbox", { name: "Confirm Admin password", exact: true }).fill("correct-horse-battery");
+  await page.getByRole("button", { name: "Create first Admin" }).click();
+  await expect(page.getByRole("navigation", { name: "Primary dashboard navigation" })).toBeVisible();
+  await expect(page.locator(".app")).toHaveCSS("--primary", "#7c3aed");
+  await expect(page.locator(".app")).toHaveCSS("--secondary", "#0f766e");
 });
 
 test("Google-only first-Admin setup asks the new Admin to sign in with Google to finish setup", async ({ page }) => {

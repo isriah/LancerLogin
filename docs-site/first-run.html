@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>First sign-in and setup</title><meta name="description" content="Create the first LancerLogin Admin, choose modules, and complete Attendance setup."><link rel="stylesheet" href="styles.css"></head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Install</a><a href="first-run.html" aria-current="page">First sign-in</a><a href="kiosk.html">Kiosk</a><a href="operations.html">Operate</a><a href="updates.html">Update</a><a href="troubleshooting.html">Troubleshoot</a><a href="technical.html">Reference</a></nav></header>
+<header class="page-header"><div><p class="eyebrow">After installation</p><h1>First sign-in and setup</h1><p>Create the first Admin, choose the modules you want, and get Attendance ready for your first meeting.</p></div></header>
+<main id="main" class="page">
+  <p>Open the dashboard link from the installation run summary. It has the form <code>https://&lt;slug&gt;-dashboard.pages.dev</code>. Keep your password manager open: you need the <code>LANCERLOGIN_SETUP_CODE</code> value you saved during <a href="setup.html#secrets">installation</a>.</p>
+
+  <h2 id="create-installation">1. Create your installation</h2>
+  <p>A new installation opens the <strong>Create your installation</strong> form. Fill in each field:</p>
+  <table class="credential-table">
+    <thead><tr><th scope="col">Field</th><th scope="col">What to enter</th></tr></thead>
+    <tbody>
+      <tr><td>One-time setup code</td><td>The <code>LANCERLOGIN_SETUP_CODE</code> secret value, at least 16 characters.</td></tr>
+      <tr><td>Organization name</td><td>The name members see on the dashboard and kiosks. You can change it later.</td></tr>
+      <tr><td>Time zone</td><td>Choose your organization's time zone from the list. Meeting times, reports, and attendance windows use it.</td></tr>
+      <tr><td>Dashboard sign-in</td><td><strong>Username and password</strong>, <strong>Google OAuth</strong>, or <strong>Both methods</strong>. Google needs a client ID and secret first; see <a href="setup.html#google-oauth">Google sign-in</a>.</td></tr>
+      <tr><td>Admin username, Admin password, and Confirm Admin password</td><td>For password sign-in. The password must be at least 12 characters.</td></tr>
+    </tbody>
+  </table>
+  <figure class="annotated compact-shot"><img src="assets/first-run-create-installation.png" alt="LancerLogin Create your installation form with fields for One-time setup code, Organization name, Time zone set to America/New York, a Dashboard sign-in choice of Username and password, Google OAuth or Both methods, Admin username, Admin password with the hint At least 12 characters, Confirm Admin password, and the Create first Admin button."><figcaption>The first-time setup form.</figcaption></figure>
+  <p>Select <strong>Create first Admin</strong>. LancerLogin creates the installation and, for password sign-in, signs you in as its first Admin straight away. After this, the setup code cannot create another Admin.</p>
+  <p class="notice"><strong>Setup code not accepted?</strong> Check for extra spaces from copying. To use a new code, update the <code>LANCERLOGIN_SETUP_CODE</code> secret and run the installation workflow again with operation <code>resume</code> and the same slug. This works only while no Admin exists.</p>
+
+  <h2 id="choose-modules">2. Choose modules</h2>
+  <p>Next, <strong>Choose modules</strong> lists the modules this installation includes. Core always provides accounts, roster, labels, reports, branding, integrations, backups, and updates; modules add workflows on top of Core. Each module is marked <strong>Built-in</strong> or <strong>Plugin</strong>, and Attendance is selected and marked <strong>Recommended</strong>.</p>
+  <figure class="annotated compact-shot"><img src="assets/first-run-choose-modules.png" alt="LancerLogin Choose modules screen listing Attendance with Built-in and Recommended badges and its switch on, Outreach Participation and Carpool with Plugin badges and their switches off, and a Continue button."><figcaption>Attendance is selected by default. Plugins can be turned on now or later.</figcaption></figure>
+  <ul>
+    <li>Keep <strong>Attendance</strong> on if you will take meeting attendance with kiosks. Most installations do.</li>
+    <li>Turn on a plugin only when you are ready to set it up. You can turn modules on or off later in <span class="ui-path">Settings <span>›</span> Modules</span>.</li>
+    <li>Turning a module off keeps its data for seven days before deleting it, so you can change your mind.</li>
+  </ul>
+  <p>Select <strong>Continue</strong>.</p>
+
+  <h2 id="attendance-setup">3. Attendance setup</h2>
+  <p><strong>Attendance setup</strong> shows one card at a time, with progress such as "Step 1 of 6" and "0 of 4 required steps complete". Each card saves when you choose <strong>Save and continue</strong>. <strong>Finish setup later</strong> keeps the steps you saved; Attendance becomes available once every required step is complete.</p>
+  <ol class="steps">
+    <li><strong>Attendance rules</strong> sets <strong>Late scan minutes</strong> (how long after a meeting ends check-ins are still accepted), <strong>Reporting starts on</strong> (optional; reports count meetings from this date), and the <strong>Late anomaly threshold (minutes)</strong> and <strong>Early anomaly threshold (minutes)</strong> that flag late arrivals and early departures. Member labels and attendance requirements can be added later.</li>
+    <li><strong>First meeting</strong> creates a test meeting that is happening now, so you can record a check-in in the next step.</li>
+    <li><strong>Roster</strong> adds at least one person. Enter <strong>Member ID</strong>, <strong>First name</strong>, <strong>Last name</strong>, and optionally <strong>Email</strong>, then choose <strong>Add member</strong>, or choose <strong>Import CSV</strong>. Choose <strong>Add another member</strong> for more. You can add everyone else later on <a href="operations.html#roster">Roster</a>.</li>
+    <li><strong>Verified attendance input</strong> records a test check-in with the browser simulator for a roster member and the meeting happening now. It uses the real attendance rules and server time and does not test or store fingerprint data. A physical kiosk can connect only after Attendance is ready, so pair it from <strong>Kiosks</strong> once setup is finished.</li>
+    <li><strong>Calendar integration</strong> is marked <strong>Optional</strong>. Choose <strong>Open Integrations settings</strong> to connect Google Calendar, or <strong>Set up later and continue</strong>.</li>
+    <li><strong>Discord integration</strong> is also <strong>Optional</strong>, with the same two choices. See <a href="operations.html#discord-commands">Discord member commands</a>.</li>
+  </ol>
+  <figure class="annotated compact-shot"><img src="assets/first-run-attendance-setup.png" alt="LancerLogin Attendance setup at Step 1 of 6 with 0 of 4 required steps complete. The required Attendance rules card has Late scan minutes set to 30, an empty Reporting starts on date, Late and Early anomaly thresholds of 10 minutes with help text for each, and Back and Save and continue buttons, with Finish setup later below."><figcaption>Step 1, Attendance rules, with help text under each field.</figcaption></figure>
+  <figure class="annotated compact-shot"><img src="assets/first-run-roster-step.png" alt="LancerLogin Attendance setup at Step 3 of 6 with 2 of 4 required steps complete. The required Roster card asks to add at least one person and has Member ID, First name, Last name and optional Email fields with Import CSV and Add member buttons."><figcaption>Step 3, Roster: add at least one person.</figcaption></figure>
+  <figure class="annotated compact-shot"><img src="assets/first-run-input-step.png" alt="LancerLogin Attendance setup at Step 4 of 6 with 3 of 4 required steps complete. The Verified attendance input card has Simulator name Browser simulator, a Roster member selection, a Meeting happening now selection, and a note that a physical kiosk can be paired from Kiosks once setup is finished."><figcaption>Step 4, Verified attendance input, uses the browser simulator.</figcaption></figure>
+  <p>The browser simulator is a software check. Its check-ins are marked as simulated, and it does not test a fingerprint reader, a badge reader, or a Raspberry Pi.</p>
+
+  <h2 id="attendance-ready">4. Attendance is ready</h2>
+  <p>After the last card, the completion screen says <strong>Attendance is ready</strong> and offers optional next steps: <strong>Pair a kiosk</strong>, <strong>Add or import members</strong>, <strong>Invite other Admins</strong>, <strong>Connect Google Calendar or Discord</strong>, and <strong>Set up dashboard updates</strong>. Choose <strong>Go to Meetings</strong> to start. The primary navigation now shows <strong>Meetings</strong>, <strong>Roster</strong>, <strong>Reports</strong>, <strong>Kiosks</strong>, and <strong>Settings</strong>, plus a page for each plugin you turned on.</p>
+  <figure class="annotated compact-shot"><img src="assets/first-run-attendance-ready.png" alt="LancerLogin Attendance is ready screen with optional next steps Pair a kiosk, Add or import members, Invite other Admins, Connect Google Calendar or Discord, and Set up dashboard updates, and a Go to Meetings button."><figcaption>The completion screen lists optional next steps.</figcaption></figure>
+  <p>To review the setup cards later, open <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Attendance setup</span> and choose <strong>Open Attendance setup</strong>. Reopening setup does not change existing meetings or attendance.</p>
+
+  <h2 id="next-steps">Next steps</h2>
+  <ul>
+    <li><a href="kiosk.html">Add a physical kiosk</a> for members to check in and out.</li>
+    <li>Give other staff access in <span class="ui-path">Settings <span>›</span> Access</span>. See <a href="operations.html#roles">Roles</a>.</li>
+    <li>Set your logo, colors, and subtitle in <span class="ui-path">Settings <span>›</span> Organization</span>.</li>
+    <li><a href="updates.html#web-update-token">Set up one-click updates</a> if you did not add the update token during installation.</li>
+    <li>Make sure a second person can recover access. See <a href="operations.html#recover-access">Recover access</a>.</li>
+  </ul>
+</main>
+<footer><div><a href="index.html">Documentation home</a> · <a href="privacy.html">Privacy</a> · <a href="releases.html">Releases</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>
+</body>
+</html>

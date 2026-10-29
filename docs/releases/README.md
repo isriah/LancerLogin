@@ -6,6 +6,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 ## LancerLogin 2
 
+- [v2.0.1](v2.0.1.md) - Integration setup fixes for Discord, Google sign-in, Google Calendar and Resend
 - [v2.0.0](v2.0.0.md) - LancerLogin 2 becomes the stable release
 
 ## LancerLogin 2 beta releases

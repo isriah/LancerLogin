@@ -769,7 +769,7 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 .embedded-roster-import { display: grid; gap: 1rem; padding: 0 1.25rem 1.25rem; }
 .embedded-roster-import .roster-import { width: 100%; padding: 0; border: 0; background: transparent; }
 .roster-import-dialog label,.member-dialog label { margin: 0; }
-.roster-import-dialog select,.roster-import-dialog textarea,.member-dialog input { width: 100%; margin-top: .4rem; padding: .75rem; border: 1px solid var(--line); color: var(--ink); background: var(--bg); border-radius: .6rem; }
+.roster-import-dialog select,.roster-import-dialog textarea,.member-dialog input:not([type="checkbox"]):not([type="radio"]) { width: 100%; margin-top: .4rem; padding: .75rem; border: 1px solid var(--line); color: var(--ink); background: var(--bg); border-radius: .6rem; }
 .member-dialog { width: min(38rem,100%); }
 .dialog-heading { display: flex; justify-content: space-between; gap: var(--space-4); align-items: start; }
 .dialog-heading h2,.dialog-heading p { margin-bottom: .25rem; }
@@ -1256,10 +1256,12 @@ label { font-size: .9rem; }
 .member-dialog form,.roster-import-dialog { gap: var(--space-4); padding: var(--space-5); }
 .member-dialog > .dialog-heading { padding: var(--space-5) var(--space-5) 0; }
 .member-dialog form > label,.member-dialog .form-grid label,.roster-import-dialog label { display: grid; gap: var(--space-2); margin: 0; }
-.member-dialog input:not([type="checkbox"]),.roster-import-dialog select,.roster-import-dialog textarea { width: 100%; min-height: var(--control-min-block-size); margin: 0; padding: var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); }
+.member-dialog input:not([type="checkbox"]):not([type="radio"]),.roster-import-dialog select,.roster-import-dialog textarea { width: 100%; min-height: var(--control-min-block-size); margin: 0; padding: var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); }
 .member-dialog input:focus-visible,.roster-import-dialog select:focus-visible,.roster-import-dialog textarea:focus-visible,.report-filter-controls input:focus-visible,.report-filter-controls select:focus-visible,.report-grid select:focus-visible,.roster-filters input:focus-visible,.roster-filters select:focus-visible { border-color: var(--primary); outline: 3px solid var(--ui-focus); outline-offset: 2px; }
 .checkbox-field { min-height: var(--control-min-block-size); display: flex !important; align-items: center; gap: var(--space-3) !important; cursor: pointer; }
 .checkbox-field input { width: 1.25rem; height: 1.25rem; margin: 0; accent-color: var(--primary); }
+.member-dialog .checkbox-field { display: flex !important; grid-template-columns: none; }
+.member-dialog .checkbox-field input[type="checkbox"] { display: grid; place-content: center; flex: 0 0 auto; width: 1.25rem; height: 1.25rem; min-height: 1.25rem; padding: 0; border-radius: .3rem; }
 input.ui-checkbox { appearance: none; display: grid; place-content: center; flex: 0 0 auto; width: 1.25rem; height: 1.25rem; min-height: 1.25rem; padding: 0; margin: 0; border: 2px solid var(--ui-border); color: var(--on-primary); background: var(--ui-surface); border-radius: .3rem; cursor: pointer; }
 input.ui-checkbox::after { width: .65rem; height: .35rem; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; content: ""; opacity: 0; transform: translateY(-.08rem) rotate(-45deg) scale(.6); transition: opacity .12s ease,transform .12s ease; }
 input.ui-checkbox:checked { border-color: var(--primary); background: var(--primary); }
@@ -1349,7 +1351,7 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
 .settings-form { grid-template-columns: 1fr; gap: var(--space-4); padding: var(--space-5); }
 .settings-form label,.settings-form .field-help,.configuration-grid label,.settings-page .task-card label { margin: 0; }
 .settings-form label,.configuration-grid label,.settings-page .task-card label,.verification-panel label,.data-action-dialog > label,.file-picker { display: grid; gap: var(--space-2); }
-.settings-form input:not([type="radio"]):not([type="checkbox"]),.settings-form select,.settings-page .task-card input:not([type="radio"]):not([type="checkbox"]),.settings-page .task-card select,.verification-panel input,.data-action-dialog input { width: 100%; min-height: var(--control-min-block-size); margin: 0; padding: var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); }
+.settings-form input:not([type="radio"]):not([type="checkbox"]),.settings-form select,.settings-page .task-card input:not([type="radio"]):not([type="checkbox"]),.settings-page .task-card select,.verification-panel input:not([type="radio"]):not([type="checkbox"]),.data-action-dialog input:not([type="radio"]):not([type="checkbox"]) { width: 100%; min-height: var(--control-min-block-size); margin: 0; padding: var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface-subtle); border-radius: var(--radius-control); }
 .settings-page select,.settings-integrations select { appearance: none; padding-right: var(--space-12); background-image: linear-gradient(45deg,transparent 50%,var(--ui-text-muted) 50%),linear-gradient(135deg,var(--ui-text-muted) 50%,transparent 50%); background-position: calc(100% - 1.5rem) calc(50% + .1rem),calc(100% - 1.12rem) calc(50% + .1rem); background-size: .38rem .38rem,.38rem .38rem; background-repeat: no-repeat; }
 .settings-page input:focus-visible,.settings-page select:focus-visible,.settings-page textarea:focus-visible,.settings-integrations input:focus-visible,.settings-integrations select:focus-visible,.settings-integrations textarea:focus-visible { border-color: var(--primary); outline: 3px solid var(--ui-focus); outline-offset: 2px; }
 .settings-page input[aria-invalid="true"],.settings-integrations input[aria-invalid="true"] { border-color: var(--ui-error); }
@@ -1425,12 +1427,21 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
 .discord-channel-manager > .primary-button,.discord-anomaly-reports > .primary-button { justify-self: start; }
 .integration-guide { margin: 0; padding: var(--space-4); border-color: var(--ui-border); background: var(--ui-surface-subtle); border-radius: var(--radius-card); }
 .integration-guide h3,.integration-guide p,.integration-guide ol,.guide-note { margin-block: 0; }
+.guide-note.ui-status { padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); }
 .integration-guide { display: grid; gap: var(--space-3); }
 .integration-guide ol { gap: var(--space-3); color: var(--ui-text-muted); font-size: var(--text-small); }
 .copy-value { gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--ui-border); background: var(--ui-surface); border-radius: var(--radius-card); }
 .copy-value button { min-height: var(--control-min-block-size); }
 .verification-panel { gap: var(--space-3); margin: 0; padding: var(--space-4); border-color: var(--ui-warning); color: var(--ui-text); background: var(--ui-warning-surface); border-radius: var(--radius-card); }
 .verification-panel .primary-button { justify-self: start; }
+.discord-verify-steps { display: grid; gap: var(--space-3); margin: 0; padding: 0 0 0 1.5rem; font-size: var(--text-small); line-height: 1.45; }
+.discord-channel-manager label.ui-checkbox { display: flex; align-items: center; gap: var(--space-3); min-height: var(--control-min-block-size); }
+.calendar-reauthorize-link { min-height: var(--control-min-block-size); display: inline-flex; align-items: center; justify-content: center; padding: var(--space-2) var(--space-4); }
+.calendar-reauthorize-link:not(.primary-button) { border: 1px solid var(--ui-border); color: var(--primary); background: var(--ui-surface); border-radius: var(--radius-control); font-weight: 750; }
+.calendar-reauthorize-link:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+.user-list .access-email-form { display: grid; gap: var(--space-2); }
+.user-list .access-email-form label { display: grid; gap: var(--space-2); }
+.user-list .access-email-form .field-help,.user-list .access-email-form .inline-messages { margin: 0; }
 .integration-actions { justify-content: flex-end; margin: 0; }
 .integration-message { margin: var(--space-3) var(--space-5) 0; }
 .data-category-list,.release-comparisons { gap: var(--space-4); }

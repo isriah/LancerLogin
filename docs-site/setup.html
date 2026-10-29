@@ -120,7 +120,7 @@
   <p>Then open the dashboard link and continue with <a href="first-run.html">First sign-in and setup</a>.</p>
 
   <h2 id="google-oauth">Optional: Google sign-in</h2>
-  <p>Admins and Operators can sign in with a username and password, with Google, or with either. You only need this section if you plan to choose <strong>Google OAuth</strong> or <strong>Both methods</strong> when you create the installation, or to add Google sign-in later in <span class="ui-path">Settings <span>›</span> Integrations</span>. Google calls the configuration area <strong>Google Auth Platform</strong>. Its sections are Branding, Audience, Clients, Data Access, and Verification Center. Google's <a href="https://support.google.com/cloud/answer/15544987">Google Auth Platform overview</a> describes the same flow.</p>
+  <p>Admins and Operators can sign in with a username and password, with Google, or with either. You only need this section if you plan to choose <strong>Google OAuth</strong> or <strong>Both methods</strong> when you create the installation, or to add Google sign-in later in <span class="ui-path">Settings <span>›</span> Integrations</span>. Google Calendar is set up separately; see <a href="operations.html#google-calendar">Connect Google Calendar</a>. Google calls the configuration area <strong>Google Auth Platform</strong>. Its sections are Branding, Audience, Clients, Data Access, and Verification Center. Google's <a href="https://support.google.com/cloud/answer/15544987">Google Auth Platform overview</a> describes the same flow.</p>
 
   <h3>Choose the project, branding, and audience</h3>
   <ol class="steps">
@@ -128,10 +128,11 @@
     <li>Under <strong>Branding</strong>, use a recognizable app name, select a support email, and add a monitored developer contact email. Google's <a href="https://support.google.com/cloud/answer/15549049">branding guide</a> explains when a logo, homepage, privacy policy, or brand verification is required.</li>
     <li>Under <strong>Audience</strong>, choose <strong>Internal</strong> only when every dashboard user belongs to the project's Google Workspace or Cloud Identity organization. Otherwise choose <strong>External</strong>.</li>
     <li>For an External audience, <strong>Testing</strong> is for a trial and <strong>In production</strong> publishes the app for ongoing use. Review Google's <a href="https://support.google.com/cloud/answer/15549945">audience and publishing status guide</a> before deciding. Workspace administrator policy can still block access.</li>
+    <li>For an External audience in <strong>Testing</strong>, add each Admin and Operator Google account under <span class="ui-path">Audience <span>›</span> Test users</span>. Otherwise Google shows "Access blocked" when they sign in.</li>
   </ol>
 
   <h3>Keep Data Access limited to sign-in</h3>
-  <p>Under <strong>Data Access</strong>, keep only <code>openid</code>, <code>email</code>, and <code>profile</code>. Do not add Drive, Calendar, Gmail, or other scopes for sign-in. Google's <a href="https://support.google.com/cloud/answer/15549135">Data Access guide</a> explains scope management.</p>
+  <p>Under <strong>Data Access</strong>, keep only <code>openid</code>, <code>email</code>, and <code>profile</code>. Do not add Drive, Calendar, Gmail, or other scopes to the sign-in client. Google Calendar uses its own client, ideally in its own project. Google's <a href="https://support.google.com/cloud/answer/15549135">Data Access guide</a> explains scope management.</p>
 
   <h3>Create the Web application client</h3>
   <ol class="steps">
@@ -139,15 +140,15 @@
     <li>Under <strong>Authorized redirect URIs</strong>, add your installation's callback address. It has this form:</li>
   </ol>
   <p class="ui-path">Callback address <span>›</span> <code>https://&lt;slug&gt;-dashboard.pages.dev/api/auth/google/callback</code></p>
-  <p>The <strong>Create your installation</strong> form and <span class="ui-path">Settings <span>›</span> Integrations</span> show the exact value with a copy button. Google compares it exactly, including the trailing slash.</p>
+  <p>The <strong>Create your installation</strong> form and <span class="ui-path">Settings <span>›</span> Integrations</span> show the exact value the API uses, with a copy button. Google compares it exactly, including the trailing slash. The address must use https. Only a <code>localhost</code> or <code>127.0.0.1</code> preview may use http.</p>
   <ol class="steps" start="3">
     <li>Create the client and save the client ID and client secret in your password manager. Google shows a new secret only once. Google's <a href="https://support.google.com/cloud/answer/15549257">Clients guide</a> covers creating and rotating secrets.</li>
-    <li>Enter the client ID, the client secret, and the first Admin's Google email in the <strong>Create your installation</strong> form, or later in <span class="ui-path">Settings <span>›</span> Integrations</span>. LancerLogin encrypts the secret and never displays it again.</li>
+    <li>Enter the client ID, the client secret, and the first Admin's Google email in the <strong>Create your installation</strong> form. To add Google sign-in later, enter the client ID and secret in <span class="ui-path">Settings <span>›</span> Integrations</span>, and add each person's Google email in <span class="ui-path">Settings <span>›</span> Access</span>. LancerLogin encrypts the secret and never displays it again.</li>
   </ol>
   <figure class="annotated compact-shot"><img src="assets/google-oauth-client.png" alt="Google Auth Platform Create OAuth client ID page with Application type Web application, the name LancerLogin dashboard, no Authorized JavaScript origins, and an Authorized redirect URI beginning https://example-robotics-team-dashboard.pages.dev/api/auth/google/."><figcaption>A Web application client with the installation's callback address as the only redirect URI.</figcaption></figure>
 
   <h3>Finish verification</h3>
-  <p>Google's Verification Center and LancerLogin's integration verification are separate. An External app in production may need Google brand verification before its name or logo appears. LancerLogin's basic sign-in scopes do not need sensitive-scope review. After you save credentials in Settings, choose <strong>Verify with Google</strong> and sign in as an active Admin. LancerLogin marks Google sign-in as configured only after that sign-in succeeds.</p>
+  <p>Google's Verification Center and LancerLogin's integration verification are separate. An External app in production may need Google brand verification before its name or logo appears. LancerLogin's basic sign-in scopes do not need sensitive-scope review. After you save credentials in Settings, choose <strong>Verify with Google</strong> and sign in with the Google account of an active Admin. That Google email must match the Admin's LancerLogin email. If you created the installation with <strong>Username and password</strong>, first add the Admin's Google email in <span class="ui-path">Settings <span>›</span> Access</span>. LancerLogin marks Google sign-in as configured only after that sign-in succeeds. If it fails, the card in <span class="ui-path">Settings <span>›</span> Integrations</span> explains why.</p>
   <p>Google sign-in can be turned off or removed only while at least one active Admin can sign in with a password.</p>
 </main>
 <footer><div><a href="index.html">Documentation home</a> · <a href="privacy.html">Privacy</a> · <a href="releases.html">Releases</a> · Support: <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a></div></footer>

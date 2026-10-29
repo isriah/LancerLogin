@@ -30,11 +30,7 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v7
         with: { node-version: 24.22.1, cache: npm }
-      - run: npm ci --no-audit
-      - name: Check that selectable installation releases contain the files the installer runs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/check-provision-release-compat.mjs
+      # Scope selection uses only Node built-ins, so it runs before the install it may skip.
       - name: Select verification scope
         id: verification-scope
         shell: bash
@@ -56,8 +52,25 @@ jobs:
             reason="new branch history"
           fi
 
+          docs=false
+          if [[ "$full" != "true" ]]; then
+            # A change confined to docs/ and docs-site/ runs only the documentation checks (scripts/ci-scope.mjs).
+            # Release commits, new branches and unreadable diffs are never documentation-only.
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+              docs_base="$BASE_SHA"
+            else
+              docs_base="$BEFORE_SHA"
+            fi
+            node scripts/ci-scope.mjs --event "$GITHUB_EVENT_NAME" --base "$docs_base" --head "$HEAD_SHA" --head-message "$HEAD_COMMIT_MESSAGE" > "$RUNNER_TEMP/docs-scope.txt"
+            cat "$RUNNER_TEMP/docs-scope.txt" >> "$GITHUB_OUTPUT"
+            grep -qx 'docs=true' "$RUNNER_TEMP/docs-scope.txt" && docs=true
+            reason="$(sed -n 's/^docs-reason=//p' "$RUNNER_TEMP/docs-scope.txt")"
+          fi
+
           if [[ "$full" == "true" ]]; then
             kiosk=true
+          elif [[ "$docs" == "true" ]]; then
+            kiosk=false
           else
             changed_files="$RUNNER_TEMP/changed-files.txt"
             if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
@@ -79,7 +92,23 @@ jobs:
 
           echo "full=$full" >> "$GITHUB_OUTPUT"
           echo "kiosk=$kiosk" >> "$GITHUB_OUTPUT"
-          echo "Verification scope: $reason (full=$full, kiosk=$kiosk)"
+          echo "Verification scope: $reason (full=$full, kiosk=$kiosk, docs=$docs)"
+      - run: npm ci --no-audit
+        if: steps.verification-scope.outputs.docs != 'true' || steps.verification-scope.outputs.docs-install == 'true'
+      - name: Check that selectable installation releases contain the files the installer runs
+        if: steps.verification-scope.outputs.docs != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-provision-release-compat.mjs
+      - name: Run documentation-only verification
+        if: steps.verification-scope.outputs.docs == 'true'
+        shell: bash
+        env:
+          DOCS_TESTS: ${{ steps.verification-scope.outputs.docs-tests }}
+        run: |
+          read -ra docs_tests <<< "$DOCS_TESTS"
+          echo "Documentation-only change: running ${docs_tests[*]}"
+          node --test "${docs_tests[@]}"
       - name: Verify root-owned kiosk artifacts as an unprivileged service account
         if: steps.verification-scope.outputs.full == 'true'
         run: sudo "$(command -v node)" --test tests/kiosk-artifacts.test.mjs
@@ -91,12 +120,12 @@ jobs:
           LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}
         run: npm run verify:release-ci
       - name: Run web-scoped verification
-        if: steps.verification-scope.outputs.full != 'true'
+        if: steps.verification-scope.outputs.docs != 'true' && steps.verification-scope.outputs.full != 'true'
         env:
           LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}
         run: npm run verify:dev
       - name: Run affected kiosk verification
-        if: steps.verification-scope.outputs.full != 'true' && steps.verification-scope.outputs.kiosk == 'true'
+        if: steps.verification-scope.outputs.docs != 'true' && steps.verification-scope.outputs.full != 'true' && steps.verification-scope.outputs.kiosk == 'true'
         run: npm run verify:kiosk
   dependency-audit:
     if: github.repository == 'isriah/LancerLogin'

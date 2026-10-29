@@ -94,11 +94,11 @@ test("the Google Calendar callback completes without a session cookie, authentic
   assert.equal((await call(env, "/admin/integrations/google-calendar/calendars")).status, 401);
   assert.equal((await call(env, "/admin/integrations/google-calendar/authorize")).status, 401);
   // Without a valid state the callback refuses before contacting Google.
-  assert.equal((await call(env, `/admin/integrations/google-calendar/callback?code=one-time&state=${encodeURIComponent(state)}`)).status, 400);
+  assert.equal((await call(env, `/admin/integrations/google-calendar/callback?code=one-time&state=${encodeURIComponent(state)}`)).headers.get("location"), `${origin}/settings/integrations?integrationError=google_calendar&message=${encodeURIComponent("Google Calendar authorization state is invalid or expired")}`);
   const session = (await sessionFor("admin", "admin")).slice("lancerlogin_session=".length);
-  assert.equal((await call(env, `/admin/integrations/google-calendar/callback?code=one-time&state=${encodeURIComponent(session)}`, { cookie: `lancerlogin_calendar_oauth_state=${session}` })).status, 400, "a session token is not a Calendar state");
+  assert.equal((await call(env, `/admin/integrations/google-calendar/callback?code=one-time&state=${encodeURIComponent(session)}`, { cookie: `lancerlogin_calendar_oauth_state=${session}` })).headers.get("location"), `${origin}/settings/integrations?integrationError=google_calendar&message=${encodeURIComponent("Google Calendar authorization state is invalid or expired")}`, "a session token is not a Calendar state");
   const operatorState = await createSignedStateCodec(secret, "google_calendar_oauth").issue({ userId: "operator" });
-  assert.equal((await call(env, `/admin/integrations/google-calendar/callback?code=one-time&state=${encodeURIComponent(operatorState)}`, { cookie: `lancerlogin_calendar_oauth_state=${operatorState}` })).status, 403);
+  assert.equal((await call(env, `/admin/integrations/google-calendar/callback?code=one-time&state=${encodeURIComponent(operatorState)}`, { cookie: `lancerlogin_calendar_oauth_state=${operatorState}` })).headers.get("location"), `${origin}/settings/integrations?integrationError=google_calendar&message=${encodeURIComponent("Only an active Admin can authorize Google Calendar")}`);
   assert.equal(tokenRequests.length, 1);
 });
 

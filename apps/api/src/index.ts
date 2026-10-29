@@ -101,7 +101,7 @@ function withCors(result: Response, request: Request, env: Env): Response {
   return new Response(result.body, { status: result.status, headers });
 }
 class DiscordPermissionError extends HttpError {
-  constructor(kind: "calendar" | "pin" | "commands" | "channel" | "roles" | "members" = "channel") { super(502, kind === "calendar" ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." : kind === "pin" ? "Discord denied this request because the bot is missing Pin Messages permission in the configured attendance channel." : kind === "commands" ? "Discord denied command management. Confirm the saved application ID belongs to this bot and install the bot in the selected server before trying command setup again." : kind === "roles" ? "Discord denied a role change. Confirm the bot has Manage Roles and its highest role is above the mapped role." : kind === "members" ? "Discord denied the full server member list. Enable the privileged Guild Members intent for this bot before syncing roles." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
+  constructor(kind: "calendar" | "pin" | "commands" | "channel" | "roles" | "members" = "channel") { super(502, kind === "calendar" ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has the Create Events permission, which Discord requires to create scheduled events, before syncing the calendar." : kind === "pin" ? "Discord denied this request because the bot is missing Pin Messages permission in the configured attendance channel." : kind === "commands" ? "Discord denied command management. Confirm the saved application ID belongs to this bot and install the bot in the selected server before trying command setup again." : kind === "roles" ? "Discord denied a role change. Confirm the bot has Manage Roles and its highest role is above the mapped role." : kind === "members" ? "Discord denied the full server member list. Enable the privileged Server Members Intent for this bot in the Discord Developer Portal before syncing roles." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
 }
 class DiscordRateLimitError extends HttpError {
   readonly retryAfterMs: number;
@@ -114,8 +114,10 @@ class DiscordResponseError extends HttpError {
 }
 class EmailProviderError extends HttpError {
   readonly emailStatus: number;
-  constructor(status: number, message: string) { super(502, `Resend rejected the email (${status})${message ? `: ${message}` : ""}`); this.emailStatus = status; }
+  constructor(status: number, message: string, prefix = "Resend rejected the email") { super(502, `${prefix} (${status})${message ? `: ${message}` : ""}`); this.emailStatus = status; }
 }
+/** Resend's own error text, reduced to one short line so it is safe to show an Admin. */
+async function resendErrorMessage(result: Response): Promise<string> { const body = await result.json().catch(() => ({})) as { message?: unknown }; return typeof body.message === "string" ? body.message.replace(/\s+/g, " ").trim().slice(0, 180) : ""; }
 class GoogleCalendarProviderError extends Error {
   readonly providerStatus: number;
   readonly retryable: boolean;
@@ -1756,10 +1758,11 @@ async function googleCalendarIntegrationStatus(env: Env) {
     googleCalendarAuthorizationRecord(env),
     db.prepare("SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, MAX(CASE WHEN status = 'failed' THEN last_error ELSE NULL END) AS lastError FROM google_calendar_operations WHERE installation_id = 'primary'").first<{ pending?: number; failed?: number; lastError?: string | null }>(),
   ]);
-  let calendarName: string | undefined;
-  if (record?.ciphertext && record.iv && env.INTEGRATION_KEY) try { calendarName = (await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY) as GoogleCalendarSecret).calendarLabel; } catch { /* Status must not expose or depend on secret values. */ }
+  let calendarName: string | undefined; let reauthorizationRequired = false;
+  // A refresh token Google refused clears authorized_at but stays stored, which marks the saved setup as needing re-authorization.
+  if (record?.ciphertext && record.iv && env.INTEGRATION_KEY) try { const stored = await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY) as GoogleCalendarSecret; calendarName = stored.calendarLabel; reauthorizationRequired = !record.authorizedAt && Boolean(stored.refreshToken); } catch { /* Status must not expose or depend on secret values. */ }
   const enabled = Boolean(record?.enabled); const saved = Boolean(record?.ciphertext); const configured = enabled && Boolean(record?.verifiedAt);
-  return { provider: "google_calendar" as const, enabled, saved, authorized: Boolean(record?.authorizedAt), configured, state: !enabled ? "disabled" as const : !saved ? "not_configured" as const : configured ? "configured" as const : "verification_required" as const, updatedAt: record?.updatedAt ?? undefined, verifiedAt: record?.verifiedAt ?? undefined, calendarName, pendingOperations: Number(queue?.pending ?? 0), failedOperations: Number(queue?.failed ?? 0), lastError: queue?.lastError ?? undefined };
+  return { provider: "google_calendar" as const, enabled, saved, authorized: Boolean(record?.authorizedAt), reauthorizationRequired, configured, state: !enabled ? "disabled" as const : !saved ? "not_configured" as const : configured ? "configured" as const : "verification_required" as const, updatedAt: record?.updatedAt ?? undefined, verifiedAt: record?.verifiedAt ?? undefined, calendarName, pendingOperations: Number(queue?.pending ?? 0), failedOperations: Number(queue?.failed ?? 0), lastError: queue?.lastError ?? undefined };
 }
 async function discordCalendarQueueStatus(env: Env) {
   const queue = await requireDatabase(env).prepare("SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, MAX(CASE WHEN status = 'failed' THEN last_error ELSE NULL END) AS lastError FROM discord_calendar_operations WHERE installation_id = 'primary'").first<{ pending?: number; failed?: number; lastError?: string | null }>();
@@ -1769,7 +1772,7 @@ async function integrationsStatus(request: Request, env: Env): Promise<Response>
   await requireRole(request, env, ["admin"]);
   const [result, flags, calendar, discordCalendar, discordCommands] = await Promise.all([requireDatabase(env).prepare("SELECT i.provider, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, EXISTS(SELECT 1 FROM integration_verification_challenges c WHERE c.installation_id = i.installation_id AND c.provider = i.provider AND c.expires_at > ?) AS verificationPending FROM encrypted_integrations i WHERE i.installation_id = 'primary' ORDER BY i.provider").bind(new Date().toISOString()).all<{ provider: IntegrationProvider; updatedAt: string; verifiedAt?: string | null; verificationPending: number }>(), integrationFlags(env), googleCalendarIntegrationStatus(env), discordCalendarQueueStatus(env), discordCommandStatus(env)]);
   const saved = new Map((result.results ?? []).map((item) => [item.provider, item]));
-  return response({ integrations: [...[...integrationProviders].map((provider) => { const item = saved.get(provider); const enabled = Boolean(flags[integrationFlagColumns[provider]]); return { provider, enabled, saved: Boolean(item), configured: enabled && Boolean(item?.verifiedAt), state: !enabled ? "disabled" : !item ? "not_configured" : item.verifiedAt ? "configured" : "verification_required", updatedAt: item?.updatedAt, verifiedAt: item?.verifiedAt ?? undefined, verificationPending: enabled && Boolean(item?.verificationPending), ...(provider === "discord" ? { ...discordCalendar, ...discordCommands } : {}) }; }), calendar] });
+  return response({ integrations: [...[...integrationProviders].map((provider) => { const item = saved.get(provider); const enabled = Boolean(flags[integrationFlagColumns[provider]]); return { provider, enabled, saved: Boolean(item), configured: enabled && Boolean(item?.verifiedAt), state: !enabled ? "disabled" : !item ? "not_configured" : item.verifiedAt ? "configured" : "verification_required", updatedAt: item?.updatedAt, verifiedAt: item?.verifiedAt ?? undefined, verificationPending: enabled && Boolean(item?.verificationPending), ...(provider === "google" ? { redirectUri: optionalPublicUrl(() => googleRedirectUri(env)) } : {}), ...(provider === "discord" ? { ...discordCalendar, ...discordCommands, interactionsUrl: optionalPublicUrl(() => discordInteractionsUrl(env)) } : {}) }; }), { ...calendar, redirectUri: optionalPublicUrl(() => googleCalendarRedirectUri(env)) }] });
 }
 async function discordChannelManagerSettings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -1862,7 +1865,7 @@ async function startResendVerification(request: Request, env: Env): Promise<Resp
   const digits = crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000; const code = digits.toString().padStart(6, "0"); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
   await requireProviderAuthority(env);
   const result = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${secret.apiKey}`, "content-type": "application/json", "idempotency-key": `lancerlogin-verify-${crypto.randomUUID()}` }, body: JSON.stringify({ from: secret.fromEmail, to: [target], subject: "Your LancerLogin verification code", text: `Your LancerLogin verification code is ${code}. It expires in 10 minutes.`, html: `<p>Your LancerLogin verification code is:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${code}</p><p>It expires in 10 minutes.</p>` }) });
-  if (!result.ok) throw new HttpError(502, "Resend could not deliver the verification email"); const body = await result.json().catch(() => ({})) as { id?: string };
+  if (!result.ok) throw new EmailProviderError(result.status, await resendErrorMessage(result), "Resend could not deliver the verification email"); const body = await result.json().catch(() => ({})) as { id?: string };
   await db.prepare("INSERT INTO integration_verification_challenges (installation_id, provider, challenge_hash, target, external_id, expires_at, created_by, created_at) VALUES ('primary', 'resend', ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, provider) DO UPDATE SET challenge_hash = excluded.challenge_hash, target = excluded.target, external_id = excluded.external_id, expires_at = excluded.expires_at, created_by = excluded.created_by, created_at = excluded.created_at").bind(await sha256(code), target, body.id ?? null, expiresAt, principal.userId, now.toISOString()).run();
   await writeAudit(db, principal, "integration.verification_started", "integration", "resend", { target, deliveryId: body.id ?? null }); return response({ provider: "resend", verificationPending: true, expiresAt, target }, 202);
 }
@@ -1878,10 +1881,21 @@ async function googleCredentials(env: Env): Promise<Record<string, string>> {
   const record = await integrationRecord(env, "google"); if (!record || record.enabled === 0) throw new HttpError(503, "Google OAuth is not enabled");
   return decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY);
 }
-function googleRedirectUri(env: Env): string {
+// Google accepts http only for loopback redirect URIs, so a local preview may use http://localhost; every other origin needs https.
+const loopbackHostnames = new Set(["localhost", "127.0.0.1", "[::1]"]);
+function oauthPublicOrigin(env: Env): string {
   const origin = new URL(env.ALLOWED_ORIGIN);
-  if (origin.protocol !== "https:" || origin.origin !== env.ALLOWED_ORIGIN) throw new HttpError(503, "Public dashboard origin is invalid");
-  return `${origin.origin}/api/auth/google/callback`;
+  if (!(origin.protocol === "https:" || (origin.protocol === "http:" && loopbackHostnames.has(origin.hostname))) || origin.origin !== env.ALLOWED_ORIGIN) throw new HttpError(503, "Public dashboard origin is invalid");
+  return origin.origin;
+}
+function googleRedirectUri(env: Env): string { return `${oauthPublicOrigin(env)}/api/auth/google/callback`; }
+/** Status must still load when the origin is misconfigured, so an unusable URL is left out instead of failing the call. */
+function optionalPublicUrl(build: () => string): string | undefined { try { return build(); } catch { return undefined; } }
+/** Browser-facing OAuth flows return to Integrations with a short, non-sensitive message instead of raw JSON. */
+function integrationErrorRedirect(env: Env, provider: "google" | "google_calendar", message: string, clearCookies: string[]): Response {
+  const headers = new Headers({ location: `${env.ALLOWED_ORIGIN}/settings/integrations?integrationError=${provider}&message=${encodeURIComponent(message)}`, "cache-control": "no-store" });
+  for (const name of clearCookies) headers.append("set-cookie", `${name}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
+  return new Response(null, { status: 302, headers });
 }
 async function googleStart(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
@@ -1902,9 +1916,18 @@ async function googleStart(request: Request, env: Env): Promise<Response> {
   if (reauthenticating) headers.append("set-cookie", `lancerlogin_oauth_reauth=${encodeURIComponent(reauthenticating.userId)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`);
   return new Response(null, { status: 302, headers });
 }
+const googleOAuthCookies = ["lancerlogin_oauth_state", "lancerlogin_oauth_verify", "lancerlogin_oauth_reauth"];
+const googleVerificationAdminMessage = "Verify Google with an active Admin account whose LancerLogin email matches this Google account.";
 async function googleCallback(request: Request, env: Env): Promise<Response> {
+  // Only the Integrations verification flow returns errors to the dashboard; normal sign-in keeps its JSON errors.
+  if (cookie(request, "lancerlogin_oauth_verify") !== "1") return completeGoogleSignIn(request, env, false);
+  try { return await completeGoogleSignIn(request, env, true); }
+  catch (error) { if (error instanceof HttpError) return integrationErrorRedirect(env, "google", error.message, googleOAuthCookies); throw error; }
+}
+async function completeGoogleSignIn(request: Request, env: Env, verification: boolean): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
-  const url = new URL(request.url); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_oauth_state");
+  const url = new URL(request.url); if (verification && url.searchParams.get("error")) throw new HttpError(400, "Google sign-in was cancelled or denied. Try verifying Google again.");
+  const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_oauth_state");
   if (!code || !state || state !== savedState || !await createSignedStateCodec(env.SESSION_KEY, "google_sign_in").verify(state)) throw new HttpError(400, "Google sign-in state is invalid or expired");
   const credentials = await googleCredentials(env); const redirectUri = googleRedirectUri(env);
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: credentials.clientId, client_secret: credentials.clientSecret, redirect_uri: redirectUri, grant_type: "authorization_code" }) });
@@ -1913,13 +1936,14 @@ async function googleCallback(request: Request, env: Env): Promise<Response> {
   const profile = await validationResponse.json() as { aud?: string; email?: string; email_verified?: string; iss?: string };
   if (!validationResponse.ok || profile.aud !== credentials.clientId || profile.email_verified !== "true" || !profile.email || !["https://accounts.google.com", "accounts.google.com"].includes(profile.iss ?? "")) throw new HttpError(401, "Google identity validation failed");
   const user = await requireDatabase(env).prepare("SELECT id, role, session_epoch AS sessionEpoch FROM users WHERE installation_id = 'primary' AND email = ? AND active = 1").bind(profile.email.toLowerCase()).first<{ id: string; role: Role; sessionEpoch?: number }>();
+  if (verification && user?.role !== "admin") throw new HttpError(403, googleVerificationAdminMessage);
   if (!user) throw new HttpError(403, "This Google account is not an active LancerLogin user");
   const reauthenticating = cookie(request, "lancerlogin_oauth_reauth");
   if (reauthenticating && (decodeURIComponent(reauthenticating) !== user.id || user.role !== "admin")) throw new HttpError(403, "Sign in with the same Admin Google account to confirm your identity");
-  await markIntegrationVerified(requireDatabase(env), "google", user.id, { email: profile.email.toLowerCase() });
+  // Only an Admin's sign-in proves the Google setup; an Operator still signs in but never marks the integration verified.
+  if (user.role === "admin") await markIntegrationVerified(requireDatabase(env), "google", user.id, { email: profile.email.toLowerCase() });
   if (reauthenticating) await writeAudit(requireDatabase(env), { userId: user.id, role: user.role, expiresAt: 0 }, "auth.reauthenticated", "user", user.id, { method: "google", purpose: "plugin_management" });
   const session = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role, epoch: Number(user.sessionEpoch ?? 0) });
-  const verification = cookie(request, "lancerlogin_oauth_verify") === "1";
   const headers = new Headers({ location: reauthenticating ? `${env.ALLOWED_ORIGIN}/settings/modules?reauthenticated=1` : verification ? `${env.ALLOWED_ORIGIN}/settings/integrations?verified=google` : env.ALLOWED_ORIGIN, "cache-control": "no-store" });
   headers.append("set-cookie", `lancerlogin_session=${session}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`);
   headers.append("set-cookie", "lancerlogin_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
@@ -1928,11 +1952,9 @@ async function googleCallback(request: Request, env: Env): Promise<Response> {
   return new Response(null, { status: 302, headers });
 }
 
-function googleCalendarRedirectUri(env: Env): string {
-  const origin = new URL(env.ALLOWED_ORIGIN);
-  if (origin.protocol !== "https:" || origin.origin !== env.ALLOWED_ORIGIN) throw new HttpError(503, "Public dashboard origin is invalid");
-  return `${origin.origin}/api/admin/integrations/google-calendar/callback`;
-}
+function googleCalendarRedirectUri(env: Env): string { return `${oauthPublicOrigin(env)}/api/admin/integrations/google-calendar/callback`; }
+// Pages forwards /api/* to the Worker with the /api prefix removed, so Discord reaches the Worker's /discord/interactions route.
+function discordInteractionsUrl(env: Env): string { return `${oauthPublicOrigin(env)}/api/discord/interactions`; }
 async function googleCalendarSecret(env: Env, requireVerified = false): Promise<{ record: GoogleCalendarAuthorizationRecord; secret: GoogleCalendarSecret }> {
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const record = await googleCalendarAuthorizationRecord(env);
@@ -1956,14 +1978,16 @@ async function googleCalendarProviderRequest(accessToken: string, path: string, 
   throw new GoogleCalendarProviderError(result.status, `Google Calendar rejected the request (${result.status}). Check the Calendar connection.`, false);
 }
 async function googleCalendarAccessToken(env: Env, requireVerified = false): Promise<{ accessToken: string; secret: GoogleCalendarSecret }> {
-  const { secret } = await googleCalendarSecret(env, requireVerified);
+  const { record, secret } = await googleCalendarSecret(env, requireVerified);
   if (!secret.refreshToken) throw new HttpError(409, "Authorize Google Calendar before selecting a calendar");
   await requireProviderAuthority(env);
   const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: secret.clientId, client_secret: secret.clientSecret, refresh_token: secret.refreshToken, grant_type: "refresh_token" }) });
-  const body = await result.json().catch(() => ({})) as { access_token?: string };
+  const body = await result.json().catch(() => ({})) as { access_token?: string; error?: unknown };
   if (!result.ok || !body.access_token) {
     if (result.status >= 500 || result.status === 429) throw new GoogleCalendarProviderError(result.status, "Google authorization is temporarily unavailable. LancerLogin will retry automatically.", true, googleCalendarRetryAfter(result));
-    throw new GoogleCalendarProviderError(result.status, "Google Calendar authorization needs to be renewed.", false);
+    // A revoked or expired refresh token never recovers on retry. Clearing authorized_at (only for the credentials that failed) marks re-authorization as required; the calendar choice stays.
+    if (body.error === "invalid_grant" || result.status === 400 || result.status === 401) await requireDatabase(env).prepare("UPDATE google_calendar_authorizations SET authorized_at = NULL, updated_at = ? WHERE installation_id = 'primary' AND ciphertext = ? AND authorized_at IS NOT NULL").bind(new Date().toISOString(), record.ciphertext).run();
+    throw new GoogleCalendarProviderError(result.status, "Google Calendar authorization needs to be renewed. An Admin must authorize Google Calendar again.", false);
   }
   return { accessToken: body.access_token, secret };
 }
@@ -1999,20 +2023,31 @@ async function googleCalendarConfiguration(request: Request, env: Env): Promise<
 async function googleCalendarStart(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
   const principal = await requireRole(request, env, ["admin"]); const { secret } = await googleCalendarSecret(env); const state = await createSignedStateCodec(env.SESSION_KEY, "google_calendar_oauth").issue({ userId: principal.userId }); const target = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-  target.search = new URLSearchParams({ client_id: secret.clientId, redirect_uri: googleCalendarRedirectUri(env), response_type: "code", scope: "https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events", access_type: "offline", include_granted_scopes: "true", prompt: "consent select_account", state }).toString();
+  target.search = new URLSearchParams({ client_id: secret.clientId, redirect_uri: googleCalendarRedirectUri(env), response_type: "code", scope: googleCalendarScopes.join(" "), access_type: "offline", include_granted_scopes: "true", prompt: "consent select_account", state }).toString();
   const headers = new Headers({ location: target.toString(), "cache-control": "no-store" }); headers.append("set-cookie", `lancerlogin_calendar_oauth_state=${state}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=600`);
   return new Response(null, { status: 302, headers });
 }
 const writableCalendarRole = (value: unknown) => value === "writer" || value === "owner";
+const googleCalendarScopes = ["https://www.googleapis.com/auth/calendar.calendarlist.readonly", "https://www.googleapis.com/auth/calendar.events"];
 async function googleCalendarCallback(request: Request, env: Env): Promise<Response> {
+  try { return await completeGoogleCalendarAuthorization(request, env); }
+  catch (error) { if (error instanceof HttpError) return integrationErrorRedirect(env, "google_calendar", error.message, ["lancerlogin_calendar_oauth_state"]); throw error; }
+}
+async function completeGoogleCalendarAuthorization(request: Request, env: Env): Promise<Response> {
   if (!env.SESSION_KEY || !env.INTEGRATION_KEY) throw new HttpError(503, "Google Calendar authorization is not configured");
-  const url = new URL(request.url); const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_calendar_oauth_state"); const signed = state ? await createSignedStateCodec(env.SESSION_KEY, "google_calendar_oauth").verify(state) : undefined;
+  const url = new URL(request.url); if (url.searchParams.get("error")) throw new HttpError(400, "Google Calendar authorization was cancelled or denied. Authorize again and approve Calendar access.");
+  const code = url.searchParams.get("code"); const state = url.searchParams.get("state"); const savedState = cookie(request, "lancerlogin_calendar_oauth_state"); const signed = state ? await createSignedStateCodec(env.SESSION_KEY, "google_calendar_oauth").verify(state) : undefined;
   if (!code || !state || state !== savedState || !signed?.userId) throw new HttpError(400, "Google Calendar authorization state is invalid or expired");
   const principal = await requireDatabase(env).prepare("SELECT id AS userId, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND role = 'admin'").bind(signed.userId).first<{ userId: string; role: Role }>();
   if (!principal) throw new HttpError(403, "Only an active Admin can authorize Google Calendar");
-  const { secret } = await googleCalendarSecret(env); await requireProviderAuthority(env); const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: secret.clientId, client_secret: secret.clientSecret, redirect_uri: googleCalendarRedirectUri(env), grant_type: "authorization_code" }) });
-  const tokens = await result.json().catch(() => ({})) as { access_token?: string; refresh_token?: string };
-  if (!result.ok || !tokens.access_token || !(tokens.refresh_token || secret.refreshToken)) throw new HttpError(401, "Google did not return durable Calendar access. Try authorizing again and approve Calendar access.");
+  const { record, secret } = await googleCalendarSecret(env); await requireProviderAuthority(env); const result = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: secret.clientId, client_secret: secret.clientSecret, redirect_uri: googleCalendarRedirectUri(env), grant_type: "authorization_code" }) });
+  const tokens = await result.json().catch(() => ({})) as { access_token?: string; refresh_token?: string; scope?: unknown };
+  // A refresh token Google refused cannot be reused, so re-authorization must return a new one.
+  const reauthorizing = !record.authorizedAt && Boolean(secret.refreshToken);
+  if (!result.ok || !tokens.access_token || !(tokens.refresh_token || (!reauthorizing && secret.refreshToken))) throw new HttpError(401, "Google did not return durable Calendar access. Try authorizing again and approve Calendar access.");
+  // Google lets the user untick a scope on the consent screen; OAuth omits scope only when every requested scope was granted.
+  const granted = typeof tokens.scope === "string" ? new Set(tokens.scope.split(/\s+/)) : undefined;
+  if (granted && !googleCalendarScopes.every((scope) => granted.has(scope))) throw new HttpError(403, "Approve both Google Calendar permissions on Google's consent screen, then authorize again.");
   const next: GoogleCalendarSecret = { ...secret, refreshToken: tokens.refresh_token ?? secret.refreshToken }; let verifiedAt: string | null = null;
   if (next.calendarId) try { const { body } = await googleCalendarProviderRequest(tokens.access_token, `/users/me/calendarList/${encodeURIComponent(next.calendarId)}`, {}, env.moduleProviderAuthority); if (writableCalendarRole(body.accessRole)) { next.calendarLabel = String(body.summary ?? next.calendarLabel ?? "Selected calendar").slice(0, 200); verifiedAt = new Date().toISOString(); } } catch { /* The Admin can choose another writable calendar after return. */ }
   const encrypted = await encryptIntegration(next, env.INTEGRATION_KEY); const now = new Date().toISOString(); const db = requireDatabase(env);
@@ -2020,7 +2055,7 @@ async function googleCalendarCallback(request: Request, env: Env): Promise<Respo
     db.prepare("UPDATE google_calendar_authorizations SET ciphertext = ?, iv = ?, authorized_at = ?, verified_at = ?, updated_at = ? WHERE installation_id = 'primary'").bind(encrypted.ciphertext, encrypted.iv, now, verifiedAt, now),
     ...(verifiedAt ? [db.prepare("UPDATE google_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now)] : []),
   ]);
-  await writeAudit(db, { userId: principal.userId, role: "admin", expiresAt: signed.expiresAt }, "google_calendar.authorized", "integration", "google_calendar", { calendarReverified: Boolean(verifiedAt) });
+  await writeAudit(db, { userId: principal.userId, role: "admin", expiresAt: signed.expiresAt }, "google_calendar.authorized", "integration", "google_calendar", { calendarReverified: Boolean(verifiedAt), reauthorized: reauthorizing });
   const headers = new Headers({ location: `${env.ALLOWED_ORIGIN}/settings/integrations?${verifiedAt ? "verified" : "authorized"}=google-calendar`, "cache-control": "no-store" }); headers.append("set-cookie", "lancerlogin_calendar_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
   return new Response(null, { status: 302, headers });
 }
@@ -2209,23 +2244,29 @@ async function users(request: Request, env: Env): Promise<Response> {
   return response({ user: { id, email, localUsername: username, memberId, role: input.role, active: true, createdAt: now } }, 201);
 }
 async function updateUser(request: Request, env: Env, userId: string): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ role?: Role; active?: boolean; localPassword?: string; memberId?: string | null }>(request);
-  const target = await db.prepare("SELECT id, role, active, local_username AS localUsername FROM users WHERE installation_id = 'primary' AND id = ?").bind(userId).first<{ id: string; role: Role; active: number; localUsername?: string }>();
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ role?: Role; active?: boolean; localPassword?: string; memberId?: string | null; email?: string | null }>(request);
+  const target = await db.prepare("SELECT id, role, active, email, local_username AS localUsername FROM users WHERE installation_id = 'primary' AND id = ?").bind(userId).first<{ id: string; role: Role; active: number; email?: string | null; localUsername?: string }>();
   if (!target) throw new HttpError(404, "User not found");
+  if (input.email !== undefined && input.email !== null && typeof input.email !== "string") throw new HttpError(400, "Email must be text or null");
+  const email = input.email === undefined ? undefined : input.email?.trim().toLowerCase() || null; const emailChanged = email !== undefined && email !== (target.email ?? null);
+  if (email && !validEmail(email)) throw new HttpError(400, "Email is invalid");
+  if (email === null && emailChanged && !target.localUsername) throw new HttpError(400, "A user needs a Google email or a local username");
+  if (email && emailChanged && await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND email = ? AND id <> ?").bind(email, userId).first()) throw new HttpError(409, "That email is already in use");
   if (userId === principal.userId && ((input.role && input.role !== "admin") || input.active === false)) throw new HttpError(409, "You cannot demote or deactivate your current Admin account");
   if (input.role && !["admin", "operator"].includes(input.role)) throw new HttpError(400, "Role must be admin or operator");
   if (input.localPassword && (!target.localUsername || input.localPassword.length < 12)) throw new HttpError(400, "Password reset requires a local username and at least 12 characters");
   if (input.memberId !== undefined && input.memberId !== null && (!input.memberId.trim() || !await db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ?").bind(input.memberId.trim()).first())) throw new HttpError(400, "Linked roster member was not found");
   if (input.memberId && await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND member_id = ? AND id <> ?").bind(input.memberId.trim(), userId).first()) throw new HttpError(409, "That roster member already has dashboard access");
-  if (input.role === undefined && input.active === undefined && input.localPassword === undefined && input.memberId === undefined) throw new HttpError(400, "Provide a role, active status, roster link, or new local password");
+  if (input.role === undefined && input.active === undefined && input.localPassword === undefined && input.memberId === undefined && input.email === undefined) throw new HttpError(400, "Provide a role, active status, roster link, Google email, or new local password");
   const passwordHash = input.localPassword ? await hashPassword(input.localPassword) : null; const now = new Date().toISOString();
   // A password reset clears any failed-login lock. A reset or deactivation bumps the session epoch, revoking existing sessions.
   const revokeSessions = passwordHash !== null || input.active === false ? 1 : 0;
   await db.batch([
-    db.prepare("UPDATE users SET role = COALESCE(?, role), active = COALESCE(?, active), password_hash = COALESCE(?, password_hash), failed_login_count = CASE WHEN ? IS NULL THEN failed_login_count ELSE 0 END, locked_until = CASE WHEN ? IS NULL THEN locked_until ELSE NULL END, session_epoch = session_epoch + ?, member_id = CASE WHEN ? = 1 THEN ? ELSE member_id END WHERE installation_id = 'primary' AND id = ?").bind(input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0, passwordHash, passwordHash, passwordHash, revokeSessions, input.memberId === undefined ? 0 : 1, input.memberId?.trim() || null, userId),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.updated', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, userId, JSON.stringify({ role: input.role, active: input.active, passwordReset: Boolean(input.localPassword), memberId: input.memberId }), now),
+    db.prepare("UPDATE users SET role = COALESCE(?, role), active = COALESCE(?, active), password_hash = COALESCE(?, password_hash), failed_login_count = CASE WHEN ? IS NULL THEN failed_login_count ELSE 0 END, locked_until = CASE WHEN ? IS NULL THEN locked_until ELSE NULL END, session_epoch = session_epoch + ?, member_id = CASE WHEN ? = 1 THEN ? ELSE member_id END, email = CASE WHEN ? = 1 THEN ? ELSE email END WHERE installation_id = 'primary' AND id = ?").bind(input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0, passwordHash, passwordHash, passwordHash, revokeSessions, input.memberId === undefined ? 0 : 1, input.memberId?.trim() || null, emailChanged ? 1 : 0, email ?? null, userId),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.updated', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, userId, JSON.stringify({ role: input.role, active: input.active, passwordReset: Boolean(input.localPassword), memberId: input.memberId, ...(emailChanged ? { emailChanged: true, hasGoogle: Boolean(email) } : {}) }), now),
   ]);
-  return response({ ok: true });
+  const user = await db.prepare("SELECT id, email, local_username AS localUsername, member_id AS memberId, role, active, created_at AS createdAt FROM users WHERE installation_id = 'primary' AND id = ?").bind(userId).first<{ id: string; email?: string | null; localUsername?: string | null; memberId?: string | null; role: Role; active: number; createdAt: string }>();
+  return response({ ok: true, user: user ? { ...user, email: user.email ?? null, localUsername: user.localUsername ?? null, memberId: user.memberId ?? null, active: Boolean(user.active) } : undefined });
 }
 function html(value: unknown): string { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
 async function resendConfiguration(env: Env): Promise<Record<string, string>> {
@@ -2257,10 +2298,10 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
   await db.prepare("INSERT INTO integration_deliveries (id, installation_id, provider, delivery_key, status, created_at, updated_at) VALUES (?, 'primary', 'resend', ?, 'pending', ?, ?)").bind(id, deliveryKey, now, now).run();
   await requireProviderAuthority(env);
   const delivery = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", "idempotency-key": deliveryKey }, body: JSON.stringify({ from: config.fromEmail, to: [member.email], subject, html: content }) });
-  const deliveryBody = await delivery.json().catch(() => ({})) as { id?: string };
+  const deliveryBody = await delivery.clone().json().catch(() => ({})) as { id?: string };
   await db.prepare("UPDATE integration_deliveries SET status = ?, external_id = ?, updated_at = ? WHERE id = ?").bind(delivery.ok ? "delivered" : "failed", deliveryBody.id ?? null, new Date().toISOString(), id).run();
   await writeAudit(db, principal, "resend.email_sent", "member", member.id, { kind: input.kind, ok: delivery.ok, meetingId: input.meetingId });
-  if (!delivery.ok) throw new HttpError(502, "Resend rejected the email");
+  if (!delivery.ok) throw new EmailProviderError(delivery.status, await resendErrorMessage(delivery));
   return response({ sent: true, kind: input.kind, memberId: member.id }, 202);
 }
 async function discordConfiguration(env: Env, allowUnverified = false): Promise<ProviderConfiguration> {

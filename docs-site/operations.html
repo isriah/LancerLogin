@@ -64,9 +64,49 @@
   </div>
   <figure class="annotated compact-shot"><img src="assets/settings-integrations.png" alt="LancerLogin Settings Integrations page, with the settings tabs Organization, Modules, Access, Integrations, Data and Updates, listing Google OAuth, Google Calendar, Resend email and Discord bot, each marked Disabled with its switch off."><figcaption>Each integration starts disabled. Turn one on to see its setup steps.</figcaption></figure>
 
+  <h2 id="google-calendar">Connect Google Calendar</h2>
+  <p>Google Calendar uses its own OAuth client, separate from <a href="setup.html#google-oauth">Google sign-in</a>. Enter each value in <span class="ui-path">Settings <span>›</span> Integrations <span>›</span> Google Calendar</span>.</p>
+  <ol class="steps">
+    <li>In the <a href="https://console.cloud.google.com/">Google Cloud console</a>, use a separate project for Calendar. If you use the sign-in project instead, add the two Calendar scopes under <strong>Data Access</strong>: <code>https://www.googleapis.com/auth/calendar.calendarlist.readonly</code> and <code>https://www.googleapis.com/auth/calendar.events</code>.</li>
+    <li>Enable the <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com">Google Calendar API</a> in that project.</li>
+    <li>In <span class="ui-path">Google Auth Platform <span>›</span> Clients</span>, create a <strong>Web application</strong> client. Add the <strong>Authorized redirect URI</strong> that the Google Calendar card shows. It has the form <code>https://&lt;slug&gt;-dashboard.pages.dev/api/admin/integrations/google-calendar/callback</code>.</li>
+    <li>For an External audience in <strong>Testing</strong>, add the Google account that will authorize Calendar under <span class="ui-path">Audience <span>›</span> Test users</span>.</li>
+    <li>In LancerLogin, enter the client ID and client secret and choose <strong>Save credentials</strong>.</li>
+    <li>Choose <strong>Authorize Google Calendar</strong>. Sign in with the account that owns or can edit the calendar, and approve both permissions.</li>
+    <li>Choose <strong>Load writable calendars</strong>, pick the destination calendar, and choose <strong>Use this calendar</strong>.</li>
+  </ol>
+  <p>If authorization fails, the card shows a message that explains the problem. In Testing, Google ends the authorization after 7 days. For ongoing sync, publish the app (<strong>In production</strong>) or use an Internal audience. When the card warns that authorization needs renewing, choose <strong>Re-authorize Google Calendar</strong>.</p>
+
+  <h2 id="resend-email">Set up Resend email</h2>
+  <p>Enter each value in <span class="ui-path">Settings <span>›</span> Integrations <span>›</span> Resend email</span>.</p>
+  <ol class="steps">
+    <li>Create an account or sign in at <a href="https://resend.com/">resend.com</a>.</li>
+    <li>Under <a href="https://resend.com/domains">Domains</a>, add a domain you control. Add the DNS records Resend lists, then wait until the domain shows <strong>Verified</strong>.</li>
+    <li>Under <a href="https://resend.com/api-keys">API Keys</a>, create a <strong>Sending access</strong> key restricted to that domain.</li>
+    <li>In LancerLogin, paste the key and a plain From address on that domain, such as <code>attendance@example.org</code>. Do not add a display name.</li>
+    <li>Choose <strong>Save credentials</strong>.</li>
+    <li>Choose <strong>Send verification code</strong>, then enter the six-digit code within ten minutes.</li>
+  </ol>
+  <p>The <code>onboarding@resend.dev</code> test sender delivers only to the email address of your own Resend account. If verification fails, the card shows Resend's own reason.</p>
+
+  <h2 id="discord-bot">Create the Discord bot</h2>
+  <p>Follow these steps in order. Discord checks the Interactions Endpoint URL when you save it, and LancerLogin can answer only after its credentials are saved. Enter each value in <span class="ui-path">Settings <span>›</span> Integrations <span>›</span> Discord bot</span>.</p>
+  <ol class="steps">
+    <li>Open the <a href="https://discord.com/developers/applications">Discord Developer Portal</a>, choose <strong>New Application</strong>, and name it.</li>
+    <li>On the <strong>Bot</strong> page, choose <strong>Reset Token</strong> and copy the bot token into LancerLogin. Treat the token like a password. For optional label role sync, turn on the privileged <strong>Server Members Intent</strong> on the same page.</li>
+    <li>On the <strong>General Information</strong> page, copy the <strong>Application ID</strong> and <strong>Public Key</strong> into LancerLogin.</li>
+    <li>On the <strong>Installation</strong> page, enable <strong>Guild Install</strong> and select the <strong>bot</strong> scope. Grant <strong>View Channels</strong>, <strong>Send Messages</strong>, <strong>Read Message History</strong>, <strong>Pin Messages</strong>, <strong>Create Public Threads</strong>, <strong>Create Events</strong>, <strong>Manage Events</strong>, and <strong>Manage Roles</strong>. The bot needs <strong>Create Events</strong> to create scheduled events. Use the install link to add the bot to your server. For role sync, place the bot's role above the roles it will manage. Members need <strong>Send Messages in Threads</strong> in the attendance channel to ask questions in absence-notice threads.</li>
+    <li>In Discord, turn on <strong>Developer Mode</strong> in <span class="ui-path">User Settings <span>›</span> Advanced</span>. Right-click the server and choose <strong>Copy Server ID</strong>. Right-click the attendance channel and choose <strong>Copy Channel ID</strong>. The attendance channel must be a text channel. Paste both into LancerLogin.</li>
+    <li>In LancerLogin, choose <strong>Save credentials</strong>. All five values are required to save.</li>
+    <li>Copy the Interactions Endpoint URL that LancerLogin now shows under <strong>Verify the connection</strong>. This is the exact address the API uses. It has the form <code>https://&lt;slug&gt;-dashboard.pages.dev/api/discord/interactions</code>. Paste it into <strong>Interactions Endpoint URL</strong> on Discord's <strong>General Information</strong> page and choose <strong>Save Changes</strong>.</li>
+    <li>Choose <strong>Send Discord verification</strong>, then press the button in the message the bot posts.</li>
+  </ol>
+  <p>If Discord says the interactions endpoint URL could not be verified, confirm that you chose <strong>Save credentials</strong> first. Then check that the saved public key is from the same Discord application: copy it again from <strong>General Information</strong> and use <strong>Replace saved credentials</strong>.</p>
+  <p>If you use private anomaly reports, add the bot to that private channel with <strong>View Channel</strong>, <strong>Send Messages</strong>, and <strong>Read Message History</strong>.</p>
+
   <h2 id="discord-commands">Enable the Discord member commands</h2>
   <p>In <span class="ui-path">Settings <span>›</span> Integrations</span>, save the bot token, Application ID, public key, Server ID, and attendance channel ID, then choose <strong>Send Discord verification</strong>. LancerLogin checks that the bot token belongs to that application and server and creates or updates exactly the guild-scoped <code>/pair</code>, <code>/attendance-report</code>, <code>/label</code>, <code>/outreach-submit</code>, and <code>/outreach-correction</code> commands. No manual HTTP request or command payload is required.</p>
-  <p>Copy the Interactions Endpoint URL that LancerLogin shows into Discord's General Information page. Commands work only in your server and return ephemeral responses, visible only to the member who ran them. <code>/attendance-report</code> reports only on the member's own linked roster entry. The Outreach commands need the Outreach plugin turned on and set up. Exact submission retries reuse the same receipt, and corrections wait for staff review before totals change. If commands go missing, choose <strong>Reconcile Discord commands</strong>.</p>
+  <p>The Interactions Endpoint URL goes into Discord only after you save credentials, as described in <a href="#discord-bot">Create the Discord bot</a>. Commands work only in your server and return ephemeral responses, visible only to the member who ran them. <code>/attendance-report</code> reports only on the member's own linked roster entry. The Outreach commands need the Outreach plugin turned on and set up. Exact submission retries reuse the same receipt, and corrections wait for staff review before totals change. If commands go missing, choose <strong>Reconcile Discord commands</strong>.</p>
 
   <h2 id="modules">Turn modules on or off</h2>
   <p>Open <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Manage modules</span>. Turning a module on opens its setup. Turning a module off hides its pages at once and keeps its data for seven days before deleting it; turn it back on within that time to keep everything. Adding a new plugin to the installation is an update; see <a href="updates.html#plugins">Add, update, or remove plugins</a>.</p>

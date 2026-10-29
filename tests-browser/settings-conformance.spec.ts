@@ -603,6 +603,20 @@ for (const { viewport, theme } of pairedViews) {
     });
   }
 
+test("Discord shows the Interactions Endpoint URL only after credentials are saved", async ({ page }) => {
+    await useSettingsContext(page);
+    await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: false, configured: false, state: "not_configured" }] }) }));
+    await page.goto("/settings/integrations");
+
+    const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+    await expect(card.getByLabel("Bot token")).toBeVisible();
+    await expect(card.getByText(/Create Public Threads/)).toBeVisible();
+    await expect(card.getByText(/before you add the Interactions Endpoint URL in Discord/)).toBeVisible();
+    await expect(card.getByRole("button", { name: "Save credentials" })).toBeVisible();
+    await expect(card.locator(".copy-value")).toHaveCount(0);
+    await expect(card.getByRole("button", { name: "Send Discord verification" })).toHaveCount(0);
+  });
+
 for (const { viewport, theme } of pairedViews) {
     test(`configured Discord command repair is accessible at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       await page.setViewportSize(viewport);
@@ -848,4 +862,97 @@ test("installation restore offers no discard while an included module depends on
   await expect(notice).toHaveCount(0); await expect(dialog.getByRole("button", { name: "Validate and restore", exact: true })).toBeEnabled();
   expect(requests).toHaveLength(1);
   await expectResponsiveFit(page);
+});
+
+test("Admin can add a Google email from Access and sees API errors inline", async ({ page }) => {
+  await useSettingsContext(page);
+  const writes: unknown[] = []; let fail = false;
+  await page.route("**/admin/users/user-1", route => { writes.push(route.request().postDataJSON()); return fail ? route.fulfill({ status: 409, json: { error: "Another account already uses that Google email." } }) : route.fulfill({ json: {} }); });
+  await page.goto("/settings/access");
+  const edit = page.getByRole("button", { name: "Edit Avery Stone access" });
+  await edit.focus(); await page.keyboard.press("Enter");
+  const email = page.getByRole("textbox", { name: "Google email for Avery Stone", exact: true });
+  await expect(email).toBeVisible(); await expect(email).toHaveValue(""); expect(writes).toEqual([]);
+  await email.fill("test.student.a@example.test"); await email.press("Enter");
+  await expect.poll(() => writes).toEqual([{ email: "test.student.a@example.test" }]);
+  await expect(page.getByRole("status").filter({ hasText: "Google email saved and audited." })).toBeVisible();
+  fail = true;
+  await email.fill("test.student.b@example.test"); await page.getByRole("button", { name: "Save Google email", exact: true }).click();
+  const failure = page.locator(".settings-account").getByRole("alert");
+  await expect(failure).toHaveText("Another account already uses that Google email."); await expect(failure).toBeFocused();
+  await expect(email).toHaveAttribute("aria-invalid", "true");
+  await email.fill(""); await email.press("Enter");
+  await expect.poll(() => writes.at(-1)).toEqual({ email: null });
+  await expectResponsiveFit(page);
+});
+
+test("integration setup uses status URLs and guidance when the API provides them", async ({ page }) => {
+  await useSettingsContext(page);
+  await page.route("**/admin/integrations", (route) => route.fulfill({ json: { integrations: [{ provider: "google", enabled: true, saved: true, configured: false, state: "verification_required", redirectUri: "https://dev.example.test/api/auth/google/callback" }, { provider: "google_calendar", enabled: true, saved: false, authorized: false, configured: false, state: "not_configured", redirectUri: "https://dev.example.test/api/admin/integrations/google-calendar/callback" }, { provider: "resend", enabled: true, saved: false, configured: false, state: "not_configured" }, { provider: "discord", enabled: true, saved: true, configured: false, state: "verification_required", interactionsUrl: "https://dev.example.test/api/discord/interactions" }] } }));
+  await page.goto("/settings/integrations");
+  const google = page.locator(".integration-card").filter({ hasText: "Google OAuth" });
+  await expect(google.locator(".copy-value code")).toHaveText("https://dev.example.test/api/auth/google/callback");
+  await expect(google.getByText(/add each staff Google account under/)).toBeVisible();
+  await expect(google.locator(".verification-panel").getByText(/active Admin whose LancerLogin email matches/)).toBeVisible();
+  for (const link of await google.getByRole("link", { name: "Settings > Access" }).all()) await expect(link).toHaveAttribute("href", "/settings/access");
+  const calendar = page.locator(".integration-card").filter({ hasText: "Google Calendar" });
+  await expect(calendar.locator(".copy-value code")).toHaveText("https://dev.example.test/api/admin/integrations/google-calendar/callback");
+  await expect(calendar.getByRole("link", { name: /Google Auth Platform > Clients/ })).toHaveAttribute("href", "https://console.cloud.google.com/auth/clients");
+  await expect(calendar.getByText(/Google ends the authorization after 7 days/)).toBeVisible();
+  const resend = page.locator(".integration-card").filter({ hasText: "Resend email" });
+  await resend.getByText("Setup instructions", { exact: true }).click();
+  await expect(resend.getByText(/only delivers to your own Resend account address/)).toBeVisible();
+  await expect(resend.locator(".guide-note").filter({ hasText: "with no display name" })).toBeVisible();
+  const discord = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+  await expect(discord.locator(".copy-value code")).toHaveText("https://dev.example.test/api/discord/interactions");
+  await expect(discord.getByText(/Create Public Threads, Create Events, Manage Events, and Manage Roles/)).toBeVisible();
+  await expect(discord.getByText("Server Members Intent", { exact: true })).toBeVisible();
+  await expect(discord.getByText(/Guild Members/)).toHaveCount(0);
+  await expect(discord.getByText(/plus the private anomaly report channel if you use one/)).toBeVisible();
+  await expectResponsiveFit(page);
+});
+
+for (const provider of ["google", "google_calendar"] as const) test(`integrationError for ${provider} shows its message on the card and leaves the URL`, async ({ page }) => {
+  await useSettingsContext(page);
+  await page.route("**/admin/integrations", (route) => route.fulfill({ json: { integrations: [{ provider: "google", enabled: true, saved: true, configured: false, state: "verification_required" }, { provider: "google_calendar", enabled: true, saved: true, authorized: false, configured: false, state: "verification_required" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] } }));
+  const text = provider === "google" ? "This Google account is not an active Admin." : "Google denied Calendar access.";
+  await page.goto(`/settings/integrations?integrationError=${provider}&message=${encodeURIComponent(text)}&keep=1`);
+  const card = page.locator(".integration-card").filter({ hasText: provider === "google" ? "Google OAuth" : "Google Calendar" });
+  await expect(card.getByRole("alert")).toHaveText(text);
+  await expect(page.getByRole("alert").filter({ hasText: text })).toHaveCount(1);
+  await expect.poll(() => new URL(page.url()).search).toBe("?keep=1");
+});
+
+test("configured Google Calendar offers re-authorization and warns when it is required", async ({ page }) => {
+  await useSettingsContext(page);
+  let reauthorizationRequired = false;
+  await page.route("**/admin/integrations", (route) => route.fulfill({ json: { integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: true, saved: true, authorized: true, configured: true, state: "configured", calendarName: "Test calendar", pendingOperations: 0, failedOperations: 0, reauthorizationRequired }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] } }));
+  await page.goto("/settings/integrations");
+  const card = page.locator(".integration-card").filter({ hasText: "Google Calendar" });
+  await card.getByText("Manage configuration", { exact: true }).click();
+  const reauthorize = card.getByRole("link", { name: "Re-authorize Google Calendar", exact: true });
+  await expect(reauthorize).toHaveAttribute("href", /\/admin\/integrations\/google-calendar\/authorize$/);
+  expect((await reauthorize.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await expect(card.getByText(/authorization needs renewing/)).toHaveCount(0);
+  reauthorizationRequired = true; await page.reload();
+  await card.getByText("Manage configuration", { exact: true }).click();
+  await expect(card.getByRole("status").filter({ hasText: "Google Calendar authorization needs renewing." })).toHaveAttribute("data-tone", "warning");
+  await expect(reauthorize).toHaveClass(/primary-button/);
+  await expectResponsiveFit(page);
+});
+
+test("Edit roster member renders the Active roster member checkbox as a checkbox", async ({ page }) => {
+  await useSettingsContext(page);
+  await page.route("**/labels", (route) => route.fulfill({ json: { labels: [{ id: "label-test", name: "Test label", active: 1, formulaEnabled: 0 }], history: [], periods: [], today: "2026-10-29" } }));
+  await page.goto("/roster");
+  await page.getByRole("button", { name: "Edit Avery Stone", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Edit roster member" });
+  const active = dialog.getByRole("checkbox", { name: "Active roster member" });
+  await expect(active).toBeChecked();
+  const box = await active.evaluate((element) => { const style = getComputedStyle(element); const bounds = element.getBoundingClientRect(); return { width: bounds.width, height: bounds.height, appearance: style.appearance, padding: style.paddingTop }; });
+  expect(box.width).toBeLessThan(30); expect(box.width).toBeGreaterThanOrEqual(16); expect(Math.abs(box.width - box.height)).toBeLessThan(1); expect(box.padding).toBe("0px");
+  const reference = await page.evaluate(() => { const probe = document.createElement("label"); probe.className = "checkbox-field"; const input = document.createElement("input"); input.type = "checkbox"; probe.append(input); document.querySelector(".app")!.append(probe); const style = getComputedStyle(input); const result = { appearance: style.appearance, radius: style.borderRadius }; probe.remove(); return result; });
+  expect(box.appearance).toBe(reference.appearance);
+  expect(await active.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(reference.radius);
+  await active.focus(); await page.keyboard.press("Space"); await expect(active).not.toBeChecked();
 });

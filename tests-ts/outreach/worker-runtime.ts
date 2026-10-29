@@ -1402,7 +1402,7 @@ test("Discord role preview reconciles the whole server and rejects a stale apply
     assert.equal(stale.status, 409); assert.equal(database.batches.length, batchesBeforeStale);
     denyMemberList = true;
     const unavailable = await worker.fetch(request("/admin/integrations/discord/label-roles/preview", { labelId: "label-1" }, { cookie: await sessionCookie("admin") }), env);
-    assert.equal(unavailable.status, 502); assert.match((await unavailable.json() as { error: string }).error, /Guild Members intent/);
+    assert.equal(unavailable.status, 502); assert.match((await unavailable.json() as { error: string }).error, /Server Members Intent/);
     denyMemberList = false; paginate = true;
     const multiPage = await worker.fetch(request("/admin/integrations/discord/label-roles/preview", { labelId: "label-1" }, { cookie: await sessionCookie("admin") }), env);
     assert.equal(multiPage.status, 200);
@@ -2397,7 +2397,7 @@ test("Discord calendar sync explains missing scheduled-event permission without 
     assert.equal(result.status, 200);
     const body = await result.json() as { failed: number; outcomes: Array<{ reason?: string }> };
     assert.equal(body.failed, 1);
-    assert.match(body.outcomes[0].reason ?? "", /Manage Events permission/);
+    assert.match(body.outcomes[0].reason ?? "", /Create Events permission/);
     assert.doesNotMatch(JSON.stringify(body), /discord-secret/);
     assert.ok(database.batches.some((batch) => batch.some((call) => call.sql.includes("discord_calendar_operations SET status = 'failed'") && call.values.includes(null))));
   } finally { globalThis.fetch = originalFetch; }
@@ -2442,7 +2442,7 @@ test("bulk Discord calendar sync stops after a permission failure instead of rep
       skipped: 0,
       failed: 1,
       outcomes: [
-        { meetingId: "meeting-1", title: "Studio", status: "failed", reason: "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has Manage Events permission before syncing the calendar." },
+        { meetingId: "meeting-1", title: "Studio", status: "failed", reason: "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has the Create Events permission, which Discord requires to create scheduled events, before syncing the calendar." },
       ],
     });
   } finally { globalThis.fetch = originalFetch; }

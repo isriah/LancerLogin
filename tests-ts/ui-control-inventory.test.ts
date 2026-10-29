@@ -54,7 +54,7 @@ const reviewedNativeControls: Record<string, Counts> = {
   "update-indicator.tsx": { button: 3 },
   "update-channel-card.tsx": { button: 1, input: 1, select: 1, summary: 1 },
   "updates-page.tsx": { button: 1 },
-  "user-settings.tsx": { button: 3, input: 5, select: 4, summary: 1 },
+  "user-settings.tsx": { button: 4, input: 6, select: 4, summary: 1 },
   "web-update-card.tsx": { button: 5, input: 1, summary: 2 },
   "web-update-setup.tsx": { button: 1 },
 };

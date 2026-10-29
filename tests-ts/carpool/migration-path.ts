@@ -59,7 +59,8 @@ test("an installation using first-party Carpool keeps it by adding the plugin, a
     const withoutPlugin = {}; // The installed build that dropped Carpool.
     const [required] = await requiredModuleMigrations(env as never, withoutPlugin);
     assert.equal(required?.id, "carpool"); assert.ok(required.plugin);
-    const admin = { userId: "admin", expiresAt: Date.now() + 8 * 3_600_000, authenticatedAt: Date.now() };
+    const signedInAt = Date.now(); // One reading, so the session spans exactly the lifetime freshUntil requires.
+    const admin = { userId: "admin", expiresAt: signedInAt + 8 * 3_600_000, authenticatedAt: signedInAt };
     await commitPluginChange(env as never, admin, { action: "add", id: "carpool", source: required.plugin!.source, commit: required.plugin!.commit, selectionSha: "0".repeat(40), trustConfirmed: true }, withoutPlugin);
     assert.deepEqual(await requiredModuleMigrations(env as never, withoutPlugin), []);
   } finally { globalThis.fetch = previous; }

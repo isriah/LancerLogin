@@ -118,7 +118,9 @@ async function withGitHub(run: (github: GitHub) => Promise<void>, github = new G
   const restore = github.install();
   try { await run(github); } finally { restore(); }
 }
-const fresh = { userId: "admin", expiresAt: Date.now() + 8 * 3_600_000, authenticatedAt: Date.now() };
+// One clock reading: freshUntil requires the session to span exactly its lifetime, and two readings can differ by a millisecond.
+const signedInAt = Date.now();
+const fresh = { userId: "admin", expiresAt: signedInAt + 8 * 3_600_000, authenticatedAt: signedInAt };
 const add = { action: "add", id: "carpool", source: carpoolSource, commit: pluginCommit };
 
 test("selection parsing, serialization, pending changes and allowlists follow composition's rules", () => {

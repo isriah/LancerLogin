@@ -4,6 +4,10 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 > Release notes record what was true when a version shipped. For current procedures, use the [documentation site](https://isriah.github.io/LancerLogin/) rather than applying older transition steps out of context.
 
+## LancerLogin 2
+
+- [v2.0.0](v2.0.0.md) - LancerLogin 2 becomes the stable release
+
 ## LancerLogin 2 beta releases
 
 - [v2.0.0-beta.18](v2.0.0-beta.18.md) - Setup completion screen, kiosk pairing screen and red and gold starting colors

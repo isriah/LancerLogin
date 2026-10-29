@@ -1,7 +1,7 @@
 import { createPortal } from "react-dom";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "./dashboard-api";
-import { WalkthroughSession, walkthroughSessionStorage } from "./walkthrough-session";
+import { WalkthroughSession, walkthroughSessionStorage, walkthroughsQuietAfterSetup } from "./walkthrough-session";
 import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough";
 
 export type WalkthroughStep = { id: string; title: string; description: string; targets: string; practice?: string; navigation?: boolean };
@@ -48,7 +48,8 @@ export function usePageWalkthrough(pageId: WalkthroughPage, ready: boolean) {
   }, [pageId]);
 
   useEffect(() => {
-    if (!loaded || !ready || offered.current || phase !== "idle" || session?.isDeferred(pageId, definition.version) || ["completed", "dismissed"].includes(progress.status)) return;
+    // Right after module setup, tours wait for the next browser session instead of opening over a new installation.
+    if (!loaded || !ready || offered.current || phase !== "idle" || session?.isDeferred(pageId, definition.version) || walkthroughsQuietAfterSetup() || ["completed", "dismissed"].includes(progress.status)) return;
     const offer = () => {
       if (offered.current || document.querySelector('[role="dialog"], .primary-navigation.mobile-open')) return;
       offered.current = true;

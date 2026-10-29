@@ -41,7 +41,6 @@ jobs:
       DATABASE_NAME: ${{ vars.LANCERLOGIN_DATABASE_NAME }}
       DATABASE_ID: ${{ vars.LANCERLOGIN_DATABASE_ID }}
       API_URL: ${{ vars.LANCERLOGIN_API_URL }}
-      WEB_UPDATE_TOKEN_EXPIRES_AT: ${{ vars.WEB_UPDATE_TOKEN_EXPIRES_AT }}
       # Secrets are not set here. Only the final step receives them, so the validation step and npm ci (with its
       # dependency lifecycle scripts) never run with Cloudflare or plugin credentials in their environment.
       WRANGLER_SEND_METRICS: "false"
@@ -76,4 +75,6 @@ jobs:
           # The runner composes the release's official modules and this repository's lancerlogin.modules.json in preflight.
           # Optional read-only token for private plugin repositories in lancerlogin.modules.json.
           LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}
+          # Read only for its expiry, from GitHub's response header, before claim. It never reaches Wrangler or plugins.
+          LANCERLOGIN_WEB_UPDATE_TOKEN: ${{ secrets.LANCERLOGIN_WEB_UPDATE_TOKEN }}
         run: node lancerlogin-source/scripts/run-web-upgrade.mjs

@@ -19,7 +19,6 @@ on:
         type: choice
         options:
           - latest stable
-          - original template release
       installation_slug:
         description: Lowercase installation slug, for example example-club
         required: true
@@ -41,14 +40,13 @@ jobs:
     env:
       INPUT_OPERATION: ${{ inputs.operation }}
       RELEASE_SELECTION: ${{ inputs.release }}
-      TEMPLATE_RELEASE: v1.0.5
       DATABASE_NAME: ${{ vars.LANCERLOGIN_DATABASE_NAME }}
       INSTALLATION_SLUG: ${{ inputs.installation_slug }}
       REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
       LANCERLOGIN_UPDATE_WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/workflows/provision-template.yml
       LANCERLOGIN_UPDATE_REPOSITORY: ${{ github.repository }}
-      WEB_UPDATE_TOKEN_EXPIRES_AT: ${{ vars.WEB_UPDATE_TOKEN_EXPIRES_AT }}
-      MODULE_SELECTION_TOKEN_EXPIRES_AT: ${{ vars.MODULE_SELECTION_TOKEN_EXPIRES_AT }}
+      REFRESH_CREDENTIAL_WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/workflows/refresh-web-update-credential.yml
+      ENVIRONMENTS_URL: https://github.com/${{ github.repository }}/settings/environments
       WEB_UPDATE_CONFIG: .provision/wrangler.json
       WRANGLER_SEND_METRICS: "false"
       WRANGLER_WRITE_LOGS: "false"
@@ -62,7 +60,7 @@ jobs:
         working-directory: .
         run: |
           if [ "$REPOSITORY_PRIVATE" != "true" ]; then
-            echo "Cloudflare deployment is allowed only from an adopter-owned private repository." >&2
+            echo "::error title=private_repository_required::Cloudflare deployment is allowed only from an adopter-owned private repository: make this repository private, or create a private repository from the template, then run this workflow there."
             exit 1
           fi
       - name: Validate deployment request
@@ -74,23 +72,32 @@ jobs:
           LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
         run: |
           if ! printf '%s' "$INPUT_OPERATION" | grep -Eq '^(create|resume|upgrade)$'; then
-            echo "Choose create, resume, or upgrade." >&2
+            echo "::error title=operation_invalid::Choose create, resume, or upgrade as the operation, then run this workflow again."
             exit 1
           fi
           if ! printf '%s' "$INSTALLATION_SLUG" | grep -Eq '^[a-z][a-z0-9-]{2,40}$'; then
-            echo "Installation slug must start with a lowercase letter and contain 3-41 lowercase letters, digits, or hyphens." >&2
+            echo "::error title=installation_slug_invalid::The installation slug must start with a lowercase letter and contain 3-41 lowercase letters, digits, or hyphens, for example example-club: run this workflow again with a valid slug."
             exit 1
           fi
-          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [[ "$CLOUDFLARE_API_TOKEN" != cfat_* ]]; then
-            echo "CLOUDFLARE_API_TOKEN must be a Cloudflare account-owned API token." >&2
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error title=cloudflare_token_required::CLOUDFLARE_API_TOKEN is not set: create an Account API token in the Cloudflare dashboard (Manage account > Account API tokens) and store it as a production environment secret."
+            exit 1
+          fi
+          if [[ "$CLOUDFLARE_API_TOKEN" != cfat_* ]]; then
+            echo "::error title=account_token_required::CLOUDFLARE_API_TOKEN is not an Account API token (those start with cfat_). A user API token from My Profile does not work: in the Cloudflare dashboard open Manage account > Account API tokens, create the token there, and replace the production environment secret."
             exit 1
           fi
           if [ "${#CLOUDFLARE_ACCOUNT_ID}" -ne 32 ]; then
-            echo "CLOUDFLARE_ACCOUNT_ID must be the 32-character ID for the selected account." >&2
+            echo "::error title=cloudflare_account_id_invalid::CLOUDFLARE_ACCOUNT_ID must be the 32-character ID of the Cloudflare account (the part after dash.cloudflare.com/ in the dashboard address), not a zone ID: replace the production environment secret."
             exit 1
           fi
-          if [ "$INPUT_OPERATION" != "upgrade" ] && [ "${#LANCERLOGIN_SETUP_CODE}" -lt 16 ]; then
-            echo "LANCERLOGIN_SETUP_CODE must be an environment secret of at least 16 characters for Create or Resume." >&2
+          # Resume and upgrade need the setup code only while it is used; a later step decides that from the installation.
+          if [ "$INPUT_OPERATION" = "create" ] && [ "${#LANCERLOGIN_SETUP_CODE}" -lt 16 ]; then
+            echo "::error title=setup_code_required::LANCERLOGIN_SETUP_CODE must be a production environment secret of at least 16 characters for create: add a unique password-manager-generated value, then run this workflow again."
+            exit 1
+          fi
+          if [ -n "$LANCERLOGIN_SETUP_CODE" ] && [ "${#LANCERLOGIN_SETUP_CODE}" -lt 16 ]; then
+            echo "::error title=setup_code_too_short::LANCERLOGIN_SETUP_CODE must be at least 16 characters: replace the production environment secret with a longer value, or remove it when no first Admin is still to be created."
             exit 1
           fi
       - name: Resolve the public release
@@ -100,13 +107,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$RELEASE_SELECTION" = "latest stable" ]; then
-            tag=$(gh api repos/isriah/LancerLogin/releases/latest --jq .tag_name)
-          else
-            tag=$TEMPLATE_RELEASE
+          if [ "$RELEASE_SELECTION" != "latest stable" ]; then
+            echo "::error title=release_selection_invalid::Choose latest stable as the release, then run this workflow again."
+            exit 1
           fi
+          tag=$(gh api repos/isriah/LancerLogin/releases/latest --jq .tag_name)
           if ! printf '%s' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-            echo "The selected release is not a valid LancerLogin version." >&2
+            echo "::error title=release_invalid::The latest stable release is not a valid LancerLogin version: run this workflow again later."
             exit 1
           fi
           gh api "repos/isriah/LancerLogin/releases/tags/$tag" --jq 'select(.draft == false and .prerelease == false) | .tag_name' | grep -Fx "$tag"
@@ -133,16 +140,67 @@ jobs:
         run: |
           package_version=$(node -p "require('./package.json').version")
           if [ "$RELEASE_TAG" != "v$package_version" ]; then
-            echo "Selected tag $RELEASE_TAG does not match package version v$package_version." >&2
+            echo "::error title=release_identity_mismatch::Selected tag $RELEASE_TAG does not match package version v$package_version: run this workflow again later."
             exit 1
           fi
       - run: npm ci
-      - name: Verify the private dispatch credential before any cloud mutation
+      - name: Check the optional dashboard update credential before any cloud mutation
+        id: update-credential
+        shell: bash
         env:
           LANCERLOGIN_WEB_UPDATE_TOKEN: ${{ secrets.LANCERLOGIN_WEB_UPDATE_TOKEN }}
           # Optional: separate Contents-write token for dashboard plugin management. See docs/MODULE-PLUGINS.md for its scope.
           LANCERLOGIN_MODULE_SELECTION_TOKEN: ${{ secrets.LANCERLOGIN_MODULE_SELECTION_TOKEN }}
-        run: node scripts/refresh-web-update-credential.mjs --verify-only
+        run: |
+          # Dashboard updates are optional. Without the dispatch token the installation is created without them, and the run
+          # summary explains how to set them up later with Refresh web update credential.
+          if [ -z "$LANCERLOGIN_WEB_UPDATE_TOKEN" ]; then
+            echo "state=missing" >> "$GITHUB_OUTPUT"
+            if [ -n "$LANCERLOGIN_MODULE_SELECTION_TOKEN" ]; then
+              echo "::warning title=selection_credential_skipped::LANCERLOGIN_MODULE_SELECTION_TOKEN is not installed until LANCERLOGIN_WEB_UPDATE_TOKEN is also set."
+            fi
+            echo "::warning title=dispatch_credential_not_configured::LANCERLOGIN_WEB_UPDATE_TOKEN is not set, so dashboard updates are not set up yet. The installation continues without them; the run summary lists the steps to set them up."
+            exit 0
+          fi
+          # GitHub reports an expiring token's expiry in a response header, so no expiry is entered by hand. Releases before
+          # v2.0.0-beta.17 read it from WEB_UPDATE_TOKEN_EXPIRES_AT and MODULE_SELECTION_TOKEN_EXPIRES_AT, so it is passed on.
+          read_expiry() {
+            local headers="$RUNNER_TEMP/github-token-headers.txt" status value
+            expiry=""
+            status=$(curl --silent --show-error --proto '=https' --tlsv1.2 --output /dev/null --dump-header "$headers" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $1" --header "Accept: application/vnd.github+json" --header "X-GitHub-Api-Version: 2026-03-10" \
+              "https://api.github.com/repos/$LANCERLOGIN_UPDATE_REPOSITORY")
+            value=$(grep -i '^github-authentication-token-expiration:' "$headers" | tail -n 1 | cut -d: -f2- | tr -d '\r' | sed 's/^ *//' || true)
+            rm -f "$headers"
+            if [ "$status" = "401" ]; then
+              echo "::error title=$2::$3"
+              exit 1
+            fi
+            if [ -n "$value" ] && ! expiry=$(date -u -d "$value" +%Y-%m-%dT%H:%M:%S.000Z); then
+              echo "::error title=token_expiration_unreadable::GitHub reported a token expiry in an unexpected format: run this workflow again later."
+              exit 1
+            fi
+          }
+          read_expiry "$LANCERLOGIN_WEB_UPDATE_TOKEN" dispatch_credential_rejected "The GitHub token for dashboard updates has expired or been revoked: create a new fine-grained token, replace LANCERLOGIN_WEB_UPDATE_TOKEN, then run Refresh web update credential."
+          web_update_expires_at=$expiry
+          module_selection_expires_at=""
+          if [ -n "$LANCERLOGIN_MODULE_SELECTION_TOKEN" ]; then
+            read_expiry "$LANCERLOGIN_MODULE_SELECTION_TOKEN" selection_credential_rejected "The GitHub token for plugin management has expired or been revoked: create a new fine-grained token, replace LANCERLOGIN_MODULE_SELECTION_TOKEN, then run Refresh web update credential."
+            module_selection_expires_at=$expiry
+          fi
+          # Those earlier releases also refuse a token without an expiry.
+          if ! grep -qi 'github-authentication-token-expiration' scripts/refresh-web-update-credential.mjs \
+            && { [ -z "$web_update_expires_at" ] || { [ -n "$LANCERLOGIN_MODULE_SELECTION_TOKEN" ] && [ -z "$module_selection_expires_at" ]; }; }; then
+            echo "::error title=dispatch_credential_expiry_required::LancerLogin $RELEASE_TAG accepts only GitHub tokens that have an expiration date: create fine-grained tokens with an expiration, replace LANCERLOGIN_WEB_UPDATE_TOKEN (and LANCERLOGIN_MODULE_SELECTION_TOKEN when it is set), then run this workflow again."
+            exit 1
+          fi
+          WEB_UPDATE_TOKEN_EXPIRES_AT=$web_update_expires_at MODULE_SELECTION_TOKEN_EXPIRES_AT=$module_selection_expires_at \
+            node scripts/refresh-web-update-credential.mjs --verify-only
+          {
+            echo "state=configured"
+            echo "web_update_expires_at=$web_update_expires_at"
+            echo "module_selection_expires_at=$module_selection_expires_at"
+          } >> "$GITHUB_OUTPUT"
       - name: Verify the scoped token and selected Cloudflare account
         shell: bash
         env:
@@ -158,10 +216,50 @@ jobs:
           if [ "$status" != "200" ]; then
             # JavaScript expands this template literal, not Bash.
             # shellcheck disable=SC2016
-            node -e 'const d=require("./.provision/token.json"); console.error(`Cloudflare account-token verification failed (HTTP ${process.argv[1]}; codes: ${(d.errors||[]).map(e=>e.code).join(",")||"none"})`)' "$status"
+            node -e 'const d=require("./.provision/token.json"); console.log(`::error title=cloudflare_token_rejected::Cloudflare rejected CLOUDFLARE_API_TOKEN for CLOUDFLARE_ACCOUNT_ID (HTTP ${process.argv[1]}; codes: ${(d.errors||[]).map(e=>e.code).join(" ")||"none"}): check that the account ID names the account that owns the Account API token and that the token is active.`)' "$status"
             exit 1
           fi
-          node -e 'const d=require("./.provision/token.json"); if(d.success!==true||d.result?.status!=="active") process.exit(1)'
+          if ! node -e 'const d=require("./.provision/token.json"); if(d.success!==true||d.result?.status!=="active") process.exit(1)'; then
+            echo "::error title=account_token_invalid::CLOUDFLARE_API_TOKEN is not active: create a new Account API token in the Cloudflare dashboard (Manage account > Account API tokens) and replace the production environment secret."
+            exit 1
+          fi
+      - name: Check the Cloudflare account and token permissions before any cloud mutation
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Read-only list requests, so a missing permission or account setting stops the run before anything is created.
+          cf_get() {
+            curl --silent --show-error --proto '=https' --tlsv1.2 --output "$2" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID$1"
+          }
+          missing_permission() {
+            echo "::error title=cloudflare_permission_missing::CLOUDFLARE_API_TOKEN cannot read $1 in this account: in the Cloudflare dashboard open Manage account > Account API tokens, edit the token to add $2, then run this workflow again."
+            exit 1
+          }
+          require_read() {
+            local status
+            status=$(cf_get "$1" .provision/preflight.json)
+            if [ "$status" = "401" ] || [ "$status" = "403" ]; then missing_permission "$2" "$3"; fi
+            if [ "$status" != "200" ] || ! node -e 'process.exit(require("./.provision/preflight.json").success === true ? 0 : 1)'; then
+              echo "::error title=cloudflare_request_failed::Cloudflare did not list $2 (HTTP $status): check CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, then run this workflow again."
+              exit 1
+            fi
+          }
+          require_read "/workers/scripts" "Workers scripts" "Workers Scripts: Edit"
+          require_read "/d1/database?per_page=1" "D1 databases" "D1: Edit"
+          require_read "/pages/projects" "Pages projects" "Cloudflare Pages: Edit"
+          # The Worker API is served at <slug>-api.<subdomain>.workers.dev, which needs the account's workers.dev subdomain.
+          status=$(cf_get /workers/subdomain .provision/workers-subdomain.json)
+          if [ "$status" = "401" ] || [ "$status" = "403" ]; then missing_permission "the workers.dev subdomain" "Workers Scripts: Edit"; fi
+          if [ "$status" != "200" ] || ! node -e 'const d=require("./.provision/workers-subdomain.json"); process.exit(d.success === true && d.result?.subdomain ? 0 : 1)'; then
+            echo "::error title=workers_subdomain_required::This Cloudflare account has no workers.dev subdomain yet, so the Worker API would have no address: in the Cloudflare dashboard open Workers & Pages, set the account's workers.dev subdomain, then run this workflow again."
+            exit 1
+          fi
+          rm -f .provision/preflight.json .provision/workers-subdomain.json
+          echo "The token can read Workers, D1 and Pages, and the account has a workers.dev subdomain."
       - name: Discover D1 resources in that account
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -179,6 +277,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_STATE: ${{ steps.d1.outputs.state }}
         run: |
           status=$(curl --silent --show-error --proto '=https' --tlsv1.2 \
             --output .provision/pages-list.json --write-out '%{http_code}' \
@@ -200,27 +299,81 @@ jobs:
             echo "worker=$worker"
             echo "worker_secrets=$worker_secrets"
           } >> "$GITHUB_OUTPUT"
+          database="${DATABASE_NAME:-$INSTALLATION_SLUG-data}"
+          existing=()
+          missing=()
+          if [ "$D1_STATE" = "exists" ]; then existing+=("the D1 database $database"); else missing+=("the D1 database $database"); fi
+          if [ "$pages" = "exists" ]; then existing+=("the Pages project $INSTALLATION_SLUG-dashboard"); else missing+=("the Pages project $INSTALLATION_SLUG-dashboard"); fi
+          if [ "$worker" = "exists" ]; then existing+=("the Worker $INSTALLATION_SLUG-api"); else missing+=("the Worker $INSTALLATION_SLUG-api"); fi
+          join() { local list; printf -v list '%s, ' "$@"; printf '%s' "${list%, }"; }
           if [ "$INPUT_OPERATION" = "create" ]; then
-            test "${{ steps.d1.outputs.state }}" = "missing"
-            test "$pages" = "missing"
-            test "$worker" = "missing"
+            if [ "${#existing[@]}" -gt 0 ]; then
+              echo "::error title=installation_resources_exist::Create stopped before any change because this Cloudflare account already has $(join "${existing[@]}"). If an earlier create with the slug $INSTALLATION_SLUG stopped partway, run this workflow again with the operation resume and the same slug. To make a separate installation, choose a different slug."
+              exit 1
+            fi
           elif [ "$INPUT_OPERATION" = "upgrade" ]; then
-            test "${{ steps.d1.outputs.state }}" = "exists"
-            test "$pages" = "exists"
-            test "$worker" = "exists"
-            test "$worker_secrets" = "exists"
+            if [ "${#missing[@]}" -gt 0 ]; then
+              echo "::error title=installation_incomplete::Upgrade stopped before any change because these were not found in this Cloudflare account: $(join "${missing[@]}"). Check the slug and LANCERLOGIN_DATABASE_NAME, or run this workflow with the operation resume and the same slug to finish an interrupted setup."
+              exit 1
+            fi
+            if [ "$worker_secrets" != "exists" ]; then
+              echo "::error title=installation_incomplete::Upgrade stopped before any change because the Worker $INSTALLATION_SLUG-api lacks its installation secrets. Run this workflow with the operation resume and the same slug to finish the setup."
+              exit 1
+            fi
           else
-            test "${{ steps.d1.outputs.state }}" = "exists"
+            # An interrupted create can stop after the Pages project and before the D1 database exists. A Worker without
+            # its database is never given a new, empty one.
+            if [ "$D1_STATE" != "exists" ] && [ "$worker" = "exists" ]; then
+              echo "::error title=installation_database_missing::Resume stopped before any change because the Worker $INSTALLATION_SLUG-api exists but the D1 database $database was not found. Check LANCERLOGIN_DATABASE_NAME; a new, empty database is never created for an existing Worker."
+              exit 1
+            fi
+            if [ "${#existing[@]}" -eq 0 ]; then
+              echo "::error title=installation_not_found::Resume stopped because nothing exists in this Cloudflare account for the slug $INSTALLATION_SLUG. Check the slug, or run this workflow with the operation create."
+              exit 1
+            fi
           fi
-      - name: Create D1 database
-        if: inputs.operation == 'create'
+      - name: Check whether the first Admin exists and the setup code is needed
+        id: admin
+        shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
+          D1_STATE: ${{ steps.d1.outputs.state }}
+          WORKER_SECRETS: ${{ steps.resources.outputs.worker_secrets }}
         run: |
-          npx wrangler d1 create "${DATABASE_NAME:-$INSTALLATION_SLUG-data}" --binding DB --update-config --config .provision/wrangler.json
-          npx wrangler d1 list --json > .provision/d1-list.json
-          test "$(node scripts/prepare-cloudflare-provision.mjs "$INSTALLATION_SLUG" .provision/d1-list.json)" = "exists"
+          # Read-only queries: whether the installations table exists yet, then whether it holds the installation, which
+          # setup creates together with the first Admin.
+          admin=missing
+          database="${DATABASE_NAME:-$INSTALLATION_SLUG-data}"
+          if [ "$D1_STATE" = "exists" ]; then
+            npx wrangler d1 execute "$database" --remote --json --config .provision/wrangler.json \
+              --command "SELECT COUNT(*) AS tables FROM sqlite_master WHERE type = 'table' AND name = 'installations'" > .provision/admin-table.json
+            if node -e 'process.exit(require("./.provision/admin-table.json")[0]?.results?.[0]?.tables === 1 ? 0 : 1)'; then
+              npx wrangler d1 execute "$database" --remote --json --config .provision/wrangler.json \
+                --command "SELECT COUNT(*) AS installations FROM installations" > .provision/admin.json
+              admin=$(node -e 'process.stdout.write(require("./.provision/admin.json")[0]?.results?.[0]?.installations > 0 ? "exists" : "missing")')
+            fi
+          fi
+          # The setup code is hashed into BOOTSTRAP_CODE_HASH when the Worker secrets are generated, and again on create or
+          # resume while no first Admin exists, so a changed LANCERLOGIN_SETUP_CODE takes effect.
+          rotate=false
+          reason=""
+          if [ "$WORKER_SECRETS" != "exists" ]; then
+            reason="this run generates the Worker secrets"
+          elif [ "$INPUT_OPERATION" != "upgrade" ] && [ "$admin" = "missing" ]; then
+            reason="no first Admin exists yet, so this run sets the setup code"
+            rotate=true
+          fi
+          if [ -n "$reason" ] && [ "${#LANCERLOGIN_SETUP_CODE}" -lt 16 ]; then
+            echo "::error title=setup_code_required::LANCERLOGIN_SETUP_CODE must be a production environment secret of at least 16 characters because $reason: add a unique password-manager-generated value, then run this workflow again."
+            exit 1
+          fi
+          {
+            echo "admin=$admin"
+            echo "rotate_setup_code=$rotate"
+          } >> "$GITHUB_OUTPUT"
+          echo "First Admin: $admin."
       - name: Check out the plugin selection from this private repository
         uses: actions/checkout@v7
         with:
@@ -250,7 +403,7 @@ jobs:
             if [ -f ../deployment-control/lancerlogin.modules.json ]; then echo "::warning::lancerlogin.modules.json is ignored by this release, which predates module plugins."; fi
           fi
       - name: Refuse an upgrade that would drop a module that moved into a plugin
-        if: inputs.operation != 'create'
+        if: inputs.operation != 'create' && steps.d1.outputs.state == 'exists'
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -269,6 +422,44 @@ jobs:
         run: npm --workspace @lancerlogin/dashboard run build
       - name: Build API before migration or deployment
         run: npx wrangler deploy --dry-run --outdir .provision/api-build --config .provision/wrangler.json
+      # Cloud resources are created only after every build passed, so a failed build leaves nothing behind.
+      - name: Create Pages project
+        if: steps.resources.outputs.pages == 'missing'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler pages project create "$INSTALLATION_SLUG-dashboard" --production-branch main
+      - name: Require the exact Pages address the installation is configured for
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # pages.dev addresses are global. When another account owns <slug>-dashboard.pages.dev, Cloudflare gives a new
+          # project a different address, while the Worker's allowed origin and the Google redirect use that exact one.
+          status=$(curl --silent --show-error --proto '=https' --tlsv1.2 \
+            --output .provision/pages-project.json --write-out '%{http_code}' \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$INSTALLATION_SLUG-dashboard")
+          if [ "$status" != "200" ]; then
+            echo "::error title=pages_project_unavailable::Cloudflare did not return the Pages project $INSTALLATION_SLUG-dashboard (HTTP $status): run this workflow again with the operation resume and the same slug."
+            exit 1
+          fi
+          subdomain=$(node -e 'const d=require("./.provision/pages-project.json"); process.stdout.write(d.success === true ? String(d.result?.subdomain ?? "") : "")')
+          if [ "$subdomain" != "$INSTALLATION_SLUG-dashboard.pages.dev" ]; then
+            if [ "$INPUT_OPERATION" = "create" ]; then created=" No D1 database or Worker was created."; else created=""; fi
+            echo "::error title=pages_address_taken::The Pages project $INSTALLATION_SLUG-dashboard has the address ${subdomain:-unknown} instead of $INSTALLATION_SLUG-dashboard.pages.dev, which another Cloudflare account already uses. LancerLogin needs that exact address for the dashboard origin and Google sign-in.$created Delete the Pages project $INSTALLATION_SLUG-dashboard in the Cloudflare dashboard, then run create again with a different slug."
+            exit 1
+          fi
+      - name: Create D1 database
+        if: steps.d1.outputs.state == 'missing'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler d1 create "${DATABASE_NAME:-$INSTALLATION_SLUG-data}" --binding DB --update-config --config .provision/wrangler.json
+          npx wrangler d1 list --json > .provision/d1-list.json
+          test "$(node scripts/prepare-cloudflare-provision.mjs "$INSTALLATION_SLUG" .provision/d1-list.json)" = "exists"
       - name: Apply D1 migrations
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -321,6 +512,20 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: lancerlogin-source
           command: deploy --config .provision/wrangler.json
+      - name: Apply the current setup code while no first Admin exists
+        if: steps.admin.outputs.rotate_setup_code == 'true'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          LANCERLOGIN_SETUP_CODE: ${{ secrets.LANCERLOGIN_SETUP_CODE }}
+        run: |
+          # Only BOOTSTRAP_CODE_HASH changes; the session and integration keys are retained.
+          BOOTSTRAP_CODE_HASH=$(printf '%s' "$LANCERLOGIN_SETUP_CODE" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+          echo "::add-mask::$BOOTSTRAP_CODE_HASH"
+          BOOTSTRAP_CODE_HASH=$BOOTSTRAP_CODE_HASH node -e 'process.stdout.write(JSON.stringify({BOOTSTRAP_CODE_HASH:process.env.BOOTSTRAP_CODE_HASH}))' \
+            | npx wrangler secret bulk --config .provision/wrangler.json
+          echo "The first-Admin setup code now matches LANCERLOGIN_SETUP_CODE."
       - name: Prepare or retain the separate fingerprint storage key
         shell: bash
         env:
@@ -334,11 +539,15 @@ jobs:
             echo "LancerLogin $RELEASE_TAG does not use a separate fingerprint storage key."
           fi
       - name: Install or refresh the private dispatch credential without rotating installation secrets
+        if: steps.update-credential.outputs.state == 'configured'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           LANCERLOGIN_WEB_UPDATE_TOKEN: ${{ secrets.LANCERLOGIN_WEB_UPDATE_TOKEN }}
           LANCERLOGIN_MODULE_SELECTION_TOKEN: ${{ secrets.LANCERLOGIN_MODULE_SELECTION_TOKEN }}
+          # Read from GitHub's response headers above, for releases before v2.0.0-beta.17. Later releases read them again.
+          WEB_UPDATE_TOKEN_EXPIRES_AT: ${{ steps.update-credential.outputs.web_update_expires_at }}
+          MODULE_SELECTION_TOKEN_EXPIRES_AT: ${{ steps.update-credential.outputs.module_selection_expires_at }}
         run: node scripts/refresh-web-update-credential.mjs
       - name: Select Worker deployment URL
         id: deploy-api
@@ -352,12 +561,6 @@ jobs:
           echo "deployment-url=$api_url" >> "$GITHUB_OUTPUT"
       - name: Add same-origin Pages API proxy
         run: node scripts/prepare-pages-proxy.mjs "${{ steps.deploy-api.outputs.deployment-url }}"
-      - name: Create Pages project
-        if: steps.resources.outputs.pages == 'missing'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler pages project create "$INSTALLATION_SLUG-dashboard" --production-branch main
       - name: Deploy Pages dashboard
         uses: cloudflare/wrangler-action@v4
         with:
@@ -370,7 +573,11 @@ jobs:
         env:
           API_URL: ${{ steps.deploy-api.outputs.deployment-url }}
           DASHBOARD_URL: https://${{ inputs.installation_slug }}-dashboard.pages.dev
+          ADMIN_STATE: ${{ steps.admin.outputs.admin }}
+          UPDATE_CREDENTIAL_STATE: ${{ steps.update-credential.outputs.state }}
         run: |
+          database_id=$(node -e 'const c=require("./.provision/wrangler.json"); process.stdout.write(c.d1_databases?.find((b) => b.binding === "DB")?.database_id ?? "")')
+          test -n "$database_id"
           {
             echo "## LancerLogin $INPUT_OPERATION complete"
             echo ""
@@ -380,7 +587,29 @@ jobs:
             echo ""
             if [ "$INPUT_OPERATION" = "upgrade" ]; then
               echo "The existing installation data and secrets were retained."
+            elif [ "$ADMIN_STATE" = "exists" ]; then
+              echo "The first Admin already exists. Open the dashboard and sign in."
             else
               echo "Open the dashboard and enter the private LANCERLOGIN_SETUP_CODE to create the first Admin."
+            fi
+            echo ""
+            echo "### Environment variables for future updates"
+            echo ""
+            echo "The update workflows read these variables, and this workflow cannot set them. Add each one to the \`production\` environment in [Settings > Environments]($ENVIRONMENTS_URL)."
+            echo ""
+            echo "| Variable | Value |"
+            echo "| --- | --- |"
+            echo "| \`LANCERLOGIN_INSTALLATION_SLUG\` | \`$INSTALLATION_SLUG\` |"
+            echo "| \`LANCERLOGIN_DATABASE_ID\` | \`$database_id\` |"
+            echo "| \`LANCERLOGIN_API_URL\` | \`$API_URL\` |"
+            if [ "$UPDATE_CREDENTIAL_STATE" != "configured" ]; then
+              echo ""
+              echo "### Dashboard updates are not set up yet"
+              echo ""
+              echo "\`LANCERLOGIN_WEB_UPDATE_TOKEN\` is not set, so the dashboard cannot start updates. LancerLogin works without it. To set up dashboard updates:"
+              echo ""
+              echo "1. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with access to only the repository \`$GITHUB_REPOSITORY\` and the repository permission **Actions: Read and write**. LancerLogin reads its expiration date from GitHub."
+              echo "2. Store it as the environment secret \`LANCERLOGIN_WEB_UPDATE_TOKEN\` in the \`production\` environment in [Settings > Environments]($ENVIRONMENTS_URL)."
+              echo "3. Set the environment variables above, then run [Refresh web update credential]($REFRESH_CREDENTIAL_WORKFLOW_URL)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"

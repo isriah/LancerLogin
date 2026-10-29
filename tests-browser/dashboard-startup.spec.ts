@@ -69,7 +69,7 @@ test("anonymous entry discards preloaded module access before a new Operator sig
   await page.route("**/platform/modules", (route) => { moduleReads++; return route.fulfill({ json: modules }); });
   await page.route("**/auth/local", (route) => route.fulfill({ json: { user: { id: "operator-2", role: "operator", debugMode: false } } }));
   await page.goto("/roster");
-  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
   expect(memberReads).toBe(0);
   const beforeLogin = moduleReads;
   modules = attendanceSnapshot({ enabled: false });
@@ -153,7 +153,7 @@ test("refresh verifies an expired session and successful first setup reads a new
   let configured = false;
   await page.route("**/auth/session", (route) => configured ? route.continue() : route.fulfill({ status: 401, json: { error: "Expired" } }));
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
   await expect(page.getByRole("table", { name: "Roster members" })).toHaveCount(0);
   await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
   await page.route("**/setup/bootstrap", (route) => { configured = true; return route.fulfill({ json: {} }); });

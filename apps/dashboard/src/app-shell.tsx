@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Branding } from "./setup-workspace";
+import type { Branding } from "./branding";
 import { AttendanceWorkspace } from "./attendance-workspace";
 import { dashboardMeetingViewKey, HomePage } from "./home-page";
 import { ReportsPage } from "./reports-page";
@@ -26,6 +26,7 @@ import { writeStorage } from "./browser-storage";
 import { AdaptiveBrandLogo } from "./adaptive-brand-logo";
 import { ContestIndicator } from "./contest-indicator";
 import { PageWalkthroughExperience } from "./page-walkthrough";
+import { quietWalkthroughsAfterSetup } from "./walkthrough-session";
 import { pageWalkthroughForPath } from "./page-walkthrough-definitions";
 import { useModuleNavigation, type ModuleNavigationResult } from "./module-navigation";
 import { ModuleSettings } from "./module-controls";
@@ -70,14 +71,20 @@ export function AppShell({ initialModules, role, branding, onBrandingChanged, on
   const reopenedSetup = moduleSetupOpen ? moduleAccess.module(moduleSetupOpen) : undefined;
   const setupModule = requiredSetup ?? (role === "admin" && reopenedSetup?.enabled ? reopenedSetup : undefined);
   const moduleSetupVisible = Boolean(setupModule);
+  // The module whose setup just finished keeps its workspace open on the completion screen until the Admin leaves it.
+  const [completedSetup, setCompletedSetup] = useState<string | null>(null);
+  const setupCompleted = Boolean(setupModule && completedSetup === setupModule.id);
   useEffect(() => { if (moduleSetupOpen && !moduleAccess.module(moduleSetupOpen)?.enabled) setModuleSetupOpen(null); }, [moduleSetupOpen, enabledModules]);
+  useEffect(() => { if (!moduleSetupOpen) setCompletedSetup(null); }, [moduleSetupOpen]);
+  // Page tours never open over first-run module selection or setup, nor for the rest of this browser session.
+  useEffect(() => { if (selectionRequired || moduleSetupVisible) quietWalkthroughsAfterSetup(); }, [selectionRequired, moduleSetupVisible]);
   // Navigating away (a setup link or browser Back) closes a reopened setup so the destination page renders.
   const setupPath = useRef(path);
   useEffect(() => { if (setupPath.current !== path) { setupPath.current = path; setModuleSetupOpen(null); } }, [path]);
   const finishingSetup = useRef(false);
   function deferSetup(module: { id: string; generation: number }) { const next = new Set(deferredSetups).add(setupDeferralId(module)); saveDeferredSetups(next); setDeferredSetups(next); }
   /** Leave setup for another page. Unfinished required setup is deferred, exactly as Finish setup later does. */
-  function leaveSetup(target: string) { if (setupModule && !setupModule.setup.ready && !finishingSetup.current) deferSetup(setupModule); finishingSetup.current = false; setModuleSetupOpen(null); navigate(target); }
+  function leaveSetup(target: string) { if (setupModule && !setupModule.setup.ready && !finishingSetup.current) deferSetup(setupModule); finishingSetup.current = false; setModuleSetupOpen(null); setCompletedSetup(null); navigate(target); }
   useEffect(() => { if (role === "admin") void api<AdminPreferences>("/admin/preferences").then(setPreferences).catch(() => setPreferences(null)); }, [role]);
   useEffect(() => { if (moduleSetupVisible) window.requestAnimationFrame(() => { window.scrollTo({ top: 0, behavior: "auto" }); document.getElementById("dashboard-content")?.focus(); }); }, [moduleSetupVisible]);
   useEffect(() => { setMobileNavOpen(false); }, [path]);
@@ -116,7 +123,7 @@ export function AppShell({ initialModules, role, branding, onBrandingChanged, on
   // Degraded mode: without verified module access, Admins can still follow an update in Settings > Updates and reload when it lands.
   else if (!moduleAccess.snapshot) page = role === "admin" && path === "/settings/updates" ? <UpdatesPage /> : <ModuleAccessUnavailable failure={moduleAccess.failure} admin={role === "admin"} onRetry={moduleAccess.reload} onOpenUpdates={() => navigate("/settings/updates")} />;
   else if (selectionRequired) page = <ModuleSettings selection snapshot={moduleAccess.snapshot} onChanged={moduleAccess.reload} />;
-  else if (moduleSetupVisible && setupModule) page = <ModuleSetupWorkspace key={`${setupModule.id}:${setupModule.generation}`} setup={installedDashboardModules.get(setupModule.id)?.setup} moduleRoot={!installedDashboardModules.get(setupModule.id)?.coreShell} module={setupModule} navigate={leaveSetup} onReady={async () => { finishingSetup.current = true; setModuleSetupOpen(null); await moduleAccess.reload(); }} onFinishLater={setupModule.setup.ready ? undefined : () => leaveSetup("/dashboard")} onClose={setupModule.setup.ready ? () => setModuleSetupOpen(null) : undefined} />;
+  else if (moduleSetupVisible && setupModule) page = <ModuleSetupWorkspace key={`${setupModule.id}:${setupModule.generation}`} setup={installedDashboardModules.get(setupModule.id)?.setup} moduleRoot={!installedDashboardModules.get(setupModule.id)?.coreShell} module={setupModule} navigate={leaveSetup} onReady={async () => { finishingSetup.current = true; const keepCompletion = Boolean(installedDashboardModules.get(setupModule.id)?.coreShell); setModuleSetupOpen(keepCompletion ? setupModule.id : null); setCompletedSetup(keepCompletion ? setupModule.id : null); await moduleAccess.reload(); }} onFinishLater={setupCompleted || setupModule.setup.ready ? undefined : () => leaveSetup("/dashboard")} onClose={!setupCompleted && setupModule.setup.ready ? () => setModuleSetupOpen(null) : undefined} />;
   else if (malformedPath(path)) page = <PageUnavailable navigate={navigate} />;
   else if (path === "/dashboard") page = attendanceReady ? <HomePage onWalkthroughChange={setWalkthrough} role={role} navigate={navigate} discordEnabled={integrations.discord.configured} debugMode={debugMode} /> : <CoreHomePage moduleCount={moduleAccess.snapshot.modules.filter((module) => module.enabled).length} />;
   else if (path === "/meetings") page = <LegacyMeetingsRedirect navigate={navigate} />;
@@ -150,7 +157,7 @@ function AccessSettings({ preferences, onPreferenceChanged }: { preferences: Adm
 function BackgroundSchedulerSettings() { return <section className="settings-page" aria-labelledby="background-scheduler-title"><div className="page-intro"><h1 id="background-scheduler-title">Background scheduler</h1><p>Inspect and control background job processing for development and diagnosis.</p></div><SchedulerControls /></section>; }
 function LegacyAttendanceRedirect({ search, navigate }: { search: string; navigate: (path: string, replace?: boolean) => void }) { const meetingId = new URLSearchParams(search).get("meetingId"); useEffect(() => { navigate(meetingId ? `/meetings/${encodeURIComponent(meetingId)}` : "/dashboard", true); }, [meetingId, navigate]); return <p className="auth-check" role="status">Opening the meeting workspace…</p>; }
 function LegacyMeetingsRedirect({ navigate }: { navigate: (path: string, replace?: boolean) => void }) { useEffect(() => { writeStorage("local", dashboardMeetingViewKey, "table"); navigate("/dashboard", true); }, [navigate]); return <p className="auth-check" role="status">Opening the Dashboard meeting table…</p>; }
-function GuidedSetupSettings({ onOpenSetup }: { onOpenSetup: () => void }) { return <section className="settings-page settings-guided-setup" aria-labelledby="guided-setup-title"><div className="page-intro"><h1 id="guided-setup-title">Attendance Setup</h1><p>Revisit Attendance rules, the first meeting, browser input, and optional integration checks without resetting completed work.</p></div><AttendanceSettingsSections /><article className="settings-callout"><div><h2>Reopen Attendance setup</h2><p>Review one setup card at a time. Existing meetings and attendance records remain unchanged.</p></div><button className="primary-button" type="button" onClick={onOpenSetup}>Open Attendance setup</button></article></section>; }
+function GuidedSetupSettings({ onOpenSetup }: { onOpenSetup: () => void }) { return <section className="settings-page settings-guided-setup" aria-labelledby="guided-setup-title"><div className="page-intro"><h1 id="guided-setup-title">Attendance setup</h1><p>Revisit Attendance rules, the first meeting, the roster, browser input, and optional integration checks without resetting completed work.</p></div><AttendanceSettingsSections /><article className="settings-callout"><div><h2>Reopen Attendance setup</h2><p>Review one setup card at a time. Existing meetings and attendance records remain unchanged.</p></div><button className="primary-button" type="button" onClick={onOpenSetup}>Open Attendance setup</button></article></section>; }
 /** True when the path holds a malformed percent escape, which would make route parameters impossible to decode. */
 function malformedPath(path: string) { try { decodeURIComponent(path); return false; } catch { return true; } }
 function PageUnavailable({ navigate }: { navigate: (path: string) => void }) { return <section className="ui-card empty-page unavailable-page" aria-labelledby="unavailable-page-title"><h1 id="unavailable-page-title">Page unavailable</h1><p>This page does not exist or your role cannot open it.</p><button type="button" onClick={() => navigate("/dashboard")}>Return to Dashboard</button></section>; }

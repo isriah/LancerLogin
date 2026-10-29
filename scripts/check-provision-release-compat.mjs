@@ -17,7 +17,6 @@ function workflowSteps(workflow) {
 
 /** fromStep limits the requirements to the steps from that index on (used for steps after D1 migrations). */
 export function provisionReleaseRequirements(workflow, { fromStep = 0 } = {}) {
-  const templateRelease = workflow.match(/^\s+TEMPLATE_RELEASE:\s*(v\d+\.\d+\.\d+)\s*$/m)?.[1];
   const sourceIsDefault = new RegExp(`^ {4}defaults:\\s+run:\\s+working-directory: ${sourceDirectory}\\s*$`, "m").test(workflow);
   const required = new Set();
   const guarded = new Set();
@@ -34,7 +33,7 @@ export function provisionReleaseRequirements(workflow, { fromStep = 0 } = {}) {
     }
   }
   if (required.size) required.add("package.json");
-  return { templateRelease, required: [...required].sort(), guarded: [...guarded].filter((path) => !required.has(path)).sort() };
+  return { required: [...required].sort(), guarded: [...guarded].filter((path) => !required.has(path)).sort() };
 }
 
 export function missingReleaseFiles(requirements, releaseFiles) {
@@ -96,10 +95,10 @@ async function github(path, token, { raw = false, optional = false } = {}) {
   return raw ? response.text() : response.json();
 }
 
-export async function selectableReleases(requirements, token) {
-  if (!requirements.templateRelease) throw new Error("The installation workflow has no pinned TEMPLATE_RELEASE.");
+/** The installation workflow installs only the latest stable release. */
+export async function selectableReleases(token) {
   const latest = await github(`repos/${officialRepository}/releases/latest`, token);
-  return [...new Set([latest.tag_name, requirements.templateRelease])];
+  return [latest.tag_name];
 }
 
 /** Every published (non-draft) official release. */
@@ -142,7 +141,7 @@ async function main() {
   const requirements = provisionReleaseRequirements(await readFile(workflowPath, "utf8"));
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
   const failures = [];
-  for (const tag of await selectableReleases(requirements, token)) {
+  for (const tag of await selectableReleases(token)) {
     const missing = missingReleaseFiles(requirements, await releaseFiles(tag, token));
     if (missing.length) failures.push(`${tag} lacks ${missing.join(", ")}`);
     else console.log(`${tag} contains every file the installation workflow runs.`);

@@ -52,7 +52,6 @@ type ScheduledController = { cron?: string };
 type Role = "admin" | "operator";
 type Principal = { userId: string; role: Role; expiresAt: number; authenticatedAt?: number; epoch?: number };
 type AuthMode = "google" | "local" | "both";
-type SetupStep = "branding" | "roster" | "pair-kiosk" | "fingerprint-test" | "confirm-attendance";
 type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
 type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number; discordContestWindowHours?: number; attendanceReportingStartsOn?: string | null; anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number };
 type DiscordChannelManagerInput = { enabled?: boolean; contestWindowHours?: number; blockRecontestsAfterRejection?: boolean };
@@ -82,7 +81,6 @@ async function latestCompatibleKioskRelease(env: Env, channel: "stable" | "beta"
 }
 
 const baseHeaders = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
-const setupSteps = new Set<SetupStep>(["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"]);
 const validTimeZone = (value: string) => { try { new Intl.DateTimeFormat("en-US", { timeZone: value }); return true; } catch { return false; } };
 const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const validColor = (value: string) => /^#[0-9a-f]{6}$/i.test(value);
@@ -242,7 +240,18 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   // Apply plugin migrations and record installed modules now, so plugins are registered as soon as the installation exists.
   // A failure retries on the next request's reconciliation or the scheduled pass.
   try { await reconcileInstalledModules(db); } catch { /* Retried by later requests and the scheduled pass. */ }
-  return response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, telemetryAccepted: false }, 201, resetGrant ? { "set-cookie": `${setupResetCookie}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0` } : undefined);
+  // A first Admin with a local password is signed in straight away with the same session cookie /auth/local issues, so
+  // setup does not end on a sign-in form. Google-only setup still signs in through Google, and a Worker without a session
+  // key reports signedIn: false so the dashboard shows the sign-in form instead.
+  const signedIn = Boolean(passwordHash && env.SESSION_KEY);
+  const cookies = [
+    ...(resetGrant ? [`${setupResetCookie}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`] : []),
+    ...(signedIn ? [await localSessionCookie(env.SESSION_KEY!, { id: adminId, role: "admin", sessionEpoch: 0 })] : []),
+  ];
+  const result = response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, signedIn, ...(signedIn ? { user: { id: adminId, role: "admin", debugMode: false } } : {}), telemetryAccepted: false }, 201);
+  // Appended after response() because it sets headers one name at a time and would keep only one of two cookies.
+  for (const value of cookies) result.headers.append("set-cookie", value);
+  return result;
 }
 
 async function modulePlatform(request: Request, env: Env): Promise<Response> {
@@ -312,6 +321,10 @@ async function webUpdates(request: Request, env: Env): Promise<Response> {
   return response(await startWebUpdate(env, input, principal.userId), 202);
 }
 const sessionCookie = (token: string) => `lancerlogin_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`;
+/** The dashboard session cookie for a user who just proved a local password: local sign-in and first-Admin setup. */
+async function localSessionCookie(sessionKey: string, user: { id: string; role: Role; sessionEpoch?: number }): Promise<string> {
+  return sessionCookie(await createSessionCodec(sessionKey).issue({ userId: user.id, role: user.role, epoch: Number(user.sessionEpoch ?? 0) }));
+}
 async function pluginManagement(request: Request, env: Env, action: "state" | "review" | "change" | "reauthenticate" | "release"): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (action === "state") {
@@ -375,8 +388,7 @@ async function localLogin(request: Request, env: Env): Promise<Response> {
     throw new HttpError(401, "Invalid username or password");
   }
   if (!await clearFailedLogins(db, user.id)) throw new HttpError(401, "Invalid username or password");
-  const token = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role, epoch: Number(user.sessionEpoch ?? 0) });
-  return response({ ok: true, user: { id: user.id, role: user.role, debugMode: Boolean(user.debugMode) } }, 200, { "set-cookie": `lancerlogin_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800` });
+  return response({ ok: true, user: { id: user.id, role: user.role, debugMode: Boolean(user.debugMode) } }, 200, { "set-cookie": await localSessionCookie(env.SESSION_KEY, user) });
 }
 async function authSession(request: Request, env: Env): Promise<Response> {
   const principal = await principalFor(request, env);
@@ -531,15 +543,6 @@ async function resolveMeetingWeightAssignment(db: D1Database, categoryId: string
   }
   const durationMinutes = Math.round((Date.parse(endsAt) - Date.parse(startsAt)) / 60_000);
   return await db.prepare("SELECT id, name, weight FROM meeting_weight_categories WHERE installation_id = 'primary' AND active = 1 AND minimum_duration_minutes IS NOT NULL AND minimum_duration_minutes <= ? ORDER BY position, name COLLATE NOCASE LIMIT 1").bind(durationMinutes).first<MeetingWeightAssignment>();
-}
-async function setupProgress(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const result = await db.prepare("SELECT step, completed_at AS completedAt, completed_by AS completedBy FROM setup_progress WHERE installation_id = 'primary' ORDER BY completed_at").all<{ step: SetupStep; completedAt: string; completedBy: string }>(); return response({ completedSteps: (result.results ?? []).filter((item) => setupSteps.has(item.step)) }); }
-  const input = await parseJson<{ step?: SetupStep; completed?: boolean }>(request);
-  if (!input.step || !setupSteps.has(input.step) || typeof input.completed !== "boolean") throw new HttpError(400, "A valid setup step and completed flag are required");
-  if (input.completed) await db.prepare("INSERT INTO setup_progress (installation_id, step, completed_at, completed_by) VALUES ('primary', ?, ?, ?) ON CONFLICT(installation_id, step) DO UPDATE SET completed_at = excluded.completed_at, completed_by = excluded.completed_by").bind(input.step, new Date().toISOString(), principal.userId).run();
-  else await db.prepare("DELETE FROM setup_progress WHERE installation_id = 'primary' AND step = ?").bind(input.step).run();
-  await writeAudit(db, principal, input.completed ? "setup.step_completed" : "setup.step_reopened", "setup_step", input.step); return response({ ok: true, step: input.step, completed: input.completed });
 }
 type LabelMutation = { memberId: string; label: string; action?: "add" | "remove"; effectiveDate?: string };
 async function labels(request: Request, env: Env): Promise<Response> {
@@ -1225,20 +1228,7 @@ async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
     const simulator = await db.prepare("SELECT name, active, online, last_seen_at AS lastSeenAt, created_at AS pairedAt FROM simulated_kiosk_sessions WHERE installation_id = 'primary'").first();
     return response({ simulator: simulator ? { ...simulator, readerOnline: false, releaseVersion: "browser simulator" } : null });
   }
-  const input = await parseJson<{ action?: "pair" | "heartbeat" | "check-in" | "scan" | "stop"; scanAction?: AttendanceAction; code?: string; kioskName?: string; online?: boolean; memberId?: string; meetingId?: string; eventId?: string }>(request);
-  if (input.action === "pair") {
-    const code = input.code?.trim().toUpperCase(); const kioskName = input.kioskName?.trim();
-    if (!code || !kioskName || kioskName.length > 80) throw new HttpError(400, "Simulator pairing code and name are required");
-    const now = new Date().toISOString(); const pairing = await db.prepare("SELECT id FROM pairing_codes WHERE installation_id = 'primary' AND purpose = 'simulator' AND code_hash = ? AND redeemed_at IS NULL AND expires_at > ?").bind(await sha256(code), now).first<{ id: string }>();
-    if (!pairing) throw new HttpError(401, "Simulator pairing code is invalid or expired");
-    const results = await db.batch([
-      db.prepare("UPDATE pairing_codes SET redeemed_at = ? WHERE id = ? AND redeemed_at IS NULL AND expires_at > ?").bind(now, pairing.id, now),
-      db.prepare("INSERT INTO simulated_kiosk_sessions (installation_id, pairing_code_id, name, active, online, last_seen_at, created_by, created_at) SELECT 'primary', ?, ?, 1, 1, ?, ?, ? WHERE EXISTS (SELECT 1 FROM pairing_codes WHERE id = ? AND redeemed_at = ?) ON CONFLICT(installation_id) DO UPDATE SET pairing_code_id = excluded.pairing_code_id, name = excluded.name, active = 1, online = 1, last_seen_at = excluded.last_seen_at, created_by = excluded.created_by, created_at = excluded.created_at").bind(pairing.id, kioskName, now, principal.userId, now, pairing.id, now),
-      db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, created_at) SELECT ?, 'primary', ?, 'simulator.paired', 'simulated_kiosk', 'browser', ? WHERE EXISTS (SELECT 1 FROM simulated_kiosk_sessions WHERE installation_id = 'primary' AND pairing_code_id = ?)").bind(crypto.randomUUID(), principal.userId, now, pairing.id),
-    ]);
-    if ((results[1]?.meta?.changes ?? 1) < 1) throw new HttpError(409, "Simulator pairing code was already used");
-    return response({ paired: true, name: kioskName, online: true, readerOnline: false }, 201);
-  }
+  const input = await parseJson<{ action?: "heartbeat" | "check-in" | "scan" | "stop"; scanAction?: AttendanceAction; online?: boolean; memberId?: string; meetingId?: string; eventId?: string }>(request);
   const simulator = await db.prepare("SELECT name, active, online FROM simulated_kiosk_sessions WHERE installation_id = 'primary'").first<{ name: string; active: number; online: number }>();
   if (!simulator?.active) throw new HttpError(409, "Pair the browser simulator before using it");
   if (input.action === "heartbeat") {
@@ -1260,7 +1250,7 @@ async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
     const outcome = await result.clone().json() as { action: AttendanceAction; duplicate?: boolean };
     await writeAudit(db, principal, outcome.action === "check_out" ? "simulator.check_out" : "simulator.check_in", "meeting", input.meetingId!, { memberId: input.memberId, origin: "browser_simulator", duplicate: Boolean(outcome.duplicate) }); return result;
   }
-  throw new HttpError(400, "Simulator action must be pair, heartbeat, scan, or stop");
+  throw new HttpError(400, "Simulator action must be heartbeat, scan, or stop");
 }
 async function attendance(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const url = new URL(request.url);
@@ -3773,12 +3763,6 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
   return response({ restored: true, scope, recovery, ...(excludedModules.length ? { excludedModules } : {}) });
 }
 
-async function resetOnboarding(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ confirmation?: string }>(request);
-  if (input.confirmation !== "RESET ONBOARDING") throw new HttpError(400, "Type RESET ONBOARDING exactly to continue");
-  await db.batch([db.prepare("DELETE FROM setup_progress WHERE installation_id = 'primary'"), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'setup.reset', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString())]); return response({ reset: true });
-}
-
 async function deleteData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "attendance" | "roster" | "installation"; confirmation?: string }>(request);
   const expected = input.scope === "attendance" ? "DELETE ATTENDANCE" : input.scope === "roster" ? "DELETE ROSTER" : input.scope === "installation" ? "DELETE INSTALLATION" : undefined;
@@ -3914,7 +3898,6 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/meeting-weight-categories" && request.method === "POST") result = await createMeetingWeightCategory(request, env);
     else if (url.pathname === "/admin/meeting-weight-categories/order" && request.method === "PATCH") result = await reorderMeetingWeightCategories(request, env);
     else if (/^\/admin\/meeting-weight-categories\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeetingWeightCategory(request, env, decodeURIComponent(url.pathname.split("/")[3]));
-    else if (url.pathname === "/admin/setup/progress" && ["GET", "PATCH"].includes(request.method)) result = await setupProgress(request, env);
     else if (url.pathname === "/labels" && ["GET", "POST"].includes(request.method)) result = await labels(request, env);
     else if (url.pathname === "/attendance/policy" && request.method === "GET") result = await attendancePolicies(request, env);
     else if (url.pathname === "/attendance/policy/preview" && request.method === "POST") result = await attendancePolicies(request, env, false);
@@ -4027,7 +4010,6 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/roster/history" && request.method === "GET") result = await rosterHistory(request, env);
     else if (url.pathname === "/admin/data/backup" && request.method === "GET") result = await backupData(request, env);
     else if (url.pathname === "/admin/data/restore" && request.method === "POST") result = await restoreData(request, env);
-    else if (url.pathname === "/admin/setup/reset" && request.method === "POST") result = await resetOnboarding(request, env);
     else if (url.pathname === "/admin/data" && request.method === "DELETE") result = await deleteData(request, env);
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
     else if (url.pathname === "/kiosk/fingerprint-review" || url.pathname.startsWith("/kiosk/fingerprint-review/")) {

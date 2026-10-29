@@ -4,6 +4,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 > Release notes record what was true when a version shipped. For current procedures, use the linked guide rather than applying older transition steps out of context.
 
+- [v2.0.0-beta.17](v2.0.0-beta.17.md) - Easier first-time setup, optional dashboard update token and clearer installer errors
 - [v2.0.0-beta.16](v2.0.0-beta.16.md) - Outreach team support for other plugins and setup notice layout fixes
 - [v2.0.0-beta.15](v2.0.0-beta.15.md) - Plugin email, plugin sub-pages and Administrator-granted access between modules
 - [v2.0.0-beta.14](v2.0.0-beta.14.md) - Fingerprint match scores with a minimum, kiosk warning reasons and reader cleanup

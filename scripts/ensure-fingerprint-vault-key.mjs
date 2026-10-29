@@ -2,7 +2,8 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { verifyCredentialTarget } from "./refresh-web-update-credential.mjs";
+import { credentialHelp, verifyCredentialTarget } from "./refresh-web-update-credential.mjs";
+import { reportFailure } from "./workflow-annotations.mjs";
 
 export const fingerprintVaultSecretName = "FINGERPRINT_VAULT_KEY";
 export const fingerprintVaultStateSql = "SELECT COALESCE((SELECT MAX(enabled) FROM kiosk_fingerprint_vault_settings),0) AS enabled, (SELECT COUNT(*) FROM kiosk_fingerprint_vault_templates) AS stored";
@@ -79,6 +80,22 @@ function wranglerCommand(args, environment, input) {
   });
 }
 
+/** Cause and fix for each fixed code, printed as the run's error annotation. */
+export const vaultHelp = {
+  private_installation_required: "Run this workflow from the adopter-owned private deployment repository, which must stay private.",
+  fixed_worker_configuration_required: "The generated Worker configuration does not name exactly this installation's Worker and D1 database: run this workflow again with the same slug.",
+  vault_secret_metadata_invalid: "Cloudflare returned an unreadable Worker secret list: run this workflow again later.",
+  vault_state_unavailable: "The fingerprint storage state could not be read from D1: check that CLOUDFLARE_API_TOKEN has D1: Edit and that the migrations were applied, then run this workflow again.",
+  vault_original_key_recovery_required: "The Worker has lost FINGERPRINT_VAULT_KEY while cloud fingerprint storage holds enrollments: restore the original key as the Worker secret FINGERPRINT_VAULT_KEY. A new key cannot read the stored enrollments, so none was created.",
+  vault_secret_write_unconfirmed: "Cloudflare did not confirm the new FINGERPRINT_VAULT_KEY Worker secret: run this workflow again.",
+  vault_command_failed: "A Wrangler command for the fingerprint storage key failed: check that CLOUDFLARE_API_TOKEN has Workers Scripts: Edit, then run this workflow again.",
+  vault_command_timeout: "A Wrangler command for the fingerprint storage key timed out: run this workflow again.",
+  vault_command_output_invalid: "Wrangler returned unexpected output for the Worker secret list: run this workflow again.",
+};
+
 if (process.argv[1]?.endsWith("ensure-fingerprint-vault-key.mjs")) installFingerprintVaultKey(process.env)
   .then(({ status }) => console.log(`Fingerprint storage key ${status}. Cloud storage remains an Administrator opt-in.`))
-  .catch(() => { console.error("Fingerprint storage key preparation stopped. Verify fixed resources and restore the original key if cloud enrollments already exist. No replacement key was authorized."); process.exitCode = 1; });
+  .catch((error) => {
+    reportFailure(error, { ...credentialHelp(process.env), ...vaultHelp }, "vault_preparation_failed", "Fingerprint storage key preparation stopped: check the Worker and D1 database with the Cloudflare token, then run this workflow again.");
+    console.error("Fingerprint storage key preparation stopped. Verify fixed resources and restore the original key if cloud enrollments already exist. No replacement key was authorized."); process.exitCode = 1;
+  });

@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { validateUpgradeEnvironment, validateOfficialSource, validateMigrationPolicy, executeWebUpgrade, createLiveUpgradeIO, retainedDashboardOrigin, controllerCredentialMinimumValidityMs, pluginCompositionEnvironment, composeUpdateModules, verifyPinnedSelection, gitBlobSha, absentSelectionSha } from "../scripts/run-web-upgrade.mjs";
-import { verifyDispatchCredential, verifyCredentialTarget, verifySelectionCredential } from "../scripts/refresh-web-update-credential.mjs";
+import { validateUpgradeEnvironment, validateOfficialSource, validateMigrationPolicy, executeWebUpgrade, createLiveUpgradeIO, retainedDashboardOrigin, controllerCredentialMinimumValidityMs, pluginCompositionEnvironment, composeUpdateModules, verifyPinnedSelection, gitBlobSha, absentSelectionSha, verifyControllerCredential, retainedWorkerSecrets, upgradeHelp } from "../scripts/run-web-upgrade.mjs";
+import { verifyDispatchCredential, verifyCredentialTarget, verifySelectionCredential, parseTokenExpiration, credentialSecrets, credentialHelp } from "../scripts/refresh-web-update-credential.mjs";
+import { errorAnnotation, safeErrorCode } from "../scripts/workflow-annotations.mjs";
+import { vaultHelp } from "../scripts/ensure-fingerprint-vault-key.mjs";
 import { syntheticUpgradeIO, rehearseSyntheticWebUpgrade } from "../scripts/rehearse-web-upgrade.mjs";
 import { buildPagesProxy } from "../scripts/prepare-pages-proxy.mjs";
 import { recoverWebUpdate } from "../scripts/recover-web-update.mjs";
@@ -96,7 +98,78 @@ test("live upgrade prepares a missing vault key over stdin after migrations and 
 test("fixed upgrade parameters reject public, malformed and resource substitutions", () => {
   assert.equal(validateUpgradeEnvironment(env).tag, "v1.0.0");
   for (const substitution of [{ REPOSITORY_PRIVATE: "false" }, { UPDATE_REPOSITORY: "isriah/LancerLogin" }, { RELEASE_TAG: "v1.0.0-rc1" }, { RELEASE_SHA: "main" }, { INSTALLATION_SLUG: "example;command" }, { DATABASE_ID: "unknown" }, { API_URL: "https://another-api.account.workers.dev" }, { CLOUDFLARE_API_TOKEN: "unscoped" }]) assert.throws(() => validateUpgradeEnvironment({ ...env, ...substitution }));
-  assert.throws(() => validateUpgradeEnvironment({ ...env, WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + controllerCredentialMinimumValidityMs - 1_000).toISOString() }), /dispatch_credential_expiry_required/);
+  // The hand-entered expiry variable is gone: an expired or missing one changes nothing.
+  const withoutExpiry = { ...env }; delete withoutExpiry.WEB_UPDATE_TOKEN_EXPIRES_AT;
+  assert.equal(validateUpgradeEnvironment(withoutExpiry).tag, "v1.0.0");
+  assert.equal(validateUpgradeEnvironment({ ...env, WEB_UPDATE_TOKEN_EXPIRES_AT: "2020-01-01" }).tag, "v1.0.0");
+  // A missing Worker URL is a coded refusal, not a raw TypeError from new URL(undefined).
+  const withoutApi = { ...env }; delete withoutApi.API_URL;
+  assert.throws(() => validateUpgradeEnvironment(withoutApi), { message: "api_url_required" });
+  assert.throws(() => validateUpgradeEnvironment(withoutApi, { credentials: false }), { message: "api_url_required" });
+  assert.throws(() => validateUpgradeEnvironment({ ...env, API_URL: "not a url" }), { message: "fixed_api_origin_required" });
+});
+
+// Authored text uses " - " instead of an em dash (U+2014).
+const emDash = new RegExp(String.fromCharCode(0x2014));
+const emDashOrNewline = new RegExp(`${emDash.source}|\\n`);
+const githubResponse = (expiry, init = {}) => Response.json({ private: true }, { ...init, headers: expiry ? { "GitHub-Authentication-Token-Expiration": expiry } : {} });
+test("the update controller derives the dispatch token's remaining validity from GitHub's expiry header", async () => {
+  const format = (ms) => new Date(Date.now() + ms).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+  const credential = { ...env, LANCERLOGIN_WEB_UPDATE_TOKEN: "synthetic-dispatch" };
+  const calls = [];
+  const result = await verifyControllerCredential(credential, async (url, init) => { calls.push({ url, init }); return githubResponse(format(86_400_000)); });
+  assert.equal(result.configured, true); assert.ok(Date.parse(result.expiresAt) > Date.now());
+  assert.deepEqual(calls.map((call) => call.url), ["https://api.github.com/repos/example/private-install"]);
+  assert.equal(calls[0].init.headers.authorization, "Bearer synthetic-dispatch"); assert.equal(calls[0].init.redirect, "error");
+  // A token without an expiry passes; one that expires within the minimum validity, or that GitHub rejects, does not.
+  assert.deepEqual(await verifyControllerCredential(credential, async () => githubResponse()), { configured: true, expiresAt: undefined });
+  await assert.rejects(verifyControllerCredential(credential, async () => githubResponse(format(controllerCredentialMinimumValidityMs - 60_000))), { message: "dispatch_credential_expiry_required" });
+  await assert.rejects(verifyControllerCredential(credential, async () => new Response(null, { status: 401 })), { message: "dispatch_credential_rejected" });
+  await assert.rejects(verifyControllerCredential(credential, async () => new Response(null, { status: 404 })), { message: "dispatch_credential_access_denied" });
+  // Without the secret (an older workflow, or updates set up elsewhere) nothing is requested or refused.
+  assert.deepEqual(await verifyControllerCredential(env, async () => { throw new Error("no request without a token"); }), { configured: false });
+});
+
+test("GitHub token expiry headers become ISO-8601 UTC, and a token without one has no expiry", () => {
+  assert.equal(parseTokenExpiration("2026-11-05 00:00:00 UTC"), "2026-11-05T00:00:00.000Z");
+  assert.equal(parseTokenExpiration("2024-08-01 01:30:00 +0700"), "2024-07-31T18:30:00.000Z");
+  assert.equal(parseTokenExpiration("2024-08-01 01:30:00 -05:00"), "2024-08-01T06:30:00.000Z");
+  assert.equal(parseTokenExpiration("2026-11-05T00:00:00Z"), "2026-11-05T00:00:00.000Z");
+  for (const absent of [null, undefined, "", "  "]) assert.equal(parseTokenExpiration(absent), undefined);
+  for (const invalid of ["tomorrow", "2026-13-45 00:00:00 UTC", "2026-11-05"]) assert.throws(() => parseTokenExpiration(invalid), { message: "token_expiration_unreadable" });
+});
+
+test("only expiring tokens store an expiry, and a stale expiry is removed for a token without one", () => {
+  const tokens = { LANCERLOGIN_WEB_UPDATE_TOKEN: "synthetic-dispatch", LANCERLOGIN_MODULE_SELECTION_TOKEN: "synthetic-selection" };
+  assert.deepEqual(credentialSecrets(tokens, { expiresAt: "2026-11-05T00:00:00.000Z" }, false), { secrets: { WEB_UPDATE_TOKEN: "synthetic-dispatch", WEB_UPDATE_TOKEN_EXPIRES_AT: "2026-11-05T00:00:00.000Z" }, staleExpiries: [] });
+  assert.deepEqual(credentialSecrets(tokens, {}, false), { secrets: { WEB_UPDATE_TOKEN: "synthetic-dispatch" }, staleExpiries: ["WEB_UPDATE_TOKEN_EXPIRES_AT"] });
+  assert.deepEqual(credentialSecrets(tokens, {}, { expiresAt: "2026-12-01T00:00:00.000Z" }), { secrets: { WEB_UPDATE_TOKEN: "synthetic-dispatch", MODULE_SELECTION_TOKEN: "synthetic-selection", MODULE_SELECTION_TOKEN_EXPIRES_AT: "2026-12-01T00:00:00.000Z" }, staleExpiries: ["WEB_UPDATE_TOKEN_EXPIRES_AT"] });
+  assert.deepEqual(credentialSecrets(tokens, { expiresAt: "2026-11-05T00:00:00.000Z" }, {}).staleExpiries, ["MODULE_SELECTION_TOKEN_EXPIRES_AT"]);
+});
+
+test("updates retain the optional update credentials only when the Worker has them", () => {
+  const required = ["SESSION_KEY", "INTEGRATION_KEY", "BOOTSTRAP_CODE_HASH"];
+  assert.deepEqual(retainedWorkerSecrets(new Set(required)), required);
+  assert.deepEqual(retainedWorkerSecrets(new Set([...required, "WEB_UPDATE_TOKEN", "OTHER"])), [...required, "WEB_UPDATE_TOKEN"]);
+  assert.deepEqual(retainedWorkerSecrets(new Set([...required, "WEB_UPDATE_TOKEN", "WEB_UPDATE_TOKEN_EXPIRES_AT", "MODULE_SELECTION_TOKEN"])), [...required, "WEB_UPDATE_TOKEN", "WEB_UPDATE_TOKEN_EXPIRES_AT", "MODULE_SELECTION_TOKEN"]);
+  assert.throws(() => retainedWorkerSecrets(new Set(["SESSION_KEY", "INTEGRATION_KEY", "WEB_UPDATE_TOKEN"])), { message: "retained_secrets_required" });
+});
+
+test("script failures print one GitHub error annotation with a fixed code and its fix", () => {
+  assert.equal(errorAnnotation("dispatch_credential_rejected", "Expired: renew it, then rerun.\n100%"), "::error title=dispatch_credential_rejected::Expired: renew it, then rerun.%0A100%25");
+  assert.equal(errorAnnotation("a:b,c", "x"), "::error title=a%3Ab%2Cc::x");
+  assert.equal(safeErrorCode(new Error("dispatch_credential_rejected"), "fallback"), "dispatch_credential_rejected");
+  // Messages that are not this repository's codes (provider text, parse errors) are never printed.
+  assert.equal(safeErrorCode(new Error("Unexpected token < in JSON at position 0"), "fallback"), "fallback");
+  assert.equal(safeErrorCode(new TypeError("Invalid URL"), "fallback"), "fallback");
+  assert.equal(safeErrorCode("not an error", "fallback"), "fallback");
+  assert.equal(credentialHelp({}).dispatch_credential_rejected, "The GitHub token for dashboard updates has expired or been revoked: create a new fine-grained token, replace LANCERLOGIN_WEB_UPDATE_TOKEN, then run Refresh web update credential.");
+  assert.match(credentialHelp({ LANCERLOGIN_UPDATE_REPOSITORY: "example/private-install" }).dispatch_credential_required, /https:\/\/github\.com\/example\/private-install\/actions\/workflows\/refresh-web-update-credential\.yml/);
+  assert.match(upgradeHelp.api_url_required, /LANCERLOGIN_API_URL/);
+  assert.match(upgradeHelp.scoped_account_credential_required, /Manage account > Account API tokens/);
+  for (const help of [credentialHelp({}), upgradeHelp, vaultHelp]) for (const [code, text] of Object.entries(help)) {
+    assert.match(code, /^[a-z][a-z0-9_]+$/); assert.doesNotMatch(text, emDashOrNewline, code);
+  }
 });
 
 test("upgrade controller retains only the registered Pages or custom dashboard origin", () => {
@@ -148,6 +221,14 @@ test("credential refresh validates private workflow without exposing/provider-lo
   await verifyDispatchCredential(credentialEnv, async (url, init) => { calls.push({ url, init }); return Response.json(url.includes("/workflows/") ? { state: "active", path: ".github/workflows/upgrade-web.yml" } : { private: true }); });
   assert.equal(calls.length, 2); assert.equal(calls.every((call) => call.url.startsWith("https://api.github.com/repos/example/private-install")), true);
   await assert.rejects(verifyDispatchCredential(credentialEnv, async () => Response.json({ private: false })), /private_repository_required/);
+  // The expiry comes from GitHub's header on the first response; no hand-entered variable is read.
+  const workflow = (expiry) => async (url) => url.includes("/workflows/") ? Response.json({ state: "active", path: ".github/workflows/upgrade-web.yml" }) : githubResponse(expiry);
+  assert.deepEqual(await verifyDispatchCredential({ ...credentialEnv, WEB_UPDATE_TOKEN_EXPIRES_AT: "2020-01-01" }, workflow("2099-11-05 00:00:00 UTC")), { expiresAt: "2099-11-05T00:00:00.000Z" });
+  assert.deepEqual(await verifyDispatchCredential(credentialEnv, workflow()), { expiresAt: undefined });
+  await assert.rejects(verifyDispatchCredential(credentialEnv, workflow("2020-01-01 00:00:00 UTC")), { message: "dispatch_credential_rejected" });
+  await assert.rejects(verifyDispatchCredential(credentialEnv, async () => new Response(null, { status: 401 })), { message: "dispatch_credential_rejected" });
+  await assert.rejects(verifyDispatchCredential(credentialEnv, async () => new Response(null, { status: 403 })), { message: "dispatch_credential_access_denied" });
+  await assert.rejects(verifyDispatchCredential({ ...credentialEnv, LANCERLOGIN_WEB_UPDATE_TOKEN: "" }, workflow()), { message: "dispatch_credential_required" });
 });
 test("refresh refuses wrong account/missing Worker/wrong D1 before secret mutation", async () => {
   const requests = []; const result = (url) => url.endsWith("/tokens/verify") ? { status: "active" } : url.includes("/d1/") ? { uuid: env.DATABASE_ID, name: "example-data" } : { bindings: [{ name: "DB", type: "d1", id: env.DATABASE_ID }] };
@@ -244,20 +325,24 @@ test("plugin-changes requests redeploy only the installed release with exactly t
 test("the optional plugin selection credential is verified, distinct from the dispatch token and uploaded only when present", async () => {
   const base = { ...env, LANCERLOGIN_UPDATE_REPOSITORY: "example/private-install", LANCERLOGIN_WEB_UPDATE_TOKEN: "synthetic-dispatch" };
   assert.equal(await verifySelectionCredential(base, async () => { throw new Error("no request without a selection token"); }), false);
-  const selection = { ...base, LANCERLOGIN_MODULE_SELECTION_TOKEN: "synthetic-selection", MODULE_SELECTION_TOKEN_EXPIRES_AT: new Date(Date.now() + 86_400_000).toISOString() };
+  const selection = { ...base, LANCERLOGIN_MODULE_SELECTION_TOKEN: "synthetic-selection" };
   const calls = [];
-  assert.equal(await verifySelectionCredential(selection, async (url, init) => { calls.push({ url, init }); return Response.json({ private: true }); }), true);
+  assert.deepEqual(await verifySelectionCredential(selection, async (url, init) => { calls.push({ url, init }); return githubResponse(url.includes("/contents/") ? undefined : "2099-01-31 12:00:00 UTC"); }), { expiresAt: "2099-01-31T12:00:00.000Z" });
+  assert.deepEqual(await verifySelectionCredential(selection, async () => Response.json({ private: true })), { expiresAt: undefined });
   assert.deepEqual(calls.map((call) => call.url), ["https://api.github.com/repos/example/private-install", "https://api.github.com/repos/example/private-install/contents/?ref=main"]);
   assert.equal(calls.every((call) => call.init.headers.authorization === "Bearer synthetic-selection" && call.init.redirect === "error" && !call.init.method), true);
   await assert.rejects(verifySelectionCredential({ ...selection, LANCERLOGIN_MODULE_SELECTION_TOKEN: "synthetic-dispatch" }, async () => Response.json({ private: true })), /selection_credential_must_be_distinct/);
-  await assert.rejects(verifySelectionCredential({ ...selection, MODULE_SELECTION_TOKEN_EXPIRES_AT: "2020-01-01" }, async () => Response.json({ private: true })), /selection_credential_expiry_required/);
+  await assert.rejects(verifySelectionCredential(selection, async () => githubResponse("2020-01-01 00:00:00 UTC")), { message: "selection_credential_rejected" });
+  await assert.rejects(verifySelectionCredential(selection, async () => new Response(null, { status: 401 })), { message: "selection_credential_rejected" });
   await assert.rejects(verifySelectionCredential(selection, async (url) => url.includes("/contents/") ? new Response(null, { status: 403 }) : Response.json({ private: true })), /selection_credential_access_denied/);
   await assert.rejects(verifySelectionCredential(selection, async () => Response.json({ private: false })), /private_repository_required/);
-  for (const name of ["provision-template", "refresh-web-update-credential"]) {
+  for (const name of ["provision-template", "refresh-web-update-credential", "upgrade-web"]) {
     const workflow = await readFile(`.github/workflows/${name}.yml`, "utf8");
-    assert.match(workflow, /LANCERLOGIN_MODULE_SELECTION_TOKEN: \$\{\{ secrets\.LANCERLOGIN_MODULE_SELECTION_TOKEN \}\}/);
-    assert.match(workflow, /MODULE_SELECTION_TOKEN_EXPIRES_AT: \$\{\{ vars\.MODULE_SELECTION_TOKEN_EXPIRES_AT \}\}/);
+    if (name !== "upgrade-web") assert.match(workflow, /LANCERLOGIN_MODULE_SELECTION_TOKEN: \$\{\{ secrets\.LANCERLOGIN_MODULE_SELECTION_TOKEN \}\}/);
+    // Expiries come from GitHub's response headers; the hand-entered variables are never read.
+    assert.doesNotMatch(workflow, /vars\.(?:WEB_UPDATE|MODULE_SELECTION)_TOKEN_EXPIRES_AT/, name);
   }
+  for (const name of ["refresh-web-update-credential.mjs", "run-web-upgrade.mjs"]) assert.doesNotMatch(await readFile(`scripts/${name}`, "utf8"), /env\.(?:WEB_UPDATE|MODULE_SELECTION)_TOKEN_EXPIRES_AT/, name);
   assert.doesNotMatch(await readFile(".github/workflows/upgrade-web.yml", "utf8"), /MODULE_SELECTION_TOKEN/, "the upgrade workflow never receives the selection credential");
 });
 
@@ -306,4 +391,196 @@ test("installation and update workflows give secrets only to the steps that use 
   const final = stepsOf(upgrade).find((step) => /node lancerlogin-source\/scripts\/run-web-upgrade\.mjs\s*$/m.test(step));
   assert.match(final, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
   assert.match(final, /CLOUDFLARE_ACCOUNT_ID: \$\{\{ secrets\.CLOUDFLARE_ACCOUNT_ID \}\}/);
+  // The runner reads the dispatch token only for its expiry; the validation step still gets no secret.
+  assert.match(final, /LANCERLOGIN_WEB_UPDATE_TOKEN: \$\{\{ secrets\.LANCERLOGIN_WEB_UPDATE_TOKEN \}\}/);
+  const runner = await readFile("scripts/run-web-upgrade.mjs", "utf8");
+  assert.match(runner, /const \{ LANCERLOGIN_WEB_UPDATE_TOKEN, \.\.\.environment \} = process\.env;/);
+  assert.match(runner, /const io = await createLiveUpgradeIO\(context, environment, "lancerlogin-source"\);/);
+});
+
+const installationSteps = async () => stepsOf(await readFile(".github/workflows/provision-template.yml", "utf8")).slice(1);
+const stepNamed = (steps, pattern) => { const index = steps.findIndex((step) => pattern.test(step)); assert.ok(index >= 0, String(pattern)); return index; };
+test("installation without the dashboard update token skips its verification and installation and explains the setup", async () => {
+  const steps = await installationSteps();
+  const check = stepNamed(steps, /name: Check the optional dashboard update credential before any cloud mutation/);
+  const install = stepNamed(steps, /name: Install or refresh the private dispatch credential/);
+  // Verified before any cloud mutation, installed after the Worker exists, both only when the token is set.
+  assert.ok(check < stepNamed(steps, /name: Verify the scoped token/));
+  assert.ok(check < stepNamed(steps, /name: Create Pages project/));
+  assert.ok(install > stepNamed(steps, /name: Deploy existing Worker API/));
+  assert.match(steps[check], /if \[ -z "\$LANCERLOGIN_WEB_UPDATE_TOKEN" \]; then\s+echo "state=missing" >> "\$GITHUB_OUTPUT"[\s\S]*::warning title=dispatch_credential_not_configured::[\s\S]*exit 0\s+fi/);
+  assert.match(steps[check], /node scripts\/refresh-web-update-credential\.mjs --verify-only/);
+  assert.match(steps[check], /echo "state=configured"/);
+  assert.match(steps[install], /if: steps\.update-credential\.outputs\.state == 'configured'/);
+  // The expiry comes from GitHub's header; 401 is the fixed rejected code with its fix.
+  assert.match(steps[check], /grep -i '\^github-authentication-token-expiration:'/);
+  assert.match(steps[check], /read_expiry "\$LANCERLOGIN_WEB_UPDATE_TOKEN" dispatch_credential_rejected "The GitHub token for dashboard updates has expired or been revoked: create a new fine-grained token, replace LANCERLOGIN_WEB_UPDATE_TOKEN, then run Refresh web update credential\."/);
+  assert.match(steps[install], /WEB_UPDATE_TOKEN_EXPIRES_AT: \$\{\{ steps\.update-credential\.outputs\.web_update_expires_at \}\}/);
+  const summary = steps[stepNamed(steps, /name: Publish setup links/)];
+  assert.match(summary, /UPDATE_CREDENTIAL_STATE: \$\{\{ steps\.update-credential\.outputs\.state \}\}/);
+  assert.match(summary, /if \[ "\$UPDATE_CREDENTIAL_STATE" != "configured" \]; then[\s\S]*### Dashboard updates are not set up yet[\s\S]*Actions: Read and write[\s\S]*LANCERLOGIN_WEB_UPDATE_TOKEN[\s\S]*\[Refresh web update credential\]\(\$REFRESH_CREDENTIAL_WORKFLOW_URL\)/);
+  assert.match(await readFile(".github/workflows/provision-template.yml", "utf8"), /REFRESH_CREDENTIAL_WORKFLOW_URL: https:\/\/github\.com\/\$\{\{ github\.repository \}\}\/actions\/workflows\/refresh-web-update-credential\.yml/);
+});
+
+test("the installation summary lists the environment variables future updates need, with the real D1 database ID", async () => {
+  const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
+  const summary = (await installationSteps()).find((step) => /name: Publish setup links/.test(step));
+  assert.match(workflow, /ENVIRONMENTS_URL: https:\/\/github\.com\/\$\{\{ github\.repository \}\}\/settings\/environments/);
+  assert.match(summary, /database_id=\$\(node -e 'const c=require\("\.\/\.provision\/wrangler\.json"\); process\.stdout\.write\(c\.d1_databases\?\.find\(\(b\) => b\.binding === "DB"\)\?\.database_id \?\? ""\)'\)\s+test -n "\$database_id"/);
+  for (const [variable, value] of [["LANCERLOGIN_INSTALLATION_SLUG", "INSTALLATION_SLUG"], ["LANCERLOGIN_DATABASE_ID", "database_id"], ["LANCERLOGIN_API_URL", "API_URL"]]) {
+    assert.ok(summary.includes(`echo "| \\\`${variable}\\\` | \\\`$${value}\\\` |"`), variable);
+  }
+  assert.match(summary, /\[Settings > Environments\]\(\$ENVIRONMENTS_URL\)/);
+  assert.doesNotMatch(workflow, /gh variable set|actions\/variables/, "repository variables are never written");
+});
+
+test("installation creates cloud resources only after every build, and names the resource a create collides with", async () => {
+  const steps = await installationSteps();
+  const lastBuild = stepNamed(steps, /name: Build API before migration or deployment/);
+  const pages = stepNamed(steps, /name: Create Pages project/);
+  const address = stepNamed(steps, /name: Require the exact Pages address/);
+  const database = stepNamed(steps, /name: Create D1 database/);
+  const migrations = stepNamed(steps, /name: Apply D1 migrations/);
+  assert.ok(lastBuild > stepNamed(steps, /name: Compose official modules/));
+  assert.ok(lastBuild < pages && pages < address && address < database && database === migrations - 1);
+  assert.ok(address < stepNamed(steps, /name: Deploy new or incomplete Worker API/));
+  assert.match(steps[database], /if: steps\.d1\.outputs\.state == 'missing'/);
+  // No mutation before the builds: every step up to them only reads.
+  for (const step of steps.slice(0, lastBuild + 1)) assert.doesNotMatch(step, /wrangler (?:d1 create|deploy\b(?! --dry-run)|pages (?:project create|deploy)|secret (?:bulk|put|delete))|--request (?:POST|PUT|PATCH|DELETE)|-X (?:POST|PUT|PATCH|DELETE)/, step.split("\n")[0]);
+  const collisions = steps[stepNamed(steps, /name: Check for resource collisions/)];
+  assert.doesNotMatch(collisions, /^\s+test "\$\{\{ steps/m);
+  assert.match(collisions, /::error title=installation_resources_exist::Create stopped before any change because this Cloudflare account already has \$\(join "\$\{existing\[@\]\}"\)\. If an earlier create with the slug \$INSTALLATION_SLUG stopped partway, run this workflow again with the operation resume and the same slug\./);
+  for (const resource of ["the D1 database $database", "the Pages project $INSTALLATION_SLUG-dashboard", "the Worker $INSTALLATION_SLUG-api"]) assert.ok(collisions.includes(`existing+=("${resource}")`), resource);
+  assert.match(collisions, /::error title=installation_database_missing::/);
+  assert.match(collisions, /::error title=installation_not_found::/);
+  assert.match(steps[stepNamed(steps, /name: Refuse an upgrade that would drop a module/)], /if: inputs\.operation != 'create' && steps\.d1\.outputs\.state == 'exists'/);
+});
+
+const runBlock = (step) => {
+  const lines = step.split("\n"); const start = lines.findIndex((line) => /^ {8}run: \|$/.test(line));
+  return lines.slice(start + 1).map((line) => line.slice(10)).join("\n");
+};
+const bash = spawnSync("bash", ["-c", "true"]).status === 0;
+test("the collision check runs the shell it ships and names each existing or missing resource", { skip: !bash && "bash is not available" }, async (t) => {
+  const collisions = runBlock((await installationSteps()).find((step) => /name: Check for resource collisions/.test(step)));
+  const root = await mkdtemp(join(tmpdir(), "lancerlogin-collisions-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "scripts")); await mkdir(join(root, ".provision"));
+  await writeFile(join(root, "scripts/cloudflare-resource-state.mjs"), await readFile("scripts/cloudflare-resource-state.mjs"));
+  // Stubs for the provider: curl lists the Pages projects, npx answers whether the Worker exists and lists its secrets.
+  const stubs = [
+    "curl() { local out; while [ $# -gt 0 ]; do [ \"$1\" = --output ] && out=$2; shift; done; printf '%s' \"$PAGES_LIST\" > \"$out\"; printf 200; }",
+    "npx() { case \"$*\" in *'deployments list'*) [ \"$WORKER\" = exists ];; *'secret list'*) printf '%s' '[{\"name\":\"SESSION_KEY\"},{\"name\":\"INTEGRATION_KEY\"},{\"name\":\"BOOTSTRAP_CODE_HASH\"}]';; esac; }",
+  ].join("\n");
+  await writeFile(join(root, "collisions.sh"), `set -eo pipefail\n${stubs}\n${collisions}\n`);
+  const run = (operation, { d1 = "missing", pages = false, worker = "missing" } = {}) => {
+    const result = spawnSync("bash", ["collisions.sh"], { cwd: root, encoding: "utf8", env: { ...process.env, INPUT_OPERATION: operation, INSTALLATION_SLUG: "example", DATABASE_NAME: "", D1_STATE: d1, WORKER: worker,
+      GITHUB_OUTPUT: join(root, "output.txt"), PAGES_LIST: JSON.stringify({ success: true, result: pages ? [{ name: "example-dashboard" }] : [] }) } });
+    return { status: result.status, stdout: result.stdout };
+  };
+  assert.equal(run("create").status, 0);
+  const collided = run("create", { d1: "exists", worker: "exists" });
+  assert.equal(collided.status, 1);
+  assert.match(collided.stdout, /^::error title=installation_resources_exist::Create stopped before any change because this Cloudflare account already has the D1 database example-data, the Worker example-api\. If an earlier create with the slug example stopped partway, run this workflow again with the operation resume and the same slug\./m);
+  assert.match(run("create", { pages: true }).stdout, /already has the Pages project example-dashboard\./);
+  // Resume finishes a create that stopped after the Pages project, but never gives an existing Worker a new database.
+  assert.equal(run("resume", { pages: true }).status, 0);
+  assert.equal(run("resume", { d1: "exists", pages: true, worker: "exists" }).status, 0);
+  assert.match(run("resume").stdout, /^::error title=installation_not_found::/m);
+  assert.match(run("resume", { pages: true, worker: "exists" }).stdout, /^::error title=installation_database_missing::/m);
+  assert.equal(run("upgrade", { d1: "exists", pages: true, worker: "exists" }).status, 0);
+  assert.match(run("upgrade", { d1: "exists", worker: "exists" }).stdout, /^::error title=installation_incomplete::Upgrade stopped before any change because these were not found in this Cloudflare account: the Pages project example-dashboard\./m);
+});
+
+const gnuDate = bash && spawnSync("bash", ["-c", "date -u -d '2026-11-05 00:00:00 UTC' +%Y"], { encoding: "utf8" }).stdout.trim() === "2026";
+test("the installation credential check skips a missing token, rejects a revoked one and passes on GitHub's expiry", { skip: !gnuDate && "bash with GNU date is not available" }, async (t) => {
+  const check = runBlock((await installationSteps()).find((step) => /name: Check the optional dashboard update credential/.test(step)));
+  const root = await mkdtemp(join(tmpdir(), "lancerlogin-update-credential-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "scripts"));
+  // Stubs: curl answers GitHub with STATUS and an optional expiry header; node records what the release script received.
+  const stubs = [
+    "curl() { local headers; while [ $# -gt 0 ]; do [ \"$1\" = --dump-header ] && headers=$2; shift; done; printf 'HTTP/2 %s\\r\\n' \"$STATUS\" > \"$headers\"; [ -n \"$EXPIRY\" ] && printf 'github-authentication-token-expiration: %s\\r\\n' \"$EXPIRY\" >> \"$headers\"; printf '%s' \"$STATUS\"; }",
+    "node() { printf '%s|%s|%s\\n' \"$*\" \"$WEB_UPDATE_TOKEN_EXPIRES_AT\" \"$MODULE_SELECTION_TOKEN_EXPIRES_AT\" >> node-calls.txt; }",
+  ].join("\n");
+  await writeFile(join(root, "check.sh"), `set -eo pipefail\n${stubs}\n${check}\n`);
+  const run = async ({ token = "synthetic-dispatch", selection = "", status = "200", expiry = "", legacy = false } = {}) => {
+    await writeFile(join(root, "scripts/refresh-web-update-credential.mjs"), legacy ? "// earlier release\n" : "// github-authentication-token-expiration\n");
+    await rm(join(root, "node-calls.txt"), { force: true }); await writeFile(join(root, "output.txt"), "");
+    const result = spawnSync("bash", ["check.sh"], { cwd: root, encoding: "utf8", env: { ...process.env, LANCERLOGIN_WEB_UPDATE_TOKEN: token, LANCERLOGIN_MODULE_SELECTION_TOKEN: selection,
+      LANCERLOGIN_UPDATE_REPOSITORY: "example/private-install", RELEASE_TAG: "v1.2.6", RUNNER_TEMP: root, GITHUB_OUTPUT: join(root, "output.txt"), STATUS: status, EXPIRY: expiry } });
+    const calls = await readFile(join(root, "node-calls.txt"), "utf8").catch(() => "");
+    return { status: result.status, stdout: result.stdout, output: await readFile(join(root, "output.txt"), "utf8"), calls };
+  };
+  const missing = await run({ token: "" });
+  assert.equal(missing.status, 0); assert.equal(missing.output, "state=missing\n"); assert.equal(missing.calls, "");
+  assert.match(missing.stdout, /^::warning title=dispatch_credential_not_configured::/m);
+  const rejected = await run({ status: "401" });
+  assert.equal(rejected.status, 1); assert.equal(rejected.calls, "");
+  assert.match(rejected.stdout, /^::error title=dispatch_credential_rejected::The GitHub token for dashboard updates has expired or been revoked/m);
+  const expiring = await run({ expiry: "2026-11-05 00:00:00 UTC" });
+  assert.equal(expiring.status, 0);
+  assert.equal(expiring.calls, "scripts/refresh-web-update-credential.mjs --verify-only|2026-11-05T00:00:00.000Z|\n");
+  assert.match(expiring.output, /^state=configured\nweb_update_expires_at=2026-11-05T00:00:00\.000Z\nmodule_selection_expires_at=\n$/);
+  // A token without an expiry passes to a release that reads the header itself, but not to an earlier release.
+  assert.equal((await run()).status, 0);
+  const legacy = await run({ legacy: true });
+  assert.equal(legacy.status, 1); assert.match(legacy.stdout, /^::error title=dispatch_credential_expiry_required::LancerLogin v1\.2\.6 accepts only GitHub tokens that have an expiration date/m);
+  assert.equal((await run({ legacy: true, expiry: "2026-11-05 00:00:00 UTC" })).status, 0);
+  const selection = await run({ selection: "synthetic-selection", expiry: "2026-11-05 00:00:00 +0700" });
+  assert.equal(selection.calls, "scripts/refresh-web-update-credential.mjs --verify-only|2026-11-04T17:00:00.000Z|2026-11-04T17:00:00.000Z\n");
+});
+
+test("installation checks the account, token permissions and exact Pages address before it deploys", async () => {
+  const steps = await installationSteps();
+  const preflight = stepNamed(steps, /name: Check the Cloudflare account and token permissions before any cloud mutation/);
+  assert.ok(preflight > stepNamed(steps, /name: Verify the scoped token/) && preflight < stepNamed(steps, /name: Discover D1 resources/));
+  for (const [path, permission] of [["/workers/scripts", "Workers Scripts: Edit"], ["/d1/database\\?per_page=1", "D1: Edit"], ["/pages/projects", "Cloudflare Pages: Edit"]]) {
+    assert.match(steps[preflight], new RegExp(`require_read "${path}" "[^"]+" "${permission}"`));
+  }
+  assert.match(steps[preflight], /cf_get \/workers\/subdomain/);
+  assert.match(steps[preflight], /::error title=workers_subdomain_required::/);
+  assert.match(steps[preflight], /::error title=cloudflare_permission_missing::/);
+  assert.doesNotMatch(steps[preflight], /--request|-X /, "only GET requests");
+  const address = steps[stepNamed(steps, /name: Require the exact Pages address/)];
+  assert.match(address, /pages\/projects\/\$INSTALLATION_SLUG-dashboard"/);
+  assert.match(address, /if \[ "\$subdomain" != "\$INSTALLATION_SLUG-dashboard\.pages\.dev" \]; then/);
+  assert.match(address, /::error title=pages_address_taken::[\s\S]*different slug/);
+  // The exact address the Worker's allowed origin is built from.
+  assert.match(await readFile("scripts/prepare-cloudflare-provision.mjs", "utf8"), /ALLOWED_ORIGIN: `https:\/\/\$\{slug\}-dashboard\.pages\.dev`/);
+});
+
+test("validation failures print coded error annotations that explain the fix", async () => {
+  const steps = await installationSteps();
+  const validation = steps[stepNamed(steps, /name: Validate deployment request/)];
+  for (const code of ["operation_invalid", "installation_slug_invalid", "cloudflare_token_required", "account_token_required", "cloudflare_account_id_invalid", "setup_code_required"]) assert.match(validation, new RegExp(`::error title=${code}::`), code);
+  assert.match(validation, /::error title=account_token_required::[^"]*Account API token[^"]*A user API token[^"]*Manage account > Account API tokens[^"]*"/);
+  for (const step of steps) for (const line of step.split("\n").filter((text) => text.includes("::error"))) assert.match(line, /::error title=(?:[a-z][a-z0-9_]+|\$2)::/, line.trim());
+  const workflows = await Promise.all(["provision-template", "upgrade-web", "refresh-web-update-credential"].map((name) => readFile(`.github/workflows/${name}.yml`, "utf8")));
+  for (const text of [...workflows, await readFile("scripts/workflow-annotations.mjs", "utf8")]) assert.doesNotMatch(text, emDash);
+});
+
+test("resume re-applies the current setup code while no first Admin exists, and needs it only then", async () => {
+  const steps = await installationSteps();
+  const validation = steps[stepNamed(steps, /name: Validate deployment request/)];
+  // Only create needs the setup code before the installation is inspected.
+  assert.match(validation, /if \[ "\$INPUT_OPERATION" = "create" \] && \[ "\$\{#LANCERLOGIN_SETUP_CODE\}" -lt 16 \]; then/);
+  assert.doesNotMatch(validation, /"\$INPUT_OPERATION" != "upgrade" \] && \[ "\$\{#LANCERLOGIN_SETUP_CODE\}" -lt 16/);
+  const adminIndex = stepNamed(steps, /name: Check whether the first Admin exists/);
+  const admin = steps[adminIndex];
+  assert.ok(adminIndex > stepNamed(steps, /name: Check for resource collisions/) && adminIndex < stepNamed(steps, /name: Create Pages project/));
+  assert.match(admin, /wrangler d1 execute "\$database" --remote --json --config \.provision\/wrangler\.json \\\s+--command "SELECT COUNT\(\*\) AS tables FROM sqlite_master WHERE type = 'table' AND name = 'installations'"/);
+  assert.match(admin, /--command "SELECT COUNT\(\*\) AS installations FROM installations"/);
+  for (const command of admin.match(/--command "[^"]+"/g)) assert.match(command, /^--command "SELECT /, "read-only queries only");
+  assert.match(admin, /elif \[ "\$INPUT_OPERATION" != "upgrade" \] && \[ "\$admin" = "missing" \]; then[\s\S]*rotate=true/);
+  assert.match(admin, /if \[ -n "\$reason" \] && \[ "\$\{#LANCERLOGIN_SETUP_CODE\}" -lt 16 \]; then\s+echo "::error title=setup_code_required::/);
+  const rotationIndex = stepNamed(steps, /name: Apply the current setup code while no first Admin exists/);
+  const rotation = steps[rotationIndex];
+  assert.ok(rotationIndex > stepNamed(steps, /name: Deploy existing Worker API/));
+  assert.match(rotation, /if: steps\.admin\.outputs\.rotate_setup_code == 'true'/);
+  assert.match(rotation, /JSON\.stringify\(\{BOOTSTRAP_CODE_HASH:process\.env\.BOOTSTRAP_CODE_HASH\}\)[\s\S]*wrangler secret bulk --config \.provision\/wrangler\.json/);
+  assert.doesNotMatch(rotation, /SESSION_KEY|INTEGRATION_KEY/, "only the setup code hash changes");
+  // The same hash as the first upload.
+  const hash = /BOOTSTRAP_CODE_HASH=\$\(printf '%s' "\$LANCERLOGIN_SETUP_CODE" \| openssl dgst -sha256 -binary \| openssl base64 -A \| tr '\+\/' '-_' \| tr -d '='\)/;
+  assert.match(rotation, hash); assert.match(steps[stepNamed(steps, /name: Generate installation secrets/)], hash);
 });

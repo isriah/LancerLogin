@@ -209,12 +209,18 @@ test("invitation waits for a successful page load and leaves a real draft untouc
   await page.reload(); await expect(page.getByText("Meeting service is unavailable.")).toBeVisible(); await expect(panel(page)).toHaveCount(0);
 });
 
-test("setup and a pending Undo take precedence over the invitation", async ({ page }) => {
+test("setup takes precedence over the invitation and keeps tours closed for the rest of the session", async ({ page }) => {
   await account(page, fresh());
   await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot({ setupReady: false }) }));
   await page.route("**/admin/modules/attendance/setup", (route) => route.fulfill({ json: attendanceSetupState() }));
-  await page.goto("/dashboard"); await expect(page.getByRole("heading", { name: "Set up Attendance", exact: true })).toBeVisible(); await expect(panel(page)).toHaveCount(0);
+  await page.goto("/dashboard"); await expect(page.getByRole("heading", { name: "Attendance setup", exact: true })).toBeVisible(); await expect(panel(page)).toHaveCount(0);
   await page.unroute("**/platform/modules"); await page.unroute("**/admin/modules/attendance/setup");
+  await page.goto("/dashboard"); await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
+  await page.waitForTimeout(500); await expect(panel(page)).toHaveCount(0);
+});
+
+test("a pending Undo takes precedence over the invitation", async ({ page }) => {
+  await account(page, fresh());
   await page.clock.install();
   await page.route(/\/meetings\/active-meeting$/, route => route.request().method() === "DELETE" ? route.fulfill({ json: { deleted: 1, deletion: { meetingIds: ["active-meeting"], deletedAt: "2026-10-18T12:00:00.000Z" } } }) : route.continue());
   await page.route("**/meetings/active-meeting/restore", route => route.fulfill({ json: { restored: 1 } }));

@@ -1,4 +1,6 @@
-name: Verify
+name: "Maintainers: Verify"
+# Maintainer verification for isriah/LancerLogin. Every job is guarded by repository, so the copy in an adopter
+# repository created from the template never runs.
 on:
   pull_request:
   push:
@@ -12,7 +14,7 @@ env:
   LANCERLOGIN_PLUGIN_FREE_BUILD: "1"
 jobs:
   actionlint:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && github.repository == 'isriah/LancerLogin'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -20,7 +22,7 @@ jobs:
         with:
           args: -color
   verify:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && github.repository == 'isriah/LancerLogin'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -49,9 +51,6 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             full=true
             reason="manual complete verification"
-          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$HEAD_COMMIT_MESSAGE" == Release\ v* ]]; then
-            full=true
-            reason="exact release commit"
           elif [[ "$GITHUB_EVENT_NAME" == "push" && "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
             full=true
             reason="new branch history"
@@ -100,6 +99,7 @@ jobs:
         if: steps.verification-scope.outputs.full != 'true' && steps.verification-scope.outputs.kiosk == 'true'
         run: npm run verify:kiosk
   dependency-audit:
+    if: github.repository == 'isriah/LancerLogin'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -151,9 +151,7 @@ jobs:
     # Core: every core and integration spec, plugin-free. Each part is a set of whole spec files balanced by measured time.
     # The dashboard is served by the Vite dev server from this checkout, so there is no prebuilt build to share.
     name: Core browser shard ${{ matrix.shard }}/4
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Release v'))
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'isriah/LancerLogin'
     runs-on: ubuntu-latest
     # Setup on a slow runner must not cancel passing tests; the test step keeps its own limit.
     timeout-minutes: 30
@@ -188,9 +186,7 @@ jobs:
     # Plugin: the specs that need the official Outreach or Carpool plugin, with both composed. Composition fails the job,
     # rather than skipping, when a pin is unreadable, and the runner refuses this group without composition.
     name: Plugin browser shard ${{ matrix.shard }}/1
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Release v'))
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'isriah/LancerLogin'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -227,9 +223,7 @@ jobs:
     # Integration: the Core specs whose behaviour changes when plugins exist (module navigation, Settings > Modules and
     # plugin management, module setup, backup and restore, shell and startup), again with the plugins composed.
     name: Integration browser shard ${{ matrix.shard }}/1
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Release v'))
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'isriah/LancerLogin'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -265,8 +259,8 @@ jobs:
   browser-smoke:
     if: >-
       !cancelled() &&
-      (github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Release v')))
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'isriah/LancerLogin'
     needs: [core-browser-shard, plugin-browser-shard, integration-browser-shard]
     runs-on: ubuntu-latest
     steps:

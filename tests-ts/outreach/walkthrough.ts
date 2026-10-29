@@ -217,7 +217,6 @@ test("entire-installation backups round-trip progress, older backups reset it, a
     result = await restore("installation", schema28); assert.equal(result.status, 200, await result.clone().text());
     assert.equal(db.sqlite.prepare("SELECT automatic FROM hours_publication_settings WHERE installation_id='primary'").get()?.automatic, 0);
     assert.deepEqual({ ...db.sqlite.prepare("SELECT event_start_local,event_end_local FROM hours_activities WHERE id='scheduled-event'").get() }, { event_start_local: null, event_end_local: null });
-    assert.equal((await call(db, "/admin/setup/reset", "admin", { confirmation: "RESET ONBOARDING" })).status, 200);
     assert.equal((await (await call(db, endpoint)).json() as any).progress.status, "completed");
     for (const scope of ["roster", "meetings"]) {
       const category = await (await call(db, `/admin/data/backup?scope=${scope}`)).json() as any;

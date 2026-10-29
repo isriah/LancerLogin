@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 
 type PageId = "roster" | "member" | "reports" | "meeting" | "kiosks" | "simulator";
@@ -213,6 +214,10 @@ for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, 
     await page.goto("/kiosks");
     await expect(page.getByText("Example kiosk", { exact: true })).toBeVisible();
     await expect(page.getByText(/Example kiosk for this walkthrough/)).toBeVisible();
+    // The example reports the release this dashboard runs, never invented version numbers.
+    const { version } = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
+    await expect(page.locator(".kiosk-summary")).toContainText(`Installed release${version}`);
+    await expect(page.locator(".kiosk-summary")).toContainText(`${version}Up to date`);
     await expect(page.getByRole("button", { name: "Rename Example kiosk", exact: true })).toBeDisabled();
     await panel(page).getByRole("button", { name: "Start walkthrough" }).click();
     for (let index = 0; index < 12; index++) {

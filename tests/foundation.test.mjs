@@ -249,7 +249,8 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /Require a private deployment repository/);
-  assert.match(workflow, /release:\s+[\s\S]*type: choice[\s\S]*- latest stable[\s\S]*- original template release/);
+  assert.match(workflow, /release:\s+[\s\S]*type: choice\s+options:\s+- latest stable\s+installation_slug:/);
+  assert.doesNotMatch(workflow, /original template release|TEMPLATE_RELEASE/);
   assert.doesNotMatch(workflow, /release_tag:\s/);
   assert.match(workflow, /gh api repos\/isriah\/LancerLogin\/releases\/latest --jq \.tag_name/);
   assert.match(workflow, /ref: \$\{\{ steps\.release\.outputs\.sha \}\}/);
@@ -284,6 +285,29 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.equal((workflow.match(/accountId: \$\{\{ secrets\.CLOUDFLARE_ACCOUNT_ID \}\}/g) ?? []).length, 3);
   assert.doesNotMatch(workflow, /accountId:\s*[a-f0-9]{32}|account_id\s*[:=]\s*[a-f0-9]{32}/i);
   assert.doesNotMatch(workflow, /run:[\s\S]{0,300}\$\{\{ inputs\.(?:operation|confirmation|installation_slug) \}\}/);
+});
+
+// Maintainer-only jobs run only in the official repository, never in an adopter repository created from the template.
+const maintainerGuard = String.raw`github\.repository == 'isriah\/LancerLogin'`;
+test("maintainer-only workflows are named as such and never run in an adopter repository", async () => {
+  const { readdir } = await import("node:fs/promises");
+  const adopterWorkflows = { "provision-template.yml": "Install or upgrade LancerLogin", "upgrade-web.yml": "Upgrade LancerLogin web (update channels v2)", "refresh-web-update-credential.yml": "Refresh web update credential" };
+  const maintainerRepository = /github\.repository == 'isriah\/LancerLogin'/;
+  for (const file of await readdir(".github/workflows")) {
+    const workflow = (await readFile(`.github/workflows/${file}`, "utf8")).replace(/\r\n/g, "\n");
+    const name = workflow.match(/^name: (.+)$/m)?.[1].replace(/^"|"$/g, "");
+    if (adopterWorkflows[file]) { assert.equal(name, adopterWorkflows[file], file); assert.doesNotMatch(name, /^Maintainers: /); continue; }
+    assert.match(name, /^Maintainers: /, file);
+    const jobs = workflow.split(/^jobs:\n/m)[1].split(/^(?=  [a-z0-9-]+:\n)/m).filter((chunk) => /^  [a-z0-9-]+:\n/.test(chunk));
+    assert.ok(jobs.length > 0, file);
+    for (const job of jobs) {
+      const id = job.match(/^  ([a-z0-9-]+):/)[1];
+      const condition = job.match(/^    if: (>-\n(?: {6}.+\n)+|.+)/m)?.[1] ?? "";
+      // A job that needs a guarded job is skipped with it, unless its condition overrides that with always().
+      const inherits = /^    needs:/m.test(job) && !/always\(\)|!cancelled\(\)/.test(condition);
+      assert.ok(inherits || maintainerRepository.test(condition), `${file} ${id}`);
+    }
+  }
 });
 
 test("CI scopes ordinary changes and runs one complete exact-release gate", async () => {
@@ -343,8 +367,10 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   const matrixOf = (count) => `shard: [${Array.from({ length: count }, (_, index) => index + 1).join(", ")}]`;
   const browserShardJob = browserJob("core-browser-shard", "plugin-browser-shard");
   assert.ok(browserShardJob);
-  assert.match(browserShardJob, /workflow_dispatch/);
-  assert.match(browserShardJob, /startsWith\(github\.event\.head_commit\.message, 'Release v'\)/);
+  // Only a dispatched run on the exact release commit runs the complete gate; fast-forwarding the trusted branch to that
+  // commit afterwards must not repeat it.
+  assert.match(browserShardJob, new RegExp(`if: github\\.event_name == 'workflow_dispatch' && ${maintainerGuard}\\n`));
+  assert.doesNotMatch(ciWorkflow, /head_commit\.message, 'Release v'|reason="exact release commit"/);
   assert.match(browserShardJob, /fail-fast: false/);
   assert.ok(browserShardJob.includes(`name: Core browser shard \${{ matrix.shard }}/${browserShardCounts.core}\n`));
   assert.ok(browserShardJob.includes(matrixOf(browserShardCounts.core)));
@@ -366,7 +392,7 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
     const count = browserShardCounts[group];
     assert.ok(job, name);
     assert.ok(job.includes(`name: ${group[0].toUpperCase()}${group.slice(1)} browser shard \${{ matrix.shard }}/${count}\n`), name);
-    assert.match(job, /if: >-\s+github\.event_name == 'workflow_dispatch' \|\|\s+\(github\.event_name == 'push' && startsWith\(github\.event\.head_commit\.message, 'Release v'\)\)\s+runs-on/);
+    assert.match(job, new RegExp(`if: github\\.event_name == 'workflow_dispatch' && ${maintainerGuard}\\s+runs-on`));
     assert.doesNotMatch(job, /pull_request|schedule/);
     assert.match(job, /fail-fast: false/);
     assert.ok(job.includes(matrixOf(count)), name);
@@ -381,7 +407,7 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   const browserGate = ciWorkflow.match(/  browser-smoke:([\s\S]*)$/)?.[1];
   assert.ok(browserGate);
   assert.match(browserGate, /needs: \[core-browser-shard, plugin-browser-shard, integration-browser-shard\]/);
-  assert.match(browserGate, /startsWith\(github\.event\.head_commit\.message, 'Release v'\)/);
+  assert.match(browserGate, new RegExp(`if: >-\\s+!cancelled\\(\\) &&\\s+github\\.event_name == 'workflow_dispatch' &&\\s+${maintainerGuard}\\s+needs:`));
   for (const [variable, job] of [["CORE_SHARD_RESULT", "core-browser-shard"], ["PLUGIN_SHARD_RESULT", "plugin-browser-shard"], ["INTEGRATION_SHARD_RESULT", "integration-browser-shard"]]) {
     assert.ok(browserGate.includes(`test "$${variable}" = success`), variable);
     assert.ok(browserGate.includes(`${variable}: \${{ needs.${job}.result }}`), variable);

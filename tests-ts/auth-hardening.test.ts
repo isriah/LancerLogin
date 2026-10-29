@@ -194,6 +194,7 @@ test("a setup code cannot claim the installation again after DELETE INSTALLATION
   const again = await call(env, "/setup/bootstrap", { body: input, cookie: grant });
   assert.equal(again.status, 201, await again.clone().text());
   assert.ok(again.headers.getSetCookie().some((value) => value.startsWith("lancerlogin_setup_reset=;")));
+  assert.ok(setCookie(again, "lancerlogin_session"), "clearing the reset grant does not replace the new Admin's session cookie");
   assert.equal(db.value<{ n: number }>("SELECT COUNT(*) AS n FROM bootstrap_reset_grants")?.n, 0, "the grant is one-time");
   // Authority epochs survive deletion by design; the new installation continues them and its module platform works.
   assert.deepEqual({ ...db.value("SELECT a.revision AS administration, e.revision AS epoch FROM platform_module_administration a JOIN platform_module_administration_epochs e USING(installation_id)") }, { administration: 1, epoch: 1 });
@@ -210,6 +211,46 @@ test("a setup code cannot claim the installation again after DELETE INSTALLATION
   assert.equal((await call(rotatedEnv, "/setup/bootstrap", { body: { ...input, setupCode: rotated } })).status, 409, "the code in use at deletion is now claimed");
   db.sqlite.exec("DELETE FROM bootstrap_code_claims");
   assert.equal((await call(env, "/setup/bootstrap", { body: input })).status, 201, "first install with an unused code still works");
+});
+
+test("first-Admin setup with a local password signs the Admin in with the local sign-in session cookie", async (context) => {
+  quietErrors(context);
+  const db = new Database(false); const env = environment(db, { APP_MODE: "unconfigured" });
+  const input = { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple" };
+  const created = await call(env, "/setup/bootstrap", { body: input });
+  assert.equal(created.status, 201, await created.clone().text());
+  const body = await created.json() as { signedIn: boolean; user?: { id: string; role: string; debugMode: boolean }; admin: { id: string } };
+  assert.equal(body.signedIn, true);
+  assert.deepEqual(body.user, { id: body.admin.id, role: "admin", debugMode: false });
+  const [issued, ...others] = created.headers.getSetCookie();
+  assert.equal(others.length, 0, "a first setup without a reset grant sets only the session cookie");
+  assert.match(issued!, /^lancerlogin_session=[^;]+; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=28800$/);
+  // The same cookie attributes as /auth/local, so first setup grants no weaker or longer-lived session than signing in.
+  const login = await call(env, "/auth/local", { body: { username: "director", password: "correct horse battery staple" } });
+  assert.equal(login.status, 200);
+  const attributes = (value: string) => value.split(";").slice(1).map((part) => part.trim());
+  assert.deepEqual(attributes(issued!), attributes(login.headers.getSetCookie()[0]!));
+  const session = await call(env, "/auth/session", { cookie: setCookie(created, "lancerlogin_session") });
+  assert.equal(session.status, 200);
+  assert.equal((await session.json() as { user: { id: string; role: string } }).user.role, "admin");
+  // The setup session follows the same revocation as a sign-in session.
+  assert.equal((await call(env, "/auth/logout", { body: {}, cookie: setCookie(created, "lancerlogin_session") })).status, 200);
+  assert.equal((await call(env, "/auth/session", { cookie: setCookie(created, "lancerlogin_session") })).status, 401);
+});
+
+test("first-Admin setup issues no session for Google-only setup or a Worker without a session key", async (context) => {
+  quietErrors(context);
+  const google = new Database(false);
+  const googleSetup = await call(environment(google, { APP_MODE: "unconfigured" }), "/setup/bootstrap", { body: { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "google", adminEmail: "admin@example.test", googleClientId: "synthetic-client", googleClientSecret: "synthetic-secret" } });
+  assert.equal(googleSetup.status, 201, await googleSetup.clone().text());
+  assert.equal((await googleSetup.json() as { signedIn: boolean }).signedIn, false);
+  assert.equal(setCookie(googleSetup, "lancerlogin_session"), undefined);
+
+  const keyless = new Database(false);
+  const keylessSetup = await call(environment(keyless, { APP_MODE: "unconfigured", SESSION_KEY: undefined }), "/setup/bootstrap", { body: { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple" } });
+  assert.equal(keylessSetup.status, 201, await keylessSetup.clone().text());
+  assert.equal((await keylessSetup.json() as { signedIn: boolean }).signedIn, false);
+  assert.equal(setCookie(keylessSetup, "lancerlogin_session"), undefined);
 });
 
 test("logout, password reset and deactivation revoke sessions; tokens from before epochs stay valid", async () => {

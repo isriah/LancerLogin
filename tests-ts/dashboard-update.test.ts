@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createSingleFlight, createReleaseCache, releaseCacheKey, releaseCacheTtlMs, ReleaseCheckError, fetchLatestRelease, latestReleaseUrl } from "../apps/dashboard/src/update-release.ts";
 import { kioskUpdateState, type KioskUpdateCommand } from "../apps/dashboard/src/kiosk-update-status.ts";
-import { canReloadWebUpdate, isCompletedWebUpdateHistory, diagnosticUrl, webUpdateError, webUpdateStatus, type WebUpdateRequest } from "../apps/dashboard/src/web-update.ts";
+import { canReloadWebUpdate, isCompletedWebUpdateHistory, deploymentLinks, diagnosticUrl, tokenCreationUrl, webUpdateError, webUpdateErrorLinks, webUpdateStatus, type WebUpdateRequest } from "../apps/dashboard/src/web-update.ts";
+import { readFileSync } from "node:fs";
 
 test("web updates require verified finalization and a newer verified target than the bundled version to reload", () => {
   const request = { state: "succeeded", targetTag: "v1.0.0", reloadReady: true, maintenance: false, errorCode: null } as WebUpdateRequest;
@@ -17,6 +18,33 @@ test("web updates require verified finalization and a newer verified target than
   assert.match(webUpdateError("cooldown"), /GitHub or this installation.*provider limits may take longer/);
   assert.equal(diagnosticUrl("javascript:alert(1)"), undefined);
   assert.equal(diagnosticUrl("https://credential:secret@example.test/"), undefined);
+});
+
+test("every update error code has specific copy naming what failed and how to fix it", () => {
+  const sources = ["apps/api/src/web-updates.ts", "apps/api/src/update-channel.ts", "apps/api/src/plugin-selection.ts"].map((path) => readFileSync(path, "utf8")).join("\n");
+  const thrown = [...readFileSync("apps/api/src/web-updates.ts", "utf8").matchAll(/fail\(\d+, "([a-z_]+)"/g)].map((match) => match[1]!);
+  const recorded = [...sources.matchAll(/error_code = '([a-z_]+)'|code = state === "recovery_required" \? "([a-z_]+)" : state === "failed" \? "([a-z_]+)"/g)].flatMap((match) => match.slice(1).filter(Boolean) as string[]);
+  // Credential codes from plugin selection that also reach the update flow, and the controller's stage failures.
+  const controller = ["preflight", "build", "maintenance", "checkpoint", "migrations", "api_deployment", "pages_deployment", "health"].map((stage) => `${stage}_failed`);
+  const codes = new Set([...thrown, ...recorded, ...controller, "dispatch_ambiguous", "selection_credential_required", "selection_credential_expired", "selection_credential_rejected", "selection_credential_permission", "selection_invalid", "selection_unavailable", "superseded_by_later_release"]);
+  for (const code of ["preflight_failed", "workflow_incomplete", "workflow_stopped_unchanged", "dispatch_credential_rejected", "dispatch_unresolved", "channel_changed"]) assert.ok(codes.has(code), code);
+  const fallback = "fallback";
+  for (const code of codes) {
+    const message = webUpdateError(code, fallback);
+    assert.notEqual(message, fallback, `${code} needs specific copy`);
+    assert.doesNotMatch(message, /operator|maintainer|—/, `${code} names the fix instead of a role`);
+  }
+  for (const code of ["credential_required", "credential_expired", "credential_expiring", "dispatch_credential_rejected"]) {
+    assert.match(webUpdateError(code), /LANCERLOGIN_WEB_UPDATE_TOKEN.*"Refresh web update credential"/);
+    assert.deepEqual(webUpdateErrorLinks(code, "example/private-install").map((link) => link.href).slice(0, 3), [tokenCreationUrl, "https://github.com/example/private-install/settings/environments", "https://github.com/example/private-install/actions/workflows/refresh-web-update-credential.yml"]);
+  }
+  assert.match(webUpdateError("credential_required"), /"Install or upgrade LancerLogin" workflow with operation "upgrade"/);
+  assert.match(webUpdateError("selection_credential_rejected"), /LANCERLOGIN_MODULE_SELECTION_TOKEN.*Contents: Read and write/);
+  // Without a known repository only the token page can be linked; nothing is guessed.
+  assert.deepEqual(webUpdateErrorLinks("credential_expired", null), [{ label: "Create a GitHub fine-grained token", href: tokenCreationUrl }]);
+  assert.deepEqual(webUpdateErrorLinks("cooldown", "example/private-install"), []);
+  assert.equal(deploymentLinks("bad/repo/path").environments, undefined);
+  assert.equal(deploymentLinks("example/private-install").install, "https://github.com/example/private-install/actions/workflows/provision-template.yml");
 });
 
 test("latest release lookup aborts a stalled public feed within its bound", async () => {

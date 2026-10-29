@@ -33,8 +33,8 @@ export function github(args, binary = false) {
 }
 const api = (gh, path) => JSON.parse(gh(["api", "--hostname", "github.com", "-H", "X-GitHub-Api-Version: 2026-03-10", `repos/${repository}/${path}`]));
 const cliRepo = ["--repo", `github.com/${repository}`];
-// A complete Verify run counts for the exact commit when it ran on a push to the trusted branch, or when a maintainer
-// dispatched it for that same commit. A dispatch runs the workflow file from that commit, so its evidence is the same;
+// A complete Verify run counts for the exact commit when a maintainer dispatched it for that commit, or when it ran on a
+// push to the trusted branch (only releases before v2.0.0-beta.16; pushes no longer run the complete gate). A dispatch runs the workflow file from that commit, so its evidence is the same;
 // resolveRelease separately requires the commit to be on the trusted branch before accepting it.
 const trustedVerifyRun = (run, sha, branch) => run.head_sha === sha && (run.event === "push" && run.head_branch === branch || run.event === "workflow_dispatch");
 export function assertCompleteVerify(run, jobs, sha, branch) {

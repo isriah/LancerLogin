@@ -34,20 +34,17 @@ test("dashboard shell includes baseline accessibility and escapes branding", () 
   assert.doesNotMatch(html, /People/);
 });
 
-test("live Admin workspace uses the authorized kiosk route and exits completed onboarding", async () => {
-  const source = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
+test("the legacy guided setup wizard and its pre-deploy preview are gone", async () => {
+  // Attendance setup (module-setup-workspace.tsx) replaced the five-step wizard and its file; Branding lives in branding.ts.
+  await assert.rejects(readFile("apps/dashboard/src/setup-workspace.tsx", "utf8"), { code: "ENOENT" });
+  const branding = await readFile("apps/dashboard/src/branding.ts", "utf8");
+  const entry = await readFile("apps/dashboard/src/main.tsx", "utf8");
   const pairing = await readFile("apps/dashboard/src/hardware-pairing-key.ts", "utf8");
-  assert.match(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/admin\/kiosks"\)/);
-  assert.match(source, /Finish and return to dashboard/);
-  assert.doesNotMatch(source, /api<\{ kiosks: Kiosk\[\] \}>\("\/kiosks"\)/);
+  assert.match(branding, /export type Branding = \{ organizationName: string;/);
+  assert.match(entry, /import type \{ Branding \} from "\.\/branding"/);
+  assert.doesNotMatch(entry, /cloudflareSteps|installationSteps|Community Edition|Copy the selected Account ID/);
+  assert.match(entry, /Setup service not configured/);
   assert.match(pairing, /releases\/latest\/download\/install-lancerlogin\.sh/);
-  assert.match(source, /Download guided Pi installer/);
-  assert.match(source, /aria-label="Core setup steps"/);
-  assert.match(source, /Browser simulator/);
-  assert.match(source, /inline-messages error/);
-  assert.match(source, /role="dialog"/);
-  assert.match(source, /Go to Dashboard/);
-  assert.doesNotMatch(source, /<details className="admin-tools"/);
 });
 
 test("browser emulator uses the shared kiosk display contract and labels its input boundary", async () => {
@@ -72,26 +69,18 @@ test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", 
   assert.match(source, /Confirm Admin password/);
   assert.match(source, /localPassword !== localPasswordConfirmation/);
   assert.doesNotMatch(source, /Allow anonymous usage reporting/);
+  assert.match(source, /If every Admin loses their password, see/);
+  assert.match(source, /https:\/\/isriah\.github\.io\/LancerLogin\/operations\.html/);
+  assert.doesNotMatch(source, /Recovery uses the local setup tool|Welcome back/);
 });
 
-test("guided setup keeps branding local and makes its compact progress accessible", async () => {
-  const workspace = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
+test("organization branding stays local and the entry keeps the saved theme", async () => {
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   const entry = await readFile("apps/dashboard/src/main.tsx", "utf8");
   const settings = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
   const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
-  assert.match(workspace, /accept="image\/png,image\/jpeg,image\/webp"/);
-  assert.match(workspace, /file\.size > 131_072/);
-  assert.doesNotMatch(workspace, /stored in D1/);
-  assert.doesNotMatch(workspace, /Light or dark mode is a personal browser preference/);
-  assert.match(workspace, /className="setup-progress" role="progressbar"/);
-  assert.match(workspace, /aria-label="Guided setup progress"/);
-  assert.match(workspace, /Physical kiosk authentication/);
-  assert.match(workspace, /Save authentication method/);
-  assert.match(workspace, /The local authentication test passed/);
-  assert.match(workspace, /setInterval\(\(\) => void refresh\(\), 5_000\)/);
-  assert.match(workspace, /disabled=\{!kioskAuthenticationReady\}/);
-  assert.doesNotMatch(workspace, /The local reader test passed/);
+  assert.match(settings, /accept="image\/png,image\/jpeg,image\/webp"/);
+  assert.doesNotMatch(settings, /stored in D1/);
   assert.match(styles, /\.setup-logo-file input\[type="file"\]::file-selector-button/);
   assert.match(styles, /\.wizard-panel \.logo-backdrop-options \+ \.color-grid/);
   assert.match(styles, /\.wizard-panel \.setup-branding-save \{ margin-top: \.45rem/);
@@ -100,7 +89,7 @@ test("guided setup keeps branding local and makes its compact progress accessibl
   assert.match(entry, /lancerlogin-theme/);
   assert.match(entry, /role="switch" aria-checked=\{!dark\} aria-label="Light mode"/);
   assert.match(styles, /\.theme-toggle\[aria-checked="true"\] \.theme-toggle-track/);
-  assert.match(workspace, /Logo contrast/);
+  assert.match(settings, /Logo contrast/);
   assert.match(settings, /id="organization-title">Organization/);
   assert.match(settings, /Save organization settings/);
   assert.match(configuration, /Late scan allowance/);
@@ -438,7 +427,6 @@ test("pending contests use meeting detail, the global notifier, and the Reports 
 test("dashboard cards keep their spacing and operational actions aligned", async () => {
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
-  const setup = await readFile("apps/dashboard/src/setup-workspace.tsx", "utf8");
   assert.match(styles, /--card-padding: var\(--space-5\)/);
   assert.match(styles, /\.kiosk-monitor[^\n]*padding: var\(--card-padding\)/);
   assert.match(styles, /\.attendance-layout \{[^}]*margin-top: 1rem/);
@@ -462,7 +450,6 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   assert.match(styles, /\.panel-heading \{[^}]*align-items: center/);
   assert.match(styles, /\.roster-directory h2 \{ margin-bottom: 0/);
   assert.match(styles, /\.wizard-steps \.setup-finish-button \{[^}]*background: var\(--primary\)/);
-  assert.match(setup, /className="primary-button setup-finish-button"/);
   assert.match(roster, /<span className="roster-action-cell" role="columnheader">Actions<\/span>/);
   assert.doesNotMatch(roster, /current\.active\s*\?\s*"Active"\s*:\s*"Inactive"/);
 });
@@ -557,7 +544,11 @@ test("numeric organization settings can be cleared before they are normalized on
 test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding", async () => {
   const source = await readFile("apps/dashboard/src/kiosks-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
-  assert.match(source, /\/admin\/pairing-codes/);
+  const pairing = await readFile("apps/dashboard/src/pair-kiosk-dialog.tsx", "utf8");
+  assert.match(source, /<PairKioskDialog /);
+  assert.match(pairing, /\/admin\/pairing-codes/);
+  assert.match(pairing, /kioskInstallCommands\(fingerprintReader\)/);
+  assert.doesNotMatch(pairing, /releases\/latest/);
   assert.match(source, /Add kiosk/);
   assert.match(source, /<h1 id="kiosks-title">\{managing \? "Manage kiosk" : "Kiosks"\}<\/h1>/);
   assert.match(source, /<div className="kiosk-card-heading"[^>]*><div><h2>Physical kiosks<\/h2>/);

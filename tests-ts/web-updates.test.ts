@@ -7,10 +7,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import worker, { PlatformScheduler, type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
-import { officialWebRelease, newerRelease, prepareWebUpdate, startWebUpdate, recordUpdateBackup, webUpdateStatus, latestUpdate, fixedWorkflowPath, updateCredentialMinimumValidityMs } from "../apps/api/src/web-updates.ts";
+import { officialWebRelease, newerRelease, prepareWebUpdate, startWebUpdate, recordUpdateBackup, webUpdateStatus, latestUpdate, fixedWorkflowPath, updateCredentialMinimumValidityMs, resetControllerCache, updateChannelControllerName } from "../apps/api/src/web-updates.ts";
+import { expirationHeader, parseGitHubExpiration, resetCredentialObservations } from "../apps/api/src/github-credential.ts";
 import { sendAttendance } from "../apps/kiosk/src/cloud-client.mjs";
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
-import { createReleaseDiscovery, discoveryTtlMs, officialReleaseUrl } from "../apps/api/src/release-discovery.ts";
+import { createReleaseDiscovery, discoveryTtlMs, officialReleaseUrl, releaseRequestHeaders } from "../apps/api/src/release-discovery.ts";
 
 class D1 {
   sqlite = new DatabaseSync(":memory:");
@@ -104,6 +105,23 @@ test("discovery omits missing or expired credentials from the fixed public feed"
     assert.equal((await discovery.check(credential)).fresh, true);
     now++;
   }
+});
+
+test("discovery sends a credential without an expiry and reads anonymously after GitHub rejects it", async () => {
+  const credential = { WEB_UPDATE_TOKEN: "synthetic-rejected-token" };
+  const seen: Array<string | null> = [];
+  const fetcher = async (_url: unknown, init?: RequestInit) => {
+    const authorization = new Headers(init?.headers).get("authorization"); seen.push(authorization);
+    return authorization ? new Response(null, { status: 401 }) : Response.json(release("v1.0.4"));
+  };
+  try {
+    const result = await createReleaseDiscovery({ fetcher }).check(credential);
+    assert.equal(result.fresh, true); assert.equal(result.release?.tag_name, "v1.0.4");
+    assert.deepEqual(seen, ["Bearer synthetic-rejected-token", null]);
+    // Once rejected, later reads skip the credential instead of failing first.
+    assert.equal(releaseRequestHeaders(credential).has("authorization"), false);
+    assert.equal(releaseRequestHeaders({ WEB_UPDATE_TOKEN: "synthetic-token" }).get("authorization"), "Bearer synthetic-token");
+  } finally { resetCredentialObservations(); }
 });
 
 test("discovery honors provider seconds/date/reset cooldowns and distinguishes unrelated403", async () => {
@@ -220,8 +238,83 @@ test("ambiguous dispatch reconciles exact request title; no blind redispatch", a
 test("definite credential rejection retains safe diagnostic and one-way request", async () => {
   const env = environment();
   await withGitHub(async (calls) => { const row = await prepared(env); await recordUpdateBackup(env, row.id); await startWebUpdate(env, { requestId: row.id, backupSaved: true }); await startWebUpdate(env, { requestId: row.id, backupSaved: true }); assert.equal(calls.filter((call) => call.url.endsWith("/dispatches")).length, 1); }, async () => new Response(null, { status: 401 }));
-  assert.equal((await latestUpdate(env))?.error_code, "credential_required");
+  assert.equal((await latestUpdate(env))?.error_code, "dispatch_credential_rejected");
   assert.equal((await latestUpdate(env))?.state, "failed");
+  // The rejection is reported in setup readiness until GitHub accepts the token again.
+  resetControllerCache();
+  await withGitHub(async () => { assert.equal((await webUpdateStatus(env)).setup.dispatchCredential.state, "expiring"); });
+  resetCredentialObservations();
+});
+
+test("a 401 from GitHub during preparation surfaces the fixed rejected-credential code", async () => {
+  const env = environment(); const previous = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 401 });
+  try { await assert.rejects(prepareWebUpdate(env), { code: "dispatch_credential_rejected" }); }
+  finally { globalThis.fetch = previous; }
+  resetControllerCache();
+  globalThis.fetch = async () => new Response(null, { status: 401 });
+  try { assert.equal((await webUpdateStatus(env)).setup.dispatchCredential.state, "rejected"); }
+  finally { globalThis.fetch = previous; resetCredentialObservations(); resetControllerCache(); }
+});
+
+test("a dispatch credential without an expiry is usable and reported as non-expiring", async () => {
+  const env = environment(); delete env.WEB_UPDATE_TOKEN_EXPIRES_AT;
+  await withGitHub(async () => {
+    assert.equal((await prepareWebUpdate(env)).request?.targetTag, "v1.0.0");
+    resetControllerCache();
+    assert.deepEqual((await webUpdateStatus(env)).setup.dispatchCredential, { state: "ready", expiresAt: null });
+  });
+  // An unreadable configured expiry still fails closed.
+  await assert.rejects(prepareWebUpdate({ ...environment(), WEB_UPDATE_TOKEN_EXPIRES_AT: "soon" }), { code: "credential_expired" });
+  resetControllerCache();
+});
+
+test("setup readiness reports a missing credential without failing status or calling GitHub", async () => {
+  const env = environment(); delete env.WEB_UPDATE_TOKEN; delete env.WEB_UPDATE_TOKEN_EXPIRES_AT;
+  await withGitHub(async (calls) => {
+    const status = await webUpdateStatus(env);
+    assert.deepEqual(status.setup, { repository: "example/private-install", dispatchCredential: { state: "missing", expiresAt: null }, selectionCredential: { state: "missing", expiresAt: null }, controller: "unknown" });
+    assert.equal(status.request, null); assert.equal(calls.length, 0);
+    await assert.rejects(prepareWebUpdate(env), { code: "credential_required" });
+  });
+  assert.equal((await webUpdateStatus({ ...env, UPDATE_REPOSITORY: undefined })).setup.repository, null);
+});
+
+test("setup readiness warns within 14 days and reports the controller version from one cached check", async () => {
+  const env = environment(); env.WEB_UPDATE_TOKEN_EXPIRES_AT = new Date(Date.now() + 3 * 86_400_000).toISOString();
+  env.MODULE_SELECTION_TOKEN = "synthetic-selection-token";
+  const previous = globalThis.fetch; let probes = 0; let name = updateChannelControllerName; let status = 200;
+  globalThis.fetch = async (url) => { probes++; assert.match(String(url), /\/actions\/workflows\/upgrade-web\.yml$/); return status === 200 ? Response.json({ state: "active", path: ".github/workflows/upgrade-web.yml", name }) : new Response(null, { status }); };
+  try {
+    resetControllerCache();
+    const setup = (await webUpdateStatus(env)).setup;
+    assert.equal(setup.dispatchCredential.state, "expiring"); assert.equal(setup.dispatchCredential.expiresAt, env.WEB_UPDATE_TOKEN_EXPIRES_AT);
+    assert.deepEqual(setup.selectionCredential, { state: "ready", expiresAt: null });
+    assert.equal(setup.controller, "current");
+    name = "Upgrade LancerLogin web"; await webUpdateStatus(env); assert.equal(probes, 1);
+    resetControllerCache(); assert.equal((await webUpdateStatus(env)).setup.controller, "upgrade_required");
+    status = 404; resetControllerCache(); assert.equal((await webUpdateStatus(env)).setup.controller, "missing");
+    env.WEB_UPDATE_TOKEN_EXPIRES_AT = new Date(Date.now() - 1).toISOString();
+    resetControllerCache(); const expired = (await webUpdateStatus(env)).setup;
+    assert.equal(expired.dispatchCredential.state, "expired"); assert.equal(expired.controller, "unknown"); assert.equal(probes, 3);
+  } finally { globalThis.fetch = previous; resetControllerCache(); }
+});
+
+test("GitHub's token expiration header refines a credential configured without an expiry", async () => {
+  const env = environment(); delete env.WEB_UPDATE_TOKEN_EXPIRES_AT;
+  const soon = new Date(Date.now() + 2 * 3_600_000); soon.setUTCMilliseconds(0);
+  const header = `${soon.toISOString().slice(0, 10)} ${soon.toISOString().slice(11, 19)} UTC`;
+  assert.equal(parseGitHubExpiration(header), soon.getTime());
+  assert.equal(parseGitHubExpiration("2026-11-29 05:00:00 -0700"), Date.parse("2026-11-29T12:00:00Z"));
+  assert.equal(parseGitHubExpiration("next week"), undefined);
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ private: true }, { headers: { [expirationHeader]: header } });
+  try {
+    resetControllerCache();
+    assert.deepEqual((await webUpdateStatus(env)).setup.dispatchCredential, { state: "expiring", expiresAt: soon.toISOString() });
+    // The observed expiry now applies the 24-hour safety margin.
+    await assert.rejects(prepareWebUpdate(env), { code: "credential_expiring" });
+  } finally { globalThis.fetch = previous; resetCredentialObservations(); resetControllerCache(); }
 });
 
 test("dispatch permission, rate-limit and validation responses remain distinct definite failures", async () => {

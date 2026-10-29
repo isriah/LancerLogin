@@ -17,10 +17,40 @@ test("fresh Admin chooses modules before opening the workspace", async ({ page }
   await page.goto("/dashboard");
   await expect(page.getByRole("heading", { name: "Choose modules" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Primary dashboard navigation" })).toHaveCount(0);
-  await page.getByRole("switch", { name: /Attendance/ }).check();
+  await expect(page.getByText("You can turn modules on or off later in Settings > Modules.", { exact: false })).toBeVisible();
+  // Attendance starts selected and recommended; each switch is named by its module alone.
+  const attendance = page.getByRole("switch", { name: "Attendance", exact: true });
+  await expect(attendance).toBeChecked();
+  const choice = page.locator(".module-choice").filter({ has: attendance });
+  await expect(choice.getByText("Recommended", { exact: true })).toBeVisible();
+  await expect(choice.getByText("Built-in", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Continue" }).click();
   await expect.poll(() => saved).toEqual({ enabled: ["attendance"], revision: 0, confirmDisable: [] });
   await expect(page.getByRole("link", { name: "Meetings" })).toBeVisible();
+});
+
+test("continuing with no modules explains Core-only use and asks for confirmation", async ({ page }) => {
+  let state = snapshot({ enabled: false, selected: false });
+  let saved: unknown;
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: state }));
+  await page.route("**/admin/modules", async (route) => {
+    saved = route.request().postDataJSON();
+    state = snapshot({ enabled: false, selected: true, revision: 1 });
+    await route.fulfill({ json: state });
+  });
+  await page.goto("/dashboard");
+  await page.getByRole("switch", { name: "Attendance", exact: true }).uncheck();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  const review = page.getByRole("region", { name: "Continue without modules?" });
+  await expect(review).toBeFocused();
+  await expect(review).toContainText("Only Core features will be available");
+  expect(saved).toBeUndefined();
+  await review.getByRole("button", { name: "Choose modules" }).click();
+  await expect(review).toHaveCount(0);
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Continue without modules" }).click();
+  await expect.poll(() => saved).toEqual({ enabled: [], revision: 0, confirmDisable: [] });
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
 });
 
 test("Core-only home keeps roster and reports while hiding Attendance surfaces", async ({ page }) => {
@@ -73,6 +103,7 @@ test("an unavailable plugin keeps the workspace usable and explains itself in Se
   await expect(page.getByText("Module access unavailable")).toHaveCount(0);
   await expect(page.getByText("Code is no longer installed. Disable it to delete its retained data.")).toBeVisible();
   await expect(page.getByRole("switch", { name: /Retired Plugin/ })).toBeChecked();
+  await expect(page.locator(".module-choice").filter({ has: page.getByRole("switch", { name: "Retired Plugin", exact: true }) }).getByText("Plugin", { exact: true })).toBeVisible();
 
   // An installed module whose database setup has not completed is reported as such, not as a cleanup problem.
   state = snapshot({ enabled: false, selected: true });

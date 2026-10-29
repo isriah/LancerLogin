@@ -52,7 +52,7 @@ for (const { viewport, theme } of pairedViews) {
       await page.route("**/module-setup/attendance/rules", (route) => route.fulfill({ json: { values: { lateScanMinutes: 30, attendanceReportingStartsOn: null, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 10 } } }));
       await page.route("**/module-setup/attendance/meeting", (route) => route.fulfill({ json: { meetings: [], timeZone: "UTC" } }));
       await page.goto("/dashboard");
-      await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Attendance setup" })).toBeVisible();
       await expect(page.getByRole("heading", { level: 2, name: "Attendance rules" })).toBeVisible();
       await expect(page.getByRole("heading", { level: 2 })).toHaveCount(1);
       await expect(page.getByText(/Roster readiness/i)).toHaveCount(0);
@@ -162,6 +162,119 @@ test("first-Admin modes expose associated validation and a pending state", async
   await expectResponsiveFit(page);
 });
 
+for (const { viewport, theme } of pairedViews) {
+  test(`first-Admin form labels every field and offers sign-in methods as a radio group at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+    await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+    await page.goto("/dashboard");
+    await expect(page.getByRole("heading", { level: 1, name: "Create your installation" })).toBeVisible();
+    await expect(page.locator(".setup-header")).not.toContainText("Community Edition");
+    await expect(page.locator(".setup-header .brand-heading")).toHaveText("LancerLogin");
+
+    for (const name of ["Organization name", "Admin username", "Admin password", "Confirm Admin password"]) await expect(page.getByRole("textbox", { name, exact: true })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Admin password", exact: true })).toHaveAccessibleDescription(/At least 12 characters\. If every Admin loses their password, see Recover access/);
+    await expect(page.getByRole("link", { name: /Recover access/ })).toHaveAttribute("href", "https://isriah.github.io/LancerLogin/operations.html");
+
+    // Time zone is a labelled list of IANA zones that starts on the browser's zone (UTC here) and keeps it when the engine omits it.
+    const timeZone = page.getByRole("combobox", { name: "Time zone" });
+    await expect(timeZone).toHaveValue("UTC");
+    expect(await timeZone.locator("option").count()).toBeGreaterThan(100);
+    await timeZone.selectOption("America/New_York");
+    await expect(timeZone).toHaveValue("America/New_York");
+
+    const methods = page.getByRole("radiogroup", { name: "Dashboard sign-in" });
+    await expect(methods.getByRole("radio")).toHaveCount(3);
+    const local = methods.getByRole("radio", { name: "Username and password", exact: true });
+    await expect(local).toBeChecked();
+    await expect(local).toHaveAccessibleDescription("Works without an identity provider.");
+    await local.focus();
+    const card = page.locator(`label.choice[for="auth-mode-local"]`);
+    expect(await card.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
+    expect((await local.boundingBox())!.width).toBeGreaterThan(8);
+    await page.keyboard.press("ArrowRight");
+    await expect(methods.getByRole("radio", { name: "Google OAuth", exact: true })).toBeChecked();
+    await expect(methods.getByRole("radio", { name: "Google OAuth", exact: true })).toBeFocused();
+    await expect(page.getByRole("group", { name: "Google OAuth guided setup" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Admin username", exact: true })).toHaveCount(0);
+    for (const name of ["First Admin Google email", "OAuth client ID", "OAuth client secret"]) await expect(page.getByLabel(name, { exact: true })).toBeVisible();
+    await page.keyboard.press("ArrowRight");
+    await expect(methods.getByRole("radio", { name: "Both methods", exact: true })).toBeChecked();
+    await expect(page.getByRole("textbox", { name: "Admin username", exact: true })).toBeVisible();
+    await expectResponsiveFit(page);
+  });
+}
+
+test("first-Admin setup with a password signs the new Admin straight in", async ({ page }) => {
+  let signedIn = false;
+  let payload: Record<string, unknown> | undefined;
+  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+  await page.route("**/setup/bootstrap", (route) => {
+    payload = route.request().postDataJSON() as Record<string, unknown>;
+    signedIn = true;
+    return route.fulfill({ status: 201, json: { configured: true, signedIn: true, user: { id: "admin-1", role: "admin", debugMode: false } } });
+  });
+  // The session check after setup sees the cookie bootstrap set; before setup there is no session.
+  await page.route("**/auth/session", (route) => signedIn ? route.fallback() : route.fulfill({ status: 401, json: { error: "Authentication required" } }));
+  let localSignIns = 0;
+  await page.route("**/auth/local", (route) => { localSignIns++; return route.fulfill({ status: 500, json: {} }); });
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot() }));
+  await page.goto("/dashboard");
+  await page.getByLabel("One-time setup code").fill("synthetic-setup-code-0001");
+  await page.getByRole("textbox", { name: "Organization name", exact: true }).fill("Reference Arts Collective");
+  await page.getByRole("combobox", { name: "Time zone" }).selectOption("Europe/London");
+  await page.getByRole("textbox", { name: "Admin username", exact: true }).fill("director");
+  await page.getByRole("textbox", { name: "Admin password", exact: true }).fill("correct-horse-battery");
+  await page.getByRole("textbox", { name: "Confirm Admin password", exact: true }).fill("correct-horse-battery");
+  await page.getByRole("button", { name: "Create first Admin" }).click();
+  await expect(page.getByRole("navigation", { name: "Primary dashboard navigation" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Sign in/ })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toHaveCount(0);
+  expect(localSignIns).toBe(0);
+  expect(payload).toMatchObject({ organizationName: "Reference Arts Collective", timeZone: "Europe/London", authMode: "local", localUsername: "director" });
+});
+
+test("Google-only first-Admin setup asks the new Admin to sign in with Google to finish setup", async ({ page }) => {
+  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+  await page.route("**/setup/bootstrap", (route) => route.fulfill({ status: 201, json: { configured: true, signedIn: false } }));
+  await page.route("**/auth/session", (route) => route.fulfill({ status: 401, json: { error: "Authentication required" } }));
+  await page.goto("/dashboard");
+  await page.getByRole("radio", { name: "Google OAuth", exact: true }).check();
+  await page.getByLabel("One-time setup code").fill("synthetic-setup-code-0001");
+  await page.getByRole("textbox", { name: "Organization name", exact: true }).fill("Reference Arts Collective");
+  await page.getByLabel("First Admin Google email").fill("admin@example.org");
+  await page.getByLabel("OAuth client ID").fill("client-id");
+  await page.getByLabel("OAuth client secret").fill("client-secret");
+  await page.getByRole("button", { name: "Create first Admin" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Sign in to finish setup" })).toBeVisible();
+  await expect(page.getByText("Your installation is ready. Continue with Google using the first Admin email to finish setup.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Continue with Google" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toHaveCount(0);
+  await expect(page.getByLabel("Username")).toHaveCount(0);
+});
+
+test("a first sign-in after setup without a session does not say Welcome back", async ({ page }) => {
+  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+  await page.route("**/setup/bootstrap", (route) => route.fulfill({ status: 201, json: { configured: true, signedIn: false } }));
+  await page.route("**/auth/session", (route) => route.fulfill({ status: 401, json: { error: "Authentication required" } }));
+  await page.goto("/dashboard");
+  await page.getByLabel("One-time setup code").fill("synthetic-setup-code-0001");
+  await page.getByRole("textbox", { name: "Organization name", exact: true }).fill("Reference Arts Collective");
+  await page.getByRole("textbox", { name: "Admin username", exact: true }).fill("director");
+  await page.getByRole("textbox", { name: "Admin password", exact: true }).fill("correct-horse-battery");
+  await page.getByRole("textbox", { name: "Confirm Admin password", exact: true }).fill("correct-horse-battery");
+  await page.getByRole("button", { name: "Create first Admin" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Sign in to finish setup" })).toBeVisible();
+  await expect(page.getByText("Your installation is ready. Sign in with the Admin account you just created to finish setup.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  await page.unroute("**/setup/status");
+  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: referenceSettings } }));
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name: "Sign in", exact: true })).toBeVisible();
+  await expect(page.getByText("Sign in to manage attendance.")).toBeVisible();
+});
+
 test("local sign-in keeps denied and unavailable states explicit without revealing account state", async ({ page }) => {
   await configureSignIn(page, "local");
   let attempts = 0;
@@ -203,7 +316,7 @@ test("Admin can move back, skip optional integrations, and finish Attendance set
   });
   await page.goto("/dashboard");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Attendance setup" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Calendar integration" })).toBeVisible();
   await expect(page.getByText("Google Calendar is not configured and verified. You can safely set it up later.")).toBeVisible();
   await page.getByRole("button", { name: "Set up later and continue" }).click();
@@ -213,6 +326,8 @@ test("Admin can move back, skip optional integrations, and finish Attendance set
   await page.getByRole("button", { name: "Set up later and continue" }).click();
   await expect(page.getByRole("heading", { level: 2, name: "Discord integration" })).toBeVisible();
   await page.getByRole("button", { name: "Set up later and continue" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Attendance is ready" })).toBeVisible();
+  await page.getByRole("link", { name: "Go to Meetings" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard", exact: true })).toBeVisible();
   expect(writes).toEqual([
     { generation: 1, stepId: "calendar", outcome: "skipped" },

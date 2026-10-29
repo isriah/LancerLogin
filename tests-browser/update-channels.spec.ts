@@ -55,7 +55,7 @@ test("beta option reveals matching notes and preserves backup-first and controll
   await page.getByLabel("Installation update track").selectOption("beta"); await page.getByRole("checkbox", { name: /I understand beta/ }).check(); await page.getByRole("button", { name: "Save update track" }).click();
   const prepare = page.getByRole("button", { name: "Back up and begin update" }); await expect(prepare).toBeEnabled();
   await expect(page.getByText("Example beta notes")).toBeVisible(); await prepare.click();
-  await expect(page.getByText(/maintainer must install the reviewed update-channel controller/)).toBeVisible();
+  await expect(page.getByText(/Beta updates need the current update controller/)).toBeVisible();
   expect(state.prepares).toEqual(["POST"]);
 });
 test("track controls use shared branded styles, square checkboxes and keyboard focus at desktop/mobile", async ({ page }) => {

@@ -100,8 +100,12 @@ test("actual workerd normal dispatch and status preserve the pinned request", as
     assert.equal(started.request.state, "queued"); assert.equal(started.request.targetCommit, sha);
     const status = await (await instance.fetch("/status")).json();
     assert.equal(status.request.state, "awaiting_approval"); assert.equal(status.request.requestId, requestId);
-    assert.deepEqual(instance.calls.map((call) => call.method), ["POST", "GET"]);
+    // The third request is the read-only, cached controller check that status reports as setup readiness.
+    assert.deepEqual(instance.calls.map((call) => call.method), ["POST", "GET", "GET"]);
+    assert.equal(instance.calls[2].path, "/repos/example/private-install/actions/workflows/upgrade-web.yml");
     assert.equal(instance.calls.every((call) => call.authorization === "Bearer synthetic-runtime-token"), true);
+    assert.equal(status.setup.dispatchCredential.state, "expiring"); // The synthetic token expires in two days. assert.equal(status.setup.repository, "example/private-install");
+    await (await instance.fetch("/status")).json(); assert.equal(instance.calls.filter((call) => call.path.endsWith("/workflows/upgrade-web.yml")).length, 1);
   } finally { await instance.worker.dispose(); }
 });
 

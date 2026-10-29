@@ -2,13 +2,16 @@
 import { completeOfficialRelease, compareReleaseVersions, parseReleaseVersion, type UpdateChannel } from "../../../packages/shared/src/release-policy.mjs";
 import { readUpdateChannel } from "./update-channel.ts";
 import { resolveOfficialRelease } from "./release-discovery.ts";
+import { credentialExpiry, credentialStatus, credentialUsable, observeCredentialResponse, type CredentialStatus } from "./github-credential.ts";
 type Result<T = unknown> = { results?: T[]; meta?: { changes?: number } };
 interface Statement { bind(...values: unknown[]): Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<Result<T>>; run(): Promise<Result>; }
 interface Database { prepare(sql: string): Statement; batch?(statements: Statement[]): Promise<unknown[]>; }
 export interface WebUpdateEnv {
   DB?: Database; ALLOWED_ORIGIN: string; RELEASE_VERSION?: string;
   UPDATE_REPOSITORY?: string; UPDATE_WORKFLOW_URL?: string; WEB_UPDATE_TOKEN?: string;
+  /** Absent when the token has no expiry. Written by provisioning from GitHub's token expiration header. */
   WEB_UPDATE_TOKEN_EXPIRES_AT?: string;
+  MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string;
 }
 export class WebUpdateError extends Error {
   readonly status: number; readonly code: string;
@@ -45,23 +48,30 @@ function repository(env: WebUpdateEnv): string {
   if (!env.UPDATE_REPOSITORY || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.UPDATE_REPOSITORY) || env.UPDATE_REPOSITORY.toLowerCase() === "isriah/lancerlogin") fail(503, "not_configured", "The private web update workflow is not configured.");
   return env.UPDATE_REPOSITORY;
 }
+/** The dispatch credential is optional. Without an expiry it never expires; with one, preparation needs a safety margin. */
 function credential(env: WebUpdateEnv, minimumValidityMs = 0): string {
-  if (!env.WEB_UPDATE_TOKEN) fail(503, "credential_required", "Renew the private deployment credential through GitHub and Cloudflare.");
-  const expiry = Date.parse(env.WEB_UPDATE_TOKEN_EXPIRES_AT ?? "");
-  if (!Number.isFinite(expiry) || expiry <= Date.now()) fail(503, "credential_expired", "The private deployment credential has expired. Renew it through GitHub and Cloudflare.");
-  if (expiry - Date.now() < minimumValidityMs) fail(503, "credential_expiring", "The private deployment credential expires too soon to start a safe update. Renew it first.");
+  if (!env.WEB_UPDATE_TOKEN) fail(503, "credential_required", "Dashboard updates are not set up. Store a GitHub token as the production environment secret LANCERLOGIN_WEB_UPDATE_TOKEN, then run the Refresh web update credential workflow.");
+  const expiry = credentialExpiry("dispatch", env.WEB_UPDATE_TOKEN, env.WEB_UPDATE_TOKEN_EXPIRES_AT);
+  if (expiry !== null) {
+    if (!Number.isFinite(expiry) || expiry <= Date.now()) fail(503, "credential_expired", "The dashboard update credential has expired. Renew LANCERLOGIN_WEB_UPDATE_TOKEN, then run the Refresh web update credential workflow.");
+    if (expiry - Date.now() < minimumValidityMs) fail(503, "credential_expiring", "The dashboard update credential expires too soon to start a safe update. Renew LANCERLOGIN_WEB_UPDATE_TOKEN first.");
+  }
   return env.WEB_UPDATE_TOKEN;
 }
-type GitHubRequestKind = "public" | "private" | "dispatch";
+/** probe: a read-only check that inspects a 404 itself instead of treating it as a credential failure. */
+type GitHubRequestKind = "public" | "private" | "dispatch" | "probe";
 async function github(path: string, env?: WebUpdateEnv, init: RequestInit = {}, kind: GitHubRequestKind = "public"): Promise<Response> {
   const headers = new Headers({ accept: "application/vnd.github+json", "user-agent": "LancerLogin", "x-github-api-version": "2026-03-10", "content-type": "application/json" });
-  if (env) headers.set("authorization", `Bearer ${credential(env)}`);
+  const token = env ? credential(env) : undefined;
+  if (token) headers.set("authorization", `Bearer ${token}`);
   let result: Response;
   // Workers supports manual/follow only. Inspect manual responses to keep credentials on the fixed host.
   try { result = await fetch(`https://api.github.com${path}`, { ...init, headers, redirect: "manual", signal: AbortSignal.timeout(4_000) }); }
   catch { return fail(503, "provider_unavailable", "GitHub is unavailable. The update request has been retained."); }
+  if (token) observeCredentialResponse("dispatch", token, result);
   if (result.status >= 300 && result.status < 400) fail(503, "provider_unavailable", "GitHub returned an unexpected redirect. The request was not forwarded.");
-  if (result.status === 401 || result.status === 404 && kind !== "public") fail(503, "credential_required", "The deployment credential cannot access the fixed private workflow.");
+  if (result.status === 401) fail(503, "dispatch_credential_rejected", "GitHub rejected the dashboard update credential. Replace LANCERLOGIN_WEB_UPDATE_TOKEN, then run the Refresh web update credential workflow.");
+  if (result.status === 404 && kind !== "public" && kind !== "probe") fail(503, "credential_required", "The deployment credential cannot access the fixed private workflow.");
   if (result.status === 429 || result.status === 403 && (result.headers.get("x-ratelimit-remaining") === "0" || result.headers.has("retry-after"))) fail(429, "cooldown", "GitHub requires a cooldown. Try again later.");
   if (result.status === 403) fail(503, "credential_permission", "The deployment credential is missing a required repository permission.");
   if (result.status === 422 && kind === "dispatch") fail(503, "workflow_invalid", "GitHub rejected the fixed update workflow dispatch. The workflow or its main branch must be repaired before retrying.");
@@ -166,7 +176,7 @@ export async function startWebUpdate(env: WebUpdateEnv, input: Record<string, un
     }
   } catch (error) {
     // Timeouts, rejection and crashes all retain the one-way dispatch claim. Reconcile only.
-    const definiteRejection = error instanceof WebUpdateError && ["credential_required", "credential_expired", "credential_expiring", "credential_permission", "workflow_invalid", "cooldown"].includes(error.code);
+    const definiteRejection = error instanceof WebUpdateError && ["credential_required", "credential_expired", "credential_expiring", "credential_permission", "dispatch_credential_rejected", "workflow_invalid", "cooldown"].includes(error.code);
     const code = definiteRejection ? (error as WebUpdateError).code : "dispatch_ambiguous";
     await db(env).prepare("UPDATE web_update_requests SET state = ?, error_code = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state = 'dispatching'").bind(definiteRejection ? "failed" : "dispatching", code, now, row.id).run();
   }
@@ -176,7 +186,52 @@ export async function webUpdateMaintenance(env: WebUpdateEnv): Promise<boolean> 
   if (!env.DB) return false;
   return Boolean(await db(env).prepare("SELECT id FROM web_update_requests WHERE installation_id = 'primary' AND maintenance = 1 LIMIT 1").first());
 }
+/** The controller workflow name that supports update channels; earlier controllers cannot install betas. */
+export const updateChannelControllerName = "Upgrade LancerLogin web (update channels v2)";
+/** current: supports update channels. upgrade_required: an earlier controller. missing: absent or inactive. unknown: not checked. */
+export type ControllerState = "current" | "upgrade_required" | "missing" | "unknown";
+export type UpdateSetup = { repository: string | null; dispatchCredential: CredentialStatus; selectionCredential: CredentialStatus; controller: ControllerState };
+const controllerTtlMs = 10 * 60_000; const controllerRetryMs = 60_000;
+let controllerCache: { key: string; until: number; state: ControllerState } | undefined;
+/** Test hook: forget the cached controller check. */
+export function resetControllerCache(): void { controllerCache = undefined; }
+function configuredRepository(env: WebUpdateEnv): string | null {
+  try { return repository(env); } catch { return null; }
+}
+/** Read-only check of the fixed controller workflow, bounded to one GitHub request per isolate every ten minutes. */
+async function controllerState(env: WebUpdateEnv, repo: string | null): Promise<ControllerState> {
+  if (!repo || !credentialUsable("dispatch", env.WEB_UPDATE_TOKEN, env.WEB_UPDATE_TOKEN_EXPIRES_AT)) return "unknown";
+  const key = `${repo}\n${env.WEB_UPDATE_TOKEN}`;
+  if (controllerCache?.key === key && Date.now() < controllerCache.until) return controllerCache.state;
+  let state: ControllerState = "unknown";
+  try {
+    const response = await github(`/repos/${repo}/actions/workflows/${WEB_UPDATE_WORKFLOW}`, env, {}, "probe");
+    if (response.status === 404) state = "missing";
+    else if (response.ok) {
+      const info = await response.json().catch(() => undefined) as { state?: string; path?: string; name?: string } | undefined;
+      state = info?.state !== "active" || info.path !== `.github/workflows/${WEB_UPDATE_WORKFLOW}` ? "missing" : info.name === updateChannelControllerName ? "current" : "upgrade_required";
+    }
+  } catch (error) { if (!(error instanceof WebUpdateError)) throw error; }
+  controllerCache = { key, until: Date.now() + (state === "unknown" ? controllerRetryMs : controllerTtlMs), state };
+  return state;
+}
+/** Setup readiness for Settings > Updates. Never fails: a missing or broken credential is reported, not thrown. */
+export async function updateSetup(env: WebUpdateEnv): Promise<UpdateSetup> {
+  const repo = configuredRepository(env);
+  const controller = await controllerState(env, repo);
+  // Read after the controller check, so a rejection GitHub just reported is reflected.
+  return {
+    repository: repo,
+    dispatchCredential: credentialStatus("dispatch", env.WEB_UPDATE_TOKEN, env.WEB_UPDATE_TOKEN_EXPIRES_AT),
+    selectionCredential: credentialStatus("selection", env.MODULE_SELECTION_TOKEN, env.MODULE_SELECTION_TOKEN_EXPIRES_AT),
+    controller,
+  };
+}
 export async function webUpdateStatus(env: WebUpdateEnv) {
+  const view = await trackWebUpdate(env);
+  return { ...view, setup: await updateSetup(env) };
+}
+async function trackWebUpdate(env: WebUpdateEnv) {
   let row = await latestUpdate(env);
   if (!row || row.state === "prepared" || terminal.has(row.state) || row.state === "recovery_required") return updateView(row, env);
   // Persisted CAS bounds provider polling across tabs and concurrent Worker instances.

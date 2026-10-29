@@ -14,7 +14,7 @@ const governedRoutes = [
   ["/settings/access", "Dashboard access"],
   ["/settings/integrations", "Integrations"],
   ["/settings/data", "Data management"],
-  ["/settings/guided-setup", "Attendance Setup"],
+  ["/settings/guided-setup", "Attendance setup"],
   ["/settings/updates", "Updates"],
 ] as const;
 

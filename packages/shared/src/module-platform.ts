@@ -538,4 +538,8 @@ export const attendanceModule = freeze<ModuleDefinition>({
 
 /** Modules maintained in this repository. Core backup ownership and historical normalization consider only these. */
 export const firstPartyModules = Object.freeze<readonly ModuleDefinition[]>([attendanceModule]);
+/** True for a module built into LancerLogin; any other module is an installed plugin. */
+export const isFirstPartyModule = (moduleId: string) => firstPartyModules.some((module) => module.id === moduleId);
+/** Modules a fresh installation starts with selected on Choose modules. */
+export const recommendedModuleIds = Object.freeze<readonly string[]>([attendanceModule.id]);
 export const bundledModuleRegistry = createModuleRegistry([...firstPartyModules, ...externalModuleManifests]);

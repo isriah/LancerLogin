@@ -9,6 +9,8 @@ import { buildPagesProxy } from "./prepare-pages-proxy.mjs";
 import { resolveDatabaseName } from "./database-identity.mjs";
 import { ensureFingerprintVaultKey, fingerprintVaultSecretName, fingerprintVaultStateSql } from "./ensure-fingerprint-vault-key.mjs";
 import { parseReleaseVersion, releaseAllowed, compareReleaseVersions } from "../packages/shared/src/release-policy.mjs";
+import { parseTokenExpiration, tokenExpirationHeader } from "./refresh-web-update-credential.mjs";
+import { reportFailure, warningAnnotation } from "./workflow-annotations.mjs";
 
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const shaPattern = /^[0-9a-f]{40}$/;
@@ -22,13 +24,37 @@ export function validateUpgradeEnvironment(env, { credentials = true } = {}) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.UPDATE_REPOSITORY ?? "") || env.UPDATE_REPOSITORY.toLowerCase() === "isriah/lancerlogin") throw new Error("private_repository_required");
   if (!idPattern.test(env.REQUEST_ID ?? "") || !env.RELEASE_TAG?.startsWith("v") || !parseReleaseVersion(env.RELEASE_TAG) || !shaPattern.test(env.RELEASE_SHA ?? "") || !/^[1-9][0-9]*$/.test(env.EXECUTOR_RUN_ID ?? "")) throw new Error("invalid_request");
   if (!/^[a-z][a-z0-9-]{2,40}$/.test(env.INSTALLATION_SLUG ?? "") || !idPattern.test(env.DATABASE_ID ?? "")) throw new Error("fixed_resources_required");
-  const api = new URL(env.API_URL);
+  if (!env.API_URL) throw new Error("api_url_required");
+  let api;
+  try { api = new URL(env.API_URL); } catch { throw new Error("fixed_api_origin_required"); }
   if (api.protocol !== "https:" || api.username || api.password || api.search || api.hash || api.pathname !== "/" || !api.hostname.startsWith(`${env.INSTALLATION_SLUG}-api.`) || !api.hostname.endsWith(".workers.dev")) throw new Error("fixed_api_origin_required");
   if (credentials && (!/^[0-9a-f]{32}$/.test(env.CLOUDFLARE_ACCOUNT_ID ?? "") || !env.CLOUDFLARE_API_TOKEN?.startsWith("cfat_"))) throw new Error("scoped_account_credential_required");
-  if (!(Date.parse(env.WEB_UPDATE_TOKEN_EXPIRES_AT ?? "") - Date.now() >= controllerCredentialMinimumValidityMs)) throw new Error("dispatch_credential_expiry_required");
   return { requestId: env.REQUEST_ID, tag: env.RELEASE_TAG, sha: env.RELEASE_SHA, runId: env.EXECUTOR_RUN_ID,
     slug: env.INSTALLATION_SLUG, databaseName: resolveDatabaseName(env.INSTALLATION_SLUG, env.DATABASE_NAME), databaseId: env.DATABASE_ID, apiUrl: api.origin,
     dashboardUrl: `https://${env.INSTALLATION_SLUG}-dashboard.pages.dev`, repository: env.UPDATE_REPOSITORY };
+}
+/**
+ * The dashboard keeps polling GitHub with the dispatch token while this run updates it, so a token that expires within
+ * controllerCredentialMinimumValidityMs is refused before claim. The expiry comes from GitHub's response header for the
+ * environment's LANCERLOGIN_WEB_UPDATE_TOKEN; a token without an expiry passes. Without that secret (dashboard updates
+ * were set up elsewhere, or by an older workflow) nothing can be checked: { configured: false }.
+ */
+export async function verifyControllerCredential(env, request = fetch) {
+  if (!env.LANCERLOGIN_WEB_UPDATE_TOKEN) return { configured: false };
+  const response = await request(`https://api.github.com/repos/${env.UPDATE_REPOSITORY}`, { headers: { authorization: `Bearer ${env.LANCERLOGIN_WEB_UPDATE_TOKEN}`, accept: "application/vnd.github+json", "user-agent": "LancerLogin", "x-github-api-version": "2026-03-10" }, redirect: "error", signal: AbortSignal.timeout(10_000) });
+  if (response.status === 401) throw new Error("dispatch_credential_rejected");
+  if (!response.ok) throw new Error("dispatch_credential_access_denied");
+  const expiresAt = parseTokenExpiration(response.headers.get(tokenExpirationHeader));
+  if (expiresAt && Date.parse(expiresAt) - Date.now() < controllerCredentialMinimumValidityMs) throw new Error("dispatch_credential_expiry_required");
+  return { configured: true, expiresAt };
+}
+/** Worker secrets every installation keeps, and the optional update credentials an update retains when present. */
+export const requiredWorkerSecrets = Object.freeze(["SESSION_KEY", "INTEGRATION_KEY", "BOOTSTRAP_CODE_HASH"]);
+export const optionalWorkerSecrets = Object.freeze(["WEB_UPDATE_TOKEN", "WEB_UPDATE_TOKEN_EXPIRES_AT", "MODULE_SELECTION_TOKEN", "MODULE_SELECTION_TOKEN_EXPIRES_AT"]);
+/** The secrets that must still exist after deployment: the required ones and every optional one present before it. */
+export function retainedWorkerSecrets(names) {
+  if (!requiredWorkerSecrets.every((name) => names.has(name))) throw new Error("retained_secrets_required");
+  return [...requiredWorkerSecrets, ...optionalWorkerSecrets.filter((name) => names.has(name))];
 }
 export async function validateOfficialSource(context, get) {
   const release = await get(`https://api.github.com/repos/isriah/LancerLogin/releases/tags/${context.tag}`);
@@ -276,6 +302,8 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
   };
   const owned = "installation_id = 'primary' AND id = ? AND executor_run_id = ?";
   let dashboardOrigin;
+  // Worker secret names preflight found; deployment must keep every one of them.
+  let retained;
   let channelPolicyInstalled = false;
   const updateState = async (state, stage, maintenance, error = null) => {
     const result = await sql(`UPDATE web_update_requests SET state = ?, stage = ?, maintenance = ?, error_code = ?, updated_at = ? WHERE ${owned} AND state NOT IN ('succeeded','failed','expired')`, [state, stage, maintenance, error, new Date().toISOString(), context.requestId, context.runId]);
@@ -299,7 +327,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
       const settings = await cf(`/workers/scripts/${context.slug}-api/settings`);
       if (!settings.bindings?.some((binding) => binding.type === "d1" && binding.name === "DB" && binding.id === context.databaseId)) throw new Error("worker_database_mismatch");
       const secretNames = new Set((await wrangler(["secret", "list", "--format", "json"], { json: true })).map((entry) => entry.name));
-      if (!["SESSION_KEY", "INTEGRATION_KEY", "BOOTSTRAP_CODE_HASH", "WEB_UPDATE_TOKEN", "WEB_UPDATE_TOKEN_EXPIRES_AT"].every((name) => secretNames.has(name))) throw new Error("retained_secrets_required");
+      retained = retainedWorkerSecrets(secretNames);
       const pages = await cf(`/pages/projects/${context.slug}-dashboard`);
       if (pages.name !== `${context.slug}-dashboard` || pages.production_branch !== "main" || pages.subdomain !== `${context.slug}-dashboard.pages.dev`) throw new Error("pages_identity_mismatch");
       dashboardOrigin = retainedDashboardOrigin(settings, pages);
@@ -402,17 +430,40 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
         if (customPages.releaseVersion !== context.tag.slice(1) || customProxy.ok !== true || customProxy.releaseVersion !== context.tag.slice(1)) throw new Error("custom_dashboard_health_mismatch");
       }
       const secrets = new Set((await wrangler(["secret", "list", "--format", "json"], { json: true })).map((entry) => entry.name));
-      if (!["SESSION_KEY", "INTEGRATION_KEY", "BOOTSTRAP_CODE_HASH", "WEB_UPDATE_TOKEN", "WEB_UPDATE_TOKEN_EXPIRES_AT", fingerprintVaultSecretName].every((name) => secrets.has(name))) throw new Error("postdeploy_secret_missing");
+      if (!retained?.length || ![...retained, fingerprintVaultSecretName].every((name) => secrets.has(name))) throw new Error("postdeploy_secret_missing");
     },
   };
 }
 
+const updatesSummary = "the run summary of Install or upgrade LancerLogin";
+/** Cause and fix for each fixed code, printed as the run's error annotation. */
+export const upgradeHelp = {
+  private_repository_required: "Run Upgrade LancerLogin web from the adopter-owned private deployment repository, which must stay private.",
+  invalid_request: "The update request is malformed: start the update again from the dashboard instead of running this workflow by hand.",
+  fixed_resources_required: `Set the production environment variables LANCERLOGIN_INSTALLATION_SLUG and LANCERLOGIN_DATABASE_ID to the values in ${updatesSummary}.`,
+  api_url_required: `LANCERLOGIN_API_URL is not set: add it as a production environment variable with the Worker API URL from ${updatesSummary}, for example https://<slug>-api.<subdomain>.workers.dev, then start the update again.`,
+  fixed_api_origin_required: `LANCERLOGIN_API_URL must be exactly the installation's Worker origin, https://<slug>-api.<subdomain>.workers.dev with no path: correct the production environment variable from ${updatesSummary}.`,
+  fixed_database_name_invalid: "LANCERLOGIN_DATABASE_NAME must be a lowercase D1 database name that ends in -data: correct or remove the production environment variable.",
+  scoped_account_credential_required: "CLOUDFLARE_API_TOKEN must be an Account API token (it starts with cfat_) and CLOUDFLARE_ACCOUNT_ID the 32-character account ID: create the token in the Cloudflare dashboard (Manage account > Account API tokens) and replace the secrets.",
+  dispatch_credential_rejected: "The GitHub token for dashboard updates has expired or been revoked: create a new fine-grained token, replace LANCERLOGIN_WEB_UPDATE_TOKEN, then run Refresh web update credential.",
+  dispatch_credential_access_denied: "LANCERLOGIN_WEB_UPDATE_TOKEN cannot read this repository: give the fine-grained token access to this repository with Actions: Read and write, run Refresh web update credential, then start the update again.",
+  dispatch_credential_expiry_required: "The GitHub token for dashboard updates expires within two hours: create a new fine-grained token, replace LANCERLOGIN_WEB_UPDATE_TOKEN, run Refresh web update credential, then start the update again.",
+  token_expiration_unreadable: "GitHub reported the dashboard update token's expiry in an unexpected format: start the update again later, and report it if it persists.",
+  official_release_required: "The requested release is not a published official LancerLogin release on the installation's update track: start the update again from the dashboard.",
+  complete_release_required: "The requested release is missing its kiosk and installer assets: wait for the release to finish publishing, then start the update again.",
+  release_commit_mismatch: "The requested release tag no longer points at the commit the dashboard pinned: start the update again from the dashboard.",
+};
 async function main() {
   const validateOnly = process.argv.includes("--validate");
   const context = validateUpgradeEnvironment(process.env, { credentials: !validateOnly });
   await validateOfficialSource(context, jsonGet);
   if (validateOnly) return;
-  const io = await createLiveUpgradeIO(context, process.env, "lancerlogin-source");
+  // The GitHub token is read once for its expiry and never reaches Wrangler, plugin composition or the IO adapter.
+  const { LANCERLOGIN_WEB_UPDATE_TOKEN, ...environment } = process.env;
+  const credential = await verifyControllerCredential({ ...context, UPDATE_REPOSITORY: context.repository, LANCERLOGIN_WEB_UPDATE_TOKEN });
+  if (!credential.configured) console.log(warningAnnotation("dispatch_credential_unchecked", "LANCERLOGIN_WEB_UPDATE_TOKEN is not available to this workflow, so its expiry was not checked. Keep the production environment secret set to the token the dashboard uses."));
+  else console.log(credential.expiresAt ? `The dashboard update token expires ${credential.expiresAt}.` : "The dashboard update token has no expiration date.");
+  const io = await createLiveUpgradeIO(context, environment, "lancerlogin-source");
   const progress = {};
   // GitHub cancellation and timeout-minutes send SIGINT, then SIGTERM, and kill the job seconds later.
   let interruption;
@@ -428,4 +479,7 @@ async function main() {
   const result = await executeWebUpgrade(context, io, progress);
   if (result.duplicate) console.log("Request already claimed; deployment mutation skipped.");
 }
-if (process.argv[1]?.endsWith("run-web-upgrade.mjs")) main().catch(() => { console.error("Web upgrade stopped. Inspect the durable request stage and recovery record; no automatic D1 restore was attempted."); process.exitCode = 1; });
+if (process.argv[1]?.endsWith("run-web-upgrade.mjs")) main().catch((error) => {
+  reportFailure(error, upgradeHelp, "web_upgrade_failed", "The web update stopped: check the update status in the dashboard and the stage named in this run. No automatic D1 restore was attempted.");
+  console.error("Web upgrade stopped. Inspect the durable request stage and recovery record; no automatic D1 restore was attempted."); process.exitCode = 1;
+});

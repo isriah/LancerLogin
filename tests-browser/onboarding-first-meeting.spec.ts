@@ -89,11 +89,19 @@ async function attendanceSetup(page: Page, existingMeeting = false): Promise<Set
   };
 }
 
+// The preview roster already has active members, so the Roster card is complete and only needs Continue.
+async function continuePastRoster(page: Page) {
+  await expect(page.getByRole("heading", { level: 2, name: "Roster" })).toBeVisible();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+}
+
 async function finishOptionalSteps(page: Page) {
   await expect(page.getByRole("heading", { level: 2, name: "Calendar integration" })).toBeVisible();
   await page.getByRole("button", { name: "Set up later and continue" }).click();
   await expect(page.getByRole("heading", { level: 2, name: "Discord integration" })).toBeVisible();
   await page.getByRole("button", { name: "Set up later and continue" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Attendance is ready" })).toBeVisible();
+  await page.getByRole("link", { name: "Go to Meetings" }).click();
 }
 
 for (const { viewport, theme } of pairedViews) {
@@ -111,6 +119,7 @@ for (const { viewport, theme } of pairedViews) {
       expect((await starts.inputValue()).slice(0, 10)).toBe((await ends.inputValue()).slice(0, 10));
       await page.getByLabel("Meeting title").fill("Synthetic attendance rehearsal");
       await page.getByRole("button", { name: "Save and continue" }).click();
+      await continuePastRoster(page);
       await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();
       await expect(page.getByText("It does not test or store fingerprint data.")).toBeVisible();
       await page.getByRole("button", { name: "Save and continue" }).click();
@@ -147,6 +156,7 @@ test("an unsuitable first meeting can be replaced with a current same-day meetin
   await page.getByLabel("Create a different meeting before continuing").check();
   await page.getByLabel("Meeting title").fill("Current replacement meeting");
   await page.getByRole("button", { name: "Save and continue" }).click();
+  await continuePastRoster(page);
   await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();
   expect(fixture.meetings[0]?.title).toBe("Current replacement meeting");
 });
@@ -159,7 +169,7 @@ test("harmless module refresh preserves a draft and revocation removes it immedi
   await expect(title).toHaveValue("Preserve this draft");
   fixture.revoke();
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { level: 1, name: "Attendance setup" })).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await expect(page.getByLabel("Meeting title")).toHaveCount(0);
 });
@@ -171,6 +181,7 @@ test.describe("organization day differs from browser day", () => {
     await page.clock.setFixedTime(new Date("2026-10-25T23:59:59.900Z"));
     const fixture = await attendanceSetup(page);
     await page.getByRole("button", { name: "Save and continue" }).click();
+    await continuePastRoster(page);
     await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();
     const meeting = fixture.requests.find(item => item.path === "meeting")!.body;
     expect(meeting.startsAt).toBe("2026-10-25T23:54:00.000Z");
@@ -186,6 +197,7 @@ test.describe("browser clock repeats an hour", () => {
     const fixture = await attendanceSetup(page);
     await page.getByLabel("Meeting title").fill("Repeated-hour rehearsal");
     await page.getByRole("button", { name: "Save and continue" }).click();
+    await continuePastRoster(page);
     await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();
     const meeting = fixture.requests.find(item => item.path === "meeting")!.body;
     expect(meeting.startsAt).toBe("2026-11-01T05:57:00.000Z");

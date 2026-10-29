@@ -123,7 +123,7 @@ test("development and CI avoid duplicate complete verification", () => {
   assert.doesNotMatch(ci, /npm run verify:all/);
   assert.match(ci, /outputs\.full == 'true'[\s\S]*sudo "\$\(command -v node\)" --test tests\/kiosk-artifacts\.test\.mjs/);
   assert.match(ci, /npm run audit:release/);
-  assert.match(ci, /startsWith\(github\.event\.head_commit\.message, 'Release v'\)[\s\S]*npm run test:browser -- --group core --part /);
+  assert.match(ci, /if: github\.event_name == 'workflow_dispatch'[\s\S]*npm run test:browser -- --group core --part /);
   const release = readFileSync(".github/workflows/release.yml", "utf8");
   assert.match(release, /package-kiosk\.mjs release\/artifacts --require-unprivileged/);
 });

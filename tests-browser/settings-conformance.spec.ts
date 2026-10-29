@@ -28,7 +28,7 @@ const routes = [
   ["/settings/access", "Dashboard access"],
   ["/settings/integrations", "Integrations"],
   ["/settings/data", "Data management"],
-  ["/settings/guided-setup", "Attendance Setup"],
+  ["/settings/guided-setup", "Attendance setup"],
   ["/settings/updates", "Updates"],
 ] as const;
 
@@ -239,7 +239,7 @@ test("disabled modules and Operator-only sections retain their visibility rules"
   await useSettingsContext(page, "operator"); await page.goto("/settings/attendance");
   const sections = page.getByRole("navigation", { name: "Attendance settings sections" });
   await expect(sections.getByRole("link")).toHaveCount(1);
-  await expect(page.getByRole("link", { name: "Guided setup", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Attendance setup", exact: true })).toHaveCount(0);
   await page.goto("/settings/configuration");
   await expect(page.getByRole("heading", { name: "Page unavailable" })).toBeVisible();
 });

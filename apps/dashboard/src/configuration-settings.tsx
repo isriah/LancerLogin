@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
 import { AttendanceSettingsSections } from "./settings-section-navigation";
 import { api } from "./dashboard-api";
-import type { Branding } from "./setup-workspace";
+import type { Branding } from "./branding";
 import { InfoTip } from "./info-tip";
 
 export function ConfigurationSettings({ initialBranding, onChanged }: { initialBranding: Branding; onChanged: (branding: Branding) => void }) {

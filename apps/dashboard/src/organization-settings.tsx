@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "./dashboard-api";
-import type { Branding } from "./setup-workspace";
+import type { Branding } from "./branding";
 import { AdaptiveBrandLogo, type LogoBackdrop } from "./adaptive-brand-logo";
 import { ColorEditor } from "./color-editor";
 import { InfoTip } from "./info-tip";

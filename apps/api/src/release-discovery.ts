@@ -1,4 +1,5 @@
 import { completeOfficialRelease, newestOfficialRelease, type UpdateChannel, type OfficialRelease } from "../../../packages/shared/src/release-policy.mjs";
+import { credentialRejected, credentialUsable, observeCredentialResponse } from "./github-credential.ts";
 
 export const officialReleaseUrl = "https://api.github.com/repos/isriah/LancerLogin/releases/latest";
 export const discoveryTtlMs = 15 * 60_000;
@@ -36,11 +37,25 @@ export async function resolveOfficialRelease(channel: UpdateChannel, get: (path:
   }
 }
 
+/**
+ * Official releases are public, so the optional dispatch credential only raises GitHub's rate limit. It is sent while it
+ * is unexpired (or has no expiry) and GitHub has not rejected it; otherwise discovery reads the feed anonymously.
+ */
 export function releaseRequestHeaders(credential?: ReleaseCredential, now = Date.now()): Headers {
   const headers = new Headers({ accept: "application/vnd.github+json", "user-agent": "LancerLogin", "x-github-api-version": "2026-03-10" });
-  const expiry = Date.parse(credential?.WEB_UPDATE_TOKEN_EXPIRES_AT ?? "");
-  if (credential?.WEB_UPDATE_TOKEN && Number.isFinite(expiry) && expiry > now) headers.set("authorization", `Bearer ${credential.WEB_UPDATE_TOKEN}`);
+  const token = credential?.WEB_UPDATE_TOKEN;
+  if (credentialUsable("dispatch", token, credential?.WEB_UPDATE_TOKEN_EXPIRES_AT, now) && !credentialRejected("dispatch", token)) headers.set("authorization", `Bearer ${token}`);
   return headers;
+}
+/** A fetch of the fixed public feed that falls back to an anonymous request when GitHub rejects the credential. */
+export async function fetchReleaseFeed(fetcher: typeof fetch, url: string, init: RequestInit & { headers: Headers }, credential?: ReleaseCredential): Promise<Response> {
+  const result = await fetcher(url, init);
+  const token = credential?.WEB_UPDATE_TOKEN;
+  if (!token || init.headers.get("authorization") !== `Bearer ${token}`) return result;
+  observeCredentialResponse("dispatch", token, result);
+  if (result.status !== 401) return result;
+  const headers = new Headers(init.headers); headers.delete("authorization");
+  return fetcher(url, { ...init, headers });
 }
 
 // One fixed public feed with optional fixed Worker credentials and no browser-selected URLs.
@@ -75,7 +90,7 @@ export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeou
     try {
       let failure: DiscoverySnapshot | undefined;
       const release = await resolveOfficialRelease(channel, async (path) => {
-        const result = await fetcher(`https://api.github.com${path}`, { headers: releaseRequestHeaders(credential, now()), redirect: "manual", signal: controller.signal, cache: "no-store" });
+        const result = await fetchReleaseFeed(fetcher, `https://api.github.com${path}`, { headers: releaseRequestHeaders(credential, now()), redirect: "manual", signal: controller.signal, cache: "no-store" }, credential);
         if (!result.ok) {
           const limited = result.status === 429 || result.status === 403 && (result.headers.has("retry-after") || result.headers.get("x-ratelimit-remaining") === "0");
           failure = fail(limited ? "rate_limited" : "provider_unavailable", result);

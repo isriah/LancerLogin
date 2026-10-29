@@ -1,4 +1,4 @@
-name: Publish public documentation
+name: "Maintainers: Publish public documentation"
 
 on:
   push:

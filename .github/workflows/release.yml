@@ -1,4 +1,4 @@
-name: Build LancerLogin release
+name: "Maintainers: Build LancerLogin release"
 
 on:
   push:

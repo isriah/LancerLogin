@@ -640,6 +640,29 @@ test("Admin member and import dialogs contain focus, report errors, and return f
   await expect(page.getByRole("button",{ name: "Edit Avery Stone",exact: true }).first()).toBeFocused();
 });
 
+test("an empty roster offers Add member and Import CSV, while filtered results keep their own empty message",async ({ page }) => {
+  await useReferenceContext(page);
+  await page.route("**/admin/members",(route) => route.fulfill({ json: { members: [],discordConfigured: true } }));
+  await page.goto("/roster");
+  const empty=page.locator(".roster-empty-state");
+  await expect(empty.getByRole("heading",{ name: "No members yet" })).toBeVisible();
+  await expect(page.getByText("No roster members match these filters.")).toHaveCount(0);
+  await empty.getByRole("button",{ name: "Import CSV",exact: true }).click();
+  const dialog=page.getByRole("dialog",{ name: "Add roster member" });
+  await expect(dialog.getByRole("heading",{ name: "Import roster" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await empty.getByRole("button",{ name: "Add member",exact: true }).click();
+  for (const name of ["Member ID","First name","Last name","Email (optional)","Discord user ID (optional)"]) await expect(dialog.getByRole("textbox",{ name,exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.unroute("**/admin/members");
+  await useReferenceContext(page);
+  await page.reload();
+  await page.getByLabel("Search roster").fill("nobody matches this");
+  await expect(page.getByText("No roster members match these filters.")).toBeVisible();
+  await expect(page.getByRole("heading",{ name: "No members yet" })).toHaveCount(0);
+});
+
 test("roster import loads CSV files and previews tab-separated spreadsheet rows",async ({ page }) => {
   await page.setViewportSize({ width: 390,height: 844 });
   await page.addInitScript(() => localStorage.setItem("lancerlogin-theme","dark"));

@@ -17,7 +17,9 @@ const stableReleases = {
 test("installation workflow runs only files present in every selectable stable release", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
   const requirements = provisionReleaseRequirements(workflow);
-  assert.equal(requirements.templateRelease, "v1.0.5");
+  // Only the latest stable release is selectable; v1.0.5 stays in the list as the oldest file set the workflow must handle.
+  assert.equal("templateRelease" in requirements, false);
+  assert.doesNotMatch(workflow, /TEMPLATE_RELEASE|original template release/);
   assert.ok(requirements.required.includes("scripts/prepare-cloudflare-provision.mjs"));
   assert.ok(requirements.required.includes("scripts/refresh-web-update-credential.mjs"));
   assert.ok(requirements.required.includes("package-lock.json"));

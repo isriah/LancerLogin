@@ -1,7 +1,8 @@
-name: Keep Playwright browser cached
+name: "Maintainers: Keep Playwright browser cached"
 # Caches saved by pull requests and release branches are visible only to that ref. A scheduled run uses the
 # default branch, whose caches every branch and pull request can restore, so Verify browser shards skip the download.
-# This lives outside Verify so release gates keep their exact required job list.
+# This lives outside Verify so release gates keep their exact required job list. It runs only in the maintainer
+# repositories, never in an adopter repository created from the template.
 on:
   schedule:
     - cron: "41 9 * * 1,4"
@@ -10,6 +11,7 @@ permissions:
   contents: read
 jobs:
   playwright-cache:
+    if: github.repository == 'isriah/LancerLogin'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

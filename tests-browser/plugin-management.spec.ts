@@ -146,9 +146,9 @@ test("removal is blocked while a module is enabled, incompatible plugins cannot 
   await expect(plugins.getByRole("button", { name: "Upgrade carpool" })).toBeFocused();
   mock.state = pluginState({ credential: { state: "missing", expiresAt: null }, selection: null, installed: [official, { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" }], protection: { state: "unknown" } });
   await page.reload();
-  await expect(plugins.getByText("Plugin management needs the plugin selection credential.")).toBeVisible();
+  await expect(plugins.getByText("Plugin management from the dashboard is not set up yet.")).toBeVisible();
   // Only the Actions-scoped update token is configured: the optional selection token is explained, not reported as broken.
-  await expect(plugins.getByText("Plugin management needs the plugin selection credential.")).toHaveAttribute("data-tone", "neutral");
+  await expect(plugins.getByText("Plugin management from the dashboard is not set up yet.")).toHaveAttribute("data-tone", "neutral");
   const pending = plugins.locator(".plugin-pending");
   await expect(pending).toContainText("Reading and changing the plugin selection from the dashboard needs the optional module selection token, LANCERLOGIN_MODULE_SELECTION_TOKEN.");
   await expect(pending).toContainText("Without it, installed plugins keep working; edit lancerlogin.modules.json in the private deployment repository instead.");

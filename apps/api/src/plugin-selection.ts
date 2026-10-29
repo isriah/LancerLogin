@@ -15,6 +15,7 @@ import { newestPluginRelease, parseReleaseVersion, pluginReleaseKind } from "../
 import { externalModuleSources } from "./generated/external-module-data.ts";
 import { extractedModulesInUse } from "./extracted-modules.ts";
 import { knownModule } from "./known-modules.ts";
+import { credentialStatus, credentialUsable, observeCredentialResponse } from "./github-credential.ts";
 
 export interface PluginSelectionEnv extends WebUpdateEnv { MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string }
 export type InstalledPlugins = Readonly<Record<string, { readonly source: string; readonly commit: string; readonly official?: boolean; readonly selected?: boolean }>>;
@@ -40,28 +41,30 @@ function repository(env: PluginSelectionEnv): string {
   return env.UPDATE_REPOSITORY;
 }
 export type CredentialState = "ready" | "missing" | "expired";
+/** Usability of the optional selection credential. A token without an expiry stays ready; expiresAt is then null. */
 export function selectionCredentialState(env: PluginSelectionEnv): { state: CredentialState; expiresAt: string | null } {
-  if (!env.MODULE_SELECTION_TOKEN) return { state: "missing", expiresAt: null };
-  const expiry = Date.parse(env.MODULE_SELECTION_TOKEN_EXPIRES_AT ?? "");
-  if (!Number.isFinite(expiry) || expiry <= Date.now()) return { state: "expired", expiresAt: Number.isFinite(expiry) ? new Date(expiry).toISOString() : null };
-  return { state: "ready", expiresAt: new Date(expiry).toISOString() };
+  const { state, expiresAt } = credentialStatus("selection", env.MODULE_SELECTION_TOKEN, env.MODULE_SELECTION_TOKEN_EXPIRES_AT);
+  // A rejected or soon-expiring token is still tried, so GitHub's own answer is reported.
+  return { state: state === "missing" || state === "expired" ? state : "ready", expiresAt };
 }
 function selectionToken(env: PluginSelectionEnv): string {
   const { state } = selectionCredentialState(env);
-  if (state === "missing") fail(503, "selection_credential_required", "Plugin management needs the plugin selection credential. Your installation operator must provision it securely.");
-  if (state === "expired") fail(503, "selection_credential_expired", "The plugin selection credential has expired. Your installation operator must renew it.");
+  if (state === "missing") fail(503, "selection_credential_required", "Plugin management from the dashboard is not set up. Store a GitHub token as the production environment secret LANCERLOGIN_MODULE_SELECTION_TOKEN, then run the Refresh web update credential workflow.");
+  if (state === "expired") fail(503, "selection_credential_expired", "The plugin selection credential has expired. Renew LANCERLOGIN_MODULE_SELECTION_TOKEN, then run the Refresh web update credential workflow.");
   return env.MODULE_SELECTION_TOKEN!;
 }
 
 /** Requests carrying the selection credential: fixed origin, no redirects, bounded time, sanitized failures. */
 async function privateGitHub(env: PluginSelectionEnv, path: string, init: RequestInit = {}): Promise<Response> {
-  const headers = githubHeaders(selectionToken(env));
+  const token = selectionToken(env);
+  const headers = githubHeaders(token);
   if (init.body) headers.set("content-type", "application/json");
   let result: Response;
   try { result = await fetch(`https://api.github.com${path}`, { ...init, headers, redirect: "manual", signal: AbortSignal.timeout(10_000) }); }
   catch { return fail(503, "provider_unavailable", "GitHub is unavailable. No change was made."); }
+  observeCredentialResponse("selection", token, result);
   if (result.status >= 300 && result.status < 400) fail(503, "provider_unavailable", "GitHub returned an unexpected redirect. The request was not forwarded.");
-  if (result.status === 401) fail(503, "selection_credential_required", "The plugin selection credential was rejected. Your installation operator must renew it.");
+  if (result.status === 401) fail(503, "selection_credential_rejected", "GitHub rejected the plugin selection credential. Replace LANCERLOGIN_MODULE_SELECTION_TOKEN, then run the Refresh web update credential workflow.");
   if (result.status === 429 || result.status === 403 && (result.headers.get("x-ratelimit-remaining") === "0" || result.headers.has("retry-after"))) fail(429, "cooldown", "GitHub requires a cooldown. Try again later.");
   if (result.status === 403) fail(503, "selection_credential_permission", "The plugin selection credential is missing Contents access to the private deployment repository.");
   return result;
@@ -118,7 +121,7 @@ export type Protection = { state: "configured" | "not_configured" | "unknown"; r
 export async function readProductionProtection(env: PluginSelectionEnv): Promise<Protection> {
   let repo: string;
   try { repo = repository(env); } catch { return { state: "unknown" }; }
-  const tokens = [selectionCredentialState(env).state === "ready" ? env.MODULE_SELECTION_TOKEN : undefined, env.WEB_UPDATE_TOKEN && Date.parse(env.WEB_UPDATE_TOKEN_EXPIRES_AT ?? "") > Date.now() ? env.WEB_UPDATE_TOKEN : undefined].filter((token): token is string => Boolean(token));
+  const tokens = [selectionCredentialState(env).state === "ready" ? env.MODULE_SELECTION_TOKEN : undefined, credentialUsable("dispatch", env.WEB_UPDATE_TOKEN, env.WEB_UPDATE_TOKEN_EXPIRES_AT) ? env.WEB_UPDATE_TOKEN : undefined].filter((token): token is string => Boolean(token));
   for (const token of tokens) {
     let response: Response;
     try { response = await fetch(`https://api.github.com/repos/${repo}/environments/production`, { headers: githubHeaders(token), redirect: "manual", signal: AbortSignal.timeout(4_000) }); }

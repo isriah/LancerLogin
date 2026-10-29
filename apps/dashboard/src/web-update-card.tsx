@@ -2,7 +2,8 @@ import { visiblePoll } from "./visible-poll";
 import { useEffect, useRef, useState } from "react";
 import { apiBaseUrl } from "./dashboard-api";
 import { formatVersion } from "./update-indicator";
-import { canReloadPluginChanges, isTerminalWebUpdate, diagnosticUrl, webUpdateError, webUpdateStatus, type WebUpdateRequest, type WebUpdateResponse } from "./web-update";
+import { canReloadPluginChanges, isTerminalWebUpdate, diagnosticUrl, webUpdateError, webUpdateErrorLinks, webUpdateStatus, type UpdateSetup, type WebUpdateRequest, type WebUpdateResponse } from "./web-update";
+import { credentialExpiryNotice, DashboardUpdatesNotSetUp, FixLinks } from "./web-update-setup";
 
 const loadedAt = Date.now();
 import { InfoHeading } from "./info-tip";
@@ -13,7 +14,9 @@ import { InfoHeading } from "./info-tip";
  */
 export function WebUpdateCard({ current, served, running, converged, reloadAvailable, available, workflowUrl, latestTag, releaseUrl, releaseNotes, mode = "release", onStatus }: { current: string; served: string; running: string; converged: boolean; reloadAvailable: boolean; available: boolean; workflowUrl: string; latestTag?: string; releaseUrl?: string; releaseNotes?: string; mode?: "release" | "modules"; onStatus?: (status: WebUpdateResponse) => void }) {
   const [status, setStatus] = useState<WebUpdateResponse>();
-  const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(""); const [errorCode, setErrorCode] = useState(""); const [busy, setBusy] = useState(false);
+  // Prepare and start responses carry no setup readiness; keep the last one status reported.
+  const [setup, setSetup] = useState<UpdateSetup>();
   const [saved, setSaved] = useState(false); const [downloaded, setDownloaded] = useState("");
   const flight = useRef(false); const mutation = useRef(false); const alive = useRef(true);
   const revision = useRef(0);
@@ -25,15 +28,17 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
   async function read(path: string, body?: object): Promise<WebUpdateResponse> {
     const response = await fetch(`${apiBaseUrl}${path}`, { credentials: "include", cache: "no-store", ...(body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
     const result = await response.json() as WebUpdateResponse & { code?: string; error?: string };
-    if (!response.ok) throw new Error(webUpdateError(result.code, result.error ?? "Unable to read web update status."));
+    if (!response.ok) throw Object.assign(new Error(webUpdateError(result.code, result.error ?? "Unable to read web update status.")), { code: result.code ?? "" });
+    if (result.setup) setSetup(result.setup);
     return result;
   }
+  function fail(cause: unknown, message = (cause as Error).message) { setError(message); setErrorCode((cause as { code?: string }).code ?? ""); }
   async function refresh() {
     if (flight.current || mutation.current) return;
     flight.current = true;
     const observed = revision.current;
-    try { const result = await read("/admin/web-updates/status"); if (alive.current && !mutation.current && revision.current === observed) { setStatus(result); setError(""); onStatus?.(result); } }
-    catch (cause) { if (alive.current && revision.current === observed) setError(`${(cause as Error).message} Progress is unconfirmed; do not start another update until status is available.`); }
+    try { const result = await read("/admin/web-updates/status"); if (alive.current && !mutation.current && revision.current === observed) { setStatus(result); setError(""); setErrorCode(""); onStatus?.(result); } }
+    catch (cause) { if (alive.current && revision.current === observed) fail(cause, `${(cause as Error).message} Progress is unconfirmed; do not start another update until status is available.`); }
     finally { flight.current = false; }
   }
   useEffect(() => { alive.current = true; void refresh(); const stop = visiblePoll(refresh, 10_000); return () => { alive.current = false; stop(); }; }, []);
@@ -41,8 +46,8 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
   useEffect(() => { if (downloaded && !busy && request?.state === "prepared" && request.requestId === downloaded) confirmation.current?.focus(); }, [downloaded, busy, request?.requestId, request?.state]);
   async function mutate(operation: () => Promise<void>) {
     if (mutation.current) return;
-    mutation.current = true; revision.current += 1; setBusy(true); setError("");
-    try { await operation(); } catch (cause) { if (alive.current) setError((cause as Error).message); }
+    mutation.current = true; revision.current += 1; setBusy(true); setError(""); setErrorCode("");
+    try { await operation(); } catch (cause) { if (alive.current) fail(cause); }
     finally { mutation.current = false; if (alive.current) setBusy(false); }
   }
   async function prepare() {
@@ -68,7 +73,7 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
     const id = request.requestId;
     await mutate(async () => {
       try { const result = await read("/admin/web-updates/start", { requestId: id, backupSaved: true }); if (alive.current) { setStatus(result); setSaved(false); onStatus?.(result); } }
-      catch (cause) { setSaved(false); throw new Error(`${(cause as Error).message} Refresh status before continuing; an accepted request must never be blindly redispatched.`); }
+      catch (cause) { setSaved(false); throw Object.assign(new Error(`${(cause as Error).message} Refresh status before continuing; an accepted request must never be blindly redispatched.`), { code: (cause as { code?: string }).code }); }
     });
   }
   const prepared = request?.state === "prepared";
@@ -86,13 +91,20 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
   const tone = error || request?.state === "recovery_required" ? "error" : reloadReady ? "success" : request ? "warning" : "neutral";
   const idle = pluginReload ? "Plugin changes are installed. Reload this tab to use them." : reloadAvailable ? `Dashboard ${current} is installed. Reload this tab to use it.` : !converged ? "The Worker and Pages releases do not match yet. Wait for deployment verification before updating." : modules ? (available ? "Plugin changes are committed but not deployed. Back up and apply them to this installation." : "No plugin changes are waiting to be applied.") : `Dashboard ${current} is installed.`;
   const titleId = modules ? "plugin-update-title" : "dashboard-update-title";
+  // Without the optional dispatch credential nothing is broken: updates run from the deployment repository instead.
+  const notSetUp = setup?.dispatchCredential.state === "missing";
+  const fixes = webUpdateErrorLinks(errorCode || (error ? "" : request?.errorCode), setup?.repository);
+  const expiryNotice = credentialExpiryNotice(setup?.dispatchCredential);
   return <article className="web-update-card" aria-labelledby={titleId}>
     <div className="panel-heading">{modules ? <h3 id={titleId}>Apply plugin changes</h3> : <InfoHeading id={titleId} info="Cloudflare dashboard installation">Dashboard</InfoHeading>}
-      {(repeatable || expired) && !reloadReady && <button className="primary-button" type="button" disabled={busy || !status || Boolean(error) || !available || !workflowUrl || !converged} onClick={() => void prepare()}>{busy ? "Preparing update…" : modules ? "Back up and apply plugin changes" : "Back up and begin update"}</button>}
+      {(repeatable || expired) && !reloadReady && <button className="primary-button" type="button" disabled={busy || !status || Boolean(error) || !available || !workflowUrl || !converged || notSetUp} onClick={() => void prepare()}>{busy ? "Preparing update…" : modules ? "Back up and apply plugin changes" : "Back up and begin update"}</button>}
     </div>
     {modules ? <p className="field-help">Redeploys the installed release, {current}, with the committed plugin selection. It uses the same backup, approval, maintenance and verification steps as an update.</p>
       : <div className="version-grid"><div><span>Installed</span><strong>{current}</strong><small>Pages serves {served || "Unknown"}. This tab runs {running || "Unknown"}.</small></div><div><span>Available</span><strong>{latestTag ? formatVersion(latestTag) : "Unavailable"}</strong>{notesUrl && <a href={notesUrl} target="_blank" rel="noreferrer">Read release notes</a>}</div></div>}
     <p className="ui-status web-update-status" data-tone={tone} role="status">{error || (request ? webUpdateStatus(expired ? { ...request, state: "expired" } : request) : idle)}</p>
+    <FixLinks label="Fix this update problem" links={fixes} />
+    {notSetUp && !request && !reloadReady && <DashboardUpdatesNotSetUp repository={setup!.repository} />}
+    {expiryNotice && <p className="field-help web-update-credential-notice">{expiryNotice}</p>}
     {request?.state === "awaiting_approval" && diagnostics && <a className="web-update-approval" href={diagnostics} target="_blank" rel="noreferrer">Review approval in GitHub</a>}
     {prepared && !expired && <div className="web-update-backup">
       <p id="web-backup-help" className="field-help">Prepared until {new Date(request.expiresAt).toLocaleString()}. Keep the backup file securely outside this installation. Refreshing never confirms that you saved it.</p>

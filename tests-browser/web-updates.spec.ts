@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { discovered } from "./release-discovery";
-import type { WebUpdateRequest } from "../apps/dashboard/src/web-update";
+import type { UpdateSetup, WebUpdateRequest } from "../apps/dashboard/src/web-update";
 
 // Match the actual JavaScript bundle at every release, including future majors.
 const bundledVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version as string;
@@ -12,13 +12,13 @@ const workflowUrl = "https://github.example.test/private/actions/workflows/upgra
 const pinned = (overrides: Partial<WebUpdateRequest> = {}): WebUpdateRequest => ({ requestId: "11111111-1111-4111-8111-111111111111", targetTag, targetCommit: "a".repeat(40), releaseNotes: "A pinned release.\n<img src=x onerror=alert('unsafe')>", releaseUrl, previousVersion: bundledVersion, state: "prepared", stage: "backup", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(), updatedAt: new Date().toISOString(), backupExported: false, maintenance: false, errorCode: null, runUrl: null, reloadReady: false, ...overrides });
 async function setup(page: Page, initial: WebUpdateRequest | null = null) {
   let request = initial; let starts = 0; let prepares = 0; let backups = 0; let backupFailure = false;
-  let statusFailure = false; let prepareError = ""; let startError = "";
+  let statusFailure = false; let prepareError = ""; let startError = ""; let readiness: UpdateSetup | undefined;
   let installed = bundledVersion; let served = bundledVersion;
   await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: installed, workflowUrl } }));
   await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: served } }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
   await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: targetTag }) }));
-  const result = () => ({ releaseVersion: bundledVersion, workflowUrl, request });
+  const result = () => ({ releaseVersion: bundledVersion, workflowUrl, request, ...(readiness ? { setup: readiness } : {}) });
   await page.route("**/admin/web-updates/status", (route) => statusFailure ? route.fulfill({ status: 503, json: { code: "provider_unavailable" } }) : route.fulfill({ json: result() }));
   await page.route("**/admin/web-updates/prepare", (route) => {
     expect(route.request().postDataJSON()).toEqual({}); prepares++;
@@ -35,7 +35,7 @@ async function setup(page: Page, initial: WebUpdateRequest | null = null) {
     if (startError) return route.fulfill({ status: 409, json: { code: startError } });
     request = { ...request!, state: "dispatching", stage: "dispatch" }; return route.fulfill({ status: 202, json: result() });
   });
-  return { get request() { return request; }, set request(value) { request = value; }, set installed(value: string) { installed = value; }, set served(value: string) { served = value; }, get starts() { return starts; }, get prepares() { return prepares; }, get backups() { return backups; }, set backupFailure(value: boolean) { backupFailure = value; }, set statusFailure(value: boolean) { statusFailure = value; }, set prepareError(value: string) { prepareError = value; }, set startError(value: string) { startError = value; } };
+  return { set readiness(value: UpdateSetup | undefined) { readiness = value; }, get request() { return request; }, set request(value) { request = value; }, set installed(value: string) { installed = value; }, set served(value: string) { served = value; }, get starts() { return starts; }, get prepares() { return prepares; }, get backups() { return backups; }, set backupFailure(value: boolean) { backupFailure = value; }, set statusFailure(value: boolean) { statusFailure = value; }, set prepareError(value: string) { prepareError = value; }, set startError(value: string) { startError = value; } };
 }
 const webStatus = (page: Page) => page.locator(".web-update-status");
 const refresh = (page: Page) => page.getByRole("button", { name: "Refresh update status", exact: true });
@@ -73,7 +73,7 @@ test("pins release, retries associated backup, requires saved confirmation and t
 
 for (const item of [
   { state: "dispatching", errorCode: "dispatch_ambiguous", text: "response was uncertain" },
-  { state: "recovery_required", errorCode: "dispatch_unresolved", text: "Manual investigation is required" },
+  { state: "recovery_required", errorCode: "dispatch_unresolved", text: "No unique workflow run could be matched to this request" },
   { state: "recovery_required", errorCode: null, text: "Recovery required" },
 ] as const) test(`resumes ${item.state}/${item.errorCode} accurately across reload and tab`, async ({ page, context }) => {
   const state = await setup(page, pinned({ ...item, maintenance: item.state === "recovery_required", stage: "pages_deployment", runUrl: "https://github.example.test/private/actions/runs/1" }));
@@ -225,4 +225,76 @@ test("an older completed update stays in history while current release notes and
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`completed-${width}-${theme}.png`), fullPage: true });
   }
+});
+
+const repository = "example/private-install";
+const readiness = (overrides: Partial<UpdateSetup> = {}): UpdateSetup => ({ repository, dispatchCredential: { state: "ready", expiresAt: null }, selectionCredential: { state: "ready", expiresAt: null }, controller: "current", ...overrides });
+const setupPanel = (page: Page) => page.getByRole("region", { name: "Setup status" });
+const setupRow = (page: Page, name: string) => setupPanel(page).getByRole("listitem").filter({ has: page.getByText(name, { exact: true }) });
+
+test("without the optional dashboard update credential, Updates shows how to update and set it up instead of an error", async ({ page }) => {
+  const state = await setup(page); state.readiness = readiness({ dispatchCredential: { state: "missing", expiresAt: null }, selectionCredential: { state: "missing", expiresAt: null }, controller: "unknown" });
+  await page.goto("/settings/updates");
+  const card = page.locator(".web-update-card");
+  const notice = card.getByRole("group", { name: "Dashboard updates are not set up yet" });
+  await expect(notice).toContainText('run the "Install or upgrade LancerLogin" workflow with operation "upgrade"');
+  await expect(notice).toContainText("Actions: Read and write, store it as the production environment secret LANCERLOGIN_WEB_UPDATE_TOKEN, then run the \"Refresh web update credential\" workflow.");
+  await expect(notice.getByRole("link", { name: "Run Install or upgrade LancerLogin" })).toHaveAttribute("href", `https://github.com/${repository}/actions/workflows/provision-template.yml`);
+  await expect(notice.getByRole("link", { name: "Create a GitHub fine-grained token" })).toHaveAttribute("href", "https://github.com/settings/personal-access-tokens/new");
+  await expect(notice.getByRole("link", { name: "Open the deployment repository's environments" })).toHaveAttribute("href", `https://github.com/${repository}/settings/environments`);
+  await expect(notice.getByRole("link", { name: "Run Refresh web update credential" })).toHaveAttribute("href", `https://github.com/${repository}/actions/workflows/refresh-web-update-credential.yml`);
+  await expect(webStatus(page)).not.toHaveAttribute("data-tone", "error");
+  await expect(page.getByRole("button", { name: "Back up and begin update" })).toBeDisabled();
+  await expect(page.getByRole("status").filter({ hasText: "Dashboard updates are not set up yet, so upgrade by running" })).toBeVisible();
+  await expect(setupRow(page, "Dashboard update credential")).toContainText("Not set up");
+  await expect(setupRow(page, "Update controller workflow")).toContainText("Not checked");
+  await expect(setupRow(page, "Plugin management credential")).toContainText("LANCERLOGIN_MODULE_SELECTION_TOKEN");
+  await expect(page.locator(".update-credential-banner")).toHaveCount(0);
+  expect(state.prepares).toBe(0);
+});
+
+test("an expiring credential shows a dismissible warning, a card notice and readiness rows in both themes and widths", async ({ page }, testInfo) => {
+  const state = await setup(page);
+  const expiresAt = new Date(Date.now() + 5 * 86_400_000).toISOString();
+  state.readiness = readiness({ dispatchCredential: { state: "expiring", expiresAt }, selectionCredential: { state: "rejected", expiresAt: null }, controller: "upgrade_required" });
+  for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
+    await page.setViewportSize({ width, height: width === 1280 ? 900 : 844 }); await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), theme);
+    await page.goto("/settings/updates"); await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+    const banner = page.locator(".update-credential-banner");
+    await expect(banner).toContainText("replace the production environment secret LANCERLOGIN_WEB_UPDATE_TOKEN");
+    await expect(banner).toHaveAttribute("data-tone", "warning");
+    await expect(page.locator(".web-update-credential-notice")).toContainText("The dashboard update credential expires");
+    await expect(page.getByRole("button", { name: "Back up and begin update" })).toBeEnabled();
+    await expect(setupRow(page, "Dashboard update credential").locator(".update-setup-badge")).toHaveText("Expiring soon");
+    await expect(setupRow(page, "Dashboard update credential").locator(".update-setup-badge")).toHaveAttribute("data-tone", "warning");
+    await expect(setupRow(page, "Update controller workflow")).toContainText("Beta updates need the current controller");
+    await expect(setupRow(page, "Update controller workflow").getByRole("link", { name: "Open the update controller workflow" })).toHaveAttribute("href", `https://github.com/${repository}/actions/workflows/upgrade-web.yml`);
+    await expect(setupRow(page, "Plugin management credential").locator(".update-setup-badge")).toHaveAttribute("data-tone", "error");
+    const dismiss = banner.getByRole("button", { name: "Dismiss credential expiry warning" });
+    const styles = await dismiss.evaluate((element) => { const style = getComputedStyle(element); const probe = document.createElement("span"); probe.style.borderRadius = "var(--radius-control)"; element.closest(".app")!.append(probe); const expectedRadius = getComputedStyle(probe).borderTopLeftRadius; probe.remove(); return { height: element.getBoundingClientRect().height, radius: style.borderTopLeftRadius, expectedRadius, background: style.backgroundColor }; });
+    expect(styles.height).toBeGreaterThanOrEqual(44); expect(styles.radius).toBe(styles.expectedRadius); expect(styles.background).not.toBe("rgba(0, 0, 0, 0)");
+    for (const link of await page.locator(".update-fix-links a").all()) expect(await link.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    await dismiss.focus(); expect(await dismiss.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
+    await expect(page.locator("main h1")).toHaveCount(1); expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`setup-${width}-${theme}.png`), fullPage: true });
+  }
+  const banner = page.locator(".update-credential-banner");
+  await banner.getByRole("button", { name: "Dismiss credential expiry warning" }).focus(); await page.keyboard.press("Enter");
+  await expect(banner).toHaveCount(0);
+  await page.reload(); await expect(page.locator(".web-update-credential-notice")).toBeVisible(); await expect(banner).toHaveCount(0);
+  // A renewed credential with a new expiry warns again.
+  state.readiness = readiness({ dispatchCredential: { state: "expiring", expiresAt: new Date(Date.now() + 9 * 86_400_000).toISOString() } });
+  await page.reload(); await expect(banner).toBeVisible();
+});
+
+test("a rejected credential names the secret and workflow to fix, with links", async ({ page }) => {
+  const state = await setup(page); state.readiness = readiness(); state.prepareError = "dispatch_credential_rejected";
+  await page.goto("/settings/updates");
+  await expect(setupRow(page, "Dashboard update credential")).toContainText("No expiry.");
+  await page.getByRole("button", { name: "Back up and begin update" }).click();
+  await expect(webStatus(page)).toContainText("GitHub rejected the dashboard update credential (LANCERLOGIN_WEB_UPDATE_TOKEN)");
+  const fixes = page.locator(".web-update-card").getByRole("list", { name: "Fix this update problem" });
+  await expect(fixes.getByRole("link", { name: "Run Refresh web update credential" })).toHaveAttribute("href", `https://github.com/${repository}/actions/workflows/refresh-web-update-credential.yml`);
+  await page.getByRole("button", { name: "Refresh update status", exact: true }).click();
+  await expect(fixes).toHaveCount(0);
 });

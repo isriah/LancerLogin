@@ -46,7 +46,7 @@ test("an expired session during a module refresh returns to sign-in", async ({ p
   await expect(page.getByRole("table", { name: "Roster members" })).toBeVisible();
   modules.mode = "signed-out";
   await refresh(page);
-  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Module access unavailable" })).toHaveCount(0);
 });
 
@@ -124,11 +124,13 @@ test("reopened Attendance setup can be closed and its Integrations link opens In
   await page.goto("/settings/guided-setup");
   const navigation = page.getByRole("navigation", { name: "Primary dashboard navigation" });
   await page.getByRole("button", { name: "Open Attendance setup" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Attendance setup" })).toBeVisible();
   await expect(navigation).toHaveCount(0);
   await page.getByRole("button", { name: "Close setup" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Set up Attendance" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { level: 1, name: "Attendance Setup" })).toBeVisible();
+  // The setup workspace and its Settings page share one name; the Settings page is the one with Open Attendance setup.
+  await expect(page.getByRole("button", { name: "Close setup" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open Attendance setup" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Attendance setup" })).toBeVisible();
   await expect(navigation).toBeVisible();
 
   await page.getByRole("button", { name: "Open Attendance setup" }).click();
@@ -179,7 +181,7 @@ test("a transient session check failure offers a retry instead of the sign-in fo
   await page.route("**/auth/session", (route) => available ? route.fallback() : route.fulfill({ status: 503, contentType: "text/html", body: "<html>Unavailable</html>" }));
   await page.goto("/roster");
   await expect(page.getByRole("heading", { name: "Session check unavailable" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Welcome back" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: /^Sign in/ })).toHaveCount(0);
   available = true;
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByRole("table", { name: "Roster members" })).toContainText("Avery Stone");

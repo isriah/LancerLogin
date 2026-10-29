@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { WalkthroughSession } from "../apps/dashboard/src/walkthrough-session.ts";
+import { quietWalkthroughsAfterSetup, WalkthroughSession, walkthroughsQuietAfterSetup } from "../apps/dashboard/src/walkthrough-session.ts";
 
 function storage() {
   const values = new Map<string, string>();
@@ -43,4 +43,13 @@ test("unavailable browser storage still defers repeated route visits and permits
     session.reset("dashboard", 1);
     assert.equal(session.isDeferred("dashboard", 1), false);
   }
+});
+
+test("module setup quiets automatic page tours for the rest of the browser session without changing deferrals", () => {
+  const tab = storage();
+  assert.equal(walkthroughsQuietAfterSetup(tab), false);
+  quietWalkthroughsAfterSetup(tab);
+  assert.equal(walkthroughsQuietAfterSetup(tab), true);
+  assert.equal(walkthroughsQuietAfterSetup(storage()), false);
+  assert.equal(new WalkthroughSession("admin-1", tab).isDeferred("roster", 1), false);
 });

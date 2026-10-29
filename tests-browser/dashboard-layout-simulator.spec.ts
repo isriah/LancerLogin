@@ -133,6 +133,6 @@ test("Operator can change theme and sign out through Settings without Admin acce
   let logout = false;
   await page.route("**/auth/logout", route => { logout = true; return route.fulfill({ json: {} }); });
   await page.getByRole("button", { name: "Sign out", exact: true }).press("Enter");
-  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
   expect(logout).toBe(true);
 });

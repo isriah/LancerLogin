@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { kioskStyles } from "../../kiosk/src/ui.mjs";
 import type { KioskDisplay } from "../../kiosk/src/kiosk-presentation.mjs";
-import type { Branding } from "./setup-workspace";
+import type { Branding } from "./branding";
 import { AdaptiveBrandLogo } from "./adaptive-brand-logo";
 
 // A shadow root keeps the physical screen's stylesheet out of dashboard controls.

@@ -105,6 +105,56 @@ test("Unconfigured simulator links to guided setup and operators cannot start en
   await expect(page.getByRole("button", { name: /^Begin enrollment/ })).toHaveCount(0);
 });
 
+test("a stopped simulator can be started again from Kiosks", async ({ page }) => {
+  await useKioskContext(page);
+  let simulator = { name: "Browser test", active: 0, online: 0, readerOnline: false, releaseVersion: "browser simulator" };
+  let started: unknown;
+  await page.route("**/admin/simulator", (route) => route.fulfill({ json: { simulator } }));
+  await page.route("**/module-setup/attendance/input", async (route) => { started = route.request().postDataJSON(); simulator = { ...simulator, active: 1, online: 1 }; await route.fulfill({ json: { mode: "browser", active: true, online: true, fingerprintReaderVerified: false } }); });
+  await page.goto("/kiosks");
+  const card = page.locator(".kiosk-simulator-card");
+  await expect(card.getByText("Stopped", { exact: true })).toBeVisible();
+  await expect(card.getByRole("link", { name: "Open simulator" })).toHaveCount(0);
+  await card.getByRole("button", { name: "Start simulator" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Browser simulator started." })).toBeVisible();
+  expect(started).toEqual({ action: "start", name: "Browser test" });
+  await expect(card.getByRole("link", { name: "Open simulator" })).toHaveAttribute("href", "/simulator");
+  await expect(card.getByRole("button", { name: "Stop simulator" })).toBeVisible();
+});
+
+test("Add physical kiosk walks through Pi preparation, a pinned installer, the pairing key, and local pairing", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await useKioskContext(page);
+  await page.addInitScript(() => { Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { (window as unknown as { copied: string[] }).copied = [...((window as unknown as { copied?: string[] }).copied ?? []), text]; } } }); });
+  await page.route("**/admin/pairing-codes", (route) => route.fulfill({ status: 201, json: { code: "ABCD-1234", expiresAt: new Date(Date.now() + 600_000).toISOString(), workerApiUrl: "https://worker.example.test", kioskName: "Front desk" } }));
+  await page.goto("/kiosks");
+  await page.getByRole("button", { name: "Add kiosk" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add physical kiosk" });
+  for (const name of ["Prepare the Pi", "Install the kiosk software", "Create the one-time pairing key", "Pair from a phone or laptop"]) await expect(dialog.getByRole("heading", { level: 3, name })).toBeVisible();
+  await expect(dialog.getByRole("link", { name: /installer/i })).toHaveCount(0);
+  await expect(dialog).toContainText("/dev/serial0");
+  await expect(dialog).toContainText("/usr/bin/node");
+  await expect(dialog).toContainText(".local:8788");
+  const commands = dialog.locator(".kiosk-pairing-command");
+  await expect(commands).toContainText(/curl -fLO https:\/\/github\.com\/isriah\/LancerLogin\/releases\/download\/v\d+\.\d+\.\d+[^/]*\/install-lancerlogin\.sh/);
+  await expect(commands).toContainText("sudo bash install-lancerlogin.sh --dry-run");
+  await expect(commands).toContainText("sudo bash install-lancerlogin.sh --install");
+  await expect(commands).not.toContainText("--no-fingerprint-reader");
+  await dialog.getByRole("radio", { name: /No fingerprint reader/ }).check();
+  await expect(commands).toContainText("sudo bash install-lancerlogin.sh --install --no-fingerprint-reader");
+  await dialog.getByRole("button", { name: "Copy install commands" }).click();
+  await expect(dialog.getByRole("status")).toHaveText("Install commands copied.");
+  await dialog.getByRole("textbox", { name: "Kiosk name" }).fill("Front desk");
+  await dialog.getByRole("button", { name: "Create one-time pairing key" }).click();
+  await dialog.getByRole("button", { name: "Copy pairing key" }).click();
+  await expect(dialog.getByRole("status")).toHaveText("Pairing key copied.");
+  const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
+  expect(copied[0]).toContain("--no-fingerprint-reader");
+  expect(copied[1]).toMatch(/^LL1\./);
+  await expect(dialog.getByRole("button", { name: "Refresh kiosk status" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+});
+
 test("Fingerprint sharing cards use one themed spacing interval", async ({ page }) => {
   await useKioskContext(page);
   await page.goto("/settings/fingerprint-sharing");

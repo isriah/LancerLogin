@@ -1,11 +1,11 @@
-import { FormEvent, StrictMode, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { FormEvent, StrictMode, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource/bebas-neue/latin-400.css";
 import "@fontsource/roboto/latin-400.css";
 import "@fontsource/roboto/latin-500.css";
 import "@fontsource/roboto/latin-700.css";
 import "./styles.css";
-import type { Branding } from "./setup-workspace";
+import type { Branding } from "./branding";
 import { AppShell } from "./app-shell";
 import { AdaptiveBrandLogo } from "./adaptive-brand-logo";
 import { brandTheme } from "./theme";
@@ -21,22 +21,13 @@ import { clearWalkthroughSession } from "./walkthrough-session";
 // Loaded last so desktop consistency rules follow every page and mobile stylesheet.
 import "./desktop-layout.css";
 
-type CloudflareStep = { id: string; title: string; detail: string; action?: { label: string; href: string } };
-
-const cloudflareSteps: CloudflareStep[] = [
-  { id: "private-repository", title: "Create a private deployment repository", detail: "Use the public LancerLogin template, choose Private, and keep deployment runs and Cloudflare credentials there." },
-  { id: "account", title: "Create or sign in to Cloudflare", detail: "Use an account owned by your organization—not a developer’s personal deployment.", action: { label: "Open Cloudflare", href: "https://dash.cloudflare.com/sign-up" } },
-  { id: "token", title: "Create a scoped Account API Token", detail: "In Manage account → Account API Tokens, allow Account Settings read plus Workers Scripts, D1, and Pages edit.", action: { label: "Open Cloudflare", href: "https://dash.cloudflare.com/" } },
-  { id: "account-id", title: "Copy the selected Account ID", detail: "Find it on the Cloudflare account overview. Keep it out of source code." },
-  { id: "secrets", title: "Link the private deployment secrets", detail: "Store the account ID, token, and a private one-time setup code in the private repository’s production environment. LancerLogin never displays saved values." },
-  { id: "provision", title: "Run the private setup workflow", detail: "Keep Latest stable selected. GitHub validates the account and resource names before it creates anything." },
-];
-
-const installationSteps = ["Organization & brand", "Roster", "Pair hardware or simulator", "Kiosk input test", "Confirm attendance"];
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 const googleOAuthGuideUrl = "https://isriah.github.io/LancerLogin/setup.html#google-oauth";
+const setupGuideUrl = "https://isriah.github.io/LancerLogin/setup.html";
+const recoverAccessUrl = "https://isriah.github.io/LancerLogin/operations.html";
 
-type SetupStatus = { configured: boolean; installation?: { authMode: "google" | "local" | "both" }; settings?: Branding };
+// justCreated is client-only: this browser just ran first-Admin setup, so the sign-in form asks the new Admin to finish setup.
+type SetupStatus = { configured: boolean; installation?: { authMode: "google" | "local" | "both" }; settings?: Branding; justCreated?: boolean };
 const themeStorageKey = "lancerlogin-theme";
 function savedTheme(): "light" | "dark" { try { return localStorage.getItem(themeStorageKey) === "light" ? "light" : "dark"; } catch { return "dark"; } }
 
@@ -54,14 +45,9 @@ function CopyValue({ label, value }: { label: string; value: string }) {
 }
 
 function App() {
-  const [completed, setCompleted] = useState<string[]>([]);
-  const [slug, setSlug] = useState("my-organization");
   const [theme, setTheme] = useState<"light" | "dark">(savedTheme);
   const [remoteStatus, setRemoteStatus] = useState<SetupStatus | "loading" | "unavailable">(apiBaseUrl ? "loading" : "unavailable");
   const startup = useRef<ReturnType<typeof startDashboardEntry<SetupStatus>> | undefined>(undefined);
-  const validSlug = /^[a-z][a-z0-9-]{2,40}$/.test(slug);
-  const plannedResources = useMemo(() => validSlug ? [`${slug}-api`, `${slug}-data`, `${slug}-dashboard`] : [], [slug, validSlug]);
-  const toggle = (id: string) => setCompleted((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => {
@@ -83,59 +69,9 @@ function App() {
     try { localStorage.setItem(themeStorageKey, next); } catch { /* Browser storage can be unavailable in private contexts. */ }
   }
 
-  if (apiBaseUrl) return <ProvisionedEntry startup={startup.current} status={remoteStatus} onConfigured={(status) => setRemoteStatus(status)} theme={theme} onTheme={chooseTheme} />;
-
-  return <div className="app" data-theme={theme}>
-    <a className="skip-link" href="#main">Skip to main content</a>
-    <aside className="sidebar" aria-label="Product navigation">
-      <div className="brand-mark" aria-hidden="true">L</div>
-      <div className="brand-copy"><strong>LancerLogin</strong><span>Community Edition</span></div>
-      <nav aria-label="Primary">
-        <a className="nav-item active" href="#setup" aria-current="page"><span>01</span> Setup</a>
-        <span className="nav-item disabled" aria-disabled="true"><span>02</span> Dashboard</span>
-        <span className="nav-item disabled" aria-disabled="true"><span>03</span> Meetings</span>
-        <span className="nav-item disabled" aria-disabled="true"><span>04</span> Attendance</span>
-        <span className="nav-item disabled" aria-disabled="true"><span>05</span> Reports</span>
-      </nav>
-      <div className="sidebar-footer"><span className="status-dot" /> Local preview · no cloud linked</div>
-    </aside>
-
-    <main id="main" className="main">
-      <header className="topbar">
-        <div><p className="kicker">Installation setup</p><h1>Connect your own Cloudflare account</h1></div>
-        <ThemeToggle theme={theme} onTheme={chooseTheme} />
-      </header>
-
-      <section className="notice" aria-labelledby="privacy-title">
-        <div className="notice-icon" aria-hidden="true">✓</div>
-        <div><h2 id="privacy-title">Public source. Private deployment. Your data.</h2><p>The public project contains no adopter credentials. Your private repository deploys a reviewed release into only the Cloudflare account you link.</p></div>
-      </section>
-
-      <div className="content-grid">
-        <section className="panel setup-panel" aria-labelledby="connect-title">
-          <div className="panel-heading"><div><p className="step-label">Before first sign-in</p><h2 id="connect-title">Link Cloudflare</h2></div><span className="progress-count">{completed.length} / {cloudflareSteps.length}</span></div>
-          <ol className="steps">
-            {cloudflareSteps.map((step, index) => <li key={step.id} className={completed.includes(step.id) ? "step complete" : "step"}>
-              <button className="step-toggle" type="button" onClick={() => toggle(step.id)} aria-label={`${completed.includes(step.id) ? "Mark incomplete" : "Mark complete"}: ${step.title}`}>{completed.includes(step.id) ? "✓" : index + 1}</button>
-              <div className="step-content"><h3>{step.title}</h3><p>{step.detail}</p>{step.action && <a href={step.action.href} target="_blank" rel="noreferrer">{step.action.label}<span aria-hidden="true"> ↗</span></a>}</div>
-            </li>)}
-          </ol>
-        </section>
-
-        <aside className="panel preview-panel" aria-labelledby="preview-title">
-          <p className="step-label">Dry-run preview</p><h2 id="preview-title">Resource plan</h2>
-          <label htmlFor="slug">Installation slug</label>
-          <input id="slug" value={slug} onChange={(event) => setSlug(event.target.value)} aria-describedby="slug-help" aria-invalid={!validSlug} />
-          <p id="slug-help" className={validSlug ? "field-help" : "field-help error"}>{validSlug ? "Lowercase letters, numbers, and hyphens." : "Start with a letter; use 3–41 lowercase letters, numbers, or hyphens."}</p>
-          <div className="resource-list" aria-live="polite">{validSlug ? plannedResources.map((resource, index) => <div key={resource}><span>{["Worker API", "D1 database", "Pages dashboard"][index]}</span><code>{resource}</code></div>) : <p>Enter a valid slug to preview resources.</p>}</div>
-          <button type="button" className="primary-button" disabled={!validSlug || completed.length < 3}>Preview GitHub workflow</button>
-          <p className="button-note">This preview does not create resources or transmit a token.</p>
-        </aside>
-      </div>
-
-      <section className="after-setup" aria-labelledby="after-title"><div><p className="step-label">After deployment</p><h2 id="after-title">Your shared setup checklist</h2><p>Any Admin can resume these required steps. Optional integrations stay separate and never block launch.</p></div><ol>{installationSteps.map((step, index) => <li key={step}><span>{String(index + 1).padStart(2, "0")}</span>{step}</li>)}</ol></section>
-    </main>
-  </div>;
+  // A build without a Worker API address cannot reach setup. Deployed builds always set one, so this only appears in an unconfigured local preview.
+  if (!apiBaseUrl) return <CenteredState theme={theme} title="Setup service not configured" detail="This dashboard build has no Worker API address. Set VITE_API_BASE_URL for a local preview, or deploy with the private setup workflow." link={{ label: "Open the setup guide", href: setupGuideUrl }} />;
+  return <ProvisionedEntry startup={startup.current} status={remoteStatus} onConfigured={(status) => setRemoteStatus(status)} theme={theme} onTheme={chooseTheme} />;
 }
 
 function ProvisionedEntry({ startup, status, onConfigured, theme, onTheme }: { startup?: ReturnType<typeof startDashboardEntry<SetupStatus>>; status: SetupStatus | "loading" | "unavailable"; onConfigured: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
@@ -161,17 +97,33 @@ function PublicModuleEntry({ branding, style, theme, onTheme }: { branding?: Bra
   return <div className="app" data-theme={theme} style={style}><a className="skip-link" href="#dashboard-content">{publicPage.page.skipLinkLabel}</a><div className="provisioned-main"><EntryHeader branding={branding} theme={theme} onTheme={onTheme} /><ModuleRoot moduleId={publicPage.moduleId}>{publicPage.page.render({ subpath: publicPage.subpath, navigate })}</ModuleRoot></div></div>;
 }
 
-function EntryHeader({ branding, theme, onTheme }: { branding?: Branding; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) { return <header className="setup-header"><a className="brand-home-link" href="/dashboard" aria-label="Go to Dashboard">{branding?.logoData ? <AdaptiveBrandLogo src={branding.logoData} alt="" backdrop={branding.logoBackdrop} className="header-logo" /> : <div className="brand-mark" aria-hidden="true">L</div>}<span className="brand-heading"><strong>{branding?.organizationName ?? "LancerLogin"}</strong><span>{branding?.subtitle || "Community Edition"}</span></span></a><ThemeToggle theme={theme} onTheme={onTheme} /></header>; }
+function EntryHeader({ branding, theme, onTheme }: { branding?: Branding; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) { return <header className="setup-header"><a className="brand-home-link" href="/dashboard" aria-label="Go to Dashboard">{branding?.logoData ? <AdaptiveBrandLogo src={branding.logoData} alt="" backdrop={branding.logoBackdrop} className="header-logo" /> : <div className="brand-mark" aria-hidden="true">L</div>}<span className="brand-heading"><strong>{branding?.organizationName ?? "LancerLogin"}</strong>{branding?.subtitle && <span>{branding.subtitle}</span>}</span></a><ThemeToggle theme={theme} onTheme={onTheme} /></header>; }
 
-function CenteredState({ theme, title, detail }: { theme: "light" | "dark"; title: string; detail: string }) {
-  return <div className="app" data-theme={theme}><main className="centered-state" aria-live="polite" aria-busy={title.startsWith("Checking")}><div className="brand-mark" aria-hidden="true">L</div><p className="kicker">LancerLogin dashboard</p><h1>{title}</h1><p>{detail}</p></main></div>;
+function CenteredState({ theme, title, detail, link }: { theme: "light" | "dark"; title: string; detail: string; link?: { label: string; href: string } }) {
+  return <div className="app" data-theme={theme}><main className="centered-state" aria-live="polite" aria-busy={title.startsWith("Checking")}><div className="brand-mark" aria-hidden="true">L</div><p className="kicker">LancerLogin dashboard</p><h1>{title}</h1><p>{detail}</p>{link && <a href={link.href} target="_blank" rel="noreferrer">{link.label}<span aria-hidden="true"> ↗</span></a>}</main></div>;
+}
+
+const authModeChoices = [
+  { mode: "local", title: "Username and password", detail: "Works without an identity provider." },
+  { mode: "google", title: "Google OAuth", detail: "Use your organization’s Google accounts." },
+  { mode: "both", title: "Both methods", detail: "Let each Admin use either method." },
+] as const;
+
+/** IANA zones this browser supports, keeping the browser's own zone when the list omits it (some engines omit UTC). */
+function supportedTimeZones(current: string): string[] | undefined {
+  const supportedValuesOf = (Intl as { supportedValuesOf?: (key: "timeZone") => string[] }).supportedValuesOf;
+  let zones: string[];
+  try { zones = supportedValuesOf?.("timeZone") ?? []; } catch { return undefined; }
+  if (!zones.length) return undefined;
+  return zones.includes(current) ? zones : [current, ...zones];
 }
 
 function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus) => void }) {
   const [setupCode, setSetupCode] = useState("");
   const [authMode, setAuthMode] = useState<"google" | "local" | "both">("local");
   const [organizationName, setOrganizationName] = useState("");
-  const [timeZone, setTimeZone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+  const [timeZone, setTimeZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+  const [timeZones] = useState(() => supportedTimeZones(timeZone));
   const [adminEmail, setAdminEmail] = useState("");
   const [googleClientId, setGoogleClientId] = useState("");
   const [googleClientSecret, setGoogleClientSecret] = useState("");
@@ -190,16 +142,18 @@ function FirstAdminSetup({ onConfigured }: { onConfigured: (status: SetupStatus)
     catch { setResult({ error: "Setup service unavailable. Check your connection and try again; your entries are kept." }); return; }
     const body = await response.json().catch(() => ({})) as { error?: string; details?: string[] };
     if (!response.ok) { setResult({ error: body.details?.join(" ") ?? body.error ?? (response.status >= 500 ? "Setup service unavailable. Try again; your entries are kept." : "Setup failed") }); return; }
-    onConfigured({ configured: true, installation: { authMode }, settings: { organizationName, subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } });
+    // A local-password setup sets the first Admin's session cookie, so the session check that follows signs them in.
+    onConfigured({ configured: true, justCreated: true, installation: { authMode }, settings: { organizationName, subtitle: "", logoData: "", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } });
   }
 
   const setupErrorId = result.error ? "first-admin-error" : undefined;
+  const passwordMismatch = Boolean(localPasswordConfirmation && localPassword !== localPasswordConfirmation);
   return <main id="dashboard-content" className="first-admin-card ui-card" aria-labelledby="first-admin-title"><div className="form-intro"><p className="kicker">First-time setup</p><h1 id="first-admin-title">Create your installation</h1><p>This creates the first Admin in your organization’s new database. You can change branding and add more users afterward.</p></div><form className="ui-form" onSubmit={submit} aria-describedby={setupErrorId}>
     <label htmlFor="setup-code">One-time setup code<span id="setup-code-help" className="field-help">Enter the private code you saved as the LANCERLOGIN_SETUP_CODE deployment secret.</span><input id="setup-code" required minLength={16} type="password" value={setupCode} onChange={(event) => setSetupCode(event.target.value)} autoComplete="one-time-code" aria-describedby={`setup-code-help${setupErrorId ? ` ${setupErrorId}` : ""}`} aria-invalid={Boolean(result.error)} /></label>
-    <div className="form-grid"><label>Organization name<input required maxLength={100} value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} autoComplete="organization" /></label><label>Time zone<input required value={timeZone} onChange={(event) => setTimeZone(event.target.value)} /></label></div>
-    <fieldset><legend>Dashboard sign-in</legend><div className="choice-grid">{(["local", "google", "both"] as const).map((mode) => <label className={authMode === mode ? "choice selected" : "choice"} key={mode}><input type="radio" name="auth-mode" value={mode} checked={authMode === mode} onChange={() => setAuthMode(mode)} /><strong>{mode === "local" ? "Username and password" : mode === "google" ? "Google OAuth" : "Both methods"}</strong><span>{mode === "local" ? "Works without an identity provider." : mode === "google" ? "Use your organization’s Google accounts." : "Let each Admin use either method."}</span></label>)}</div></fieldset>
-    {usesGoogle && <fieldset><legend>Google OAuth guided setup</legend><div className="oauth-walkthrough"><p>Use an organization-owned Google Cloud project. In Google Auth Platform, configure Branding, Audience, Data Access, and one <strong>Web application</strong> client.</p><a className="oauth-guide-link" href={googleOAuthGuideUrl} target="_blank" rel="noreferrer">Open the complete Google OAuth guide<span aria-hidden="true"> ↗</span></a><CopyValue label="Authorized redirect URI" value={`${window.location.origin}/api/auth/google/callback`} /><p className="field-help">Register this exact value under Authorized redirect URIs. LancerLogin does not need an Authorized JavaScript origin. Saved secrets are encrypted and never displayed again.</p></div><label>First Admin Google email<input type="email" required value={adminEmail} onChange={(event) => setAdminEmail(event.target.value)} autoComplete="email" /></label><div className="form-grid"><label>OAuth client ID<input required maxLength={500} value={googleClientId} onChange={(event) => setGoogleClientId(event.target.value)} autoComplete="off" /></label><label>OAuth client secret<input required maxLength={500} type="password" value={googleClientSecret} onChange={(event) => setGoogleClientSecret(event.target.value)} autoComplete="off" /></label></div></fieldset>}
-    {usesLocal && <><div className="form-grid"><label>Admin username<input required value={localUsername} onChange={(event) => setLocalUsername(event.target.value)} autoComplete="username" /></label><label>Admin password<input type="password" minLength={12} required value={localPassword} onChange={(event) => setLocalPassword(event.target.value)} autoComplete="new-password" /><span className="field-help">At least 12 characters. Recovery uses the local setup tool.</span></label></div><label>Confirm Admin password<input type="password" minLength={12} required value={localPasswordConfirmation} onChange={(event) => setLocalPasswordConfirmation(event.target.value)} autoComplete="new-password" aria-invalid={Boolean(localPasswordConfirmation && localPassword !== localPasswordConfirmation)} aria-describedby="password-confirmation-help" /></label>{localPasswordConfirmation && localPassword !== localPasswordConfirmation && <p id="password-confirmation-help" className="inline-field-error" role="alert">Passwords do not match.</p>}</>}
+    <div className="form-grid"><label htmlFor="organization-name">Organization name<input id="organization-name" required maxLength={100} value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} autoComplete="organization" /></label><label htmlFor="time-zone">Time zone{timeZones ? <select id="time-zone" className="ui-native-select" required value={timeZone} onChange={(event) => setTimeZone(event.target.value)}>{timeZones.map((zone) => <option key={zone} value={zone}>{zone.replaceAll("_", " ")}</option>)}</select> : <input id="time-zone" required value={timeZone} onChange={(event) => setTimeZone(event.target.value)} placeholder="America/New_York" autoComplete="off" />}</label></div>
+    <fieldset><legend id="auth-mode-legend">Dashboard sign-in</legend><div className="choice-grid" role="radiogroup" aria-labelledby="auth-mode-legend">{authModeChoices.map(({ mode, title, detail }) => <label htmlFor={`auth-mode-${mode}`} className={authMode === mode ? "choice selected" : "choice"} key={mode}><input id={`auth-mode-${mode}`} type="radio" name="auth-mode" value={mode} checked={authMode === mode} onChange={() => setAuthMode(mode)} aria-labelledby={`auth-mode-${mode}-title`} aria-describedby={`auth-mode-${mode}-detail`} /><strong id={`auth-mode-${mode}-title`}>{title}</strong><span id={`auth-mode-${mode}-detail`}>{detail}</span></label>)}</div></fieldset>
+    {usesGoogle && <fieldset><legend>Google OAuth guided setup</legend><div className="oauth-walkthrough"><p>Use an organization-owned Google Cloud project. In Google Auth Platform, configure Branding, Audience, Data Access, and one <strong>Web application</strong> client.</p><a className="oauth-guide-link" href={googleOAuthGuideUrl} target="_blank" rel="noreferrer">Open the complete Google OAuth guide<span aria-hidden="true"> ↗</span></a><CopyValue label="Authorized redirect URI" value={`${window.location.origin}/api/auth/google/callback`} /><p className="field-help">Register this exact value under Authorized redirect URIs. LancerLogin does not need an Authorized JavaScript origin. Saved secrets are encrypted and never displayed again.</p></div><label htmlFor="admin-email">First Admin Google email<input id="admin-email" type="email" required value={adminEmail} onChange={(event) => setAdminEmail(event.target.value)} autoComplete="email" /></label><div className="form-grid"><label htmlFor="google-client-id">OAuth client ID<input id="google-client-id" required maxLength={500} value={googleClientId} onChange={(event) => setGoogleClientId(event.target.value)} autoComplete="off" /></label><label htmlFor="google-client-secret">OAuth client secret<input id="google-client-secret" required maxLength={500} type="password" value={googleClientSecret} onChange={(event) => setGoogleClientSecret(event.target.value)} autoComplete="off" /></label></div></fieldset>}
+    {usesLocal && <><div className="form-grid"><label htmlFor="admin-username">Admin username<input id="admin-username" required value={localUsername} onChange={(event) => setLocalUsername(event.target.value)} autoComplete="username" /></label><div className="field-with-help"><label htmlFor="admin-password">Admin password<input id="admin-password" type="password" minLength={12} required value={localPassword} onChange={(event) => setLocalPassword(event.target.value)} autoComplete="new-password" aria-describedby="admin-password-help" /></label><p id="admin-password-help" className="field-help">At least 12 characters. If every Admin loses their password, see <a href={recoverAccessUrl} target="_blank" rel="noreferrer">Recover access<span aria-hidden="true"> ↗</span></a> in the docs.</p></div></div><label htmlFor="admin-password-confirmation">Confirm Admin password<input id="admin-password-confirmation" type="password" minLength={12} required value={localPasswordConfirmation} onChange={(event) => setLocalPasswordConfirmation(event.target.value)} autoComplete="new-password" aria-invalid={passwordMismatch} aria-describedby={passwordMismatch ? "password-confirmation-help" : undefined} /></label>{passwordMismatch && <p id="password-confirmation-help" className="inline-field-error" role="alert">Passwords do not match.</p>}</>}
     {result.error && <p id="first-admin-error" className="ui-status form-error" data-tone="error" role="alert" tabIndex={-1}>{result.error}</p>}<button className="primary-button" disabled={result.busy} type="submit">{result.busy ? "Creating installation…" : "Create first Admin"}</button>
   </form></main>;
 }
@@ -244,7 +198,7 @@ function LocalLogin({ status, onSignedIn }: { status: SetupStatus; onSignedIn: (
   const [username, setUsername] = useState(""); const [password, setPassword] = useState(""); const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) { event.preventDefault(); setMessage(""); setBusy(true); try { const response = await fetch(`${apiBaseUrl}/auth/local`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ username, password }) }); if (response.ok) onSignedIn((await response.json() as { user: { id: string; role: "admin" | "operator"; debugMode: boolean } }).user); else setMessage(signInFailureMessage(response.status)); } catch { setMessage("Sign-in service unavailable. Check your connection and try again."); } finally { setBusy(false); } }
   const messageId = message ? "sign-in-message" : undefined;
-  return <main id="dashboard-content" className="login-card ui-card" aria-labelledby="sign-in-title"><div className="form-intro"><p className="kicker">{status.settings?.organizationName ?? "LancerLogin"}</p><h1 id="sign-in-title">Welcome back</h1><p>Sign in to manage attendance and finish setup.</p></div>{mode !== "google" && <form className="ui-form" onSubmit={submit} aria-describedby={messageId}><label htmlFor="sign-in-username">Username<input id="sign-in-username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><label htmlFor="sign-in-password">Password<input id="sign-in-password" required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><button className="primary-button" disabled={busy} type="submit">{busy ? "Signing in…" : "Sign in"}</button></form>}{mode === "both" && <div className="auth-divider" aria-hidden="true"><span>or</span></div>}{mode !== "local" && <a className="google-button action-link" href={`${apiBaseUrl}/auth/google/start`}>Continue with Google</a>}{message && <p id="sign-in-message" className="ui-status auth-message" data-tone="error" role="alert" tabIndex={-1}>{message}</p>}</main>;
+  return <main id="dashboard-content" className="login-card ui-card" aria-labelledby="sign-in-title"><div className="form-intro"><p className="kicker">{status.settings?.organizationName ?? "LancerLogin"}</p><h1 id="sign-in-title">{status.justCreated ? "Sign in to finish setup" : "Sign in"}</h1><p>{status.justCreated ? mode === "google" ? "Your installation is ready. Continue with Google using the first Admin email to finish setup." : "Your installation is ready. Sign in with the Admin account you just created to finish setup." : "Sign in to manage attendance."}</p></div>{mode !== "google" && <form className="ui-form" onSubmit={submit} aria-describedby={messageId}><label htmlFor="sign-in-username">Username<input id="sign-in-username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><label htmlFor="sign-in-password">Password<input id="sign-in-password" required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><button className="primary-button" disabled={busy} type="submit">{busy ? "Signing in…" : "Sign in"}</button></form>}{mode === "both" && <div className="auth-divider" aria-hidden="true"><span>or</span></div>}{mode !== "local" && <a className="google-button action-link" href={`${apiBaseUrl}/auth/google/start`}>Continue with Google</a>}{message && <p id="sign-in-message" className="ui-status auth-message" data-tone="error" role="alert" tabIndex={-1}>{message}</p>}</main>;
 }
 
 createRoot(document.getElementById("root")!).render(<StrictMode><ErrorBoundary fallback={() => <AppErrorFallback />}><App /></ErrorBoundary></StrictMode>);

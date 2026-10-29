@@ -327,13 +327,15 @@ test("Admin can configure bounded attendance anomaly thresholds with audit histo
   assert.match(String(audit?.values.find((value) => typeof value === "string" && value.includes("anomalyLateThresholdMinutes"))), /"anomalyLateThresholdMinutes":12/);
 });
 
-test("Admin can persist shared checklist progress with an audit record", async () => {
+test("retired guided-setup checklist routes are no longer served", async () => {
+  // The legacy setup wizard was removed; Attendance setup progress lives in platform_module_setup_progress.
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/admin/setup/progress", { step: "branding", completed: true }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
-  assert.equal(result.status, 200);
-  assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO setup_progress")));
-  assert.ok(database.calls.some((call) => call.values.includes("setup.step_completed")));
+  const admin = await sessionCookie("admin");
+  assert.equal((await worker.fetch(request("/admin/setup/progress", undefined, { method: "GET", cookie: admin }), env)).status, 404);
+  assert.equal((await worker.fetch(request("/admin/setup/progress", { step: "branding", completed: true }, { method: "PATCH", cookie: admin }), env)).status, 404);
+  assert.equal((await worker.fetch(request("/admin/setup/reset", { confirmation: "RESET ONBOARDING" }, { cookie: admin }), env)).status, 404);
+  assert.equal(database.calls.some((call) => /(^|[^_])setup_progress/.test(call.sql)), false);
 });
 
 test("Admin roster import is bounded, installation-scoped, and audited", async () => {
@@ -398,12 +400,13 @@ test("browser simulator uses a distinct one-time code and never creates a hardwa
   assert.ok(pairingWrite?.values.includes("simulator"));
   assert.equal(database.calls.some((call) => call.sql.includes("FROM kiosks WHERE")), false);
 
+  // Attendance setup starts the simulator itself (attendance-module-setup.ts); the legacy wizard's pair action is retired.
   database.rows.set("purpose = 'simulator'", { id: "simulator-code" });
+  const batches = database.batches.length;
   const paired = await worker.fetch(request("/admin/simulator", { action: "pair", code, kioskName: "Browser test" }, { cookie }), env);
-  assert.equal(paired.status, 201);
-  const batch = database.batches.at(-1) ?? [];
-  assert.ok(batch.some((call) => call.sql.includes("INSERT INTO simulated_kiosk_sessions")));
-  assert.equal(batch.some((call) => call.sql.includes("INSERT INTO kiosks")), false);
+  assert.notEqual(paired.status, 201);
+  assert.equal(database.batches.length, batches);
+  assert.equal(database.calls.some((call) => call.sql.includes("INSERT INTO simulated_kiosk_sessions") || call.sql.includes("INSERT INTO kiosks")), false);
   assert.equal((await paired.text()).includes("kioskToken"), false);
 });
 
@@ -3174,12 +3177,6 @@ test("restore rejects a backup from another category before executing a batch", 
   const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const backup = { product: "LancerLogin", schemaVersion: 2, scope: "roster", exportedAt: "2026-09-01T00:00:00.000Z", tables: { members: [] } };
   const result = await worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup }, { cookie: await sessionCookie("admin") }), env); assert.equal(result.status, 400); assert.equal(database.batches.length, 0);
-});
-
-test("onboarding reset clears progress without deleting organization data", async () => {
-  const database = new FakeDatabase(); const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const admin = await sessionCookie("admin");
-  assert.equal((await worker.fetch(request("/admin/setup/reset", { confirmation: "reset onboarding" }, { cookie: admin }), env)).status, 400);
-  assert.equal((await worker.fetch(request("/admin/setup/reset", { confirmation: "RESET ONBOARDING" }, { cookie: admin }), env)).status, 200); const statements = database.batches.at(-1) ?? []; assert.ok(statements.some((call) => call.sql.includes("DELETE FROM setup_progress"))); assert.equal(statements.some((call) => /DELETE FROM members|DELETE FROM meetings|DELETE FROM installations/.test(call.sql)), false);
 });
 
 for (const scenario of ["update", "conflict", "retry"] as const) {

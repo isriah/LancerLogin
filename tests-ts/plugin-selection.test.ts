@@ -7,7 +7,8 @@ import { join } from "node:path";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
 import { latestUpdate, recordUpdateBackup, startWebUpdate } from "../apps/api/src/web-updates.ts";
-import { commitPluginChange, freshUntil, lookupPluginRelease, newestTrackRelease, parseAllowlist, pendingChanges, reauthenticationWindowMs, reviewPluginChange, sourceAllowed, type InstalledPlugins } from "../apps/api/src/plugin-selection.ts";
+import { commitPluginChange, freshUntil, lookupPluginRelease, newestTrackRelease, parseAllowlist, pendingChanges, reauthenticationWindowMs, reviewPluginChange, selectionCredentialState, sourceAllowed, type InstalledPlugins } from "../apps/api/src/plugin-selection.ts";
+import { resetCredentialObservations } from "../apps/api/src/github-credential.ts";
 import { parseSelectionFile, serializeSelection } from "../packages/shared/src/module-selection.ts";
 
 class D1 {
@@ -150,6 +151,18 @@ test("a plugin's release track is an optional selection field: absent means stab
   assert.equal(serializeSelection({ modules: [{ ...entry, track: "nightly" }, { ...entry, id: "other", source: "https://github.com/example/other.git" }] }), `${JSON.stringify({ format: 1, modules: [{ ...entry, track: "nightly" }, { ...entry, id: "other", source: "https://github.com/example/other.git" }] }, null, 2)}\n`);
   // Composition builds the pinned commit; pending changes ignore the track.
   assert.deepEqual(pendingChanges(parse({ format: 1, modules: [{ id: "hour-tracking", source: outreachSource, commit: "e".repeat(40), track: "nightly" }] }), installed), []);
+});
+
+test("a selection credential without an expiry is ready, and GitHub's 401 surfaces the fixed rejected code", async () => {
+  const env = environment(); delete env.MODULE_SELECTION_TOKEN_EXPIRES_AT;
+  assert.deepEqual(selectionCredentialState(env), { state: "ready", expiresAt: null });
+  assert.equal(selectionCredentialState({ ...env, MODULE_SELECTION_TOKEN_EXPIRES_AT: "2020-01-01T00:00:00.000Z" }).state, "expired");
+  assert.equal(selectionCredentialState({ ...env, MODULE_SELECTION_TOKEN: undefined }).state, "missing");
+  await withGitHub(async () => { assert.equal((await reviewPluginChange(env, add, installed)).action, "add"); });
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 401 });
+  try { await assert.rejects(reviewPluginChange(env, add, installed), { code: "selection_credential_rejected" }); }
+  finally { globalThis.fetch = previous; resetCredentialObservations(); }
 });
 
 test("Upgrade offers the newest published, immutable release on the plugin's track, read without credentials", async () => {

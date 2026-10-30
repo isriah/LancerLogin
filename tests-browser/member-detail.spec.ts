@@ -104,6 +104,27 @@ test("Operators can correct member history but cannot clear attendance or edit t
   expect(state.writes).toEqual([{ path: "/attendance/corrections", body: { memberId: "member-1", meetingId: "meeting-two", disposition: "excused", reason: "Approved absence" } }]);
 });
 
+test("a Re-enroll suggested badge shows for Admins and Operators, and only Admins can dismiss it", async ({ page }) => {
+  const suggestion = { rosterId: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", medianScore: 48, lowestScore: 31, lastScanAt: "2026-09-21T18:00:00Z" };
+  for (const role of ["operator", "admin"] as const) {
+    await memberFixture(page, role);
+    const dismissals: string[] = [];
+    let flagged = true;
+    await page.route("**/admin/kiosks/reenroll-suggestions", route => route.fulfill({ json: { threshold: 70, scans: 5, members: flagged ? [suggestion] : [] } }));
+    await page.route("**/admin/kiosks/reenroll-suggestions/*/dismissal", route => { expect(route.request().method()).toBe("POST"); dismissals.push(route.request().url()); flagged = false; return route.fulfill({ json: { threshold: 70, scans: 5, members: [] } }); });
+    await page.goto("/roster/A-101");
+    const profile = page.locator(".member-profile-card");
+    await expect(profile.locator(".member-reenroll-badge")).toHaveText("Re-enroll suggested");
+    await expect(profile.getByRole("group", { name: "Fingerprint re-enrollment" })).toContainText("Middle score 48");
+    const dismiss = profile.getByRole("button", { name: "Dismiss", exact: true });
+    if (role === "operator") { await expect(dismiss).toHaveCount(0); await page.unrouteAll(); continue; }
+    await dismiss.click();
+    await expect(profile.locator(".member-reenroll-badge")).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: "Suggestion dismissed" })).toBeVisible();
+    expect(dismissals).toEqual([expect.stringMatching(/\/admin\/kiosks\/reenroll-suggestions\/member-1\/dismissal$/)]);
+  }
+});
+
 test("member attendance shows pending and failed saves without changing the displayed outcome", async ({ page }) => {
   const state = await memberFixture(page);
   let release!: () => void;

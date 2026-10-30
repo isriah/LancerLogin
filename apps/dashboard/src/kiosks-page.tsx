@@ -1,5 +1,9 @@
 import { KioskScanReviews } from "./kiosk-scan-reviews";
 import { KioskFingerprintMatch } from "./kiosk-fingerprint-match";
+import { KioskDebugTools } from "./kiosk-debug-tools";
+import { KioskPossibleWrongMatches } from "./kiosk-possible-wrong-matches";
+import { KioskReenrollSuggestions } from "./kiosk-reenroll-suggestions";
+import { DiscordUnmatchedRoleMembers } from "./discord-unmatched-role-members";
 import { visiblePoll } from "./visible-poll";
 import { RouteLink, usePath } from "./router";
 import "./mobile-kiosks.css";
@@ -27,28 +31,47 @@ function formatUptime(seconds?: number) {
   return `${days ? `${days}d ` : ""}${hours}h ${minutes}m`;
 }
 
+// Rejected scans never make a kiosk degraded. Kiosks from 2.0.0-beta.14 report the causes behind their category, so one
+// raised only by unreviewed rejected scans or a failed review upload is ignored; attendance that cannot upload (an
+// unconfirmed clock or scans still waiting) and reader faults still count. The API applies the same rule on heartbeat.
+function kioskProblem(kiosk: Kiosk) {
+  if (!kiosk.errorCategory) return false;
+  if (typeof kiosk.clockConfirmed !== "number" || kiosk.errorCategory === "reader") return true;
+  return kiosk.clockConfirmed === 0 || Boolean(kiosk.clockPendingScans) || Boolean(kiosk.pendingEvents);
+}
+
 function kioskHealth(kiosk?: Kiosk) {
   const online = Boolean(kiosk?.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < 90_000);
-  const healthy = Boolean(kiosk && online && kiosk.readerOnline && kiosk.networkType !== "offline" && (kiosk.pendingEvents ?? 0) === 0 && !kiosk.errorCategory);
+  const healthy = Boolean(kiosk && online && kiosk.readerOnline && kiosk.networkType !== "offline" && (kiosk.pendingEvents ?? 0) === 0 && !kioskProblem(kiosk));
   const health = !kiosk ? "unpaired" : !online ? "offline" : healthy ? "healthy" : "degraded";
   return { online, health, label: health === "unpaired" ? "Not paired" : health[0].toUpperCase() + health.slice(1) };
 }
 
 const scans = (count: number) => `${count} ${count === 1 ? "scan" : "scans"}`;
 // Why a kiosk reports an issue. Kiosks before 2.0.0-beta.14 send only the category, so they keep the general advice.
+// Rejected scans are not an issue here; they are reviewed from Debug tools.
 function kioskIssues(kiosk: Kiosk) {
-  if (!kiosk.errorCategory) return [];
+  if (!kioskProblem(kiosk)) return [];
   const issues: string[] = [], detailed = typeof kiosk.clockConfirmed === "number";
-  if (!detailed) return [kiosk.errorCategory === "offline_queue" ? "Saved scans need attention. Open maintenance on this kiosk to check its clock and review rejected scans." : kiosk.errorCategory.replaceAll("_", " ")];
-  if (kiosk.reviewSyncFailing) issues.push("Rejected scans could not be sent for review. The kiosk retries every minute.");
+  if (!detailed) return [kiosk.errorCategory === "offline_queue" ? "Saved attendance scans are stuck on this kiosk and cannot upload. Check the kiosk's clock and network connection." : kiosk.errorCategory!.replaceAll("_", " ")];
   if (kiosk.clockConfirmed === 0) issues.push("Clock not confirmed. Reconnect the kiosk to the network, or open maintenance on the kiosk to confirm the date and time.");
-  if (kiosk.clockPendingScans) issues.push(`${scans(kiosk.clockPendingScans)} saved while the clock was unconfirmed.`);
-  if (kiosk.scansNeedReview) issues.push(`${scans(kiosk.scansNeedReview)} rejected and not yet reviewed. Review them under Rejected scans; the kiosk clears this within two minutes.`);
+  if (kiosk.clockPendingScans) issues.push(`${scans(kiosk.clockPendingScans)} saved while the clock was unconfirmed. They upload once the clock is confirmed.`);
   if (kiosk.pendingEvents) issues.push(`${scans(kiosk.pendingEvents)} waiting to upload.`);
-  return issues.length ? issues : [kiosk.errorCategory.replaceAll("_", " ")];
+  return issues.length ? issues : [kiosk.errorCategory!.replaceAll("_", " ")];
 }
 
-export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, kioskId }: { role: "admin" | "operator"; discordConfigured: boolean; walkthroughOpen?: boolean; kioskId?: string }) {
+const signInLabels: Record<KioskAuthenticationMethod, string> = { fingerprint: "fingerprint", rfid: "badge", nfc: "badge", member_id: "member ID", qr: "QR code" };
+// Why Begin enrollment is unavailable for a kiosk, in the order an Admin would fix it; undefined when it is available.
+function enrollmentBlocked(kiosk: Kiosk, online: boolean) {
+  const configured = kiosk.configuredAuthenticationMethod ?? "fingerprint", reported = kiosk.authenticationMethod ?? "fingerprint";
+  if (!online) return "Kiosk offline";
+  if (configured !== "fingerprint") return `This kiosk uses ${signInLabels[configured]} sign-in`;
+  if (reported !== "fingerprint") return "Waiting for the kiosk to switch to fingerprint sign-in";
+  if (!kiosk.readerOnline) return "Fingerprint reader offline";
+  return undefined;
+}
+
+export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, kioskId, debugMode = false }: { role: "admin" | "operator"; discordConfigured: boolean; walkthroughOpen?: boolean; kioskId?: string; debugMode?: boolean }) {
   const { path, navigate } = usePath();
   const managing = Boolean(kioskId);
   const [kiosks, setKiosks] = useState<Kiosk[]>([]);
@@ -110,6 +133,7 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
   const configuredAuthenticationMethod = active?.configuredAuthenticationMethod ?? "fingerprint";
   useEffect(() => { setAuthenticationMethod(configuredAuthenticationMethod); }, [active?.id, configuredAuthenticationMethod]);
   const activeAuthenticationMethod = active?.authenticationMethod ?? "fingerprint";
+  const enrollmentReason = active ? enrollmentBlocked(active, online) : undefined;
   const releaseCurrent = Boolean(release.fresh && hasComparableStableVersions(release.release, active?.releaseVersion ?? "") && !isNewerRelease(latestRelease, active!.releaseVersion!));
 
   function cancelRename() { const id = editing; setEditing(undefined); if (id) editButtons.current[id]?.focus(); }
@@ -148,7 +172,6 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
         {active && !managing && <div className="kiosk-device-switcher" role="group" aria-label="Active physical kiosks">{(example ? [active] : activeKiosks).map((kiosk) => {
           const state = kioskHealth(kiosk);
           return <div className="kiosk-device-option" key={kiosk.id} data-selected={active?.id === kiosk.id ? "true" : undefined}>
-            {role === "admin" && <button className="ui-button kiosk-enrollment-button" type="button" disabled={example || enrollmentBusy || !state.online || !kiosk.readerOnline || kiosk.configuredAuthenticationMethod !== "fingerprint" || kiosk.authenticationMethod !== "fingerprint"} onClick={() => void beginEnrollment(kiosk)} aria-label={`Begin enrollment on ${kiosk.name}`}>Begin enrollment</button>}
             <div className="kiosk-device-row" data-walkthrough={active?.id === kiosk.id ? "kiosk-status" : undefined}>
               <button className="ui-button kiosk-device-select" type="button" disabled={example} aria-pressed={active?.id === kiosk.id} onClick={() => { setSelectedKioskId(kiosk.id); setEditing(undefined); setMaintenanceHelp(false); }}><strong>{kiosk.name}</strong><span className="status-pill ui-status" data-tone={state.health === "healthy" ? "success" : state.health === "degraded" ? "warning" : "error"}>{state.label}</span></button>
               {role === "admin" && <button className="ui-button kiosk-edit-button" type="button" aria-label={`Rename ${kiosk.name}`} title={`Rename ${kiosk.name}`} disabled={example || renameBusy} data-walkthrough={active?.id === kiosk.id ? "kiosk-rename" : undefined} ref={element => { editButtons.current[kiosk.id] = element; }} onClick={() => { setSelectedKioskId(kiosk.id); setName(kiosk.name); setEditing(kiosk.id); }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m16 3 5 5-12 12-6 1 1-6Z M14 5l5 5" /></svg></button>}
@@ -159,9 +182,9 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
         {!active && <p data-walkthrough="kiosk-status">{managing ? "This kiosk is unavailable or retired." : "No kiosk paired"}</p>}
 
         {active ? <>
-          <dl className="kiosk-diagnostics kiosk-summary" data-walkthrough="kiosk-diagnostics"><div><dt>Authentication</dt><dd>{authenticationMethodLabels[activeAuthenticationMethod]}{configuredAuthenticationMethod !== activeAuthenticationMethod && <small>{authenticationMethodLabels[configuredAuthenticationMethod]} configured - waiting for kiosk sync</small>}</dd></div><div><dt>{activeAuthenticationMethod === "fingerprint" ? "Fingerprint reader" : "Input service"}</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Installed release</dt><dd>{active.releaseVersion ?? "Unknown"}</dd></div><div><dt>{release.channel === "stable" ? "Latest stable release" : release.channel === "beta" ? "Latest beta release" : "Latest release"}</dt><dd>{example ? <>{dashboardReleaseVersion}<small>Up to date</small></> : <>{latestRelease || "Unavailable"}{!release.fresh && latestRelease ? <small>Previously checked; confirmation required</small> : release.fresh && kioskUpdateTransition(release.release, active.releaseVersion ?? "") === "replace-development" ? <small>Replace development build with confirmation</small> : release.fresh && hasComparableStableVersions(release.release, active.releaseVersion ?? "") ? <small>{releaseCurrent ? "Up to date" : "Update available"}</small> : null}</>}</dd></div>{issues.length > 0 && <div className="kiosk-diagnostic-error"><dt>Needs attention</dt><dd>{issues.length === 1 ? issues[0] : <ul className="kiosk-issues">{issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}</dd></div>}</dl>
-          {!managing && !example && <RouteLink className="ui-button kiosk-manage-link" href={`/kiosks/${encodeURIComponent(active.id)}/manage`} currentPath={path} navigate={navigate}>Manage kiosk</RouteLink>}
-          {(managing || walkthroughOpen) && <details className="kiosk-management-section" open={walkthroughOpen || undefined}><summary>Diagnostics</summary><dl className="kiosk-diagnostics"><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div>{typeof active.readerTemplates === "number" && typeof active.linkedTemplates === "number" && <div><dt>Reader fingerprints</dt><dd>{active.readerTemplates} of 200 stored<small>{active.linkedTemplates} linked to members{unlinkedTemplates ? `, ${unlinkedTemplates} unlinked` : ""}</small></dd></div>}{typeof active.weakMatches === "number" && <div><dt>Weak matches asked to rescan</dt><dd>{active.weakMatches}<small>Since the kiosk last started</small></dd></div>}<div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div></dl></details>}
+          <dl className="kiosk-diagnostics kiosk-summary" data-walkthrough="kiosk-diagnostics"><div><dt>Authentication</dt><dd>{authenticationMethodLabels[activeAuthenticationMethod]}{configuredAuthenticationMethod !== activeAuthenticationMethod && <small>{authenticationMethodLabels[configuredAuthenticationMethod]} configured - waiting for kiosk sync</small>}</dd></div><div><dt>{activeAuthenticationMethod === "fingerprint" ? "Fingerprint reader" : "Input service"}</dt><dd>{active.readerOnline ? "Online" : "Offline"}</dd></div><div><dt>Installed release</dt><dd>{active.releaseVersion ?? "Unknown"}</dd></div><div><dt>Latest release</dt><dd>{example ? <>{dashboardReleaseVersion}<small>Up to date</small></> : <>{latestRelease || "Unavailable"}{release.channel === "stable" || release.channel === "beta" ? <small>{release.channel === "beta" ? "Beta track" : "Stable track"}</small> : null}{!release.fresh && latestRelease ? <small>Previously checked; confirmation required</small> : release.fresh && kioskUpdateTransition(release.release, active.releaseVersion ?? "") === "replace-development" ? <small>Replace development build with confirmation</small> : release.fresh && hasComparableStableVersions(release.release, active.releaseVersion ?? "") ? <small>{releaseCurrent ? "Up to date" : "Update available"}</small> : null}</>}</dd></div>{issues.length > 0 && <div className="kiosk-diagnostic-error"><dt>Needs attention</dt><dd>{issues.length === 1 ? issues[0] : <ul className="kiosk-issues">{issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}</dd></div>}</dl>
+          {!managing && (role === "admin" || !example) && <div className="kiosk-card-actions">{role === "admin" && <div className="kiosk-enrollment-action"><button className="ui-button ui-button--primary kiosk-enrollment-button" type="button" disabled={example || enrollmentBusy || Boolean(enrollmentReason)} aria-describedby={enrollmentReason && !example ? "kiosk-enrollment-reason" : undefined} onClick={() => void beginEnrollment(active)}>Begin enrollment on {active.name}</button>{enrollmentReason && !example && <small id="kiosk-enrollment-reason">{enrollmentReason}</small>}</div>}{!example && <RouteLink className="ui-button kiosk-manage-link" href={`/kiosks/${encodeURIComponent(active.id)}/manage`} currentPath={path} navigate={navigate}>Manage kiosk</RouteLink>}</div>}
+          {(managing || walkthroughOpen) && <details className="kiosk-management-section" open={walkthroughOpen || undefined}><summary>Diagnostics</summary><dl className="kiosk-diagnostics"><div><dt>Network</dt><dd>{active.networkType === "wifi" ? `Wi-Fi${active.networkSignal !== null && active.networkSignal !== undefined ? ` · ${active.networkSignal}% signal` : ""}` : active.networkType === "ethernet" ? "Ethernet" : active.networkType === "offline" ? "Offline" : "Unavailable"}</dd></div><div><dt>Last Wi-Fi scan</dt><dd>{active.lastWifiScanAt ? new Date(active.lastWifiScanAt).toLocaleString() : "Never"}</dd></div><div><dt>Uptime</dt><dd>{formatUptime(active.uptimeSeconds)}</dd></div><div><dt>Pending scans</dt><dd>{active.pendingEvents ?? 0}</dd></div>{typeof active.readerTemplates === "number" && typeof active.linkedTemplates === "number" && <div><dt>Reader fingerprints</dt><dd>{active.readerTemplates} of 200 stored<small>{active.linkedTemplates} linked to members{unlinkedTemplates ? `, ${unlinkedTemplates} unlinked` : ""}</small></dd></div>}{debugMode && typeof active.weakMatches === "number" && <div><dt>Weak matches asked to rescan</dt><dd>{active.weakMatches}<small>Since the kiosk last started</small></dd></div>}<div><dt>Last successful sync</dt><dd>{active.lastSyncAt ? new Date(active.lastSyncAt).toLocaleString() : "Never"}</dd></div><div><dt>Last heartbeat</dt><dd>{active.lastSeenAt ? new Date(active.lastSeenAt).toLocaleString() : "Never"}</dd></div><div><dt>Paired</dt><dd>{new Date(active.pairedAt).toLocaleString()}</dd></div></dl></details>}
           {role === "admin" && (example || !releaseCurrent) && <div className="kiosk-update-action"><button className="primary-button" type="button" data-walkthrough="kiosk-update" disabled={example || !online || release.checking || !release.fresh || !["upgrade", "replace-development"].includes(kioskUpdateTransition(release.release, active.releaseVersion ?? ""))} onClick={() => void command("install_latest", "Kiosk update")}>Update kiosk</button></div>}
           {role === "admin" && (managing || walkthroughOpen) && <>
             <details className="kiosk-management-section" open={walkthroughOpen || undefined}><summary>Authentication settings</summary>
@@ -189,8 +212,13 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
       </article>
       {role === "admin" && !managing && <article className="task-card kiosk-simulator-card" data-walkthrough="kiosk-simulator"><h2>Browser simulator</h2><div className="kiosk-state"><strong>{simulator?.name ?? "Not configured"}</strong><span className="status-pill ui-status" data-tone={simulator?.active && simulator.online ? "success" : simulator?.active ? "error" : "neutral"}>{simulator?.active ? simulator.online ? "Online" : "Offline" : simulator ? "Stopped" : "Not paired"}</span></div><p>Uses the kiosk scan surface with browser-selected simulated reads. Events are audited and do not count as physical kiosk activity.</p>{simulator && simulator.active !== 1 && <div className="kiosk-actions"><button className="primary-button" type="button" disabled={simulatorBusy} onClick={() => void startSimulator(simulator.name)}>{simulatorBusy ? "Starting…" : "Start simulator"}</button></div>}{!simulator && <RouteLink className="secondary-button action-link" href="/settings/guided-setup" currentPath={path} navigate={navigate}>Set up browser simulator</RouteLink>}{simulator?.active === 1 && <div className="kiosk-actions"><a className="primary-button action-link" href="/simulator">Open simulator</a><button type="button" onClick={() => void stopSimulator()}>Stop simulator</button></div>}</article>}
     </div>
-    {role === "admin" && !managing && <KioskScanReviews />}
-    {role === "admin" && !managing && <KioskFingerprintMatch />}
+    {role === "admin" && !managing && debugMode && <KioskDebugTools>
+      <KioskScanReviews uploadFailures={activeKiosks.filter(kiosk => kiosk.reviewSyncFailing && kioskHealth(kiosk).online).map(kiosk => kiosk.name)} />
+      <KioskFingerprintMatch />
+      <KioskPossibleWrongMatches />
+      <KioskReenrollSuggestions role={role} />
+      <DiscordUnmatchedRoleMembers />
+    </KioskDebugTools>}
     {pairing && <PairKioskDialog onClose={() => setPairing(false)} onPaired={load} />}
     {enrolling && <KioskEnrollmentDialog kiosk={enrolling.kiosk} initial={enrolling.session} onClose={() => setEnrolling(undefined)} />}
   </section>;

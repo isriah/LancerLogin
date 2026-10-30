@@ -232,6 +232,28 @@ test("physical kiosk gives bounded scan and offline feedback at 800 by 480", asy
   expect(dimensions).toEqual({ width: 800, height: 480 });
 });
 
+test("physical kiosk asks for a rescan without an error state and notes a weak reading on an accepted scan", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  await page.setExtraHTTPHeaders({ "x-lancerlogin-preview-state": "rescan" });
+  await page.goto(`${kioskBaseUrl}/`);
+  const shell = page.locator("#kiosk");
+  await expect(page.getByRole("heading", { name: "Scan again" })).toBeVisible();
+  await expect(shell).toHaveClass(/kiosk-shell-rescan/);
+  expect(await shell.evaluate((element) => getComputedStyle(element).animationName)).not.toBe("failure-flash");
+  await expect(page.locator("#display-notice")).toBeHidden();
+
+  await page.setExtraHTTPHeaders({ "x-lancerlogin-preview-state": "welcome_weak" });
+  await expect(page.getByRole("heading", { name: "Welcome" })).toBeVisible();
+  await expect(page.locator("#display-notice")).toHaveText("Your fingerprint is reading weakly. Ask a mentor to re-enroll it.");
+  await expect(page.locator("#display-notice")).toBeVisible();
+  const dimensions = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
+  expect(dimensions).toEqual({ width: 800, height: 480 });
+
+  await page.setExtraHTTPHeaders({ "x-lancerlogin-preview-state": "ready" });
+  await expect(page.getByRole("heading", { name: "Place finger on reader" })).toBeVisible();
+  await expect(page.locator("#display-notice")).toBeHidden();
+});
+
 test("physical kiosk replaces motion with persistent state cues", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 800, height: 480 });

@@ -4,7 +4,8 @@ import { pairedViews } from "./paired-views";
 
 type Progress = { pageId: string; version: number; status: string; stepId: string | null };
 async function account(page: Page, state: { progress: Progress; fail?: boolean }, role = "admin", debugMode = false) {
-  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: `${role}-1`, role, debugMode } } }));
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: `${role}-1`, role } } }));
+  if (debugMode) await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode", "true"));
   await page.route("**/auth/walkthroughs/dashboard", async (route) => {
     if (route.request().method() === "PATCH") {
       if (state.fail) return route.fulfill({ status: 503, json: { error: "Unavailable" } });
@@ -58,7 +59,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await page.setViewportSize(viewport);
     await page.addInitScript((selectedTheme) => localStorage.setItem("lancerlogin-theme", selectedTheme), theme);
     const state = fresh(); state.progress = { pageId: "dashboard", version: 1, status: "completed", stepId: "recurrence" };
-    await account(page, state, "operator", true);
+    await account(page, state, "admin", true);
     await page.goto("/dashboard");
     await page.getByText("Page help (debug)", { exact: true }).click();
     const reset = page.getByRole("button", { name: "Reset page walkthrough" });

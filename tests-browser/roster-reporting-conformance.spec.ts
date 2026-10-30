@@ -71,7 +71,8 @@ async function useReferenceContext(page: Page,role: Role="admin",debugMode=false
     { id: "dates-report",ownerUserId: "admin-1",scope: "personal",name: "Attendance dates",definition: { ...structuredClone(defaultReportDefinition),columns: [{ key: "core.member.name" },{ key: "attendance.detail.absent-dates" }],sort: { column: { key: "core.member.name" },direction: "asc" as const } },revision: 1,createdAt: "2026-09-02T00:00:00Z",updatedAt: "2026-09-02T00:00:00Z",warnings: [],errors: [] },
   ];
   await page.route("**/setup/status",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ configured: true,installation: { authMode: "local" },settings: referenceSettings }) }));
-  await page.route("**/auth/session",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ user: { role,debugMode } }) }));
+  await page.route("**/auth/session",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ user: { role } }) }));
+  if(debugMode) await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode","true"));
   await page.route("**/platform/modules",(route) => route.fulfill({ json: attendanceSnapshot() }));
   await page.route("**/integrations/capabilities",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ integrations: { google: { enabled: true,configured: true },resend: { enabled: false,configured: false },discord: { enabled: true,configured: true } } }) }));
   await page.route("**/admin/members",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ members: roster,discordConfigured: true }) }));
@@ -134,6 +135,28 @@ test("roster filters share one desktop row and the Show pill has its filter icon
   }
 });
 
+test("Show Re-enroll suggested lists only members whose fingerprint should be re-enrolled, with a badge", async ({ page }) => {
+  await useReferenceContext(page);
+  await page.route("**/admin/kiosks/reenroll-suggestions", route => route.fulfill({ json: { threshold: 70, scans: 5, members: [{ rosterId: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", medianScore: 48, lowestScore: 31, lastScanAt: "2026-09-21T18:00:00Z" }] } }));
+  await page.goto("/roster");
+  const show = page.getByRole("combobox", { name: "Show", exact: true });
+  await show.selectOption("all");
+  const list = page.getByRole("table", { name: "Roster members" });
+  await expect(list.getByRole("row").filter({ hasText: "Morgan Diaz" })).toBeVisible();
+  const avery = list.getByRole("row").filter({ hasText: "Avery Stone" });
+  await expect(avery.locator(".roster-reenroll-badge")).toHaveText("Re-enroll suggested");
+  await expect(avery.locator(".roster-reenroll-badge")).toHaveAttribute("title", /last 5 accepted fingerprint scans is below 70/);
+  await expect(show.locator("option")).toHaveText(["Active members", "All members", "Re-enroll suggested (1)"]);
+  await show.selectOption("reenroll");
+  await expect(show).toHaveValue("reenroll");
+  await expect(list.getByRole("row").filter({ hasText: "Morgan Diaz" })).toHaveCount(0);
+  await expect(avery).toBeVisible();
+  await expect(page.locator(".roster-directory .panel-heading p")).toHaveText("1 shown");
+  await show.selectOption("active");
+  await expect(show).toHaveValue("active");
+  await expectResponsiveFit(page);
+});
+
 test("attendance trend dates and values remain readable in contained scrollers", async ({ page }) => {
   await useReferenceContext(page);
   const data = referenceAttendanceReport();
@@ -154,6 +177,17 @@ test("attendance trend dates and values remain readable in contained scrollers",
   }
   expect(await chart.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
 });
+
+/** Where a label row's sync-direction picker and its action slot sit, after web fonts settle. */
+async function labelRoleGroup(page: Page,label: string) {
+  await page.evaluate(() => document.fonts.ready);
+  const row=page.locator(".labels-table tbody tr").filter({ has: page.getByRole("rowheader",{ name: label,exact: true }) });
+  return row.evaluate((element) => {
+    const box=(selector: string) => { const found=element.querySelector(selector); if(!found) return undefined; const rect=found.getBoundingClientRect(); return { left: rect.left,right: rect.right,top: rect.top,width: rect.width,height: rect.height }; };
+    const cell=element.querySelector("td[data-label='Discord role']")!; const more=element.querySelector(".row-menu");
+    return { picker: box(".label-sync-direction"),slot: box(".label-role-action"),inCell: Boolean(cell.querySelector(".label-role-action")),more: box(".row-menu"),moreIsLast: more?.closest("td")===element.lastElementChild,rowRight: element.getBoundingClientRect().right,cellRight: cell.getBoundingClientRect().right };
+  });
+}
 
 async function expectLabelButtonTheme(page: Page,name: string,kind: "secondary"|"primary"|"danger") {
   const button=page.locator(".member-labels-panel").getByRole("button",{ name,exact: true });
@@ -195,6 +229,8 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await page.goto("/roster");
       const add=page.getByRole("button",{ name: "Add member",exact: true });
       const bulk=page.getByRole("button",{ name: "Bulk edit",exact: true });
+      // The font swap shifts the whole action row about 5px; the buttons stay level, but boxes read between separate calls would not.
+      await add.waitFor(); await page.evaluate(() => document.fonts.ready);
       const addBox=await add.boundingBox(); const bulkBox=await bulk.boundingBox();
       expect(addBox).not.toBeNull(); expect(bulkBox).not.toBeNull();
       const importBox=await page.getByRole("button",{ name: "Import",exact: true }).boundingBox();
@@ -202,6 +238,16 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       expect(Math.abs(addBox!.y-importBox!.y)).toBeLessThan(2);
       if(viewport.width>760) { expect(importBox!.x+importBox!.width).toBeLessThanOrEqual(bulkBox!.x); expect(Math.abs(addBox!.y+addBox!.height/2-bulkBox!.y-bulkBox!.height/2)).toBeLessThan(2); }
       else { expect(bulkBox!.y).toBeGreaterThan(addBox!.y+addBox!.height); expect(bulkBox!.width).toBeGreaterThan(addBox!.width+importBox!.width); }
+      // Roboto's tall ascent leaves a centred line box about 1px high, so compare each label's cap-height middle, and its text box horizontally, with the button's middle.
+      for(const action of [add,page.getByRole("button",{ name: "Import",exact: true }),bulk]) {
+        const offset=await action.evaluate((element) => {
+          const css=getComputedStyle(element); const box=element.getBoundingClientRect(); const range=document.createRange();
+          range.selectNodeContents(element); const text=range.getBoundingClientRect(); range.selectNodeContents(element.firstChild!); const label=range.getBoundingClientRect();
+          const context=document.createElement("canvas").getContext("2d")!; context.font=`${css.fontWeight} ${css.fontSize} ${css.fontFamily}`; const metrics=context.measureText("H");
+          return { x: text.left+text.width/2-(box.left+box.width/2),y: label.top+metrics.fontBoundingBoxAscent-metrics.actualBoundingBoxAscent/2-(box.top+box.height/2) };
+        });
+        expect(Math.abs(offset.x)).toBeLessThan(.5); expect(Math.abs(offset.y)).toBeLessThan(.5);
+      }
       await expect(page.getByText("Attendance rates could not be loaded.")).toBeVisible();
       const retry=page.getByRole("button",{ name: "Retry attendance rates" });
       const style=await retry.evaluate((element) => {
@@ -244,6 +290,8 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await expect(tabs.getByText("Browse reports",{ exact: true })).toBeVisible();
       await expect(tabs.getByRole("button",{ name: "New report" })).toBeVisible();
       const reportInfo=page.locator(".report-filters").getByRole("button",{ name: "More information" });
+      // Swapping in the web fonts moves this glyph about 50px; hovering before then leaves the pointer behind and closes the tip.
+      await page.evaluate(() => document.fonts.ready);
       await reportInfo.locator(".info-tip-glyph").hover();
       await expect(page.locator(".info-tip-content").filter({ hasText: "Choose the period, meetings, roster" })).toBeVisible();
       const controls=page.locator(".report-filters");
@@ -1030,7 +1078,12 @@ test("member labels are edited inside the member editor and Debug mode controls 
   await useReferenceContext(page,"operator");
   await page.reload();
   await expect(page.getByRole("heading",{ name: "Label history" })).toHaveCount(0);
+  // Debug mode is Admin-only: an Operator on a device with Debug turned on still sees no history.
   await useReferenceContext(page,"operator",true);
+  await page.reload();
+  await expect(page.locator("main h1")).toBeVisible();
+  await expect(page.getByRole("heading",{ name: "Label history" })).toHaveCount(0);
+  await useReferenceContext(page,"admin",true);
   await page.reload();
   await expect(page.getByRole("heading",{ name: "Label history" })).toBeVisible();
 });
@@ -1097,6 +1150,15 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     if(view.width>=800) { const heights=await table.locator("tbody tr").evaluateAll((rows) => rows.map((row) => Math.round(row.getBoundingClientRect().height))); expect(heights).toEqual(heights.map(() => heights[0])); }
     else await expect(table.locator(".label-sync-text").first()).toHaveText("Label changes since last sync");
     await expect(page.getByRole("button",{ name: "Restore" })).toBeHidden();
+    // Sync to Discord sits right after the sync-direction picker in the Discord role cell; More stays at the row's far right.
+    const group=await labelRoleGroup(page,"FRC 321");
+    expect(group.inCell).toBe(true);
+    await expect(table.locator(".label-role-action").getByRole("button",{ name: "Sync to Discord" })).toBeVisible();
+    if(view.width>=800) { expect(group.slot!.left-group.picker!.right).toBeGreaterThanOrEqual(6); expect(group.slot!.left-group.picker!.right).toBeLessThanOrEqual(10); expect(Math.abs(group.slot!.top+group.slot!.height/2-(group.picker!.top+group.picker!.height/2))).toBeLessThanOrEqual(2); }
+    expect(group.moreIsLast).toBe(true);
+    // Nothing in the group spills out of its cell, on phones too.
+    expect(group.picker!.right).toBeLessThanOrEqual(group.cellRight+1); expect(group.slot!.right).toBeLessThanOrEqual(group.cellRight+1);
+    expect(group.rowRight-group.more!.right).toBeLessThanOrEqual(view.width>=800 ? 16 : 24);
     // Roles the bot cannot manage are listed but disabled, with the reason; linked roles are left out.
     const picker=page.getByRole("combobox",{ name: "Discord role for Drive Team" });
     await expect(picker.locator("option",{ hasText: "Bot (Has Administrator or Manage Roles permission)" })).toHaveJSProperty("disabled",true);
@@ -1117,9 +1179,13 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     if(view.width<800) expect(await table.evaluate((element) => getComputedStyle(element.querySelector("thead")!).position)).toBe("absolute");
     // Rename, the last sync, Unlink and Retire live in the row's More menu.
     const syncedRow=table.getByRole("row").filter({ has: page.getByRole("rowheader",{ name: "FRC 321" }) });
-    await syncedRow.getByRole("button",{ name: "More actions for FRC 321" }).click();
     const menu=page.getByRole("menu",{ name: "Actions for FRC 321" });
-    await expect(menu.getByRole("menuitem")).toHaveText(["Rename","View last sync","Unlink role","Retire label"]);
+    // The review panel's smooth scrollIntoView can still be running under load, and any scroll closes the row menu; reopen until it stays open.
+    await expect(async () => {
+      const more=syncedRow.getByRole("button",{ name: "More actions for FRC 321" });
+      if(await more.getAttribute("aria-expanded")!=="true") await more.click();
+      await expect(menu.getByRole("menuitem")).toHaveText(["Rename","View last sync","Unlink role","Retire label"],{ timeout: 1000 });
+    }).toPass();
     await expect(menu.getByRole("menuitem",{ name: "Rename" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
@@ -1142,6 +1208,130 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     await expect(page.getByRole("button",{ name: "Sync to Discord" })).toHaveCount(0);
     await expect(page.getByRole("button",{ name: "Unlink" })).toHaveCount(0);
     await expectResponsiveFit(page);
+  });
+
+  test(`two-way Discord sync starts only after every mismatch is decided and the attendance warning is acknowledged at ${view.width}px in ${view.theme} mode`,async ({ page }) => {
+    await page.setViewportSize({ width: view.width,height: view.height });
+    await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme",theme),view.theme);
+    await useReferenceContext(page);
+    const labelsPayload={ labels: [{ id: "frc-321",name: "FRC 321",active: 1,formulaEnabled: 0 }],history: [],periods: [],rules: [{ labelId: "frc-321" }],meetingCounts: {},today: "2026-10-30" };
+    await page.route("**/settings/labels",(route) => route.continue()); await page.route((url) => url.pathname==="/labels",(route) => route.fulfill({ json: labelsPayload }));
+    let direction="to_discord";
+    await page.route("**/admin/integrations/discord/label-roles",(route) => route.fulfill({ json: { integrationAvailable: true,mappings: [{ labelId: "frc-321",labelName: "FRC 321",roleId: "423456789012345678",roleName: "FRC 321",health: "ready",syncState: "no_label_changes",syncDirection: direction,twoWayCheckedAt: direction==="two_way" ? "2026-10-30T12:00:00Z" : null,createdAt: "2026-09-23T00:00:00Z" }] } }));
+    await page.route("**/admin/integrations/discord/roles",(route) => route.fulfill({ json: { canManageRoles: true,roles: [{ id: "423456789012345678",name: "FRC 321",manageable: true,labelId: "frc-321",labelName: "FRC 321" }] } }));
+    const mismatches=[{ memberId: "TEST-A",name: "Test Student A",discordUserId: "111111111111111111",displayName: "test-a",hasLabel: true,hasRole: false },{ memberId: "TEST-B",name: "Test Student B",discordUserId: "222222222222222222",displayName: "test-b",hasLabel: false,hasRole: true }];
+    let previews=0;
+    await page.route("**/admin/integrations/discord/label-roles/two-way/preview",(route) => { previews+=1; return route.fulfill({ json: { previewId: `two-way-${previews}`,expiresAt: new Date(Date.now()+600000).toISOString(),labelId: "frc-321",labelName: "FRC 321",roleId: "423456789012345678",roleName: "FRC 321",pairedCount: 5,mismatches: previews===1 ? [] : mismatches,unmatchedCount: 2,attendance: { affectsAttendance: true,attendanceRules: 1,weeklyTargets: 2,meetingAudiences: 0 } } }); });
+    let confirmed: unknown;
+    await page.route("**/admin/integrations/discord/label-roles/two-way/confirm",(route) => { confirmed=route.request().postDataJSON(); direction="two_way"; return route.fulfill({ json: { enabled: true,labelId: "frc-321",syncDirection: "two_way",labelsAdded: 0,labelsRemoved: 1,rolesAdded: 1,rolesRemoved: 0 } }); });
+    await page.goto("/settings/labels");
+    const directionPicker=page.getByRole("combobox",{ name: "Sync direction for FRC 321" });
+    await expect(directionPicker).toHaveValue("to_discord");
+    await expect(page.locator(".label-role-action").getByRole("button",{ name: "Sync to Discord" })).toBeVisible();
+    const before=await labelRoleGroup(page,"FRC 321");
+
+    // Everyone already matches: only the warning and Confirm remain. Cancel keeps Dashboard to Discord.
+    await directionPicker.selectOption("two_way");
+    const card=page.getByRole("region",{ name: "Turn on two-way sync" });
+    await expect(card).toContainText("Label FRC 321 and Discord role @FRC 321");
+    await expect(card.locator(".status-pill").first()).toHaveText("Not turned on yet");
+    await expect(card).toContainText("Everyone already matches.");
+    await expect(card.getByRole("table")).toHaveCount(0);
+    await card.getByRole("button",{ name: "Cancel" }).click();
+    await expect(card).toHaveCount(0); await expect(directionPicker).toHaveValue("to_discord");
+    expect(confirmed).toBeUndefined();
+
+    await directionPicker.selectOption("two_way");
+    await expect(card.getByRole("note")).toContainText("FRC 321 is used by 1 attendance rule and 2 weekly targets. With two-way sync on, adding or removing @FRC 321 in Discord changes these members' attendance requirements.");
+    await expect(card).toContainText("2 people don't match · 0 of 2 decided");
+    await expect(card).toContainText("2 Discord users with @FRC 321 aren't linked to anyone on the roster. They're listed in Debug tools on the Kiosks page and won't be changed.");
+    await expect(card).toContainText("No changes chosen yet.");
+    const confirm=card.getByRole("button",{ name: "Confirm and turn on two-way sync" });
+    await expect(confirm).toBeDisabled(); await expect(confirm).toHaveAttribute("title","Choose the correct side for 2 more people");
+    const rowA=card.getByRole("row").filter({ has: page.getByRole("rowheader",{ name: /Test Student A/ }) });
+    await expect(rowA).toContainText("Choose a side");
+    await expect(card.getByRole("group",{ name: "Correct side for Test Student A" }).getByRole("button",{ pressed: true })).toHaveCount(0);
+    // For everyone sets each row; a row can still be changed afterwards.
+    await card.getByRole("group",{ name: "Correct side for everyone" }).getByRole("button",{ name: "Use Discord" }).click();
+    await expect(rowA).toContainText("Remove FRC 321 label");
+    await card.getByRole("group",{ name: "Correct side for Test Student A" }).getByRole("button",{ name: "Dashboard" }).click();
+    await expect(rowA).toContainText("Add @FRC 321 in Discord");
+    await expect(card).toContainText("2 people don't match · 2 of 2 decided");
+    await expect(card).toContainText("This will add 1 label, add 1 role.");
+    await expect(confirm).toBeDisabled(); await expect(confirm).toHaveAttribute("title","Confirm that you understand the attendance warning");
+    await card.getByRole("checkbox",{ name: "I understand" }).check();
+    await expect(confirm).toBeEnabled();
+    const [background,primary]=await confirm.evaluate((element) => { const probe=document.createElement("span"); probe.style.background="var(--primary)"; element.closest(".app")!.append(probe); const expected=getComputedStyle(probe).backgroundColor; probe.remove(); return [getComputedStyle(element).backgroundColor,expected]; });
+    expect(background).toBe(primary);
+    await expectResponsiveFit(page);
+    if(view.width<800) await expect(card.locator("thead")).toBeHidden();
+    await confirm.click();
+    await expect(card.getByRole("status")).toHaveText("Two-way sync is on. Changes are applied, and Discord is checked every 5 minutes.");
+    expect(confirmed).toEqual({ previewId: "two-way-2",choices: { "TEST-A": "dashboard","TEST-B": "discord" },acknowledgeAttendance: true });
+    await expect(directionPicker).toHaveValue("two_way");
+    await expect(page.getByRole("button",{ name: "Sync status for FRC 321: Two-way sync" })).toBeVisible();
+    await expect(page.getByRole("button",{ name: "Sync to Discord" })).toHaveCount(0);
+    // Two-way's quiet "Every 5 min" note takes Sync to Discord's slot, so the row keeps its shape.
+    const note=page.locator(".label-role-action").getByRole("note");
+    await expect(note).toHaveText("Every 5 min");
+    await expect(note).toHaveAccessibleDescription("Two-way labels sync automatically every 5 minutes");
+    await expect(note).toHaveAttribute("title","Two-way labels sync automatically every 5 minutes");
+    await expect(note.locator(".sync-icon")).toBeVisible();
+    const after=await labelRoleGroup(page,"FRC 321");
+    expect(Math.abs(after.slot!.width-before.slot!.width)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(after.slot!.height-before.slot!.height)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(after.slot!.left-before.slot!.left)).toBeLessThanOrEqual(0.5);
+    if(view.width>=800) { expect(after.slot!.left-after.picker!.right).toBeGreaterThanOrEqual(6); expect(after.slot!.left-after.picker!.right).toBeLessThanOrEqual(10); }
+    expect(after.moreIsLast).toBe(true);
+    expect(after.picker!.right).toBeLessThanOrEqual(after.cellRight+1); expect(after.slot!.right).toBeLessThanOrEqual(after.cellRight+1);
+    await expectResponsiveFit(page);
+  });
+
+  test(`a two-way label paused after a restore resumes only through review, or switches to Dashboard to Discord, at ${view.width}px in ${view.theme} mode`,async ({ page }) => {
+    await page.setViewportSize({ width: view.width,height: view.height });
+    await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme",theme),view.theme);
+    await useReferenceContext(page);
+    const labelsPayload={ labels: [{ id: "frc-321",name: "FRC 321",active: 1,formulaEnabled: 0 }],history: [],periods: [],rules: [],meetingCounts: {},today: "2026-10-30" };
+    await page.route("**/settings/labels",(route) => route.continue()); await page.route((url) => url.pathname==="/labels",(route) => route.fulfill({ json: labelsPayload }));
+    let state: "paused" | "two_way" | "to_discord"="paused";
+    await page.route("**/admin/integrations/discord/label-roles",(route) => route.fulfill({ json: { integrationAvailable: true,mappings: [{ labelId: "frc-321",labelName: "FRC 321",roleId: "423456789012345678",roleName: "FRC 321",health: "ready",syncState: "no_label_changes",syncDirection: state==="two_way" ? "two_way" : "to_discord",...(state==="paused" ? { twoWayPaused: true } : {}),twoWayError: null,twoWayCheckedAt: null,createdAt: "2026-09-23T00:00:00Z" }] } }));
+    await page.route("**/admin/integrations/discord/roles",(route) => route.fulfill({ json: { canManageRoles: true,roles: [{ id: "423456789012345678",name: "FRC 321",manageable: true,labelId: "frc-321",labelName: "FRC 321" }] } }));
+    let rolePreviews=0; await page.route("**/admin/integrations/discord/label-roles/preview*",(route) => { rolePreviews+=1; return route.fulfill({ status: 409,json: { error: "paused" } }); });
+    await page.route("**/admin/integrations/discord/label-roles/two-way/preview",(route) => route.fulfill({ json: { previewId: "two-way-restored",expiresAt: new Date(Date.now()+600000).toISOString(),labelId: "frc-321",labelName: "FRC 321",roleId: "423456789012345678",roleName: "FRC 321",pairedCount: 2,mismatches: [],unmatchedCount: 0,attendance: { affectsAttendance: false,attendanceRules: 0,weeklyTargets: 0,meetingAudiences: 0 } } }));
+    let confirmed: unknown; await page.route("**/admin/integrations/discord/label-roles/two-way/confirm",(route) => { confirmed=route.request().postDataJSON(); state="two_way"; return route.fulfill({ json: { enabled: true,labelId: "frc-321",syncDirection: "two_way",labelsAdded: 0,labelsRemoved: 0,rolesAdded: 0,rolesRemoved: 0 } }); });
+    let switched: unknown; await page.route("**/admin/integrations/discord/label-roles/frc-321/direction",(route) => { switched=route.request().postDataJSON(); state="to_discord"; return route.fulfill({ json: { syncDirection: "to_discord" } }); });
+    await page.goto("/settings/labels");
+
+    // The row and the Discord roles card both say why, and nothing can sync the role while it is paused.
+    const directionPicker=page.getByRole("combobox",{ name: "Sync direction for FRC 321" });
+    await expect(directionPicker).toHaveValue("paused");
+    await expect(page.getByRole("button",{ name: "Sync status for FRC 321: Two-way, needs reconciliation" })).toBeVisible();
+    await expect(page.locator(".label-sync-text")).toHaveText("Two-way, needs reconciliation");
+    const banner=page.locator(".label-two-way-paused");
+    await expect(banner).toContainText("FRC 321: Two-way sync paused after a restore. Review differences to turn it back on.");
+    await expect(page.getByRole("button",{ name: "Sync to Discord",exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button",{ name: "Sync all linked roles" })).toBeDisabled();
+    await expectResponsiveFit(page);
+
+    // Review differences opens the reconciliation card; confirming turns two-way sync back on.
+    await page.getByRole("button",{ name: "Review differences",exact: true }).click();
+    const card=page.getByRole("region",{ name: "Turn on two-way sync" });
+    await expect(card).toContainText("Everyone already matches.");
+    await card.getByRole("button",{ name: "Confirm and turn on two-way sync" }).click();
+    expect(confirmed).toEqual({ previewId: "two-way-restored",choices: {},acknowledgeAttendance: false });
+    await expect(directionPicker).toHaveValue("two_way");
+    await expect(banner).toHaveCount(0);
+    expect(rolePreviews).toBe(0);
+
+    // A label paused again can be switched to Dashboard to Discord from the card instead.
+    state="paused"; await page.reload();
+    await expect(directionPicker).toHaveValue("paused");
+    page.once("dialog",(dialog) => dialog.accept());
+    await banner.getByRole("button",{ name: "Switch to Dashboard to Discord" }).click();
+    await expect(directionPicker).toHaveValue("to_discord");
+    expect(switched).toEqual({ direction: "to_discord" });
+    await expect(banner).toHaveCount(0);
+    await expect(page.getByRole("button",{ name: "Sync to Discord",exact: true })).toBeEnabled();
   });
 }
 

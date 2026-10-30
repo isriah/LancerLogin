@@ -191,7 +191,7 @@ test("dashboard consolidates meeting navigation and keeps roster accounts togeth
   assert.doesNotMatch(modules, /settings-module-branch|settings-module-links|setExpanded/);
   assert.match(modules, /href: "\/settings\/attendance"/);
   assert.match(shell, /CoreHomePage/);
-  assert.match(users, /ModuleAssignmentControls/);
+  assert.match(users, /\/admin\/modules\/assignments\//);
   assert.doesNotMatch(shell, /\["\/meetings", "Meetings"\]|\["\/attendance", "Attendance"\]/);
   assert.match(shell, /LegacyMeetingsRedirect/);
   assert.match(shell, /dashboardMeetingViewKey, "table"/);
@@ -218,6 +218,50 @@ test("dashboard consolidates meeting navigation and keeps roster accounts togeth
     assert.match(outreachModule, /\{ path: "\/hours", render: workspace, wide: true \}/);
     assert.match(outreachModule, /\{ path: "\/hours\/activities\/:activityId\+", render: workspace, wide: true \}/);
   }
+});
+
+test("Debug mode is a per-device Admin switch that reveals the Background scheduler", async () => {
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const main = await readFile("apps/dashboard/src/main.tsx", "utf8");
+  const startup = await readFile("apps/dashboard/src/dashboard-startup.ts", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  assert.doesNotMatch(shell, /Developer options|developer-options|\/admin\/preferences|developerSchedulerEnabled/);
+  assert.doesNotMatch(styles, /developer-options/);
+  assert.match(shell, /\{role === "admin" && <button className="theme-toggle debug-mode-toggle" type="button" role="switch" aria-checked=\{debugMode\} aria-label="Debug mode"/);
+  assert.match(shell, /\.\.\.\(role === "admin" && debugMode \? \[\["\/settings\/background-scheduler", "Background scheduler"\]\] : \[\]\)/);
+  assert.match(shell, /role === "admin" && debugMode && path === "\/settings\/background-scheduler"/);
+  assert.match(shell, /debugMode: boolean; onDebugModeChanged: \(enabled: boolean\) => void/);
+  // The switch lives in this browser only: off by default, never read from or written to the server, and always off for Operators.
+  assert.doesNotMatch(main, /\/auth\/preferences|session\.debugMode/);
+  assert.match(main, /useState\(\(\) => readStorage\("local", debugModeStorageKey\) === "true"\)/);
+  assert.match(main, /debugMode=\{session\.role === "admin" && debugPreference\}/);
+  assert.match(main, /writeStorage\("local", debugModeStorageKey, String\(debugMode\)\)/);
+  assert.doesNotMatch(startup, /debugMode/);
+});
+
+test("Accounts and roles lists accounts in a sorted table with one Save per edit panel", async () => {
+  const users = await readFile("apps/dashboard/src/user-settings.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  assert.match(users, />Accounts and roles<\/InfoHeading>/);
+  assert.match(users, /info="[^"]*Only Admins can grant dashboard access or change roles\."/);
+  assert.doesNotMatch(users, /setNotice\("Only Admins can grant/);
+  assert.match(users, /active \$\{active\.length === 1 \? "account" : "accounts"\}/);
+  assert.match(users, /aria-expanded=\{creating\}[^>]*>\{creating \? "Cancel" : "Grant access"\}/);
+  assert.doesNotMatch(users, /<details className="settings-disclosure grant-access">/);
+  for (const heading of ["Name", "Sign-in", "Role", "Modules"]) assert.match(users, new RegExp(`<th scope="col">${heading}</th>`));
+  assert.match(users, /left\.role === "admin" \? -1 : 1\) \|\| accountName\(left\)\.localeCompare/);
+  assert.match(users, /Inactive accounts \(\{inactive\.length\}\)/);
+  assert.match(users, /aria-expanded=\{open\}/);
+  assert.match(users, /\{open \? "Close" : "Edit"\}/);
+  assert.match(users, /Admins can use every enabled module\./);
+  assert.match(users, /\{user\.active \? "Deactivate account" : "Reactivate account"\}/);
+  assert.match(users, /Confirm deactivate/);
+  // One Save sends the needed account PATCH, then the module assignment PUT; selects no longer save on change.
+  assert.doesNotMatch(users, /onChange=\{\(event\) => void update/);
+  assert.match(users, /method: "PATCH", body: JSON\.stringify\(patch\)/);
+  assert.match(users, /method: "PUT", body: JSON\.stringify\(\{ capabilities: draft\.capabilities, revision: stored\.value\.revision \}\)/);
+  assert.match(styles, /@media \(max-width: 760px\) \{\r?\n  \.access-header/);
+  assert.match(styles, /\.access-table thead \{ display: none; \}/);
 });
 
 test("dashboard access sign-in method is a compact, accessible radio toggle group", async () => {
@@ -290,6 +334,9 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(home, /setCalendarSelection/);
   assert.match(home, /MeetingsPage[^>]+discordEnabled=\{discordEnabled\} navigate=\{openMeeting\} embedded meetings=\{meetings\} onMeetingsChange=\{load\}/);
   assert.match(home, /MeetingCreationDialog[^>]+open=\{creating \|\| practiceForm\}/);
+  assert.match(home, /MeetingCreationDialog[^>]+initialDate=\{practiceForm \? undefined : createDate\}/);
+  assert.match(home, /onClick=\{\(\) => addMeeting\(calendarSelection\.selectedDate\)\}/);
+  assert.match(calendar, /onChange\(selectionForDate\(today, key\)\); dayOpen\?\.open\(\);/);
   assert.match(meetings, /useModalFocus\(dialog, open && !practice, busy, close\)/);
   assert.match(meetings, /useEffect\(\(\) => \{ if \(error\) errorAlert\.current\?\.focus\(\); \}, \[error\]\)/);
   assert.match(meetings, /ref=\{errorAlert\} id="meeting-create-error"/);
@@ -727,4 +774,22 @@ test("roster dialogs trap keyboard focus and restore it when closed", async () =
   assert.match(helper, /previouslyFocused\?\.focus\(\)/);
   assert.match(roster, /useModalFocus\(dialog,\s*open/);
   assert.match(importer, /useModalFocus\(dialog,\s*modal\s*&&\s*visible/);
+});
+
+test("a label's Discord role, sync direction and that direction's action form one group, with More alone at the row's end", async () => {
+  const page = await readFile("apps/dashboard/src/labels-page.tsx", "utf8");
+  const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
+  // The action follows the direction picker inside the Discord role cell; the actions cell keeps only the More menu.
+  assert.match(page, /<\/select>\}\{primary && <span className="label-role-action">\{primary\}<\/span>\}<\/div>/);
+  assert.match(page, /<td className="label-actions"><div className="label-row-actions">\{menu\.length > 0 \? <RowMenu/);
+  assert.doesNotMatch(page, /label-action-slot/);
+  // Two-way shows a quiet note in the same slot, described for assistive technology and on hover.
+  assert.match(page, /const autoSyncText = "Two-way labels sync automatically every 5 minutes";/);
+  assert.match(page, /twoWay \? <><span className="label-auto-sync" role="note" title=\{autoSyncText\} aria-describedby=\{`label-auto-sync-\$\{label\.id\}`\}><SyncIcon state="syncing" \/><span>Every 5 min<\/span><\/span><span id=\{`label-auto-sync-\$\{label\.id\}`\} hidden>\{autoSyncText\}<\/span><\/>/);
+  assert.match(styles, /\.labels-table \.label-role-action \{[^}]*inline-size: 9\.5rem;/);
+  assert.match(styles, /\.labels-table \.label-role-action > \* \{ inline-size: 100%; \}/);
+  assert.match(styles, /\.labels-table \.label-auto-sync \{[^}]*min-block-size: var\(--control-min-block-size\);[^}]*border: 1px dashed var\(--ui-border\);[^}]*color: var\(--ui-text-muted\);/);
+  assert.doesNotMatch(styles, /label-action-slot/);
+  // Narrow cards keep More at the right.
+  assert.match(styles, /@media \(max-width: 800px\) \{[\s\S]*?\.labels-table \.label-row-actions \{ justify-content: flex-end; \}/);
 });

@@ -151,6 +151,11 @@
       "area": "Kiosks and fingerprints",
       "seconds": 64
     },
+    "meeting-calendar-day-open.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 6
+    },
     "meeting-calendar-fixture.spec.ts": {
       "group": "core",
       "area": "Meetings and attendance",

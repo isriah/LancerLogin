@@ -42,9 +42,9 @@ const short = (sha?: string | null) => sha ? sha.slice(0, 12) : "";
 const versionOr = (version: string | null | undefined, sha?: string | null) => version || short(sha);
 const pendingText: Record<Pending["kind"], (change: Pending) => string> = {
   add: (change) => `Add ${change.id} at ${versionOr(change.version, change.commit)}`,
-  upgrade: (change) => `Change ${change.id} from ${versionOr(change.installedVersion, change.installedCommit)} to ${versionOr(change.version, change.commit)}`,
+  upgrade: (change) => `Update ${change.id} from ${versionOr(change.installedVersion, change.installedCommit)} to ${versionOr(change.version, change.commit)}`,
   remove: (change) => `Remove ${change.id} (installed at ${versionOr(change.installedVersion, change.installedCommit)})`,
-  revert: (change) => `Return ${change.id} to the commit LancerLogin pins for this release`,
+  revert: (change) => `Return ${change.id} to the version LancerLogin pins for this release`,
 };
 const trackLabel: Record<Track, string> = { stable: "Stable", nightly: "Nightly (testing only)" };
 const latestTrackName: Record<Track, string> = { stable: "Stable", nightly: "Nightly" };
@@ -63,7 +63,7 @@ export function IdentityConfirmation({ options, freshUntil, busy, action, onConf
   </div>;
 }
 
-const removalBlocked = (phase: Phase) => phase === "enabled" ? "Disable this module above before removing its plugin." : phase === "retained" || phase === "deleting" ? "Its retained data must be deleted before the plugin can be removed." : "";
+const removalBlocked = (phase: Phase) => phase === "enabled" ? "Turn this module off and save before removing it." : phase === "retained" || phase === "deleting" ? "Its retained data must be deleted before the module can be removed." : "";
 
 function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; state: PluginState; onClose: () => void; onCommitted: (message: string) => void }) {
   const [form, setForm] = useState<Draft>({ ...draft, track: draft.track ?? "stable" });
@@ -85,7 +85,7 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
     finally { setBusy(false); }
   }
   const body = (value: Draft) => value.action === "remove" ? { action: value.action, id: value.id } : { action: value.action, id: value.id.trim(), source: value.source.trim(), commit: value.commit.trim().toLowerCase(), track: value.track ?? "stable" };
-  // Upgrade offers the newest published, immutable release on the plugin's track; the Admin still reviews its commit.
+  // Update offers the newest published, immutable release on the module's track; the Admin still reviews its commit.
   async function findRelease(value: Draft, replace = true) {
     const current = ++lookupRun.current;
     setLookup({ busy: true });
@@ -111,23 +111,23 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
     if (!review) return;
     await run(async () => {
       await request("/admin/plugins/change", { ...body(form), selectionSha: review.selectionSha, ...(form.action === "remove" ? {} : { trustConfirmed: true }) });
-      onCommitted(`${form.action === "add" ? "Added" : form.action === "upgrade" ? "Pinned" : "Removed"} ${form.id}${form.action !== "remove" && form.track === "nightly" ? " on the Nightly track (testing only)" : ""} in the private deployment repository. Apply plugin changes to deploy it.`);
+      onCommitted(`${form.action === "add" ? "Added" : form.action === "upgrade" ? "Pinned" : "Removed"} ${form.id}${form.action !== "remove" && form.track === "nightly" ? " on the Nightly track (testing only)" : ""} in the private deployment repository. Select Apply changes to deploy it.`);
     });
   }
-  const verb = form.action === "add" ? "Add plugin" : form.action === "upgrade" ? "Upgrade plugin" : "Remove plugin";
+  const verb = form.action === "add" ? "Add module" : form.action === "upgrade" ? "Update module" : "Remove module";
   const offered = lookup.result?.release && lookup.result.track === form.track ? lookup.result.release : undefined;
   const lookupText = lookup.busy ? `Looking up the newest ${trackLabel[form.track ?? "stable"]} release…` : lookup.error ? lookup.error : !lookup.result || lookup.result.track !== form.track ? "" : offered ? `Newest ${trackLabel[lookup.result.track]} release: ${offered.tag}${offered.kind === "nightly" ? " (nightly testing build)" : offered.kind === "beta" ? " (beta)" : ""}, commit ${short(offered.commit)}. Its full commit is filled in below; review it before committing.` : lookup.result.reason ?? "";
   const compatibility = review?.metadata ? review.metadata.state === "compatible" ? "Compatible with this installation" : review.metadata.state === "incompatible" ? "Incompatible with this installation" : "Not determined here" : "";
   return <div className="dialog-backdrop"><section ref={dialog} className="ui-dialog plugin-change-dialog" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} tabIndex={-1}>
-    <div className="dialog-heading"><div><h2 id={`${id}-title`}>{verb}</h2><p>Changes are committed to lancerlogin.modules.json in the private deployment repository. Nothing is deployed until you apply plugin changes.</p></div><button type="button" className="ui-button" aria-label="Close plugin dialog" disabled={busy} onClick={onClose}>×</button></div>
+    <div className="dialog-heading"><div><h2 id={`${id}-title`}>{verb}</h2><p>Changes are committed to lancerlogin.modules.json in the private deployment repository. Nothing is deployed until you select Apply changes in Settings &gt; Modules.</p></div><button type="button" className="ui-button" aria-label="Close module dialog" disabled={busy} onClick={onClose}>×</button></div>
     {error && <p className="ui-status" data-tone="error" role="alert">{error}</p>}
     {editing && <form className="ui-form plugin-change-form" onSubmit={(event) => void inspect(event)}>
       <label>Module ID<input className="ui-control" required value={form.id} readOnly={draft.action !== "add"} autoComplete="off" spellCheck={false} aria-describedby={`${id}-id-help`} data-modal-initial-focus={draft.action === "add" ? "" : undefined} onChange={(event) => setForm({ ...form, id: event.target.value })} /></label>
-      <p id={`${id}-id-help`} className="field-help">The plugin's module ID, for example carpool.</p>
+      <p id={`${id}-id-help`} className="field-help">The ID the repository declares for its module, for example carpool. A repository provides exactly one module.</p>
       <label>Git repository URL<input className="ui-control" required type="url" inputMode="url" value={form.source} autoComplete="off" spellCheck={false} placeholder="https://github.com/owner/repository.git" aria-describedby={`${id}-source-help`} onChange={(event) => setForm({ ...form, source: event.target.value })} /></label>
       <p id={`${id}-source-help`} className="field-help">An https URL ending in .git, without credentials.</p>
       <label>Release track<select className="ui-control ui-native-select" value={form.track} disabled={busy} aria-describedby={`${id}-track-help`} onChange={(event) => { const next = { ...form, track: event.target.value as Track }; setForm(next); if (canLookup) void findRelease(next); }}><option value="stable">{trackLabel.stable}</option><option value="nightly">{trackLabel.nightly}</option></select></label>
-      <p id={`${id}-track-help`} className="field-help">Upgrade offers the newest published, immutable release on this track. Stable offers stable releases only; Nightly also offers beta and nightly prereleases.</p>
+      <p id={`${id}-track-help`} className="field-help">Update offers the newest published, immutable release on this track. Stable offers stable releases only; Nightly also offers beta and nightly prereleases.</p>
       {form.track === "nightly" && <p className="ui-status plugin-nightly-warning" data-tone="warning">{nightlyWarning}</p>}
       <div className="plugin-release-lookup"><button className="ui-button" type="button" disabled={busy || lookup.busy || !canLookup} onClick={() => void findRelease(form)}>Find newest release</button>
         <p className="field-help" role="status" aria-live="polite">{lookupText}{diagnosticUrl(offered?.url) && <> <a href={diagnosticUrl(offered?.url)} target="_blank" rel="noreferrer">Release notes</a></>}</p></div>
@@ -143,15 +143,15 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
         {review.commit && <div><dt>Commit</dt><dd><code>{review.commit}</code></dd></div>}
         {review.previousCommit && <div><dt>{review.action === "remove" ? "Selected commit" : "Previous commit"}</dt><dd><code>{review.previousCommit}</code></dd></div>}
         {review.track && <div><dt>Release track</dt><dd>{trackLabel[review.track]}{review.previousTrack && review.previousTrack !== review.track ? `, changed from ${trackLabel[review.previousTrack]}` : ""}{offered && offered.commit === review.commit ? `. Release ${offered.tag}` : ""}.</dd></div>}
-        {review.metadata && <div><dt>Compatibility</dt><dd>{compatibility}{review.metadata.version ? `. Plugin version ${review.metadata.version}` : ""}{review.metadata.contract ? `, module contract ${review.metadata.contract}` : ""}{review.metadata.core ? `, supports LancerLogin ${review.metadata.core}` : ""}.{review.metadata.reason ? ` ${review.metadata.reason}` : ""}</dd></div>}
+        {review.metadata && <div><dt>Compatibility</dt><dd>{compatibility}{review.metadata.version ? `. Module version ${review.metadata.version}` : ""}{review.metadata.contract ? `, module contract ${review.metadata.contract}` : ""}{review.metadata.core ? `, supports LancerLogin ${review.metadata.core}` : ""}.{review.metadata.reason ? ` ${review.metadata.reason}` : ""}</dd></div>}
         {review.metadata && <div><dt>Tables</dt><dd>{review.metadata.tablePrefix ? `Tables named ${review.metadata.tablePrefix}*.` : "Not determined here."}{review.metadata.migrations ? ` ${review.metadata.migrations.length ? `Migrations: ${review.metadata.migrations.join(", ")}.` : "No migrations."}` : ""}{review.metadata.adoptedCoreMigrations ? ` Adopts ${review.metadata.adoptedCoreMigrations} historical LancerLogin migrations.` : ""}</dd></div>}
         {review.metadata && <div><dt>Routes, jobs and Discord commands</dt><dd>{review.declaredNote}</dd></div>}
       </dl>
       {review.track === "nightly" && <p className="ui-status plugin-nightly-warning" data-tone="warning">{nightlyWarning}</p>}
-      {review.action === "remove" ? <p>{review.official ? "The installation returns to the commit LancerLogin pins for this module." : "The plugin's code is removed when the change is applied. Its module is already disabled with no retained data."}</p>
+      {review.action === "remove" ? <p>{review.official ? "The installation returns to the commit LancerLogin pins for this module." : "The module's code is removed when the change is applied. It is already turned off with no retained data."}</p>
         : <><p className="settings-callout plugin-trust">{review.trustStatement}</p>
           <label className="module-choice"><input type="checkbox" className="ui-checkbox" checked={trusted} disabled={busy} onChange={(event) => setTrusted(event.target.checked)} /><span>I trust this source and reviewed this exact commit.</span></label></>}
-      <IdentityConfirmation options={state.reauthentication} freshUntil={freshUntil} busy={busy} action="change plugins" onConfirm={reauthenticate} />
+      <IdentityConfirmation options={state.reauthentication} freshUntil={freshUntil} busy={busy} action="add, update or remove modules" onConfirm={reauthenticate} />
       <div className="module-actions">
         <button className={`ui-button ui-button--primary primary-button${review.action === "remove" ? " ui-button--danger" : ""}`} type="button" disabled={busy || !fresh || review.action !== "remove" && (!trusted || review.metadata?.state === "incompatible")} onClick={() => void commit()}>{busy ? "Committing…" : review.action === "remove" ? "Commit removal" : "Commit change"}</button>
         {draft.action !== "remove" && <button className="ui-button" type="button" disabled={busy} onClick={() => setReview(undefined)}>Edit</button>}
@@ -161,14 +161,23 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
   </section></div>;
 }
 
-export function PluginManagement() {
+type Row = { id: string; source: string; commit: string; official: boolean; selected: boolean; phase: Phase; track?: Track; version?: string | null; latest?: LatestRelease | null; latestUnavailable?: boolean; updateAvailable?: boolean; releasePinVersion?: string | null; notInstalled?: boolean };
+/**
+ * Settings > Modules: the modules this installation runs from git repositories, read from the private deployment repository.
+ * Each repository supplies exactly one module, so Admins see modules only; the plugin names stay internal.
+ */
+export type ModulePackages = {
+  state?: PluginState; release?: DashboardReleaseState; error: string; notice: string; draft?: Draft;
+  ready: boolean; locked: boolean; updateActive: boolean;
+  open: (draft: Draft) => void; close: () => void; committed: (message: string) => void; setUpdateActive: (active: boolean) => void;
+};
+export function useModulePackages(enabled: boolean): ModulePackages {
   const [state, setState] = useState<PluginState>();
   const [release, setRelease] = useState<DashboardReleaseState>();
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [draft, setDraft] = useState<Draft>();
   const [updateActive, setUpdateActive] = useState(false);
-  const id = useId();
   async function load() {
     try {
       const [value, releaseState] = await Promise.all([request<PluginState>("/admin/plugins"), readDashboardReleaseState().catch(() => undefined)]);
@@ -176,63 +185,126 @@ export function PluginManagement() {
     } catch (cause) { setError((cause as Error).message); }
   }
   useEffect(() => {
+    if (!enabled) return;
     void load();
-    if (new URLSearchParams(window.location.search).get("reauthenticated") === "1") setNotice("Identity confirmed. Make your plugin or module access change within ten minutes.");
-  }, []);
-  const ready = state?.credential.state === "ready" && Boolean(state.repository) && Boolean(state.selection) && !state.error;
-  const locked = Boolean(state?.activeUpdate) || updateActive;
-  const selected = new Map(state?.selection?.modules.map((entry) => [entry.id, entry]) ?? []);
-  const rows = state ? [...state.installed, ...(state.selection?.modules ?? []).filter((entry) => !state.installed.some((item) => item.id === entry.id)).map((entry) => ({ ...entry, official: false, selected: true, notInstalled: true }))] : [];
-  // The selection credential is optional: without it the installation works and the selection is edited in the repository.
-  const optionalCredentialText = "Reading and changing the plugin selection from the dashboard needs the optional module selection token, LANCERLOGIN_MODULE_SELECTION_TOKEN. Without it, installed plugins keep working; edit lancerlogin.modules.json in the private deployment repository instead. See \"Plugin selection credential\" in docs/MODULE-PLUGINS.md.";
-  const credentialText = !state ? "" : state.credential.state === "missing" ? "Plugin management from the dashboard is not set up yet. Settings > Updates shows how to add the plugin selection credential." : state.credential.state === "expired" ? "The plugin selection credential (LANCERLOGIN_MODULE_SELECTION_TOKEN) has expired. Replace the production environment secret with a new token, then run the \"Refresh web update credential\" workflow." : !state.repository ? "The private deployment repository is not configured." : `Changes are committed to ${state.repository}. ${state.credential.expiresAt ? `Credential valid until ${new Date(state.credential.expiresAt).toLocaleDateString()}.` : "The credential has no expiry."}`;
-  return <section className="module-controls plugin-management" aria-labelledby={`${id}-title`}>
-    <div className="panel-heading"><div><h2 id={`${id}-title`}>Plugins</h2><p>Plugins add modules from a git repository pinned to an exact commit. They run with the same access as LancerLogin.</p></div>
-      <button className="ui-button ui-button--primary primary-button" type="button" disabled={!ready || locked} onClick={() => { setNotice(""); setDraft({ action: "add", id: "", source: "", commit: "" }); }}>Add plugin</button></div>
+    if (new URLSearchParams(window.location.search).get("reauthenticated") === "1") setNotice("Identity confirmed. Make your module or module access change within ten minutes.");
+  }, [enabled]);
+  return {
+    state, release, error, notice, draft, updateActive, setUpdateActive,
+    ready: state?.credential.state === "ready" && Boolean(state.repository) && Boolean(state.selection) && !state.error,
+    locked: Boolean(state?.activeUpdate) || updateActive,
+    open: (next) => { setNotice(""); setDraft(next); },
+    close: () => setDraft(undefined),
+    committed: (message) => { setDraft(undefined); setNotice(message); void load(); },
+  };
+}
+
+/** Every module from a git repository: installed ones, then ones committed to the selection but not deployed yet. */
+export function moduleRepositoryRows(packages: ModulePackages): Row[] {
+  const { state } = packages;
+  if (!state) return [];
+  return [...state.installed, ...(state.selection?.modules ?? []).filter((entry) => !state.installed.some((item) => item.id === entry.id)).map((entry) => ({ ...entry, official: false, selected: true, notInstalled: true }))];
+}
+const pendingFor = (packages: ModulePackages, id: string) => packages.state?.pending.find((change) => change.id === id);
+/** Row attributes for a module from a git repository: its pending change, release track and version status. */
+export function moduleRowAttributes(packages: ModulePackages, id: string): Record<string, string | undefined> {
+  const row = moduleRepositoryRows(packages).find((item) => item.id === id);
+  if (!row) return {};
+  const entry = packages.state?.selection?.modules.find((item) => item.id === id);
+  return { "data-pending": pendingFor(packages, id)?.kind, "data-track": entry ? entry.track ?? "stable" : undefined, "data-version-status": versionStatus(row) };
+}
+function versionStatus(row: Row) {
+  return row.notInstalled || row.latestUnavailable !== false ? "unavailable" : row.updateAvailable ? "update" : row.version && row.latest ? "current" : "unknown";
+}
+
+/** The "Not deployed" badge for a module whose committed change is waiting for Apply changes. */
+export function NotDeployedBadge({ packages, id }: { packages: ModulePackages; id: string }) {
+  return pendingFor(packages, id) ? <span className="ui-status module-choice-badge module-pending-badge" data-tone="warning">Not deployed</span> : null;
+}
+
+/** Source, commit, version and track lines for a module from a git repository, shown inside its row. */
+export function ModuleSourceDetails({ packages, id }: { packages: ModulePackages; id: string }) {
+  const { state } = packages;
+  const row = moduleRepositoryRows(packages).find((item) => item.id === id);
+  if (!state || !row) return null;
+  const entry = state.selection?.modules.find((item) => item.id === id);
+  const track = entry?.track ?? "stable";
+  // A track label only describes a selection entry that was read; unpinned included modules follow LancerLogin's pin, and without the selection the track is unknown.
+  const trackText = entry ? (track === "stable" ? " · Stable track" : "") : row.official && state.selection ? " · Pinned by LancerLogin" : "";
+  // Versions come from the module's published releases; when they cannot be read, the commit alone is shown.
+  const status = versionStatus(row);
+  const versionText = status === "unavailable" ? "" : `${row.version ?? "Unreleased commit"} · `;
+  const latestText = status === "unavailable" ? "Latest version unavailable" : `Latest on ${latestTrackName[row.track ?? track]}: ${row.latest?.tag ?? "no published release"}`;
+  const blocked = entry && !row.official ? removalBlocked(row.phase) : "";
+  return <>
+    <small className="module-source">{row.source}</small>
+    <small>{versionText}Commit <code>{short(row.commit)}</code>{row.official ? " · Included with LancerLogin" : ""}{row.selected ? " · Pinned by this installation" : ""}{trackText}</small>
+    {row.notInstalled ? <small>Added but not deployed yet. Apply changes to install it.</small> : <small className="plugin-version">{latestText}{status === "update" ? <> · <span className="plugin-version-status">Update available</span></> : status === "current" ? <> · <span className="plugin-version-status">Up to date</span></> : null}</small>}
+    {row.releasePinVersion && <small>Included with LancerLogin {state.releaseVersion}: {row.releasePinVersion}</small>}
+    {track === "nightly" && <span className="plugin-track-badge">Nightly track · testing only</span>}
+    {blocked && <small>{blocked}</small>}
+  </>;
+}
+
+/** Update and Remove for a module from a git repository. Both commit a change that Apply changes then deploys. */
+export function ModuleRepositoryActions({ packages, id, label }: { packages: ModulePackages; id: string; label: string }) {
+  const { state, ready, locked } = packages;
+  const row = moduleRepositoryRows(packages).find((item) => item.id === id);
+  if (!state || !row) return null;
+  const entry = state.selection?.modules.find((item) => item.id === id);
+  const track = entry?.track ?? "stable";
+  const blocked = entry && !row.official ? removalBlocked(row.phase) : "";
+  const update = !row.notInstalled && <button className={`ui-button${versionStatus(row) === "update" ? " ui-button--primary primary-button" : ""}`} type="button" disabled={!ready || locked} aria-label={`Update ${label}`} onClick={() => packages.open({ action: "upgrade", id, source: entry?.source ?? row.source, commit: "", track })}>Update</button>;
+  const remove = entry && <button className="ui-button" type="button" disabled={!ready || locked || Boolean(blocked)} aria-label={row.notInstalled ? `Remove pending ${label}` : row.official ? `Use LancerLogin's pin for ${label}` : `Remove ${label}`} onClick={() => packages.open({ action: "remove", id, source: "", commit: "" })}>{row.official ? "Use LancerLogin's pin" : "Remove"}</button>;
+  return update || remove ? <div className="module-actions module-row-actions">{update}{remove}</div> : null;
+}
+
+export function AddModuleButton({ packages }: { packages: ModulePackages }) {
+  return <button className="ui-button ui-button--primary primary-button" type="button" disabled={!packages.ready || packages.locked} onClick={() => packages.open({ action: "add", id: "", source: "", commit: "" })}>Add module</button>;
+}
+
+/** Whether modules can be added, updated and removed from the dashboard, and the result of the last change. */
+export function ModuleRepositoryStatus({ packages }: { packages: ModulePackages }) {
+  const { state, error, notice, ready, locked } = packages;
+  const credentialText = !state ? "" : state.credential.state === "missing" ? "Adding, updating and removing modules from the dashboard is not set up yet. Settings > Updates shows how to add the module selection credential." : state.credential.state === "expired" ? "The module selection credential (LANCERLOGIN_MODULE_SELECTION_TOKEN) has expired. Replace the production environment secret with a new token, then run the \"Refresh web update credential\" workflow." : !state.repository ? "The private deployment repository is not configured." : `Module changes are committed to ${state.repository}. ${state.credential.expiresAt ? `Credential valid until ${new Date(state.credential.expiresAt).toLocaleDateString()}.` : "The credential has no expiry."}`;
+  if (!state && !error && !notice) return null;
+  return <div className="module-repository-status">
     {notice && <p className="ui-status settings-notice" data-tone="success" role="status">{notice}</p>}
     {error && <p className="ui-status" data-tone="error" role="alert">{error}</p>}
     {state && <>
       <p className="ui-status" data-tone={ready || !state.error && state.credential.state === "missing" ? "neutral" : "warning"}>{state.error ? state.error.message : credentialText}</p>
-      {state.allowlist.state === "configured" && <p className="field-help">Allowed plugin sources: {state.allowlist.sources!.join(", ")}.</p>}
-      {state.allowlist.state === "invalid" && <p className="ui-status" data-tone="error">The plugin source allowlist in the private repository is invalid, so no plugin can be added or upgraded.</p>}
-      {locked && <p className="ui-status" data-tone="warning" role="status">A web update is in progress. Plugin changes are locked until it finishes.</p>}
-      <h3>Installed plugins</h3>
-      {rows.filter((row) => !("notInstalled" in row)).length === 0 && <p className="field-help">No plugins are installed.</p>}
-      <ul className="plugin-list">{rows.filter((row) => !("notInstalled" in row)).map((row) => {
-        const entry = selected.get(row.id); const blocked = entry && !row.official ? removalBlocked(row.phase) : "";
-        const track = entry?.track ?? "stable";
-        // A track label only describes a selection entry that was read; unpinned official plugins follow LancerLogin's pin, and without the selection the track is unknown.
-        const trackLabel = entry ? (track === "stable" ? " · Stable track" : "") : row.official && state.selection ? " · Pinned by LancerLogin" : "";
-        // Versions come from the plugin's published releases; when they cannot be read, the commit alone is shown.
-        const info = "notInstalled" in row ? undefined : row as PluginState["installed"][number];
-        const unavailable = !info || info.latestUnavailable !== false;
-        const versionText = unavailable ? "" : `${info!.version ?? "Unreleased commit"} · `;
-        const status = unavailable ? "unavailable" : info!.updateAvailable ? "update" : info!.version && info!.latest ? "current" : "unknown";
-        const latestText = unavailable ? "Latest version unavailable" : `Latest on ${latestTrackName[info!.track ?? track]}: ${info!.latest?.tag ?? "no published release"}`;
-        return <li key={row.id} className="plugin-row" data-track={entry ? track : undefined} data-version-status={status}><div><strong>{row.id}</strong><small>{row.source}</small><small>{versionText}Commit <code>{short(row.commit)}</code>{row.official ? " · Included with LancerLogin" : ""}{row.selected ? " · Pinned by this installation" : ""}{trackLabel}</small><small className="plugin-version">{latestText}{status === "update" ? <> · <span className="plugin-version-status">Update available</span></> : status === "current" ? <> · <span className="plugin-version-status">Up to date</span></> : null}</small>{info?.releasePinVersion && <small>Included with LancerLogin {state.releaseVersion}: {info.releasePinVersion}</small>}{track === "nightly" && <span className="plugin-track-badge">Nightly track · testing only</span>}{blocked && <small>{blocked}</small>}</div>
-          <div className="module-actions"><button className={`ui-button${status === "update" ? " ui-button--primary primary-button" : ""}`} type="button" disabled={!ready || locked} aria-label={`Upgrade ${row.id}`} onClick={() => { setNotice(""); setDraft({ action: "upgrade", id: row.id, source: entry?.source ?? row.source, commit: "", track }); }}>Upgrade</button>
-            {entry && <button className="ui-button" type="button" disabled={!ready || locked || Boolean(blocked)} aria-label={row.official ? `Use LancerLogin's pin for ${row.id}` : `Remove ${row.id}`} onClick={() => { setNotice(""); setDraft({ action: "remove", id: row.id, source: "", commit: "" }); }}>{row.official ? "Use LancerLogin's pin" : "Remove"}</button>}</div></li>;
-      })}</ul>
-      <section className="plugin-pending" aria-labelledby={`${id}-pending-title`}>
-        <h3 id={`${id}-pending-title`}>Pending changes{state.pending.length > 0 && <> <span className="plugin-pending-badge">Not deployed</span></>}</h3>
-        {state.pending.length ? <><p className="field-help">Committed in the private deployment repository and waiting to be applied. Installed modules are unchanged until then.</p>
-          <ul className="plugin-list">{state.pending.map((change) => {
-            const entry = selected.get(change.id); const installed = state.installed.find((item) => item.id === change.id);
-            const blocked = change.kind === "add" && entry ? removalBlocked(entry.phase) : "";
-            return <li key={`${change.kind}:${change.id}`} className="plugin-row" data-pending={change.kind}><div><strong>{pendingText[change.kind](change)}</strong>{change.source && <small>{change.source}</small>}</div>
-              {change.kind === "add" && entry && !installed && <div className="module-actions"><button className="ui-button" type="button" disabled={!ready || locked || Boolean(blocked)} aria-label={`Remove pending ${change.id}`} onClick={() => setDraft({ action: "remove", id: change.id, source: "", commit: "" })}>Remove</button></div>}</li>;
-          })}</ul></> : <p className="field-help">{state.selection ? "No pending changes. Installed plugins match the committed selection." : state.credential.state === "missing" ? optionalCredentialText : "Pending changes are unavailable until the selection can be read."}</p>}
-      </section>
-      {release && (state.pending.length > 0 || state.activeUpdate?.mode === "modules" || updateActive) && <WebUpdateCard mode="modules" current={release.worker || state.releaseVersion} served={release.served} running={release.running} converged={release.converged} reloadAvailable={false} available={state.pending.length > 0 && !state.activeUpdate} workflowUrl={release.workflowUrl} onStatus={(status: WebUpdateResponse) => setUpdateActive(Boolean(status.activeRequest && status.activeRequest.state !== "prepared"))} />}
+      {state.allowlist.state === "configured" && <p className="field-help">Allowed module sources: {state.allowlist.sources!.join(", ")}.</p>}
+      {state.allowlist.state === "invalid" && <p className="ui-status" data-tone="error">The module source allowlist in the private repository is invalid, so no module can be added or updated.</p>}
+      {locked && <p className="ui-status" data-tone="warning" role="status">An update is in progress. Adding, updating and removing modules is locked until it finishes.</p>}
     </>}
-    {draft && state && <ChangeDialog draft={draft} state={state} onClose={() => setDraft(undefined)} onCommitted={(message) => { setDraft(undefined); setNotice(message); void load(); }} />}
+  </div>;
+}
+
+/** Committed module changes waiting to be deployed, and Apply changes, which redeploys the installed release with them. */
+export function PendingModuleChanges({ packages }: { packages: ModulePackages }) {
+  const { state, release, ready, updateActive } = packages;
+  const id = useId();
+  if (!state) return null;
+  // The selection credential is optional: without it the installation works and the selection is edited in the repository.
+  const optionalCredentialText = "Reading and changing the module selection from the dashboard needs the optional module selection token, LANCERLOGIN_MODULE_SELECTION_TOKEN. Without it, installed modules keep working; edit lancerlogin.modules.json in the private deployment repository instead. See \"Module selection credential\" in docs/MODULE-PLUGINS.md.";
+  const applying = state.activeUpdate?.mode === "modules" || updateActive;
+  return <section className="plugin-pending" aria-labelledby={`${id}-pending-title`}>
+    <h3 id={`${id}-pending-title`}>Pending changes{state.pending.length > 0 && <> <span className="plugin-pending-badge">Not deployed</span></>}</h3>
+    {state.pending.length ? <><p className="field-help">Committed in the private deployment repository and waiting for Apply changes. Installed modules are unchanged until then.</p>
+      <ul className="plugin-list">{state.pending.map((change) => <li key={`${change.kind}:${change.id}`} className="plugin-row" data-pending={change.kind}><div><strong>{pendingText[change.kind](change)}</strong>{change.source && <small>{change.source}</small>}</div></li>)}</ul></>
+      : <p className="field-help">{state.selection ? "No pending changes. Installed modules match the committed selection." : state.credential.state === "missing" ? optionalCredentialText : "Pending changes are unavailable until the selection can be read."}</p>}
+    {release && (state.selection || applying) && <WebUpdateCard mode="modules" current={release.worker || state.releaseVersion} served={release.served} running={release.running} converged={release.converged} reloadAvailable={false} available={ready && state.pending.length > 0 && !state.activeUpdate} workflowUrl={release.workflowUrl} onStatus={(status: WebUpdateResponse) => packages.setUpdateActive(Boolean(status.activeRequest && status.activeRequest.state !== "prepared"))} />}
   </section>;
+}
+
+export function ModuleChangeDialog({ packages }: { packages: ModulePackages }) {
+  return packages.draft && packages.state ? <ChangeDialog draft={packages.draft} state={packages.state} onClose={packages.close} onCommitted={packages.committed} /> : null;
 }
 
 type RequiredMigration = { id: string; label: string; plugin: { source: string; commit: string } | null };
 /**
- * Settings > Updates: a module that moved out of LancerLogin into a plugin, still in use and missing from the next build.
- * The Admin keeps it by adding its plugin through the plugin change flow, or removes it by disabling it in Settings > Modules.
+ * Settings > Updates: a module that moved out of LancerLogin into its own repository, still in use and missing from the next
+ * build. The Admin keeps it by adding it through the module change flow, or removes it by turning it off in Settings > Modules.
  */
 export function ModuleMigrationNotice({ onRequired }: { onRequired?: (required: boolean) => void }) {
   const [required, setRequired] = useState<RequiredMigration[]>([]);
@@ -249,17 +321,17 @@ export function ModuleMigrationNotice({ onRequired }: { onRequired?: (required: 
   useEffect(() => { void load(); }, []);
   if (!required.length && !notice) return null;
   const ready = state?.credential.state === "ready" && Boolean(state.selection) && !state.activeUpdate;
-  return <section className="module-migration-notices" aria-label="Modules that moved into plugins">
+  return <section className="module-migration-notices" aria-label="Modules that moved into their own repositories">
     {notice && <p className="ui-status settings-notice" data-tone="success" role="status">{notice}</p>}
     {required.map((module) => <div key={module.id} className="settings-callout module-migration" role="group" aria-labelledby={`migration-${module.id}`}>
-      <p id={`migration-${module.id}`}><strong>{module.label} is in use and is now a separate plugin.</strong></p>
-      <p>Updating without its plugin would stop {module.label}. Keep it by adding the plugin, which carries its data and settings over unchanged, or remove it: disable it in Settings &gt; Modules, where its data is retained for seven days.</p>
-      {!ready && state && <p className="field-help">{state.credential.state !== "ready" ? "Adding a plugin from the dashboard needs the plugin selection credential, LANCERLOGIN_MODULE_SELECTION_TOKEN; Setup status below shows how to add it. You can instead add the plugin to lancerlogin.modules.json in the private deployment repository." : "Plugin changes are locked while a web update is in progress."}</p>}
+      <p id={`migration-${module.id}`}><strong>{module.label} is in use and is now a separate module.</strong></p>
+      <p>{module.label} is now installed from its own repository, and updating without it would stop {module.label}. Keep it by adding the module, which carries its data and settings over unchanged, or remove it: turn it off in Settings &gt; Modules, where its data is retained for seven days.</p>
+      {!ready && state && <p className="field-help">{state.credential.state !== "ready" ? "Adding a module from the dashboard needs the module selection credential, LANCERLOGIN_MODULE_SELECTION_TOKEN; Setup status below shows how to add it. You can instead add the module to lancerlogin.modules.json in the private deployment repository." : "Module changes are locked while a web update is in progress."}</p>}
       <div className="module-actions">
-        <button className="ui-button ui-button--primary primary-button" type="button" disabled={!ready || !module.plugin} onClick={() => { setNotice(""); setDraft({ action: "add", id: module.id, source: module.plugin!.source, commit: module.plugin!.commit }); }}>Keep {module.label} (add plugin)</button>
+        <button className="ui-button ui-button--primary primary-button" type="button" disabled={!ready || !module.plugin} onClick={() => { setNotice(""); setDraft({ action: "add", id: module.id, source: module.plugin!.source, commit: module.plugin!.commit }); }}>Keep {module.label} (add module)</button>
         <a className="ui-button" href="/settings/modules">Remove {module.label}</a>
       </div>
     </div>)}
-    {draft && state && <ChangeDialog draft={draft} state={state} onClose={() => setDraft(undefined)} onCommitted={() => { setDraft(undefined); setNotice(`Added the ${draft.id} plugin. The next update installs LancerLogin and the plugin together.`); void load(); }} />}
+    {draft && state && <ChangeDialog draft={draft} state={state} onClose={() => setDraft(undefined)} onCommitted={() => { setDraft(undefined); setNotice(`Added the ${draft.id} module. The next update installs LancerLogin and the module together.`); void load(); }} />}
   </section>;
 }

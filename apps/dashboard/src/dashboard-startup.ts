@@ -4,7 +4,7 @@ import { resolveDashboardPublicPage } from "./module-contributions.ts";
 import { loadModuleNavigation } from "./module-navigation";
 import { normalizePath } from "./router";
 
-export type DashboardSession = { id: string; role: "admin" | "operator"; debugMode: boolean };
+export type DashboardSession = { id: string; role: "admin" | "operator" };
 
 /** The signed-in user, or undefined when signed out. A transient failure (network, rate limit, server error) rejects, so a valid session is not mistaken for a sign-out. */
 export async function loadDashboardSession(): Promise<DashboardSession | undefined> {

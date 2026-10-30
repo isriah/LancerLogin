@@ -94,6 +94,26 @@ export function serializeSelection(document: { modules: readonly SelectionEntry[
 }
 
 /**
+ * One repository supplies exactly one module. The `lancerlogin` field of a module repository's package.json names it with a
+ * single `moduleId`; a list of IDs, or a `modules` list or map, declares several. Returns the declared IDs when there is
+ * more than one, so the Worker's review and composition refuse the repository with the same clear reason.
+ */
+export function declaredModuleIds(field: unknown): string[] | undefined {
+  if (!field || typeof field !== "object") return undefined;
+  const { moduleId, modules } = field as { moduleId?: unknown; modules?: unknown };
+  const name = (value: unknown) => typeof value === "string" ? value : value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string" ? (value as { id: string }).id : value && typeof value === "object" && typeof (value as { moduleId?: unknown }).moduleId === "string" ? (value as { moduleId: string }).moduleId : "unnamed";
+  const ids = [
+    ...(Array.isArray(moduleId) ? moduleId.map(name) : typeof moduleId === "string" ? [moduleId] : []),
+    ...(Array.isArray(modules) ? modules.map(name) : modules && typeof modules === "object" ? Object.keys(modules) : []),
+  ];
+  const distinct = [...new Set(ids)];
+  return distinct.length > 1 || Array.isArray(moduleId) && moduleId.length > 1 || Array.isArray(modules) && modules.length > 1 ? distinct : undefined;
+}
+export function multipleModulesMessage(ids: readonly string[]): string {
+  return `This repository declares ${ids.length > 1 ? `${ids.length} modules (${ids.join(", ")})` : "more than one module"}. A module repository must provide exactly one module, so it cannot be added. Ask its maintainer to publish each module from its own repository.`;
+}
+
+/**
  * The optional source allowlist, lancerlogin.plugin-sources.json, kept beside the selection file in the private deployment
  * repository and never written by the Worker. The Worker checks it for dashboard plugin changes and composition checks it
  * for every source the selection file names, with these same rules: an entry is a lowercase host (every owner on it) or

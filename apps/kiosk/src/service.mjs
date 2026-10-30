@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInstallationActivities, createUnpairingStore } from "./unpairing-store.mjs";
-import { completeKioskCommand, createDeliveryBackoff, fetchKioskCommand, fetchKioskConfiguration, fetchKioskEnrollment, fetchKioskRoster, pairInstallation, sendAttendance, sendHeartbeat, sendKioskEnrollmentProgress, sendScanReviews } from "./cloud-client.mjs";
+import { completeKioskCommand, createDeliveryBackoff, fetchKioskCommand, fetchKioskConfiguration, fetchKioskEnrollment, fetchKioskRoster, pairInstallation, sendAttendance, sendHeartbeat, sendKioskEnrollmentProgress, sendLocalEnrollment, sendScanReviews } from "./cloud-client.mjs";
+import { createEnrollmentReports } from "./enrollment-reports.mjs";
 import { createDashboardEnrollment } from "./dashboard-enrollment.mjs";
 import { dashboardEnrollmentApp } from "./dashboard-enrollment-ui.mjs";
 import { createKioskPollClient, createKioskPollScheduler } from "./kiosk-poll.mjs";
@@ -70,6 +71,8 @@ const fingerprintMatchPath = join(dirname(authenticationPath), "fingerprint-matc
 const credentialPath = process.env.LANCERLOGIN_CREDENTIAL_MAPPINGS ?? "/var/lib/lancerlogin/credential-mappings.json";
 const rosterPath = process.env.LANCERLOGIN_ROSTER_CACHE ?? "/var/lib/lancerlogin/roster-cache.json";
 const queue = createFileQueue(process.env.LANCERLOGIN_QUEUE ?? "/var/lib/lancerlogin/attendance-queue.json");
+// Maintenance-screen enrollments waiting to be reported to the Worker, in their own queue beside the attendance queue.
+const enrollmentReportsPath = process.env.LANCERLOGIN_ENROLLMENT_REPORTS ?? join(dirname(process.env.LANCERLOGIN_QUEUE ?? "/var/lib/lancerlogin/attendance-queue.json"), "local-enrollment-reports.json");
 const attendanceClock = createAttendanceClock(`${process.env.LANCERLOGIN_QUEUE ?? "/var/lib/lancerlogin/attendance-queue.json"}.clock.json`);
 const mappings = createMappingStore(process.env.LANCERLOGIN_MAPPINGS ?? "/var/lib/lancerlogin/slot-mappings.json");
 const credentials = createCredentialStore(credentialPath); const rosterCache = createRosterCache(rosterPath); const identityInput = createIdentityInput();
@@ -81,7 +84,7 @@ const releaseVersion = localReleaseVersion(process.env.LANCERLOGIN_VERSION);
 const installationActivities = createInstallationActivities();
 const unpairingStore = createUnpairingStore(dirname(configPath), { pinPath: networkPinPath, statePaths: [
   configPath, brandingPath, authenticationPath, credentialPath, rosterPath,
-  process.env.LANCERLOGIN_QUEUE ?? "/var/lib/lancerlogin/attendance-queue.json",
+  process.env.LANCERLOGIN_QUEUE ?? "/var/lib/lancerlogin/attendance-queue.json", enrollmentReportsPath,
   process.env.LANCERLOGIN_MAPPINGS ?? "/var/lib/lancerlogin/slot-mappings.json",
   ...["SYNC", "VAULT", "RESET", "REVIEW"].map(kind => process.env[`LANCERLOGIN_FINGERPRINT_${kind}`] ?? join(dirname(configPath), `fingerprint-${kind.toLowerCase()}`)),
 ] });
@@ -119,14 +122,19 @@ async function loadAuthenticationMethod() { try { authenticationMethod = normali
 async function saveAuthenticationMethod(value) { const next = normalizeIdentityMethod(value); if (next === authenticationMethod) return; attendanceInputGeneration++; await mkdir(dirname(authenticationPath), { recursive: true, mode: 0o700 }); const temporary = `${authenticationPath}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify({ authenticationMethod: next })}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, authenticationPath); await chmod(authenticationPath, 0o600); authenticationMethod = next; identityInput.clear(); if (next === "fingerprint") { requireFingerRemoval(); } state.readerOnline = next === "fingerprint" ? false : true; display = readyDisplay(); }
 // Matches scoring below the Admin's minimum are asked to rescan instead of being recorded. 0 accepts every match the
 // reader reports. Persisted so an offline restart keeps the last setting.
-let fingerprintMinimumScore = 0, weakMatches = 0;
+// Accepted matches below the re-enrollment score still count, with a note to ask a mentor to re-enroll. 0 (an API
+// before this setting) shows no note.
+let fingerprintMinimumScore = 0, fingerprintReenrollScore = 0, weakMatches = 0;
 const validMinimumScore = value => Number.isInteger(value) && value >= 0 && value <= 1000;
-async function loadFingerprintMatch() { try { const value = JSON.parse(await readFile(fingerprintMatchPath, "utf8")).minimumScore; if (validMinimumScore(value)) fingerprintMinimumScore = value; } catch { /* Accept every reader match until the first cloud sync. */ } }
-async function saveFingerprintMatch(value) {
-  if (!validMinimumScore(value) || value === fingerprintMinimumScore) return;
+const validReenrollScore = value => Number.isInteger(value) && value >= 0 && value <= 1020;
+const weakReading = score => fingerprintReenrollScore > 0 && Number.isInteger(score) && score < fingerprintReenrollScore;
+async function loadFingerprintMatch() { try { const saved = JSON.parse(await readFile(fingerprintMatchPath, "utf8")); if (validMinimumScore(saved.minimumScore)) fingerprintMinimumScore = saved.minimumScore; if (validReenrollScore(saved.reenrollScore)) fingerprintReenrollScore = saved.reenrollScore; } catch { /* Accept every reader match until the first cloud sync. */ } }
+async function saveFingerprintMatch(value, reenrollValue) {
+  const reenroll = validReenrollScore(reenrollValue) ? reenrollValue : 0;
+  if (!validMinimumScore(value) || value === fingerprintMinimumScore && reenroll === fingerprintReenrollScore) return;
   await mkdir(dirname(fingerprintMatchPath), { recursive: true, mode: 0o700 }); const temporary = `${fingerprintMatchPath}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify({ minimumScore: value })}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, fingerprintMatchPath);
-  fingerprintMinimumScore = value;
+  await writeFile(temporary, `${JSON.stringify({ minimumScore: value, reenrollScore: reenroll })}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, fingerprintMatchPath);
+  fingerprintMinimumScore = value; fingerprintReenrollScore = reenroll;
 }
 async function loadPairing() { await pairingBoundary; if (unpairingBusy || pairingRecovery) return undefined; return pairingCache.load(); }
 async function savePairing(config) { return pairingCache.save(config); }
@@ -259,6 +267,7 @@ function purgeExpiredArchives() {
 }
 let heartbeatRunning, lastOpenScanReviews, readerCounts;
 const scanReviewSync = createScanReviewSync({ queue, send: (config, records) => sendScanReviews(config, records, { fetchImpl: boundedCloudFetch }) });
+const enrollmentReports = createEnrollmentReports({ path: enrollmentReportsPath, send: (config, report) => sendLocalEnrollment(config, report, { fetchImpl: boundedCloudFetch }) });
 function heartbeat() {
   if (!heartbeatRunning) heartbeatRunning = installationActivities.run(heartbeatNow).catch(() => undefined).finally(() => { heartbeatRunning = undefined; });
   return heartbeatRunning;
@@ -266,7 +275,7 @@ function heartbeat() {
 const boundedCloudFetch = (url, options) => fetch(url, { ...options, redirect: "error", signal: AbortSignal.timeout(8000) });
 async function applyRemoteConfiguration(config, remote) {
   const previousMethod = authenticationMethod;
-  if (remote.settings) { await saveBranding(remote.settings); await saveAuthenticationMethod(remote.settings.authenticationMethod); await saveFingerprintMatch(remote.settings.fingerprintMinimumScore ?? 0); }
+  if (remote.settings) { await saveBranding(remote.settings); await saveAuthenticationMethod(remote.settings.authenticationMethod); await saveFingerprintMatch(remote.settings.fingerprintMinimumScore ?? 0, remote.settings.fingerprintReenrollScore); }
   await testAuthenticator();
   if (authenticationMethod !== "fingerprint" && (authenticationMethod !== previousMethod || Date.now() - rosterCachedAt >= 5 * 60_000)) {
     rosterCachedAt = Date.now();
@@ -282,6 +291,8 @@ async function heartbeatNow() {
   try { networkDiagnostics = await network.diagnostics(); state.networkType = networkDiagnostics.type; } catch { state.networkType = undefined; }
   try {
     const sync = await flushAttendance(config);
+    // Separate queue and backoff: a Worker without the endpoint parks reports without delaying attendance.
+    await enrollmentReports.flush(config).catch(() => undefined);
     // Older APIs and a review-only outage must not prevent attendance delivery.
     let reviewSyncFailed = false;
     await scanReviewSync.tick(config).catch(() => { reviewSyncFailed = true; });
@@ -364,7 +375,7 @@ async function pollCommandsNow(suppliedCommand, expectedConfig) {
   } catch { /* The heartbeat reports cloud connectivity separately. */ }
   finally { commandPolling = false; }
 }
-async function showDisplay(id, overrides = {}) { if (displayTimer) clearTimeout(displayTimer); display = kioskState(id, overrides); const duration = kioskStates[id]?.durationMs; if (duration) displayTimer = setTimeout(() => { display = state.readerOnline ? readyDisplay() : unavailableDisplay(); void setFeedback(display.id); }, duration); }
+async function showDisplay(id, overrides = {}) { if (displayTimer) clearTimeout(displayTimer); display = kioskState(id, overrides); const duration = overrides.durationMs ?? kioskStates[id]?.durationMs; if (duration) displayTimer = setTimeout(() => { display = state.readerOnline ? readyDisplay() : unavailableDisplay(); void setFeedback(display.id); }, duration); }
 async function setFeedback(id) { const definition = kioskStates[id]; if (authenticationMethod === "fingerprint" && sensor && definition?.led) await useSensor(() => sensor.led(definition.led)); }
 async function captureIdentity() {
   if (authenticationMethod !== "fingerprint") return identityInput.next();
@@ -378,7 +389,7 @@ async function captureIdentity() {
   if (!memberId) return { status: "unknown", detail: "This fingerprint is not linked to an active roster member" };
   return { status: "identified", memberId, identityKey: `fingerprint:${observation.slot}`, ...(Number.isInteger(observation.score) ? { matchScore: observation.score } : {}) };
 }
-const scanner = createIdentityScanner({ captureIdentity, captureTime: () => attendanceClock.capture(), now: () => performance.now(), captureAllowed: () => !shuttingDown && attendanceClock.isVerified() && !operatorPresence.status().captureSuspended && !fingerRemovalRequired, setFeedback, queue, loadPairing, flushAttendance, onDisplay: showDisplay, onInput: (online) => { readerObserved = true; state.readerOnline = online; }, onCloud: (online) => { state.cloudOnline = online; if (online) { state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; } else state.errorCategory = "cloud_sync"; } });
+const scanner = createIdentityScanner({ captureIdentity, captureTime: () => attendanceClock.capture(), now: () => performance.now(), captureAllowed: () => !shuttingDown && attendanceClock.isVerified() && !operatorPresence.status().captureSuspended && !fingerRemovalRequired, setFeedback, queue, loadPairing, flushAttendance, weakReading, onDisplay: showDisplay, onInput: (online) => { readerObserved = true; state.readerOnline = online; }, onCloud: (online) => { state.cloudOnline = online; if (online) { state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; } else state.errorCategory = "cloud_sync"; } });
 const operatorPresence = createOperatorPresence({ restored: await presenceRestart.take(presenceBinding(await loadPairing().catch(() => undefined))), onSuspend: () => { attendanceInputGeneration++; identityInput.clear(); requireFingerRemoval(); void scanner.suspend("operator"); } });
 const dashboardEnrollment = createDashboardEnrollment({
   loadPairing,
@@ -697,8 +708,11 @@ async function handleRequest(request, response) {
       state.readerOnline = true;
       requireFingerRemoval();
       await showDisplay("enroll_success", { detail: "Lift your finger. Enrollment is saved." });
+      // The reader already holds the new template, so a failed report never fails the enrollment.
+      const reported = await enrollmentReports.record({ rosterId, pairingId: config.pairingId }).catch(error => { console.warn(`Local enrollment report was not saved: ${error instanceof Error ? error.message : error}`); });
       response.statusCode = 201; response.end(JSON.stringify({ ...result, fingerRemovalRequired: true }));
       void pollFingerprintSync();
+      if (reported) void installationActivities.run(() => enrollmentReports.flush(config)).catch(() => undefined);
     } catch (error) {
       await showDisplay("enroll_failure", { detail: error instanceof Error ? error.message : "Try again" });
       response.statusCode = error instanceof EnrollmentError ? error.status : 400;
@@ -738,7 +752,7 @@ if (process.env.NODE_ENV !== "test") {
       // Fold the attendance journal into its snapshot files. Not required for
       // safety (the journal is replayed on start) but keeps an older release,
       // reinstalled after this one, able to read every saved scan.
-      if (!unpairingBusy && !pairingRecovery) await queue.compact().catch(() => undefined);
+      if (!unpairingBusy && !pairingRecovery) { await queue.compact().catch(() => undefined); await enrollmentReports.compact().catch(() => undefined); }
       const config = await loadPairing();
       if (config?.pairingId && !unpairingBusy && !pairingRecovery) await presenceRestart.save(operatorPresence.checkpoint(), presenceBinding(config));
       clearTimeout(deadline); process.exit(0);
@@ -748,7 +762,7 @@ if (process.env.NODE_ENV !== "test") {
   void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod(), loadFingerprintMatch(), attendanceClock.refresh().catch(() => undefined)]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); purgeExpiredArchives(); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, 60_000).unref(); setInterval(pollCloud, 5_000).unref();
   setInterval(() => { void dashboardEnrollment.expire(); void refreshCapturePermission(); void checkFingerRemoval(); }, 250).unref();
   // Apply attendance retention and keep the journal short even on a quiet kiosk.
-  setInterval(() => { void installationActivities.run(() => queue.compact()).catch(() => undefined); purgeExpiredArchives(); }, 6 * 60 * 60_000).unref();
+  setInterval(() => { void installationActivities.run(() => queue.compact()).catch(() => undefined); void installationActivities.run(() => enrollmentReports.compact()).catch(() => undefined); purgeExpiredArchives(); }, 6 * 60 * 60_000).unref();
 }
 
 export { server, network };

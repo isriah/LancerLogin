@@ -123,7 +123,7 @@ export async function prepareWebUpdate(env: WebUpdateEnv, actorId?: string, opti
   if (mode === "modules") {
     // The installed official release is redeployed; only the plugin selection changes.
     const installed = env.RELEASE_VERSION ?? "";
-    if (!parseReleaseVersion(installed)) fail(503, "release_unavailable", "Plugin changes need an installed official release.");
+    if (!parseReleaseVersion(installed)) fail(503, "release_unavailable", "Module changes need an installed official release.");
     target = { tag: `v${installed}`, notes: moduleUpdateNotes, prerelease: parseReleaseVersion(installed)?.beta !== undefined };
   } else {
     const release = await resolveOfficialRelease(setting.channel, (path) => github(path, env));
@@ -138,7 +138,7 @@ export async function prepareWebUpdate(env: WebUpdateEnv, actorId?: string, opti
   // Pin the plugin selection this request deploys, so a later selection change cannot reach an already prepared update.
   const selectionSha = await options.selectionSha?.();
   if (selectionSha !== undefined && !/^[0-9a-f]{40}$/.test(selectionSha)) fail(503, "selection_unavailable", "The plugin selection could not be read.");
-  if (mode === "modules" && selectionSha === undefined) fail(503, "selection_credential_required", "Plugin changes need the plugin selection credential.");
+  if (mode === "modules" && selectionSha === undefined) fail(503, "selection_credential_required", "Module changes need the module selection credential.");
   const id = crypto.randomUUID(); const expires = new Date(Date.now() + 30 * 60_000).toISOString();
   // INSERT OR IGNORE respects the partial unique index under simultaneous Admin requests.
   await db(env).prepare("INSERT OR IGNORE INTO web_update_requests (id, installation_id, release_tag, release_sha, release_notes, previous_version, prepared_by, state, created_at, expires_at, updated_at, update_channel, mode, module_selection_sha) SELECT ?, 'primary', ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM installation_update_settings WHERE installation_id = 'primary' AND update_channel = ? AND update_channel_revision = ?)")

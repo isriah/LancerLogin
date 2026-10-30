@@ -1389,7 +1389,7 @@ test("a saved Saturday scan keeps its original time after restart and Wednesday 
       assert.equal(result.accepted, true);
     });
     assert.deepEqual(delivered, ["saturday-scan"]);
-    assert.deepEqual(requests, [{ eventId: "saturday-scan", memberId: "synthetic-member", occurredAt }]);
+    assert.deepEqual(requests, [{ eventId: "saturday-scan", memberId: "synthetic-member", occurredAt, rescanSupported: true }]);
     assert.deepEqual(await createFileQueue(path).pending(), []);
   } finally { await rm(directory, { recursive: true }); }
 });
@@ -1602,14 +1602,53 @@ test("legacy fingerprint import prepares roster and slot mappings without templa
 test("attendance client sends only identifiers and operational timestamps", async () => {
   let sent;
   await sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z", fingerprint: "must-not-send" }, { fetchImpl: async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ accepted: true, eventId: "event-1" }), { headers: { "content-type": "application/json" } }); } });
-  assert.deepEqual(sent, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z" });
+  assert.deepEqual(sent, { eventId: "event-1", memberId: "member-1", meetingId: "meeting-1", occurredAt: "2026-09-01T20:00:00Z", rescanSupported: true });
 });
 
 test("attendance client lets the Worker resolve a meeting and treats a rejected scan as delivered", async () => {
   let sent;
   const result = await sendAttendance({ apiUrl: "https://api.example.test", kioskToken: "secret" }, { eventId: "event-2", memberId: "member-1", occurredAt: "2026-09-01T20:00:00Z" }, { fetchImpl: async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ error: "No meeting is accepting attendance scans at this time" }), { status: 409, headers: { "content-type": "application/json" } }); } });
-  assert.deepEqual(sent, { eventId: "event-2", memberId: "member-1", occurredAt: "2026-09-01T20:00:00Z" });
+  assert.deepEqual(sent, { eventId: "event-2", memberId: "member-1", occurredAt: "2026-09-01T20:00:00Z", rescanSupported: true });
   assert.deepEqual(result, { accepted: false, rejected: true, status: 409, code: "no_eligible_meeting", error: "No meeting is accepting attendance scans at this time" });
+});
+
+test("a possible wrong match asks for a rescan and a late queued one is delivered without a review record", async () => {
+  const reply = () => new Response(JSON.stringify({ error: "Scan again", code: "possible_wrong_match" }), { status: 409, headers: { "content-type": "application/json" } });
+  const config = { apiUrl: "https://api.example.test", kioskToken: "secret" };
+  const result = await sendAttendance(config, { eventId: "event-3", memberId: "member-1", occurredAt: "2026-09-01T20:00:00Z" }, { fetchImpl: async () => reply() });
+  assert.deepEqual(result, { accepted: false, duplicate: false, rescan: true, status: 409, code: "possible_wrong_match", error: "Scan again", eventId: "event-3" });
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-wrong-match-"));
+  try {
+    const queue = createFileQueue(join(directory, "queue.json"));
+    await queue.enqueue({ eventId: "queued-1", memberId: "member-1", occurredAt: "2026-09-01T19:00:00Z" });
+    assert.deepEqual(await queue.flush(event => sendAttendance(config, event, { fetchImpl: async () => reply() })), ["queued-1"]);
+    const diagnostics = await queue.diagnostics();
+    assert.deepEqual([diagnostics.pending, diagnostics.rejected, diagnostics.needsReview], [0, 0, 0]);
+    assert.deepEqual(await queue.rejections(), []);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("the scan surface shows Scan again for a possible wrong match and a weak-reading note only on accepted weak scans", async () => {
+  for (const [reply, score, expected] of [
+    [{ rescan: true, code: "possible_wrong_match" }, 40, { state: "rescan", notice: undefined }],
+    [{ accepted: true, action: "check_in", member: { displayName: "Test Student A" } }, 79, { state: "welcome", notice: "Your fingerprint is reading weakly. Ask a mentor to re-enroll it." }],
+    [{ accepted: true, action: "check_out", member: { displayName: "Test Student A" } }, 80, { state: "goodbye", notice: undefined }],
+    [{ duplicate: true, action: "check_in", member: { displayName: "Test Student A" } }, 10, { state: "duplicate", notice: undefined }],
+  ]) {
+    const displays = [], events = [];
+    const scanner = createIdentityScanner({
+      captureIdentity: async () => ({ status: "identified", memberId: "synthetic-member", identityKey: "fingerprint:1", matchScore: score }),
+      queue: { pending: async () => [...events], enqueue: async event => { events.push(event); return true; } },
+      loadPairing: async () => ({ pairingId: "synthetic-pairing" }), flushAttendance: async () => ({ acknowledgements: [{ eventId: events.at(-1).eventId, ...reply }] }),
+      onDisplay: async (state, values) => displays.push({ state, ...values }), onCloud: () => undefined, delay: async () => undefined,
+      weakReading: value => value < 80,
+    });
+    await scanner.tick();
+    const last = displays.at(-1);
+    assert.deepEqual({ state: last.state, notice: last.notice }, expected);
+  }
+  assert.equal(deviceStates.rescan.tone, "notice", "a rescan prompt is not an error state");
+  assert.ok(deviceStates.rescan.led);
 });
 
 test("attendance transport preserves the pairing captured with a queued scan", async () => {
@@ -2012,6 +2051,8 @@ test("local kiosk UI is touch-sized, accessible, and self-contained", () => {
   assert.match(maintenanceHtml, /pin-keypad/);
   assert.match(maintenanceHtml, /member-picker/);
   assert.match(maintenanceHtml, /slot-keypad/);
+  // Rejected scans upload in the background and are reviewed from the dashboard's Debug tools, not on the kiosk.
+  assert.doesNotMatch(maintenanceHtml + maintenanceApp, /attendance-review|Review scans|Review rejected scans/);
   assert.match(maintenanceStyles, /100vh/);
   assert.match(maintenanceStyles, /\[hidden\]\{display:none!important\}/);
   assert.match(maintenanceStyles, /option-list/);

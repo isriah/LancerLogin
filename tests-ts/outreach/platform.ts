@@ -170,7 +170,7 @@ test("an installation that used first-party Outreach keeps its data and lifecycl
   assert.deepEqual([listed.phase, listed.workspaceReady, "unavailable" in listed], ["enabled", true, false]);
   // Its next backup carries Outreach in the plugin section, and that backup restores the same rows.
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 44);
+  assert.equal(backup.schemaVersion, 45);
   const section = backup.externalModules.find((entry: { id: string }) => entry.id === "hour-tracking");
   assert.deepEqual({ ...section, tables: undefined }, { id: "hour-tracking", label: "Outreach Participation", contractVersion: 1, backupVersion: 3, source: outreachPlugin.available ? outreachPlugin.source : null, commit: outreachPlugin.available ? outreachPlugin.commit : null, tables: undefined });
   assert.deepEqual(section.tables.hours_activities.map((row: { id: string }) => row.id), ["activity-1"]);

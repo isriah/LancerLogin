@@ -26,11 +26,11 @@ function pluginState(overrides: Partial<PluginState> = {}): PluginState {
 }
 const review = { action: "add", id: "carpool", source, commit, previousCommit: null, official: false, selectionSha,
   metadata: { state: "compatible", version: "1.0.0", contract: 1, core: ">=2.0.0-beta.11 <3.0.0", tablePrefix: "carpool_", migrations: ["0001_carpool.sql"] },
-  declaredNote: "Routes, jobs and Discord commands are declared in plugin code. LancerLogin does not run plugin code to show them here.",
-  trustStatement: "A plugin runs inside this installation's Worker and dashboard with the same access as LancerLogin.", allowlist: "none" };
+  declaredNote: "Routes, jobs and Discord commands are declared in the module's code. LancerLogin does not run module code to show them here.",
+  trustStatement: "A module from a git repository runs inside this installation's Worker and dashboard with the same access as LancerLogin.", allowlist: "none" };
 
 async function setup(page: Page, initial = pluginState()) {
-  let state = initial; let update: WebUpdateRequest | null = null;
+  let state = initial; let update: WebUpdateRequest | null = null; let completed: WebUpdateRequest | null = null;
   const posts: Array<{ path: string; body: unknown }> = [];
   await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot({ enabled: true, selectionCompleted: true, setupReady: true }) }));
   await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: version, workflowUrl } }));
@@ -51,7 +51,7 @@ async function setup(page: Page, initial = pluginState()) {
     state = { ...state, selection: { ...state.selection!, sha: "2".repeat(40), modules: [{ id: "carpool", source, commit, phase: null }] }, pending: [{ kind: "add", id: "carpool", source, commit }] };
     return route.fulfill({ status: 201, json: { committed: { action: "add", id: "carpool", commit } } });
   });
-  const result = () => ({ releaseVersion: version, workflowUrl, request: update, activeRequest: update && !["succeeded", "failed", "expired"].includes(update.state) ? update : null, latestCompletedRequest: null });
+  const result = () => ({ releaseVersion: version, workflowUrl, request: update, activeRequest: update && !["succeeded", "failed", "expired"].includes(update.state) ? update : null, latestCompletedRequest: completed });
   await page.route("**/admin/web-updates/status", (route) => route.fulfill({ json: result() }));
   await page.route("**/admin/web-updates/prepare", (route) => {
     posts.push({ path: "prepare", body: route.request().postDataJSON() });
@@ -64,28 +64,47 @@ async function setup(page: Page, initial = pluginState()) {
     update = { ...update!, state: "awaiting_approval", stage: "dispatch" }; state = { ...state, activeUpdate: { requestId: update.requestId, mode: "modules", state: "awaiting_approval" } };
     return route.fulfill({ status: 202, json: result() });
   });
-  return { posts, set state(value: PluginState) { state = value; } };
+  return { posts, set state(value: PluginState) { state = value; }, set update(value: WebUpdateRequest | null) { update = value; }, set completed(value: WebUpdateRequest | null) { completed = value; } };
 }
+const instantText = "Turning a module on or off takes effect as soon as you save, with no deploy. Adding, updating or removing a module is committed first and takes effect when you select Apply changes.";
+const moduleRow = (page: Page, id: string) => page.locator(`.module-card .module-row[data-module="${id}"]`);
+const modulesRequest = (overrides: Partial<WebUpdateRequest> = {}): WebUpdateRequest => ({ requestId: "44444444-4444-4444-8444-444444444444", mode: "modules", targetTag: `v${version}`, targetCommit: "b".repeat(40), releaseNotes: "Module changes.", releaseUrl: "", previousVersion: version, state: "awaiting_approval", stage: "dispatch", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 1_800_000).toISOString(), updatedAt: new Date().toISOString(), backupExported: true, maintenance: false, errorCode: null, runUrl: null, reloadReady: false, ...overrides });
 
-test("Admin adds a plugin with review, trust confirmation and fresh re-authentication, then applies it through backup and start", async ({ page }) => {
+test("Admin adds a module from a git repository with review, trust confirmation and fresh re-authentication, then applies it from the Modules card", async ({ page }) => {
   const mock = await setup(page);
   await page.goto("/settings/modules");
-  const plugins = page.locator(".plugin-management");
-  await expect(plugins.getByRole("heading", { name: "Plugins", exact: true })).toBeVisible();
+  const card = page.locator(".module-card");
+  await expect(card.locator("legend")).toHaveText("Modules");
+  // One card lists every module; there is no separate plugins card and no plugin wording.
+  await expect(page.locator(".plugin-management")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: /Plugins/ })).toHaveCount(0);
+  await expect(card).toContainText(instantText);
+  await expect(card).not.toContainText(/plugin/i);
   // No recommendation or check of the production environment's reviewers is shown.
-  await expect(plugins).not.toContainText("Production approval");
-  await expect(plugins).not.toContainText("required reviewers");
-  const officialRow = plugins.locator(".plugin-row").filter({ hasText: "hour-tracking" });
+  await expect(card).not.toContainText("Production approval");
+  await expect(card).not.toContainText("required reviewers");
+  // A built-in module has a switch and no repository actions.
+  const attendance = moduleRow(page, "attendance");
+  await expect(attendance.getByRole("switch", { name: "Attendance", exact: true })).toBeVisible();
+  await expect(attendance.getByText("Built-in", { exact: true })).toBeVisible();
+  await expect(attendance.getByRole("button")).toHaveCount(0);
+  // A module from a git repository shows its repository and short commit, with Update on its row.
+  const officialRow = moduleRow(page, "hour-tracking");
+  await expect(officialRow.getByText("Git repository", { exact: true })).toBeVisible();
+  await expect(officialRow).toContainText(official.source);
+  await expect(officialRow).toContainText(`Commit ${official.commit.slice(0, 12)}`);
   await expect(officialRow).toContainText("Included with LancerLogin");
-  // An unpinned official plugin follows LancerLogin's pin; it has no selection entry, so no track is claimed.
+  // An unpinned included module follows LancerLogin's pin; it has no selection entry, so no track is claimed.
   await expect(officialRow).toContainText("Pinned by LancerLogin");
   await expect(officialRow).not.toContainText("Stable track");
   await expect(officialRow).not.toHaveAttribute("data-track", /.*/);
-  await expect(plugins.getByText("No pending changes.")).toBeVisible();
-  // Nothing is pending, so the heading must not claim undeployed work.
-  await expect(plugins.locator(".plugin-pending-badge")).toHaveCount(0);
-  await plugins.getByRole("button", { name: "Add plugin" }).click();
-  const dialog = page.getByRole("dialog", { name: "Add plugin" });
+  await expect(officialRow.getByRole("button", { name: /^Update / })).toBeEnabled();
+  await expect(officialRow.locator(".module-pending-badge")).toHaveCount(0);
+  await expect(card.getByText("No pending changes.")).toBeVisible();
+  // Nothing is pending, so the card must not claim undeployed work.
+  await expect(card.locator(".plugin-pending-badge")).toHaveCount(0);
+  await card.getByRole("button", { name: "Add module" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add module" });
   await expect(dialog.getByLabel("Module ID")).toBeFocused();
   await dialog.getByLabel("Module ID").fill("carpool");
   await dialog.getByLabel("Git repository URL").fill(source);
@@ -95,7 +114,7 @@ test("Admin adds a plugin with review, trust confirmation and fresh re-authentic
   await expect(dialog).toContainText(commit);
   await expect(dialog).toContainText("Compatible with this installation");
   await expect(dialog).toContainText("Tables named carpool_*");
-  await expect(dialog).toContainText("does not run plugin code");
+  await expect(dialog).toContainText("does not run module code");
   await expect(dialog).toContainText("same access as LancerLogin");
   const commitButton = dialog.getByRole("button", { name: "Commit change" });
   await expect(commitButton).toBeDisabled();
@@ -110,32 +129,56 @@ test("Admin adds a plugin with review, trust confirmation and fresh re-authentic
   await commitButton.click();
   await expect(dialog).toHaveCount(0);
   expect(mock.posts.find((post) => post.path === "change")?.body).toEqual({ action: "add", id: "carpool", source, commit, track: "stable", selectionSha, trustConfirmed: true });
-  await expect(plugins.getByRole("status").filter({ hasText: "Added carpool in the private deployment repository" })).toBeVisible();
-  const pending = plugins.locator(".plugin-pending");
+  await expect(card.getByRole("status").filter({ hasText: "Added carpool in the private deployment repository. Select Apply changes to deploy it." })).toBeVisible();
+  const pending = card.locator(".plugin-pending");
   await expect(pending.getByRole("heading", { name: /Pending changes/ })).toContainText("Not deployed");
   await expect(pending.locator(".plugin-pending-badge")).toHaveCount(1);
   await expect(pending).toContainText(`Add carpool at ${commit.slice(0, 12)}`);
-  await expect(plugins.locator(".plugin-list").first()).not.toContainText("carpool");
-  await plugins.getByRole("button", { name: "Back up and apply plugin changes" }).click();
+  // The added module has a row marked Not deployed, with its repository and a Remove for the pending addition.
+  const carpoolRow = moduleRow(page, "carpool");
+  await expect(carpoolRow).toHaveAttribute("data-pending", "add");
+  await expect(carpoolRow.locator(".module-pending-badge")).toHaveText("Not deployed");
+  await expect(carpoolRow).toContainText(source);
+  await expect(carpoolRow).toContainText(`Commit ${commit.slice(0, 12)}`);
+  await card.getByRole("button", { name: "Apply changes", exact: true }).click();
   expect(mock.posts.find((post) => post.path === "prepare")?.body).toEqual({ mode: "modules" });
-  const download = page.waitForEvent("download"); await plugins.getByRole("button", { name: "Download entire-installation backup" }).click(); await download;
-  const confirmation = plugins.getByRole("checkbox", { name: /I saved this update’s entire-installation backup/ });
+  const download = page.waitForEvent("download"); await card.getByRole("button", { name: "Download entire-installation backup" }).click(); await download;
+  const confirmation = card.getByRole("checkbox", { name: /I saved this update’s entire-installation backup/ });
   await expect(confirmation).toBeFocused(); await page.keyboard.press("Space");
-  await plugins.getByRole("button", { name: "Apply plugin changes", exact: true }).click();
+  await card.getByRole("button", { name: "Start applying changes", exact: true }).click();
   expect(mock.posts.find((post) => post.path === "start")?.body).toEqual({ requestId: "33333333-3333-4333-8333-333333333333", backupSaved: true });
-  await expect(plugins.locator(".web-update-status")).toContainText(`Plugin changes for v${version}. Waiting for production approval`);
-  await expect(plugins.getByRole("button", { name: "Add plugin" })).toBeDisabled();
+  await expect(card.locator(".web-update-status")).toContainText(`Module changes for v${version}. Waiting for production approval`);
+  await expect(card.getByRole("button", { name: "Add module" })).toBeDisabled();
 });
 
-test("removal is blocked while a module is enabled, incompatible plugins cannot be committed and a missing credential disables changes", async ({ page }) => {
-  const mock = await setup(page, pluginState({ installed: [official, { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" }], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit, phase: "enabled" }] } }));
-  await page.route("**/admin/plugins/review", (route) => route.fulfill({ json: { ...review, action: "upgrade", commit: next, previousCommit: commit, metadata: { state: "incompatible", reason: "The plugin supports LancerLogin >=3.0.0." } } }));
+test("a repository that declares more than one module is refused with a clear message", async ({ page }) => {
+  const mock = await setup(page);
+  const refusal = "This repository declares 2 modules (carpool, rideshare). A module repository must provide exactly one module, so it cannot be added. Ask its maintainer to publish each module from its own repository.";
+  await page.route("**/admin/plugins/review", (route) => { mock.posts.push({ path: "review", body: route.request().postDataJSON() }); return route.fulfill({ status: 422, json: { error: refusal, code: "multiple_modules" } }); });
   await page.goto("/settings/modules");
-  const plugins = page.locator(".plugin-management");
-  await expect(plugins.getByRole("button", { name: "Remove carpool" })).toBeDisabled();
-  await expect(plugins).toContainText("Disable this module above before removing its plugin.");
-  await plugins.getByRole("button", { name: "Upgrade carpool" }).click();
-  const dialog = page.getByRole("dialog", { name: "Upgrade plugin" });
+  await page.locator(".module-card").getByRole("button", { name: "Add module" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add module" });
+  await dialog.getByLabel("Module ID").fill("carpool");
+  await dialog.getByLabel("Git repository URL").fill(source);
+  await dialog.getByLabel("Commit SHA").fill(commit);
+  await dialog.getByRole("button", { name: "Review change" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText(refusal);
+  await expect(dialog.getByRole("heading", { name: "Confirm carpool" })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Commit change" })).toHaveCount(0);
+  expect(mock.posts.filter((post) => post.path === "change")).toEqual([]);
+});
+
+test("removal is blocked while a module is on, incompatible updates cannot be committed and a missing credential disables changes", async ({ page }) => {
+  const mock = await setup(page, pluginState({ installed: [official, { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" }], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit, phase: "enabled" }] } }));
+  await page.route("**/admin/plugins/review", (route) => route.fulfill({ json: { ...review, action: "upgrade", commit: next, previousCommit: commit, metadata: { state: "incompatible", reason: "The module supports LancerLogin >=3.0.0." } } }));
+  await page.goto("/settings/modules");
+  const card = page.locator(".module-card");
+  const carpoolRow = moduleRow(page, "carpool");
+  await expect(carpoolRow.getByRole("button", { name: /^Remove / })).toBeDisabled();
+  await expect(carpoolRow).toContainText("Turn this module off and save before removing it.");
+  const update = carpoolRow.getByRole("button", { name: /^Update / });
+  await update.click();
+  const dialog = page.getByRole("dialog", { name: "Update module" });
   await expect(dialog.getByLabel("Commit SHA")).toBeFocused();
   await dialog.getByLabel("Commit SHA").fill(next);
   await dialog.getByRole("button", { name: "Review change" }).click();
@@ -144,23 +187,25 @@ test("removal is blocked while a module is enabled, incompatible plugins cannot 
   await expect(dialog.getByRole("button", { name: "Commit change" })).toBeDisabled();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
-  await expect(plugins.getByRole("button", { name: "Upgrade carpool" })).toBeFocused();
+  await expect(update).toBeFocused();
   mock.state = pluginState({ credential: { state: "missing", expiresAt: null }, selection: null, installed: [official, { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" }] });
   await page.reload();
-  await expect(plugins.getByText("Plugin management from the dashboard is not set up yet.")).toBeVisible();
+  await expect(card.getByText("Adding, updating and removing modules from the dashboard is not set up yet.")).toBeVisible();
   // Only the Actions-scoped update token is configured: the optional selection token is explained, not reported as broken.
-  await expect(plugins.getByText("Plugin management from the dashboard is not set up yet.")).toHaveAttribute("data-tone", "neutral");
-  const pending = plugins.locator(".plugin-pending");
-  await expect(pending).toContainText("Reading and changing the plugin selection from the dashboard needs the optional module selection token, LANCERLOGIN_MODULE_SELECTION_TOKEN.");
-  await expect(pending).toContainText("Without it, installed plugins keep working; edit lancerlogin.modules.json in the private deployment repository instead.");
-  await expect(pending).toContainText("\"Plugin selection credential\" in docs/MODULE-PLUGINS.md");
+  await expect(card.getByText("Adding, updating and removing modules from the dashboard is not set up yet.")).toHaveAttribute("data-tone", "neutral");
+  const pending = card.locator(".plugin-pending");
+  await expect(pending).toContainText("Reading and changing the module selection from the dashboard needs the optional module selection token, LANCERLOGIN_MODULE_SELECTION_TOKEN.");
+  await expect(pending).toContainText("Without it, installed modules keep working; edit lancerlogin.modules.json in the private deployment repository instead.");
+  await expect(pending).toContainText("\"Module selection credential\" in docs/MODULE-PLUGINS.md");
   await expect(pending).not.toContainText("unavailable until the selection can be read");
-  // The selection cannot be read without the token, so nothing is reported as pending or undeployed.
+  // The selection cannot be read without the token, so nothing is reported as pending or undeployed, and Apply changes is not offered.
   await expect(pending.getByRole("heading", { name: "Pending changes" })).toBeVisible();
   await expect(pending).not.toContainText("Not deployed");
   await expect(pending.locator(".plugin-pending-badge")).toHaveCount(0);
-  // Without the selection no plugin track was read, so no row claims one.
-  const unreadRows = plugins.locator(".plugin-row");
+  await expect(card.locator(".module-pending-badge")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Apply changes", exact: true })).toHaveCount(0);
+  // Without the selection no module track was read, so no row claims one.
+  const unreadRows = card.locator('.module-row[data-module="hour-tracking"], .module-row[data-module="carpool"]');
   await expect(unreadRows).toHaveCount(2);
   for (const unread of await unreadRows.all()) {
     await expect(unread).not.toContainText("Stable track");
@@ -168,12 +213,12 @@ test("removal is blocked while a module is enabled, incompatible plugins cannot 
     await expect(unread).not.toContainText("Pinned by LancerLogin");
     await expect(unread).not.toHaveAttribute("data-track", /.*/);
   }
-  await expect(plugins).not.toContainText("Production approval");
-  await expect(plugins.getByRole("button", { name: "Add plugin" })).toBeDisabled();
+  await expect(card).not.toContainText("Production approval");
+  await expect(card.getByRole("button", { name: "Add module" })).toBeDisabled();
   expect(mock.posts.filter((post) => post.path === "change")).toEqual([]);
 });
 
-test("Admin moves a plugin to the testing-only Nightly track, and Upgrade offers the newest release on that track", async ({ page }) => {
+test("Admin moves a module to the testing-only Nightly track, and Update offers the newest release on that track", async ({ page }) => {
   const carpool = { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" as const };
   const mock = await setup(page, pluginState({ installed: [official, carpool], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit, phase: "enabled" }] } }));
   await page.route("**/admin/plugins/review", (route) => {
@@ -186,13 +231,13 @@ test("Admin moves a plugin to the testing-only Nightly track, and Upgrade offers
     return route.fulfill({ status: 201, json: { committed: { action: "upgrade", id: "carpool", commit: nightlyRelease.commit, track: "nightly" } } });
   });
   await page.goto("/settings/modules");
-  const plugins = page.locator(".plugin-management");
-  const row = plugins.locator(".plugin-row").filter({ hasText: "carpool" }).first();
+  const card = page.locator(".module-card");
+  const row = moduleRow(page, "carpool");
   await expect(row).toContainText("Stable track");
   await expect(row).toHaveAttribute("data-track", "stable");
   await expect(row.locator(".plugin-track-badge")).toHaveCount(0);
-  await row.getByRole("button", { name: "Upgrade carpool" }).click();
-  const dialog = page.getByRole("dialog", { name: "Upgrade plugin" });
+  await row.getByRole("button", { name: /^Update / }).click();
+  const dialog = page.getByRole("dialog", { name: "Update module" });
   const track = dialog.getByLabel("Release track");
   await expect(track).toHaveValue("stable");
   await expect(dialog.getByRole("status").filter({ hasText: "Newest Stable release: v1.0.0" })).toBeVisible();
@@ -220,64 +265,94 @@ test("Admin moves a plugin to the testing-only Nightly track, and Upgrade offers
   await dialog.getByRole("button", { name: "Commit change" }).click();
   await expect(dialog).toHaveCount(0);
   expect(mock.posts.find((post) => post.path === "change")?.body).toEqual({ action: "upgrade", id: "carpool", source, commit: nightlyRelease.commit, track: "nightly", selectionSha, trustConfirmed: true });
-  await expect(plugins.getByRole("status").filter({ hasText: "Pinned carpool on the Nightly track (testing only)" })).toBeVisible();
-  await expect(plugins.locator(".plugin-row").filter({ hasText: "carpool" }).first().locator(".plugin-track-badge")).toHaveText("Nightly track · testing only");
-  // Reopening Upgrade keeps the plugin on its track.
-  await plugins.getByRole("button", { name: "Upgrade carpool" }).click();
-  await expect(page.getByRole("dialog", { name: "Upgrade plugin" }).getByLabel("Release track")).toHaveValue("nightly");
+  await expect(card.getByRole("status").filter({ hasText: "Pinned carpool on the Nightly track (testing only)" })).toBeVisible();
+  await expect(row.locator(".plugin-track-badge")).toHaveText("Nightly track · testing only");
+  await expect(row.locator(".module-pending-badge")).toHaveText("Not deployed");
+  await expect(row).toHaveAttribute("data-pending", "upgrade");
+  // Reopening Update keeps the module on its track.
+  await row.getByRole("button", { name: /^Update / }).click();
+  await expect(page.getByRole("dialog", { name: "Update module" }).getByLabel("Release track")).toHaveValue("nightly");
 });
 
-test("plugin rows show current and latest versions, accent Upgrade when outdated, versioned pending changes and an unavailable state", async ({ page }) => {
+test("module rows show current and latest versions, accent Update when outdated, versioned pending changes and an unavailable state", async ({ page }) => {
   const outreach = { ...official, track: "stable" as const, version: "v0.2.0", latest: { tag: "v0.2.0", kind: "stable" as const, commit: official.commit }, latestUnavailable: false, updateAvailable: false, releasePinVersion: "v0.2.0" };
   const carpool = { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" as const, track: "stable" as const, version: "v1.0.0", latest: { tag: "v1.0.1", kind: "stable" as const, commit: next }, latestUnavailable: false, updateAvailable: true };
   const mock = await setup(page, pluginState({ installed: [outreach, carpool], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit: next, phase: "enabled" }] }, pending: [{ kind: "upgrade", id: "carpool", source, commit: next, installedCommit: commit, version: "v1.0.1", installedVersion: "v1.0.0" }] }));
   await page.goto("/settings/modules");
-  const plugins = page.locator(".plugin-management");
-  const installedList = plugins.locator(".plugin-list").first();
-  const outreachRow = installedList.locator(".plugin-row").filter({ hasText: "hour-tracking" });
+  const card = page.locator(".module-card");
+  const outreachRow = moduleRow(page, "hour-tracking");
   await expect(outreachRow).toContainText(`v0.2.0 · Commit ${official.commit.slice(0, 12)}`);
   await expect(outreachRow).toContainText("Latest on Stable: v0.2.0 · Up to date");
   await expect(outreachRow).toContainText(`Included with LancerLogin ${version}: v0.2.0`);
   await expect(outreachRow).toHaveAttribute("data-version-status", "current");
-  const carpoolRow = installedList.locator(".plugin-row").filter({ hasText: "carpool" });
+  await expect(outreachRow.locator(".module-pending-badge")).toHaveCount(0);
+  const carpoolRow = moduleRow(page, "carpool");
   await expect(carpoolRow).toContainText(`v1.0.0 · Commit ${commit.slice(0, 12)}`);
   await expect(carpoolRow).toContainText("Latest on Stable: v1.0.1 · Update available");
   await expect(carpoolRow).not.toContainText("Included with LancerLogin");
-  // The accent style marks the plugin that has a newer release; an up-to-date plugin keeps the secondary style.
-  const accent = (name: string) => plugins.getByRole("button", { name }).evaluate((element) => {
+  await expect(carpoolRow.locator(".module-pending-badge")).toHaveText("Not deployed");
+  // The accent style marks the module that has a newer release; an up-to-date module keeps the secondary style.
+  const accent = (id: string) => moduleRow(page, id).getByRole("button", { name: /^Update / }).evaluate((element) => {
     const probe = document.createElement("span"); probe.style.backgroundColor = "var(--primary)"; element.append(probe);
     const same = getComputedStyle(element).backgroundColor === getComputedStyle(probe).backgroundColor; probe.remove(); return same;
   });
-  expect(await accent("Upgrade carpool")).toBe(true);
-  expect(await accent("Upgrade hour-tracking")).toBe(false);
-  await expect(plugins.locator(".plugin-pending")).toContainText("Change carpool from v1.0.0 to v1.0.1");
-  await expect(plugins).not.toContainText("Production approval");
+  expect(await accent("carpool")).toBe(true);
+  expect(await accent("hour-tracking")).toBe(false);
+  await expect(card.locator(".plugin-pending")).toContainText("Update carpool from v1.0.0 to v1.0.1");
+  await expect(card).not.toContainText("Production approval");
   // Unknown versions fall back to short commits, an unreleased commit says so, and an unavailable lookup is muted, not an error.
   mock.state = pluginState({ installed: [{ ...official, latestUnavailable: true, latest: null, version: null, updateAvailable: false }, { ...carpool, version: null, updateAvailable: false }], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit: next, phase: "enabled" }] }, pending: [{ kind: "upgrade", id: "carpool", source, commit: next, installedCommit: commit, version: null, installedVersion: null }] });
   await page.reload();
-  const unavailableRow = installedList.locator(".plugin-row").filter({ hasText: "hour-tracking" });
+  const unavailableRow = moduleRow(page, "hour-tracking");
   await expect(unavailableRow).toContainText(`Commit ${official.commit.slice(0, 12)}`);
   await expect(unavailableRow).not.toContainText("Unreleased commit");
   const muted = unavailableRow.getByText("Latest version unavailable");
   await expect(muted).toBeVisible();
   expect(await muted.evaluate((element) => { const probe = document.createElement("span"); probe.style.color = "var(--ui-text-muted)"; element.append(probe); const same = getComputedStyle(element).color === getComputedStyle(probe).color; probe.remove(); return same; })).toBe(true);
-  await expect(plugins.getByRole("alert")).toHaveCount(0);
-  const unreleasedRow = installedList.locator(".plugin-row").filter({ hasText: "carpool" });
+  await expect(card.getByRole("alert")).toHaveCount(0);
+  const unreleasedRow = moduleRow(page, "carpool");
   await expect(unreleasedRow).toContainText(`Unreleased commit · Commit ${commit.slice(0, 12)}`);
   await expect(unreleasedRow).toContainText("Latest on Stable: v1.0.1");
   await expect(unreleasedRow).not.toContainText("Update available");
-  expect(await accent("Upgrade carpool")).toBe(false);
-  await expect(plugins.locator(".plugin-pending")).toContainText(`Change carpool from ${commit.slice(0, 12)} to ${next.slice(0, 12)}`);
+  expect(await accent("carpool")).toBe(false);
+  await expect(card.locator(".plugin-pending")).toContainText(`Update carpool from ${commit.slice(0, 12)} to ${next.slice(0, 12)}`);
 });
 
-test("plugin controls use shared themed styles at desktop and mobile in light and dark", async ({ page }) => {
+test("Settings > Updates no longer applies module changes, and the Modules card shows the apply in progress and the last result", async ({ page }) => {
+  const mock = await setup(page, pluginState({ selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit, phase: null }] }, pending: [{ kind: "add", id: "carpool", source, commit }] }));
+  await page.route("**/admin/plugins/migrations", (route) => route.fulfill({ json: { required: [] } }));
+  await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
+  mock.update = modulesRequest();
+  await page.goto("/settings/updates");
+  const updates = page.locator(".release-comparisons");
+  await expect(updates.locator(".web-update-status")).toHaveText("Module changes are being applied from Settings > Modules. Follow them there; release updates are available after they finish.");
+  await expect(updates.getByRole("link", { name: "Open Settings > Modules" })).toHaveAttribute("href", "/settings/modules");
+  for (const name of [/Apply changes/, /Start applying changes/, /plugin/i, "Back up and begin update"]) await expect(updates.getByRole("button", { name })).toHaveCount(0);
+  await expect(updates).not.toContainText(/Module changes for|plugin/i);
+  await page.goto("/settings/modules");
+  const card = page.locator(".module-card");
+  await expect(card.locator(".web-update-status")).toContainText(`Module changes for v${version}. Waiting for production approval`);
+  await expect(card.getByRole("button", { name: "Add module" })).toBeDisabled();
+  // Once it finishes, the result stays on the Modules card and Settings > Updates offers release updates again.
+  mock.update = null;
+  mock.completed = modulesRequest({ state: "succeeded", stage: "succeeded", reloadReady: true, updatedAt: "2026-01-01T00:00:00.000Z" });
+  mock.state = pluginState({ selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit, phase: null }] } });
+  await page.reload();
+  await expect(card.locator(".web-update-last-result")).toContainText(`Last apply: Module changes for v${version}. Update verified successfully.`);
+  await page.goto("/settings/updates");
+  await expect(updates.locator(".web-update-status")).not.toContainText("Module changes");
+  await expect(updates.getByRole("link", { name: "Open Settings > Modules" })).toHaveCount(0);
+  await expect(updates).not.toContainText(/Previous module changes|plugin/i);
+});
+
+test("module controls use shared themed styles at desktop and mobile in light and dark", async ({ page }) => {
   await setup(page, pluginState({ installed: [official, { id: "carpool", source, commit, official: false, selected: true, phase: "disabled" }], pending: [{ kind: "upgrade", id: "carpool", source, commit: next, installedCommit: commit }], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit: next, track: "nightly", phase: "disabled" }] } }));
   for (const theme of ["light", "dark"]) for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await page.addInitScript((value) => localStorage.setItem("lancerlogin-theme", value), theme);
     await page.goto("/settings/modules");
     await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
-    const add = page.locator(".plugin-management").getByRole("button", { name: "Add plugin" });
+    const add = page.locator(".module-card").getByRole("button", { name: "Add module" });
     await expect(add).toBeEnabled();
     await expect(page.locator(".plugin-pending")).toContainText("Not deployed");
     await add.focus();
@@ -293,28 +368,33 @@ test("plugin controls use shared themed styles at desktop and mobile in light an
       const result = { color: actual.color === expected.color, background: actual.backgroundColor === expected.backgroundColor, text: element.textContent }; probe.remove(); return result;
     });
     expect(badge).toEqual({ color: true, background: true, text: "Nightly track · testing only" });
+    for (const button of await page.locator(".module-row-actions button").all()) expect(await button.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    // On desktop, Apply changes keeps its natural width beside its heading instead of stretching across the card.
+    const apply = page.locator(".module-card").getByRole("button", { name: "Apply changes", exact: true });
+    if (width === 1280) expect(await apply.evaluate((element) => element.getBoundingClientRect().width < element.closest(".plugin-pending")!.getBoundingClientRect().width / 2)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`modules-card-${theme}-${width}.png`), fullPage: true });
     await add.click();
-    const dialog = page.getByRole("dialog", { name: "Add plugin" });
+    const dialog = page.getByRole("dialog", { name: "Add module" });
     for (const label of ["Module ID", "Git repository URL", "Release track", "Commit SHA"]) expect(await dialog.getByLabel(label).evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-    await page.screenshot({ path: test.info().outputPath(`plugins-${theme}-${width}.png`) });
+    await page.screenshot({ path: test.info().outputPath(`modules-dialog-${theme}-${width}.png`) });
     await page.keyboard.press("Escape");
   }
 });
 
-test("Settings > Updates explains a used module that moved into a plugin and keeps it through the plugin flow", async ({ page }) => {
+test("Settings > Updates explains a used module that moved into its own repository and keeps it through the module flow", async ({ page }) => {
   const mock = await setup(page);
   let required = [{ id: "carpool", label: "Carpool", plugin: { source, commit } }];
   await page.route("**/admin/plugins/migrations", (route) => route.fulfill({ json: { required } }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
   await page.route("**/admin/plugins/change", (route) => { mock.posts.push({ path: "change", body: route.request().postDataJSON() }); required = []; return route.fulfill({ status: 201, json: { committed: { action: "add", id: "carpool", commit } } }); });
   await page.goto("/settings/updates");
-  const notice = page.getByRole("group", { name: "Carpool is in use and is now a separate plugin." });
+  const notice = page.getByRole("group", { name: "Carpool is in use and is now a separate module." });
   await expect(notice).toBeVisible();
   await expect(page.getByRole("button", { name: "Back up and begin update" })).toBeDisabled();
   await expect(notice.getByRole("link", { name: "Remove Carpool" })).toHaveAttribute("href", "/settings/modules");
-  await notice.getByRole("button", { name: "Keep Carpool (add plugin)" }).click();
-  const dialog = page.getByRole("dialog", { name: "Add plugin" });
+  await notice.getByRole("button", { name: "Keep Carpool (add module)" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add module" });
   await expect(dialog.getByLabel("Module ID")).toHaveValue("carpool");
   await expect(dialog.getByLabel("Git repository URL")).toHaveValue(source);
   await expect(dialog.getByLabel("Commit SHA")).toHaveValue(commit);
@@ -323,7 +403,7 @@ test("Settings > Updates explains a used module that moved into a plugin and kee
   await dialog.getByLabel("Your password").fill("correct");
   await dialog.getByRole("button", { name: "Confirm identity" }).click();
   await dialog.getByRole("button", { name: "Commit change" }).click();
-  await expect(page.getByText("Added the carpool plugin. The next update installs LancerLogin and the plugin together.")).toBeVisible();
+  await expect(page.getByText("Added the carpool module. The next update installs LancerLogin and the module together.")).toBeVisible();
   await expect(notice).toHaveCount(0);
   expect(mock.posts.find((post) => post.path === "change")?.body).toMatchObject({ action: "add", id: "carpool", source, commit, trustConfirmed: true });
 });

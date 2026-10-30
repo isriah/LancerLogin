@@ -3,7 +3,7 @@ import { FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "./dashboard-api";
 import { useModalFocus } from "./modal-focus";
 import type { MemberLabel } from "./member-labels";
-import { formForMeeting, initialMeetingForm, meetingDurationMinutes, meetingTimestamps, moveMeetingStart, dateAfterDays, type MeetingForm } from "./meeting-form";
+import { formForMeeting, initialMeetingForm, meetingClockMinutes, meetingDurationMinutes, meetingTimestamps, moveMeetingStart, dateAfterDays, type MeetingForm } from "./meeting-form";
 export { addMinutes, dateAfterDays, formForMeeting, initialMeetingForm, localInput, meetingTimestamps, splitLocal, type MeetingForm } from "./meeting-form";
 
 export type Frequency = "daily" | "weekly" | "biweekly" | "monthly";
@@ -28,8 +28,8 @@ const weightLabel = (category: Pick<MeetingWeightCategory, "name" | "weight">) =
 export function MeetingFields({ value, onChange, categories = [], currentMeeting, initialFocus = false }: { value: MeetingForm; onChange: (value: MeetingForm) => void; categories?: MeetingWeightCategory[]; currentMeeting?: Meeting; initialFocus?: boolean }) {
   const [labels, setLabels] = useState<MemberLabel[]>([]);
   useEffect(() => { void api<{ labels: MemberLabel[] }>("/labels").then((result) => setLabels(result.labels)).catch(() => undefined); }, []);
-  const duration = meetingDurationMinutes(value); const lastDuration = useRef(duration);
-  if (Number.isFinite(duration) && duration > 0) lastDuration.current = duration;
+  const duration = meetingDurationMinutes(value); const span = meetingClockMinutes(value); const lastDuration = useRef(span);
+  if (Number.isFinite(span) && span > 0) lastDuration.current = span;
   const changeStart = (startTime: string) => onChange(moveMeetingStart(value, { startTime }, lastDuration.current));
   const changeDate = (date: string) => onChange(moveMeetingStart(value, { date }, lastDuration.current));
   const automatic = categories.find((category) => category.minimumDurationMinutes != null && Math.round(duration) >= category.minimumDurationMinutes);

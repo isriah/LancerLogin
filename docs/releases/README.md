@@ -11,6 +11,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 ## LancerLogin 2 beta releases
 
+- [v2.1.0-beta.2](v2.1.0-beta.2.md) - Two-way Discord label sync, refused impossible scans, re-enrollment prompts and per-device Debug mode
 - [v2.1.0-beta.1](v2.1.0-beta.1.md) - Labels page, Discord roles from the dashboard, roster bulk edit sidebar and faster pages
 - [v2.0.0-beta.18](v2.0.0-beta.18.md) - Setup completion screen, kiosk pairing screen and red and gold starting colors
 - [v2.0.0-beta.17](v2.0.0-beta.17.md) - Easier first-time setup, optional dashboard update token and clearer installer errors

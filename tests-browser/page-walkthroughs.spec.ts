@@ -18,7 +18,8 @@ const completedSteps: Record<PageId | "dashboard", string> = { dashboard: "recur
 const panel = (page: Page) => page.locator(".walkthrough-panel");
 
 async function walkthroughAccount(page: Page, pageId: PageId, state: { progress: Progress }, debugMode = true) {
-  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: "admin-1", role: "admin", debugMode } } }));
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: "admin-1", role: "admin" } } }));
+  if (debugMode) await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode", "true"));
   await page.route("**/auth/walkthroughs/*", async (route) => {
     const requestedPage = new URL(route.request().url()).pathname.split("/").at(-1)! as PageId | "dashboard";
     if (requestedPage === pageId) {
@@ -132,7 +133,8 @@ for (const viewport of [{ width: 1280, height: 900, theme: "light" }, { width: 3
 
 test("Settings and its subpages do not register page walkthroughs", async ({ page }) => {
   let requests = 0;
-  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: "admin-1", role: "admin", debugMode: true } } }));
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: "admin-1", role: "admin" } } }));
+  await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode", "true"));
   await page.route("**/auth/walkthroughs/*", (route) => { requests += 1; return route.fulfill({ json: { error: "Unexpected walkthrough request" }, status: 500 }); });
   await page.goto("/settings/session");
   await expect(page.locator(".settings-page")).toBeVisible();
@@ -147,7 +149,7 @@ for (const view of [{ width: 1280, height: 900, theme: "light", role: "admin" },
     await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), view.theme);
     const state = { progress: { pageId: "reports", version: 1, status: "in_progress", stepId: "report-builder" } as Progress };
     await walkthroughAccount(page, "reports", state);
-    await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: "test-user", role: view.role, debugMode: true } } }));
+    await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: "test-user", role: view.role } } }));
     const reports: any[] = []; let creates = 0; let deletions = 0;
     let release: (() => void) | undefined;
     await page.route("**/reports/views", async (route) => {

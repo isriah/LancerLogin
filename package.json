@@ -2,7 +2,7 @@
   "name": "lancerlogin",
   "private": true,
   "type": "module",
-  "version": "2.1.0-beta.1",
+  "version": "2.1.0-beta.2",
   "description": "Self-hosted modular attendance and operations",
   "license": "Apache-2.0",
   "workspaces": [
@@ -11,11 +11,11 @@
   ],
   "scripts": {
     "test": "node --test --test-concurrency=2 tests/**/*.test.mjs && node --experimental-strip-types --test --test-concurrency=2 tests-ts/**/*.test.ts",
-    "test:api": "node --test tests/member-inactive-periods.test.mjs tests/member-inactive-periods-d1.test.mjs tests/attendance-service.test.mjs tests/d1-repository.test.mjs tests/d1-read-efficiency-workerd.test.mjs tests/fingerprint-idle-budget-workerd.test.mjs tests/integration-workflows.test.mjs tests/pairing-service.test.mjs tests/roster-import.test.mjs tests/security.test.mjs tests/web-updates-workerd.test.mjs tests/worker.test.mjs && node --experimental-strip-types --test tests-ts/attendance-lifecycle.test.ts tests-ts/contest-bulk.test.ts tests-ts/member-label-policy.test.ts tests-ts/report-builder.test.ts tests-ts/integration-runtime.test.ts tests-ts/runtime-security.test.ts tests-ts/worker-runtime.test.ts tests-ts/multi-kiosk.test.ts tests-ts/attendance-participation-start.test.ts tests-ts/d1-read-efficiency.test.ts tests-ts/web-updates.test.ts tests-ts/update-channel.test.ts tests-ts/walkthrough.test.ts",
+    "test:api": "node --test tests/member-inactive-periods.test.mjs tests/member-inactive-periods-d1.test.mjs tests/attendance-service.test.mjs tests/d1-repository.test.mjs tests/d1-read-efficiency-workerd.test.mjs tests/fingerprint-idle-budget-workerd.test.mjs tests/integration-workflows.test.mjs tests/pairing-service.test.mjs tests/roster-import.test.mjs tests/security.test.mjs tests/web-updates-workerd.test.mjs tests/worker.test.mjs && node --experimental-strip-types --test tests-ts/attendance-lifecycle.test.ts tests-ts/contest-bulk.test.ts tests-ts/member-label-policy.test.ts tests-ts/discord-label-two-way.test.ts tests-ts/discord-label-two-way-backup.test.ts tests-ts/report-builder.test.ts tests-ts/integration-runtime.test.ts tests-ts/runtime-security.test.ts tests-ts/worker-runtime.test.ts tests-ts/multi-kiosk.test.ts tests-ts/attendance-participation-start.test.ts tests-ts/d1-read-efficiency.test.ts tests-ts/web-updates.test.ts tests-ts/update-channel.test.ts tests-ts/walkthrough.test.ts tests-ts/scan-integrity.test.ts",
     "test:dashboard": "node --test tests/dashboard-shell.test.mjs && node --experimental-strip-types --test tests-ts/dashboard-update.test.ts tests-ts/dashboard-conformance.test.ts tests-ts/ui-control-inventory.test.ts",
     "test:browser": "node scripts/run-browser-tests.mjs",
     "test:docs": "node --test tests/docs-site.test.mjs",
-    "test:kiosk": "node --test --test-concurrency=2 tests/kiosk-runtime.test.mjs tests/kiosk-attendance-clock.test.mjs tests/kiosk-scan-review-sync.test.mjs tests/kiosk-reassociation.test.mjs tests/kiosk-artifacts.test.mjs tests/fingerprint-reset.test.mjs tests/fingerprint-state-lock.test.mjs tests/kiosk-operator-runtime.test.mjs tests/kiosk-operator-service.test.mjs tests/kiosk-poll.test.mjs tests/kiosk-poll-service.test.mjs tests/fingerprint-diagnostics.test.mjs tests/fingerprint-roster.test.mjs tests/kiosk-desktop.test.mjs tests/kiosk-presence-client.test.mjs tests/kiosk-presence-restart.test.mjs",
+    "test:kiosk": "node --test --test-concurrency=2 tests/kiosk-runtime.test.mjs tests/kiosk-attendance-clock.test.mjs tests/kiosk-scan-review-sync.test.mjs tests/kiosk-reassociation.test.mjs tests/kiosk-artifacts.test.mjs tests/fingerprint-reset.test.mjs tests/fingerprint-state-lock.test.mjs tests/kiosk-operator-runtime.test.mjs tests/kiosk-operator-service.test.mjs tests/kiosk-poll.test.mjs tests/kiosk-poll-service.test.mjs tests/fingerprint-diagnostics.test.mjs tests/fingerprint-roster.test.mjs tests/kiosk-desktop.test.mjs tests/kiosk-presence-client.test.mjs tests/kiosk-presence-restart.test.mjs tests/kiosk-enrollment-reports.test.mjs",
     "test:provisioning": "node --test tests/cloudflare-setup.test.mjs tests/d1-maintenance.test.mjs tests/foundation.test.mjs tests/pages-proxy.test.mjs tests/provision-plan.test.mjs tests/provision-resources.test.mjs tests/web-upgrade.test.mjs tests/release-policy.test.mjs tests/provision-release-compat.test.mjs",
     "rehearse:web-upgrade": "node scripts/rehearse-web-upgrade.mjs",
     "rehearse:update": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/rehearse-update.mjs",

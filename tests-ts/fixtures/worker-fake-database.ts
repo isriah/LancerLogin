@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { createSessionCodec } from "../../apps/api/src/runtime-security.ts";
 
 /** The SQL fragment of the Worker's per-request session user lookup (id, role and the /auth/session profile columns). */
-export const sessionUserLookup = "SELECT id, role, email, local_username AS localUsername, debug_mode AS debugMode FROM users";
+export const sessionUserLookup = "SELECT id, role, email, local_username AS localUsername FROM users";
 
 export class FakeStatement {
   values: unknown[] = [];

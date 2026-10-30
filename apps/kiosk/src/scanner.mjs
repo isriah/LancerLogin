@@ -2,7 +2,10 @@ import { kioskDisplayForQueuedScan } from "./kiosk-presentation.mjs";
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-export function createIdentityScanner({ captureIdentity, captureAllowed = () => true, captureTime, setFeedback = async () => undefined, queue, loadPairing, flushAttendance, onDisplay, onInput = () => undefined, onCloud, now = () => Date.now(), delay = wait, eventId = () => crypto.randomUUID(), debounceMs = 8_000, flushWaitMs = 1_000 }) {
+// Shown under an accepted scan whose match score is below the re-enrollment threshold. Attendance is still recorded.
+export const weakReadingNotice = "Your fingerprint is reading weakly. Ask a mentor to re-enroll it.";
+
+export function createIdentityScanner({ captureIdentity, captureAllowed = () => true, captureTime, setFeedback = async () => undefined, queue, loadPairing, flushAttendance, onDisplay, onInput = () => undefined, onCloud, now = () => Date.now(), delay = wait, eventId = () => crypto.randomUUID(), debounceMs = 8_000, flushWaitMs = 1_000, weakReading = () => false }) {
   let stopped = false; let paused = false; let lastIdentity; let lastIdentityAt = 0; let lastUnknownAt = -Infinity;
   async function show(id, overrides) { await onDisplay(id, overrides); try { await setFeedback(id); } catch { /* Screen feedback remains available if optional hardware feedback fails. */ } }
   let currentTick, currentCommit, captureGeneration = 0;
@@ -59,11 +62,15 @@ export function createIdentityScanner({ captureIdentity, captureAllowed = () => 
     } catch { onCloud(false); }
     if (!acknowledgement) { await show(queuedDisplay.id, { detail: event.clock?.verified === false ? "Saved on kiosk | Clock needs sync before attendance can be confirmed" : queuedDisplay.detail }); await delay(250); return; }
     if (acknowledgement.rejected) { await show("rejected", { detail: acknowledgement.error }); await delay(250); return; }
+    // The member scanned on another kiosk moments apart from this scan, so this finger was probably matched to the
+    // wrong member. Nothing was recorded. The debounce still applies, so a finger left on the reader is not resent.
+    if (acknowledgement.rescan) { await show("rescan"); await delay(250); return; }
     const displayName = acknowledgement.member?.displayName;
     const meetingTitle = acknowledgement.meeting?.title;
+    const notice = !acknowledgement.duplicate && weakReading(event.matchScore) ? { notice: weakReadingNotice, durationMs: 4_000 } : {};
     if (acknowledgement.duplicate) await show("duplicate", { name: displayName, meetingTitle });
-    else if (acknowledgement.action === "check_out") await show("goodbye", { name: displayName, meetingTitle });
-    else await show("welcome", { name: displayName, meetingTitle });
+    else if (acknowledgement.action === "check_out") await show("goodbye", { name: displayName, meetingTitle, ...notice });
+    else await show("welcome", { name: displayName, meetingTitle, ...notice });
     await delay(250);
   }
   function tick() {

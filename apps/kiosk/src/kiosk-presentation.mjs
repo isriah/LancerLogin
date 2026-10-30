@@ -9,6 +9,8 @@ export const kioskStates = Object.freeze({
   duplicate: { message: "Already recorded", detail: "Attendance was not changed", tone: "notice", durationMs: 2200 },
   rejected: { message: "Scan needs help", detail: "Ask an operator for help", tone: "error", durationMs: 2800 },
   unknown: { message: "Fingerprint not recognized", detail: "Try the same finger again, or ask an operator for help", tone: "error", durationMs: 2600 },
+  // A possible wrong match: the member scanned on another kiosk moments apart, so nothing was recorded.
+  rescan: { message: "Scan again", detail: "Place your finger flat on the reader and hold it still.", tone: "notice", durationMs: 2600 },
   offline: { message: "Saved for sync", detail: "This scan is stored on the kiosk and will sync automatically", tone: "offline", durationMs: 2600 },
   reader_offline: { message: "Reader offline", detail: "The fingerprint reader is not responding", tone: "error" },
   enroll_wait_first: { message: "Place finger", detail: "Enrollment scan 1 of 2", tone: "processing" },

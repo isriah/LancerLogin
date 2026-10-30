@@ -50,7 +50,7 @@ test("composed plugins export a separate section beside an unchanged first-party
   const { db, client } = pluginDatabase(); t.after(() => db.raw.close());
   for (const scope of ["meetings", "roster", "installation"] as const) {
     const backup = await client.backup(scope);
-    assert.equal(backup.schemaVersion, 44);
+    assert.equal(backup.schemaVersion, 45);
     assert.deepEqual(backup.ownership, golden[scope].ownership, `${scope} ownership is unchanged by installed plugins`);
     assert.deepEqual(Object.keys(backup.tables), golden[scope].tables, `${scope} Core tables are unchanged by installed plugins`);
     assert.equal("externalModules" in backup, scope === "installation");

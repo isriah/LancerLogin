@@ -112,10 +112,10 @@ test("Admin can save independent attendance anomaly limits", async ({ page }) =>
   expect(saved?.anomalyEarlyThresholdMinutes).toBe(18);
 });
 
-test("Settings keeps navigation and user controls together and persists Debug mode", async ({ page }) => {
+test("Settings keeps navigation and user controls together and keeps Debug mode on this device", async ({ page }) => {
   await useSettingsContext(page);
-  let preference: Record<string, unknown> | undefined;
-  await page.route("**/auth/preferences", async (route) => { preference = route.request().postDataJSON() as Record<string, unknown>; await route.fulfill({ json: preference }); });
+  const serverPreferences: string[] = [];
+  page.on("request", (request) => { if (/\/(auth|admin)\/preferences/.test(request.url())) serverPreferences.push(request.url()); });
   await page.goto("/settings/configuration");
   await openSettingsNavigation(page);
   const toolbar = page.locator(".settings-toolbar");
@@ -130,10 +130,13 @@ test("Settings keeps navigation and user controls together and persists Debug mo
   await expect(toolbar.getByRole("button", { name: "Sign out" })).toBeVisible();
   const debug = toolbar.getByRole("switch", { name: "Debug mode" });
   await expect(debug).toHaveAttribute("aria-checked", "false");
+  await expect(navigation.getByRole("link", { name: "Background scheduler", exact: true })).toHaveCount(0);
   await debug.focus();
   await page.keyboard.press("Space");
-  await expect.poll(() => preference).toEqual({ debugMode: true });
   await expect(debug).toHaveAttribute("aria-checked", "true");
+  expect(await page.evaluate(() => localStorage.getItem("lancerlogin-debug-mode"))).toBe("true");
+  await expect(navigation.getByRole("link", { name: "Background scheduler", exact: true })).toHaveAttribute("href", "/settings/background-scheduler");
+  expect(serverPreferences).toEqual([]);
   await expect(debug).toBeFocused();
   expect(await debug.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
   const toggleAppearance = (toggle: typeof darkMode) => toggle.evaluate((element) => {
@@ -511,7 +514,7 @@ test("Settings validation, integration states and data dialogs remain explicit a
   await useSettingsContext(page);
 
   await page.goto("/settings/access");
-  await page.getByText("Grant dashboard access", { exact: true }).click();
+  await page.getByRole("button", { name: "Grant access", exact: true }).click();
   await page.getByLabel("Temporary password", { exact: true }).fill("long-enough-password");
   const confirmation = page.getByLabel("Confirm temporary password", { exact: true });
   await confirmation.fill("different-password");
@@ -682,6 +685,13 @@ test("pending Discord commands are checked once when Integrations opens and sett
 
 test("Operator role cannot open administrative Settings routes", async ({ page }) => {
   await useSettingsContext(page, "operator");
+  // Debug mode is Admin-only, even on a device where an Admin turned it on.
+  await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode", "true"));
+  await page.goto("/settings/session");
+  await expect(page.locator(".settings-session-actions").getByRole("switch", { name: "Light mode" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Debug mode" })).toHaveCount(0);
+  await page.goto("/settings/background-scheduler");
+  await expect(page.getByRole("heading", { level: 1, name: "Page unavailable" })).toBeVisible();
   for (const [path] of routes) {
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1, name: "Page unavailable" })).toBeVisible();
@@ -708,7 +718,7 @@ test("mobile Settings navigation collapses with keyboard access to every categor
   await expectResponsiveFit(page);
 });
 
-test("mobile access disclosures preserve account updates and password validation without writes on open", async ({ page }) => {
+test("mobile access edit panel saves once and keeps password validation without writes on open", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
   const writes: unknown[] = [];
   await page.route("**/admin/users/user-1", route => { writes.push(route.request().postDataJSON()); return route.fulfill({ json: {} }); });
@@ -716,10 +726,14 @@ test("mobile access disclosures preserve account updates and password validation
   const role = page.getByRole("combobox", { name: "Role for admin", exact: true });
   await expect(role).toBeHidden();
   const edit = page.getByRole("button", { name: "Edit Avery Stone access" });
-  await edit.focus(); await page.keyboard.press("Enter"); await expect(role).toBeVisible(); expect(writes).toEqual([]);
-  await role.selectOption("operator"); await expect.poll(() => writes).toEqual([{ role: "operator" }]);
-  await edit.click(); await expect(role).toBeHidden();
-  await page.getByText("Grant dashboard access", { exact: true }).click();
+  await expect(edit).toHaveAttribute("aria-expanded", "false");
+  await edit.focus(); await page.keyboard.press("Enter"); await expect(role).toBeVisible(); await expect(role).toBeFocused(); expect(writes).toEqual([]);
+  const close = page.getByRole("button", { name: "Close Avery Stone access" }); await expect(close).toHaveAttribute("aria-expanded", "true");
+  await role.selectOption("operator"); await page.waitForTimeout(100); expect(writes).toEqual([]);
+  await page.getByRole("button", { name: "Save", exact: true }).click(); await expect.poll(() => writes).toEqual([{ role: "operator" }]);
+  await expect(page.getByRole("status").filter({ hasText: /^Saved$/ })).toBeVisible();
+  await close.click(); await expect(role).toBeHidden(); await expect(edit).toBeFocused();
+  await page.getByRole("button", { name: "Grant access", exact: true }).click();
   await page.getByLabel("Temporary password", { exact: true }).fill("long-enough-password");
   await page.getByLabel("Confirm temporary password", { exact: true }).fill("different-password");
   await expect(page.locator("#password-confirmation-error")).toContainText("Passwords do not match");
@@ -800,7 +814,7 @@ test("module status follows the unsaved switch instead of the saved state", asyn
 
 test("scheduler job disclosures retain complete timestamps and provider-delivery distinction", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
-  await page.route("**/admin/preferences", route => route.fulfill({ json: { developerSchedulerEnabled: true, revision: 1 } }));
+  await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode", "true"));
   const jobs = Object.fromEntries(["core.discord-commands", "attendance.google-calendar", "attendance.discord-calendar", "attendance.discord-channel", "attendance.discord-notices", "attendance.discord-anomalies", "attendance.discord-label-roles", "hour-tracking.publication"].map(id => [id, { next: 1_797_600_000_000, last: 1_797_599_000_000, outcome: "ok" }]));
   await page.route("**/admin/scheduler", route => route.fulfill({ json: { enabled: true, jobs } }));
   await page.goto("/settings/background-scheduler");
@@ -894,8 +908,9 @@ test("installation restore offers no discard while an included module depends on
 
 test("Admin can add a Google email from Access and sees API errors inline", async ({ page }) => {
   await useSettingsContext(page);
-  const writes: unknown[] = []; let fail = false;
-  await page.route("**/admin/users/user-1", route => { writes.push(route.request().postDataJSON()); return fail ? route.fulfill({ status: 409, json: { error: "Another account already uses that Google email." } }) : route.fulfill({ json: {} }); });
+  const writes: unknown[] = []; let fail = false; let savedEmail: string | null = null;
+  await page.route("**/admin/users", (route) => route.fulfill({ json: { users: [{ id: "user-1", localUsername: "admin", email: savedEmail, role: "admin", active: 1, memberId: "member-1", memberExternalId: "A-101", memberFirstName: "Avery", memberLastName: "Stone", createdAt: new Date().toISOString() }] } }));
+  await page.route("**/admin/users/user-1", route => { const body = route.request().postDataJSON() as { email: string | null }; writes.push(body); if (fail) return route.fulfill({ status: 409, json: { error: "Another account already uses that Google email." } }); savedEmail = body.email; return route.fulfill({ json: {} }); });
   await page.goto("/settings/access");
   const edit = page.getByRole("button", { name: "Edit Avery Stone access" });
   await edit.focus(); await page.keyboard.press("Enter");
@@ -903,15 +918,93 @@ test("Admin can add a Google email from Access and sees API errors inline", asyn
   await expect(email).toBeVisible(); await expect(email).toHaveValue(""); expect(writes).toEqual([]);
   await email.fill("test.student.a@example.test"); await email.press("Enter");
   await expect.poll(() => writes).toEqual([{ email: "test.student.a@example.test" }]);
-  await expect(page.getByRole("status").filter({ hasText: "Google email saved and audited." })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: /^Saved$/ })).toBeVisible();
   fail = true;
-  await email.fill("test.student.b@example.test"); await page.getByRole("button", { name: "Save Google email", exact: true }).click();
-  const failure = page.locator(".settings-account").getByRole("alert");
+  await email.fill("test.student.b@example.test"); await page.getByRole("button", { name: "Save", exact: true }).click();
+  const failure = page.locator(".access-edit-panel").getByRole("alert");
   await expect(failure).toHaveText("Another account already uses that Google email."); await expect(failure).toBeFocused();
   await expect(email).toHaveAttribute("aria-invalid", "true");
   await email.fill(""); await email.press("Enter");
   await expect.poll(() => writes.at(-1)).toEqual({ email: null });
   await expectResponsiveFit(page);
+});
+
+const accessUsers = [
+  { id: "operator-b", localUsername: "test.operator.b", role: "operator", active: 1, memberId: "member-b", memberExternalId: "T-102", memberFirstName: "Test Student", memberLastName: "B", createdAt: "2026-09-01T00:00:00.000Z" },
+  { id: "admin-z", email: "Test.Admin.Z@Example.Test", role: "admin", active: 1, createdAt: "2026-09-02T00:00:00.000Z" },
+  { id: "admin-a", localUsername: "test.admin.a", email: "test.student.a@example.test", role: "admin", active: 1, memberId: "member-a", memberExternalId: "T-101", memberFirstName: "Test Student", memberLastName: "A", createdAt: "2026-09-03T00:00:00.000Z" },
+  { id: "operator-c", localUsername: "test.operator.c", role: "operator", active: 0, createdAt: "2026-09-04T00:00:00.000Z" },
+];
+async function useAccessAccounts(page: Page) {
+  await useSettingsContext(page);
+  const writes: { url: string; method: string; body: unknown }[] = [];
+  const grants: Record<string, { userId: string; revision: number; capabilities: string[] }> = { "operator-b": { userId: "operator-b", revision: 2, capabilities: ["attendance.manage"] }, "operator-c": { userId: "operator-c", revision: 0, capabilities: [] }, "admin-a": { userId: "admin-a", revision: 0, capabilities: [] }, "admin-z": { userId: "admin-z", revision: 0, capabilities: [] } };
+  await page.route("**/admin/users", (route) => route.fulfill({ json: { users: accessUsers } }));
+  await page.route("**/admin/users/*", (route) => { writes.push({ url: route.request().url(), method: route.request().method(), body: route.request().postDataJSON() }); return route.fulfill({ json: { ok: true } }); });
+  await page.route("**/admin/modules/assignments/*", (route) => {
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!);
+    if (route.request().method() === "PUT") { const body = route.request().postDataJSON() as { capabilities: string[]; revision: number }; writes.push({ url: route.request().url(), method: "PUT", body }); grants[id] = { userId: id, revision: body.revision + 1, capabilities: body.capabilities }; }
+    return route.fulfill({ json: grants[id] });
+  });
+  return writes;
+}
+
+for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, height: 844, theme: "dark" }] as const) test(`Accounts and roles lists sorted accounts with one edit panel at ${view.width} ${view.theme}`, async ({ page }) => {
+  await page.setViewportSize(view); await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), view.theme);
+  const writes = await useAccessAccounts(page);
+  await page.goto("/settings/access");
+  const card = page.locator(".user-section");
+  await expect(card.getByRole("heading", { name: "Accounts and roles" })).toBeVisible();
+  await expect(card.getByText("3 active accounts", { exact: true })).toBeVisible();
+  await expect(card.getByText("Only Admins can grant dashboard access or change roles.", { exact: true })).toBeHidden();
+  const rows = card.locator(".access-table").first().locator("tr.settings-account");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.locator("td[data-label='Name'] strong")).toHaveText(["Test Student A", "test.admin.z@example.test", "Test Student B"]);
+  await expect(rows.nth(0)).toContainText("T-101"); await expect(rows.nth(0)).toContainText("test.admin.a (local)"); await expect(rows.nth(0)).toContainText("test.student.a@example.test");
+  await expect(rows.nth(1)).toContainText("Not on roster");
+  await expect(rows.locator(".access-role-badge")).toHaveText(["Admin", "Admin", "Operator"]);
+  await expect(rows.locator("td[data-label='Modules']")).toHaveText(["All", "All", "Attendance"]);
+  const inactive = card.getByText("Inactive accounts (1)", { exact: true });
+  const inactiveRow = card.locator(".access-inactive tr.settings-account");
+  await expect(inactiveRow).toBeHidden(); await inactive.click(); await expect(inactiveRow).toBeVisible(); await expect(inactiveRow).toContainText("test.operator.c (local)");
+
+  const grant = card.getByRole("button", { name: "Grant access", exact: true });
+  await grant.click(); await expect(card.getByRole("button", { name: "Cancel", exact: true }).first()).toHaveAttribute("aria-expanded", "true");
+  await expect(card.getByLabel("Temporary password", { exact: true })).toBeVisible();
+  await card.locator(".access-header").getByRole("button", { name: "Cancel", exact: true }).click(); await expect(card.getByLabel("Temporary password", { exact: true })).toHaveCount(0); await expect(grant).toBeFocused();
+
+  // Opening a second account closes the first and discards its unsaved change.
+  await card.getByRole("button", { name: "Edit Test Student B access" }).click();
+  const operatorPanel = card.getByRole("form", { name: "Edit Test Student B" });
+  await expect(operatorPanel.getByText("Local username", { exact: true })).toBeVisible(); await expect(operatorPanel.locator("output")).toHaveText("test.operator.b");
+  const manage = operatorPanel.getByRole("checkbox", { name: /Manage Attendance/ }); await expect(manage).toBeChecked();
+  await manage.uncheck();
+  await card.getByRole("button", { name: "Edit Test Student A access" }).click();
+  await expect(operatorPanel).toHaveCount(0); await expect(card.locator(".access-edit-panel")).toHaveCount(1);
+  await expect(card.getByRole("form", { name: "Edit Test Student A" }).getByText("Admins can use every enabled module.", { exact: true })).toBeVisible();
+  await card.getByRole("button", { name: "Edit Test Student B access" }).click();
+  await expect(card.getByRole("form", { name: "Edit Test Student B" }).getByRole("checkbox", { name: /Manage Attendance/ })).toBeChecked();
+  expect(writes).toEqual([]);
+
+  // One Save sends the account change, then the module assignment change.
+  const panel = card.getByRole("form", { name: "Edit Test Student B" });
+  await panel.getByRole("textbox", { name: "Google email for Test Student B" }).fill("test.student.b@example.test");
+  await panel.getByRole("checkbox", { name: /Manage Attendance/ }).uncheck();
+  await panel.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => writes.map(({ method, body }) => ({ method, body }))).toEqual([{ method: "PATCH", body: { email: "test.student.b@example.test" } }, { method: "PUT", body: { capabilities: [], revision: 2 } }]);
+  await expect(panel.getByRole("status").filter({ hasText: /^Saved$/ })).toBeVisible();
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: test.info().outputPath(`access-edit-${view.width}-${view.theme}.png`), fullPage: true });
+
+  // Deactivation asks inline before it writes.
+  await panel.getByRole("button", { name: "Deactivate account", exact: true }).click();
+  const confirm = panel.getByRole("button", { name: "Confirm deactivate", exact: true }); await expect(confirm).toBeFocused(); expect(writes).toHaveLength(2);
+  await panel.getByRole("button", { name: "Keep as is", exact: true }).click(); await expect(panel.getByRole("button", { name: "Deactivate account", exact: true })).toBeFocused();
+  await panel.getByRole("button", { name: "Deactivate account", exact: true }).click(); await confirm.click();
+  await expect.poll(() => writes.at(-1)?.body).toEqual({ active: false });
+  await expect(card.getByRole("status").filter({ hasText: "Test Student B was deactivated and signed out." })).toBeVisible();
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: test.info().outputPath(`access-${view.width}-${view.theme}.png`), fullPage: true });
 });
 
 test("integration setup uses status URLs and guidance when the API provides them", async ({ page }) => {

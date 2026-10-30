@@ -93,10 +93,10 @@ test("Admin assigns Attendance explicitly to an Operator", async ({ page }) => {
     await route.fulfill({ json: assignments });
   });
   await page.goto("/settings/access");
-  await page.getByRole("button", { name: "Module assignments for desk" }).click();
+  await page.getByRole("button", { name: "Edit desk access" }).click();
   await page.getByRole("checkbox", { name: /Manage Attendance/ }).check();
-  await page.getByRole("button", { name: "Save assignments" }).click();
-  await expect(page.getByText("Module assignments saved.")).toBeVisible();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: /^Saved$/ })).toBeVisible();
   expect(assignments.capabilities).toEqual(["attendance.manage"]);
 });
 
@@ -109,7 +109,7 @@ test("an unavailable plugin keeps the workspace usable and explains itself in Se
   await expect(page.getByText("Module access unavailable")).toHaveCount(0);
   await expect(page.getByText("Code is no longer installed. Disable it to delete its retained data.")).toBeVisible();
   await expect(page.getByRole("switch", { name: /Retired Plugin/ })).toBeChecked();
-  await expect(page.locator(".module-choice").filter({ has: page.getByRole("switch", { name: "Retired Plugin", exact: true }) }).getByText("Plugin", { exact: true })).toBeVisible();
+  await expect(page.locator(".module-choice").filter({ has: page.getByRole("switch", { name: "Retired Plugin", exact: true }) }).getByText("Git repository", { exact: true })).toBeVisible();
 
   // An installed module whose database setup has not completed is reported as such, not as a cleanup problem.
   state = snapshot({ enabled: false, selected: true });

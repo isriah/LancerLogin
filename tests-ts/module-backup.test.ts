@@ -38,7 +38,7 @@ test("plugin-free builds keep the first-party backup envelope and an empty plugi
   const db = new BackupDatabase(); t.after(() => db.raw.close()); const client = backupClient(worker, db);
   for (const scope of ["meetings", "roster", "installation"] as const) {
     const backup = await client.backup(scope);
-    assert.equal(backup.schemaVersion, 44);
+    assert.equal(backup.schemaVersion, 45);
     assert.deepEqual(backup.ownership, golden[scope].ownership, `${scope} ownership matches the schema 44 envelope`);
     assert.deepEqual(Object.keys(backup.tables), golden[scope].tables);
     // Schema 43 differs from the schema 41 and 42 envelope only by Carpool, and schema 44 from schema 43 only by Outreach:

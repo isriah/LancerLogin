@@ -9,8 +9,9 @@ const loadedAt = Date.now();
 import { InfoHeading } from "./info-tip";
 
 /**
- * The durable back up, confirm, start and progress flow. mode "modules" prepares the apply-plugin-changes request from
- * Settings > Modules; either card shows whichever request is active, labelled by that request's own mode.
+ * The durable back up, confirm, start and progress flow. mode "release" is Settings > Updates and handles release updates
+ * only; mode "modules" is Apply changes on Settings > Modules and handles module-changes requests only. Each card leaves
+ * the other's request to it and only points there, since one active request blocks preparing another.
  */
 export function WebUpdateCard({ current, served, running, converged, reloadAvailable, available, workflowUrl, latestTag, releaseUrl, releaseNotes, mode = "release", onStatus }: { current: string; served: string; running: string; converged: boolean; reloadAvailable: boolean; available: boolean; workflowUrl: string; latestTag?: string; releaseUrl?: string; releaseNotes?: string; mode?: "release" | "modules"; onStatus?: (status: WebUpdateResponse) => void }) {
   const [status, setStatus] = useState<WebUpdateResponse>();
@@ -23,8 +24,13 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
   const confirmation = useRef<HTMLInputElement>(null);
   const splitStatus = Boolean(status && ("activeRequest" in status || "latestCompletedRequest" in status));
   const legacyRequest = status?.request ?? undefined;
-  const request: WebUpdateRequest | undefined = splitStatus ? status?.activeRequest ?? undefined : legacyRequest && !isTerminalWebUpdate(legacyRequest) ? legacyRequest : undefined;
-  const previousRequest: WebUpdateRequest | undefined = splitStatus ? status?.latestCompletedRequest ?? undefined : legacyRequest && isTerminalWebUpdate(legacyRequest) ? legacyRequest : undefined;
+  const activeRequest: WebUpdateRequest | undefined = splitStatus ? status?.activeRequest ?? undefined : legacyRequest && !isTerminalWebUpdate(legacyRequest) ? legacyRequest : undefined;
+  const completedRequest: WebUpdateRequest | undefined = splitStatus ? status?.latestCompletedRequest ?? undefined : legacyRequest && isTerminalWebUpdate(legacyRequest) ? legacyRequest : undefined;
+  const own = (value?: WebUpdateRequest) => Boolean(value) && (value!.mode === "modules") === (mode === "modules");
+  const request = own(activeRequest) ? activeRequest : undefined;
+  const previousRequest = own(completedRequest) ? completedRequest : undefined;
+  // The other card's request: shown only as a pointer to where it is followed.
+  const foreign = activeRequest && !request ? activeRequest : undefined;
   async function read(path: string, body?: object): Promise<WebUpdateResponse> {
     const response = await fetch(`${apiBaseUrl}${path}`, { credentials: "include", cache: "no-store", ...(body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
     const result = await response.json() as WebUpdateResponse & { code?: string; error?: string };
@@ -78,7 +84,7 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
   }
   const prepared = request?.state === "prepared";
   const expired = prepared && Date.parse(request.expiresAt) <= Date.now();
-  const repeatable = !request;
+  const repeatable = !request && !foreign;
   const exported = Boolean(prepared && request.backupExported);
   const diagnostics = diagnosticUrl(request?.runUrl) ?? diagnosticUrl(previousRequest?.runUrl) ?? diagnosticUrl(status?.workflowUrl || workflowUrl);
   const notesUrl = diagnosticUrl(releaseUrl);
@@ -89,19 +95,22 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
   const modules = mode === "modules";
   const requestModules = request?.mode === "modules";
   const tone = error || request?.state === "recovery_required" ? "error" : reloadReady ? "success" : request ? "warning" : "neutral";
-  const idle = pluginReload ? "Plugin changes are installed. Reload this tab to use them." : reloadAvailable ? `Dashboard ${current} is installed. Reload this tab to use it.` : !converged ? "The Worker and Pages releases do not match yet. Wait for deployment verification before updating." : modules ? (available ? "Plugin changes are committed but not deployed. Back up and apply them to this installation." : "No plugin changes are waiting to be applied.") : `Dashboard ${current} is installed.`;
-  const titleId = modules ? "plugin-update-title" : "dashboard-update-title";
+  const idle = pluginReload ? "Module changes are installed. Reload this tab to use them." : reloadAvailable ? `Dashboard ${current} is installed. Reload this tab to use it.` : !converged ? "The Worker and Pages releases do not match yet. Wait for deployment verification before updating." : modules ? (available ? "Module changes are committed but not deployed. Apply changes backs up this installation and deploys them." : "No module changes are waiting to be applied.") : `Dashboard ${current} is installed.`;
+  const foreignText = foreign ? modules ? "A release update is in progress. Follow it in Settings > Updates; module changes can be applied after it finishes." : "Module changes are being applied from Settings > Modules. Follow them there; release updates are available after they finish." : "";
+  const titleId = modules ? "module-apply-title" : "dashboard-update-title";
   // Without the optional dispatch credential nothing is broken: updates run from the deployment repository instead.
   const notSetUp = setup?.dispatchCredential.state === "missing";
   const fixes = webUpdateErrorLinks(errorCode || (error ? "" : request?.errorCode), setup?.repository);
   const expiryNotice = credentialExpiryNotice(setup?.dispatchCredential);
   return <article className="web-update-card" aria-labelledby={titleId}>
-    <div className="panel-heading">{modules ? <h3 id={titleId}>Apply plugin changes</h3> : <InfoHeading id={titleId} info="Cloudflare dashboard installation">Dashboard</InfoHeading>}
-      {(repeatable || expired) && !reloadReady && <button className="primary-button" type="button" disabled={busy || !status || Boolean(error) || !available || !workflowUrl || !converged || notSetUp} onClick={() => void prepare()}>{busy ? "Preparing update…" : modules ? "Back up and apply plugin changes" : "Back up and begin update"}</button>}
+    <div className="panel-heading">{modules ? <h3 id={titleId}>Apply changes</h3> : <InfoHeading id={titleId} info="Cloudflare dashboard installation">Dashboard</InfoHeading>}
+      {(repeatable || expired) && !reloadReady && <button className="primary-button" type="button" disabled={busy || !status || Boolean(error) || !available || !workflowUrl || !converged || notSetUp} onClick={() => void prepare()}>{busy ? "Preparing update…" : modules ? "Apply changes" : "Back up and begin update"}</button>}
     </div>
-    {modules ? <p className="field-help">Redeploys the installed release, {current}, with the committed plugin selection. It uses the same backup, approval, maintenance and verification steps as an update.</p>
+    {modules ? <p className="field-help">Redeploys the installed release, {current}, with the committed module changes. It uses the same backup, approval, maintenance and verification steps as an update.</p>
       : <div className="version-grid"><div><span>Installed</span><strong>{current}</strong><small>Pages serves {served || "Unknown"}. This tab runs {running || "Unknown"}.</small></div><div><span>Available</span><strong>{latestTag ? formatVersion(latestTag) : "Unavailable"}</strong>{notesUrl && <a href={notesUrl} target="_blank" rel="noreferrer">Read release notes</a>}</div></div>}
-    <p className="ui-status web-update-status" data-tone={tone} role="status">{error || (request ? webUpdateStatus(expired ? { ...request, state: "expired" } : request) : idle)}</p>
+    <p className="ui-status web-update-status" data-tone={tone} role="status">{error || (request ? webUpdateStatus(expired ? { ...request, state: "expired" } : request) : foreignText || idle)}</p>
+    {foreign && <a className="web-update-elsewhere" href={modules ? "/settings/updates" : "/settings/modules"}>{modules ? "Open Settings > Updates" : "Open Settings > Modules"}</a>}
+    {modules && previousRequest && !request && <p className="field-help web-update-last-result">Last apply: {webUpdateStatus(previousRequest)}</p>}
     <FixLinks label="Fix this update problem" links={fixes} />
     {notSetUp && !request && !reloadReady && <DashboardUpdatesNotSetUp repository={setup!.repository} />}
     {expiryNotice && <p className="field-help web-update-credential-notice">{expiryNotice}</p>}
@@ -109,12 +118,12 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
     {prepared && !expired && <div className="web-update-backup">
       <p id="web-backup-help" className="field-help">Prepared until {new Date(request.expiresAt).toLocaleString()}. Keep the backup file securely outside this installation. Refreshing never confirms that you saved it.</p>
       <button className={exported ? "quiet-button" : "primary-button"} type="button" disabled={busy} onClick={() => void backup()}>{busy ? "Working…" : exported ? "Download backup again" : "Download entire-installation backup"}</button>
-      {exported && <><label className="web-update-confirmation"><input ref={confirmation} type="checkbox" checked={saved} disabled={busy} aria-describedby="web-backup-help" onChange={(event) => setSaved(event.target.checked)} />I saved this update’s entire-installation backup file securely.</label><button className="primary-button" type="button" disabled={busy || !saved || Boolean(error)} onClick={() => void start()}>{busy ? "Starting update…" : requestModules ? "Apply plugin changes" : `Start update to ${request.targetTag}`}</button></>}
+      {exported && <><label className="web-update-confirmation"><input ref={confirmation} type="checkbox" checked={saved} disabled={busy} aria-describedby="web-backup-help" onChange={(event) => setSaved(event.target.checked)} />I saved this update’s entire-installation backup file securely.</label><button className="primary-button" type="button" disabled={busy || !saved || Boolean(error)} onClick={() => void start()}>{busy ? "Starting update…" : requestModules ? "Start applying changes" : `Start update to ${request.targetTag}`}</button></>}
     </div>}
     {reloadReady && <button className="primary-button" type="button" onClick={() => window.location.reload()}>Reload updated dashboard</button>}
     <button className="quiet-button" type="button" disabled={busy} onClick={() => void refresh()}>Refresh update status</button>
     {notesTag && !modules && !requestModules && <section className="web-update-notes" aria-label="Update release notes"><h3>Release notes for {notesTag}</h3><p>{notes || (notesUrl ? "Read the release notes using the link above." : "No release notes supplied.")}</p></section>}
-    <details className="web-update-diagnostics"><summary>Diagnostics and manual recovery</summary>{previousRequest && <section aria-label="Previous update"><h3>{previousRequest.mode === "modules" ? `Previous plugin changes for ${previousRequest.targetTag}` : `Previous update to ${previousRequest.targetTag}`}</h3><p className="field-help">{webUpdateStatus(previousRequest)}</p><p>{previousRequest.releaseNotes}</p></section>}{request && <p className="field-help">Stage: {request.stage.replaceAll("_", " ")}. Request: {request.requestId}. Last updated {new Date(request.updatedAt).toLocaleString()}.</p>}{diagnostics && <a href={diagnostics} target="_blank" rel="noreferrer">Open diagnostic workflow / manual recovery</a>}</details>
+    <details className="web-update-diagnostics"><summary>Diagnostics and manual recovery</summary>{previousRequest && <section aria-label="Previous update"><h3>{previousRequest.mode === "modules" ? `Previous module changes for ${previousRequest.targetTag}` : `Previous update to ${previousRequest.targetTag}`}</h3><p className="field-help">{webUpdateStatus(previousRequest)}</p><p>{previousRequest.releaseNotes}</p></section>}{request && <p className="field-help">Stage: {request.stage.replaceAll("_", " ")}. Request: {request.requestId}. Last updated {new Date(request.updatedAt).toLocaleString()}.</p>}{diagnostics && <a href={diagnostics} target="_blank" rel="noreferrer">Open diagnostic workflow / manual recovery</a>}</details>
     {!request && !previousRequest && !modules && <details className="settings-disclosure"><summary>Update steps</summary><ol className="update-steps"><li>Review the available release and prepare your update.</li><li>Download the entire-installation backup and confirm the file was saved.</li><li>Start once here. Track GitHub approval, deployment and health verification.</li><li>Reload only after the installation is verified.</li></ol></details>}
   </article>;
 }

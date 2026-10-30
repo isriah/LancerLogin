@@ -10,7 +10,7 @@
 import { WebUpdateError, absentSelectionSha, startedUpdate, type WebUpdateEnv } from "./web-updates.ts";
 import { firstPartyModules } from "../../../packages/shared/src/module-platform.ts";
 import { supportedModuleContractVersions } from "../../../packages/shared/src/module-contract.ts";
-import { allowlistFileName, entryTrack, parseAllowlist, sourceAllowed, type AllowedSource, type Allowlist, parseModuleSource, parseSelectionFile, satisfiesCoreRange, selectionFileName, selectionTracks, serializeSelection, SelectionError, moduleIdPattern, commitPattern, type SelectionDocument, type SelectionEntry, type SelectionTrack } from "../../../packages/shared/src/module-selection.ts";
+import { allowlistFileName, entryTrack, parseAllowlist, sourceAllowed, type AllowedSource, type Allowlist, declaredModuleIds, multipleModulesMessage, parseModuleSource, parseSelectionFile, satisfiesCoreRange, selectionFileName, selectionTracks, serializeSelection, SelectionError, moduleIdPattern, commitPattern, type SelectionDocument, type SelectionEntry, type SelectionTrack } from "../../../packages/shared/src/module-selection.ts";
 import { compareReleaseVersions, newestPluginRelease, parseReleaseVersion, pluginReleaseKind } from "../../../packages/shared/src/release-policy.mjs";
 import officialModulePins from "../../../scripts/official-modules.json" with { type: "json" };
 import { externalModuleSources } from "./generated/external-module-data.ts";
@@ -28,8 +28,8 @@ export { allowlistFileName, parseAllowlist, sourceAllowed, type AllowedSource, t
 export const selectionBranch = "main";
 /** A change needs a sign-in or re-authentication within this window. */
 export const reauthenticationWindowMs = 10 * 60_000;
-export const trustStatement = "A plugin runs inside this installation's Worker and dashboard with the same access as LancerLogin: it can read and change all installation data and make network requests. LancerLogin does not review external plugins. Add only plugins whose source you trust, pinned to a commit you have reviewed.";
-export const undeclaredNote = "Routes, jobs and Discord commands are declared in plugin code. LancerLogin does not run plugin code to show them here; composition checks them for conflicts before the change is applied, and refuses the change if any conflict.";
+export const trustStatement = "A module from a git repository runs inside this installation's Worker and dashboard with the same access as LancerLogin: it can read and change all installation data and make network requests. LancerLogin does not review modules from other repositories. Add only modules whose source you trust, pinned to a commit you have reviewed.";
+export const undeclaredNote = "Routes, jobs and Discord commands are declared in the module's code. LancerLogin does not run module code to show them here; composition checks them for conflicts before the change is applied, and refuses the change if any conflict.";
 
 function fail(status: number, code: string, message: string): never { throw new WebUpdateError(status, code, message); }
 const githubHeaders = (token?: string, accept = "application/vnd.github+json") => {
@@ -50,8 +50,8 @@ export function selectionCredentialState(env: PluginSelectionEnv): { state: Cred
 }
 function selectionToken(env: PluginSelectionEnv): string {
   const { state } = selectionCredentialState(env);
-  if (state === "missing") fail(503, "selection_credential_required", "Plugin management from the dashboard is not set up. Store a GitHub token as the production environment secret LANCERLOGIN_MODULE_SELECTION_TOKEN, then run the Refresh web update credential workflow.");
-  if (state === "expired") fail(503, "selection_credential_expired", "The plugin selection credential has expired. Renew LANCERLOGIN_MODULE_SELECTION_TOKEN, then run the Refresh web update credential workflow.");
+  if (state === "missing") fail(503, "selection_credential_required", "Adding, updating and removing modules from the dashboard is not set up. Store a GitHub token as the production environment secret LANCERLOGIN_MODULE_SELECTION_TOKEN, then run the Refresh web update credential workflow.");
+  if (state === "expired") fail(503, "selection_credential_expired", "The module selection credential has expired. Renew LANCERLOGIN_MODULE_SELECTION_TOKEN, then run the Refresh web update credential workflow.");
   return env.MODULE_SELECTION_TOKEN!;
 }
 
@@ -65,9 +65,9 @@ async function privateGitHub(env: PluginSelectionEnv, path: string, init: Reques
   catch { return fail(503, "provider_unavailable", "GitHub is unavailable. No change was made."); }
   observeCredentialResponse("selection", token, result);
   if (result.status >= 300 && result.status < 400) fail(503, "provider_unavailable", "GitHub returned an unexpected redirect. The request was not forwarded.");
-  if (result.status === 401) fail(503, "selection_credential_rejected", "GitHub rejected the plugin selection credential. Replace LANCERLOGIN_MODULE_SELECTION_TOKEN, then run the Refresh web update credential workflow.");
+  if (result.status === 401) fail(503, "selection_credential_rejected", "GitHub rejected the module selection credential. Replace LANCERLOGIN_MODULE_SELECTION_TOKEN, then run the Refresh web update credential workflow.");
   if (result.status === 429 || result.status === 403 && (result.headers.get("x-ratelimit-remaining") === "0" || result.headers.has("retry-after"))) fail(429, "cooldown", "GitHub requires a cooldown. Try again later.");
-  if (result.status === 403) fail(503, "selection_credential_permission", "The plugin selection credential is missing Contents access to the private deployment repository.");
+  if (result.status === 403) fail(503, "selection_credential_permission", "The module selection credential is missing Contents access to the private deployment repository.");
   return result;
 }
 function decodeBase64Text(value: string): string {
@@ -90,8 +90,8 @@ async function readRepositoryFile(env: PluginSelectionEnv, name: string): Promis
 }
 async function requirePrivateRepository(env: PluginSelectionEnv): Promise<void> {
   const response = await privateGitHub(env, `/repos/${repository(env)}`);
-  if (response.status === 404) fail(503, "selection_credential_permission", "The plugin selection credential cannot access the private deployment repository.");
-  if (!response.ok || (await response.json() as { private?: boolean }).private !== true) fail(503, "not_private", "Plugin management requires the configured private deployment repository.");
+  if (response.status === 404) fail(503, "selection_credential_permission", "The module selection credential cannot access the private deployment repository.");
+  if (!response.ok || (await response.json() as { private?: boolean }).private !== true) fail(503, "not_private", "Module management requires the configured private deployment repository.");
 }
 
 export type SelectionSnapshot = { sha: string; present: boolean; document: SelectionDocument };
@@ -208,7 +208,7 @@ function readTrack(value: unknown): SelectionTrack | undefined {
   return value as SelectionTrack | undefined;
 }
 function readChangeInput(input: Record<string, unknown>, extra: readonly string[]): ChangeInput {
-  if (Object.keys(input).some((key) => !["action", "id", "source", "commit", "track", ...extra].includes(key))) fail(400, "invalid_request", "Only the plugin action, module ID, source, commit and release track are accepted.");
+  if (Object.keys(input).some((key) => !["action", "id", "source", "commit", "track", ...extra].includes(key))) fail(400, "invalid_request", "Only the change action, module ID, source, commit and release track are accepted.");
   if (!["add", "upgrade", "remove"].includes(String(input.action))) fail(400, "invalid_request", "Choose add, upgrade or remove.");
   if (typeof input.id !== "string" || !moduleIdPattern.test(input.id) || input.id.length > 64) fail(400, "invalid_request", "Enter a module ID of lowercase letters, digits and single hyphens.");
   const action = input.action as ChangeAction;
@@ -226,7 +226,7 @@ function readChangeInput(input: Record<string, unknown>, extra: readonly string[
 function proposedSelection(current: SelectionDocument, change: ChangeInput, installed: InstalledPlugins, phases: Map<string, Phase>): { document: SelectionDocument; previous?: SelectionEntry } {
   const previous = current.modules.find((entry) => entry.id === change.id);
   const official = installed[change.id]?.official === true;
-  if (firstPartyIds.has(change.id)) fail(409, "first_party_module", `${change.id} is part of LancerLogin and cannot be selected as a plugin.`);
+  if (firstPartyIds.has(change.id)) fail(409, "first_party_module", `${change.id} is built into LancerLogin and cannot be added from a repository.`);
   let modules: SelectionEntry[];
   if (change.action === "add") {
     if (previous) fail(409, "already_selected", `${change.id} is already selected. Upgrade it instead.`);
@@ -239,11 +239,11 @@ function proposedSelection(current: SelectionDocument, change: ChangeInput, inst
     const entry = { id: change.id, source: change.source!, commit: change.commit!, ...(track === "nightly" ? { track: "nightly" as const } : {}) };
     modules = previous ? current.modules.map((item) => item.id === change.id ? entry : item) : [...current.modules, entry];
   } else {
-    if (!previous) fail(409, "not_selected", official ? `${change.id} is included with LancerLogin. Opt out of official modules in the private repository to remove it.` : `${change.id} is not in the plugin selection.`);
+    if (!previous) fail(409, "not_selected", official ? `${change.id} is included with LancerLogin. Opt out of official modules in the private repository to remove it.` : `${change.id} is not in the module selection.`);
     // Removing an official module's pin returns it to LancerLogin's pin; any other removal takes the module's code away.
     const removesCode = !official || current.officialModules === false;
     const phase = phases.get(change.id);
-    if (removesCode && (phase === "enabled" || phase === "retained" || phase === "deleting")) fail(409, "module_in_use", phase === "enabled" ? `Disable ${change.id} before removing its plugin.` : `${change.id} still has retained data. Remove its plugin after the retained data is deleted.`);
+    if (removesCode && (phase === "enabled" || phase === "retained" || phase === "deleting")) fail(409, "module_in_use", phase === "enabled" ? `Turn ${change.id} off before removing it.` : `${change.id} still has retained data. Remove it after the retained data is deleted.`);
     modules = current.modules.filter((item) => item.id !== change.id);
   }
   // Official module sources may not be reused by another selected module, exactly as composition refuses.
@@ -259,6 +259,8 @@ function proposedSelection(current: SelectionDocument, change: ChangeInput, inst
 export type PluginMetadata = {
   state: "compatible" | "incompatible" | "unknown"; reason?: string;
   version?: string; contract?: number; core?: string; tablePrefix?: string; migrations?: string[]; adoptedCoreMigrations?: number;
+  /** Set when the repository declares more than one module: such a repository is refused, never just marked incompatible. */
+  multipleModules?: string[];
 };
 /**
  * Read a plugin's package.json and migration names at the pinned commit through GitHub's public API, without credentials
@@ -273,17 +275,19 @@ export async function readPluginMetadata(source: string, commit: string, moduleI
     catch { return undefined; }
   };
   const response = await get("package.json", "application/vnd.github.raw+json");
-  if (!response?.ok) return { state: "unknown", reason: response?.status === 404 ? "The plugin's package.json was not found at that commit, or the repository is private. Composition checks it before the change is applied." : "GitHub could not be reached to inspect the plugin. Composition checks it before the change is applied." };
+  if (!response?.ok) return { state: "unknown", reason: response?.status === 404 ? "The module repository's package.json was not found at that commit, or the repository is private. Composition checks it before the change is applied." : "GitHub could not be reached to inspect the module repository. Composition checks it before the change is applied." };
   let pkg: { version?: unknown; lancerlogin?: { moduleId?: unknown; contract?: unknown; core?: unknown; tablePrefix?: unknown; migrations?: unknown; adoptedCoreMigrations?: unknown } };
-  try { pkg = JSON.parse((await response.text()).slice(0, 65_536)); } catch { return { state: "incompatible", reason: "The plugin's package.json is not valid JSON." }; }
+  try { pkg = JSON.parse((await response.text()).slice(0, 65_536)); } catch { return { state: "incompatible", reason: "The module repository's package.json is not valid JSON." }; }
   const field = pkg?.lancerlogin;
-  if (!field || typeof field !== "object") return { state: "incompatible", reason: "The plugin's package.json has no lancerlogin field." };
+  if (!field || typeof field !== "object") return { state: "incompatible", reason: "The module repository's package.json has no lancerlogin field." };
+  const declared = declaredModuleIds(field);
+  if (declared) return { state: "incompatible", reason: multipleModulesMessage(declared), multipleModules: declared };
   const metadata: PluginMetadata = { state: "compatible", version: typeof pkg.version === "string" ? pkg.version.slice(0, 40) : undefined, contract: typeof field.contract === "number" ? field.contract : undefined, core: typeof field.core === "string" ? field.core.slice(0, 200) : undefined, tablePrefix: typeof field.tablePrefix === "string" ? field.tablePrefix.slice(0, 40) : undefined, adoptedCoreMigrations: Array.isArray(field.adoptedCoreMigrations) ? field.adoptedCoreMigrations.length : undefined };
-  if (field.moduleId !== moduleId) return { ...metadata, state: "incompatible", reason: `The plugin declares module ID ${JSON.stringify(field.moduleId)}, not ${moduleId}.` };
-  if (typeof field.contract !== "number" || !supportedModuleContractVersions.includes(field.contract)) return { ...metadata, state: "incompatible", reason: `The plugin needs module contract ${String(field.contract)}; this LancerLogin supports ${supportedModuleContractVersions.join(", ")}.` };
+  if (field.moduleId !== moduleId) return { ...metadata, state: "incompatible", reason: `The repository declares module ID ${JSON.stringify(field.moduleId)}, not ${moduleId}.` };
+  if (typeof field.contract !== "number" || !supportedModuleContractVersions.includes(field.contract)) return { ...metadata, state: "incompatible", reason: `The module needs module contract ${String(field.contract)}; this LancerLogin supports ${supportedModuleContractVersions.join(", ")}.` };
   if (!coreVersion || !parseReleaseVersion(coreVersion)) { metadata.state = "unknown"; metadata.reason = "This installation is not running an official release, so its Core range cannot be checked."; }
   else {
-    try { if (!satisfiesCoreRange(coreVersion, field.core)) return { ...metadata, state: "incompatible", reason: `The plugin supports LancerLogin ${String(field.core)}; this installation runs ${coreVersion}.` }; }
+    try { if (!satisfiesCoreRange(coreVersion, field.core)) return { ...metadata, state: "incompatible", reason: `The module supports LancerLogin ${String(field.core)}; this installation runs ${coreVersion}.` }; }
     catch (error) { if (error instanceof SelectionError) return { ...metadata, state: "incompatible", reason: error.message }; throw error; }
   }
   if (typeof field.migrations === "string" && /^\.\/[A-Za-z0-9_./-]{1,100}$/.test(field.migrations) && !field.migrations.split("/").includes("..")) {
@@ -294,6 +298,11 @@ export async function readPluginMetadata(source: string, commit: string, moduleI
   return metadata;
 }
 
+/** A plugin supplies exactly one module: a repository that declares several is refused outright. */
+function refuseMultipleModules(metadata: PluginMetadata | undefined): void {
+  if (metadata?.multipleModules) fail(422, "multiple_modules", metadata.reason ?? multipleModulesMessage(metadata.multipleModules));
+}
+
 /** Confirmation details for a proposed change. Nothing is committed. */
 export async function reviewPluginChange(env: PluginSelectionEnv, input: Record<string, unknown>, installed: InstalledPlugins = externalModuleSources) {
   const change = readChangeInput(input, []);
@@ -301,8 +310,9 @@ export async function reviewPluginChange(env: PluginSelectionEnv, input: Record<
   const [selection, phases] = [await readSelection(env), await modulePhases(db)];
   const allowlist = await readAllowlist(env);
   const { previous } = proposedSelection(selection.document, change, installed, phases);
-  if (change.source && !sourceAllowed(change.source, allowlist)) fail(403, "source_not_allowed", allowlist.state === "invalid" ? `${allowlistFileName} is invalid, so no plugin source can be selected. Repair it in the private deployment repository.` : "This installation's source allowlist does not include that plugin host and owner.");
+  if (change.source && !sourceAllowed(change.source, allowlist)) fail(403, "source_not_allowed", allowlist.state === "invalid" ? `${allowlistFileName} is invalid, so no module source can be selected. Repair it in the private deployment repository.` : "This installation's source allowlist does not include that plugin host and owner.");
   const metadata = change.action === "remove" ? undefined : await readPluginMetadata(change.source!, change.commit!, change.id, env.RELEASE_VERSION);
+  refuseMultipleModules(metadata);
   return {
     action: change.action, id: change.id, source: change.source ?? previous?.source ?? installed[change.id]?.source ?? null, commit: change.commit ?? null,
     previousCommit: previous?.commit ?? installed[change.id]?.commit ?? null, official: installed[change.id]?.official === true,
@@ -316,16 +326,18 @@ export async function reviewPluginChange(env: PluginSelectionEnv, input: Record<
 export async function commitPluginChange(env: PluginSelectionEnv, principal: Principal, input: Record<string, unknown>, installed: InstalledPlugins = externalModuleSources) {
   const change = readChangeInput(input, ["selectionSha", "trustConfirmed"]);
   if (typeof input.selectionSha !== "string" || !commitPattern.test(input.selectionSha)) fail(400, "invalid_request", "Review the change before confirming it.");
-  if (change.action !== "remove" && input.trustConfirmed !== true) fail(400, "trust_confirmation_required", "Confirm that you trust this plugin's source and reviewed the pinned commit.");
+  if (change.action !== "remove" && input.trustConfirmed !== true) fail(400, "trust_confirmation_required", "Confirm that you trust this module's source and reviewed the pinned commit.");
   if (change.action === "remove" && input.trustConfirmed !== undefined && input.trustConfirmed !== true) fail(400, "invalid_request", "Removal needs no trust confirmation.");
-  if (!freshUntil(principal)) fail(401, "reauthentication_required", "Confirm your identity again before changing plugins.");
+  if (!freshUntil(principal)) fail(401, "reauthentication_required", "Confirm your identity again before adding, updating or removing modules.");
   const db = env.DB ?? fail(503, "not_configured", "D1 is not linked.");
-  if (await startedUpdate(env)) fail(409, "update_active", "A web update is in progress. Change plugins after it finishes.");
+  if (await startedUpdate(env)) fail(409, "update_active", "A web update is in progress. Change modules after it finishes.");
   const selection = await readSelection(env);
-  if (selection.sha !== input.selectionSha) fail(409, "selection_changed", "The plugin selection changed since you reviewed it. Review the change again.");
+  if (selection.sha !== input.selectionSha) fail(409, "selection_changed", "The module selection changed since you reviewed it. Review the change again.");
   const allowlist = await readAllowlist(env);
-  if (change.source && !sourceAllowed(change.source, allowlist)) fail(403, "source_not_allowed", "This installation's source allowlist does not permit that plugin source.");
+  if (change.source && !sourceAllowed(change.source, allowlist)) fail(403, "source_not_allowed", "This installation's source allowlist does not permit that module source.");
   const { document, previous } = proposedSelection(selection.document, change, installed, await modulePhases(db));
+  // Checked again at commit, so a direct request cannot pin a repository the review would refuse.
+  if (change.action !== "remove") refuseMultipleModules(await readPluginMetadata(change.source!, change.commit!, change.id, env.RELEASE_VERSION));
   const short = (sha?: string) => sha ? sha.slice(0, 12) : "";
   const track = change.action === "remove" ? null : entryTrack(document.modules.find((entry) => entry.id === change.id));
   const previousTrack = previous || installed[change.id] ? entryTrack(previous) : null;
@@ -335,8 +347,8 @@ export async function commitPluginChange(env: PluginSelectionEnv, principal: Pri
     : `Remove plugin ${change.id}`;
   const body = { message: `${subject}\n\nRequested in LancerLogin Settings > Modules by Admin user ${principal.userId}.`, content: encodeBase64Text(serializeSelection(document)), branch: selectionBranch, ...(selection.present ? { sha: selection.sha } : {}) };
   const response = await privateGitHub(env, `/repos/${repository(env)}/contents/${selectionFileName}`, { method: "PUT", body: JSON.stringify(body) });
-  if (response.status === 409 || response.status === 422) fail(409, "selection_changed", "The plugin selection changed in the private repository. Review the change again.");
-  if (response.status === 404) fail(503, "selection_credential_permission", "The plugin selection credential cannot write to the private deployment repository.");
+  if (response.status === 409 || response.status === 422) fail(409, "selection_changed", "The module selection changed in the private repository. Review the change again.");
+  if (response.status === 404) fail(503, "selection_credential_permission", "The module selection credential cannot write to the private deployment repository.");
   const result = response.ok ? await response.json().catch(() => undefined) as { content?: { sha?: string }; commit?: { sha?: string } } | undefined : undefined;
   if (!result?.content?.sha || !result.commit?.sha) fail(503, "commit_unconfirmed", "GitHub did not confirm the commit. Reload to see the current selection before trying again.");
   const now = new Date().toISOString(); const auditId = crypto.randomUUID();
@@ -366,7 +378,7 @@ export async function newestTrackRelease(source: string, track: SelectionTrack):
     try { return await fetch(`https://api.github.com/repos/${owner}/${name}${path}`, { headers: githubHeaders(), redirect: "manual", signal: AbortSignal.timeout(4_000) }); }
     catch { return undefined; }
   };
-  const unavailable = (response: Response | undefined) => ({ track, release: null, reason: response?.status === 404 ? "The plugin's releases were not found, or its repository is private. Enter the commit you reviewed." : response?.status === 403 || response?.status === 429 ? "GitHub requires a cooldown before releases can be looked up. Try again later, or enter the commit you reviewed." : "GitHub could not be reached to look up releases. Enter the commit you reviewed." });
+  const unavailable = (response: Response | undefined) => ({ track, release: null, reason: response?.status === 404 ? "The module's releases were not found, or its repository is private. Enter the commit you reviewed." : response?.status === 403 || response?.status === 429 ? "GitHub requires a cooldown before releases can be looked up. Try again later, or enter the commit you reviewed." : "GitHub could not be reached to look up releases. Enter the commit you reviewed." });
   // The highest version wins, never the most recent publication, so read every page (bounded) before choosing.
   const releases: unknown[] = [];
   for (let page = 1; page <= 10; page++) {
@@ -496,5 +508,5 @@ export async function requiredModuleMigrations(env: PluginSelectionEnv, installe
 }
 export async function requireNoModuleMigration(env: PluginSelectionEnv, installed?: InstalledPlugins): Promise<void> {
   const required = await requiredModuleMigrations(env, installed);
-  if (required.length) fail(409, "module_migration_required", `${required.map((module) => module.label).join(" and ")} ${required.length === 1 ? "is" : "are"} in use and now ${required.length === 1 ? "a separate plugin" : "separate plugins"}. Keep ${required.length === 1 ? "it" : "them"} by adding the plugin in Settings > Modules, or disable ${required.length === 1 ? "it" : "them"} there, before updating.`);
+  if (required.length) fail(409, "module_migration_required", `${required.map((module) => module.label).join(" and ")} ${required.length === 1 ? "is" : "are"} in use and now ${required.length === 1 ? "a separate module" : "separate modules"}. Keep ${required.length === 1 ? "it" : "them"} by adding ${required.length === 1 ? "it" : "them"} in Settings > Modules, or turn ${required.length === 1 ? "it" : "them"} off there, before updating.`);
 }

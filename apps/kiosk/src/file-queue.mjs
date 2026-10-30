@@ -302,8 +302,10 @@ export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 10
           if (events[0]?.eventId !== event.eventId) throw new Error("Attendance queue changed during replay");
           // Acknowledgements are batched. A crash before the batch is written
           // resends those scans; the server dedupes them on kiosk_event_id.
+          // A scan refused as a possible wrong match recorded nothing and needs no review. It is journaled as a
+          // duplicate so releases that know only these three results can still read the journal.
           const item = result?.rejected ? { eventId: event.eventId, result: "rejected", record: rejectionRecord(event, result) }
-            : { eventId: event.eventId, result: result?.duplicate ? "duplicate" : "accepted" };
+            : { eventId: event.eventId, result: result?.duplicate || result?.rescan ? "duplicate" : "accepted" };
           apply({ t: "d", items: [item] });
           bufferedAcks.push(item);
           if (bufferedAcks.length >= ackBatch) { await flushAcks(); await maybeCompact(); }

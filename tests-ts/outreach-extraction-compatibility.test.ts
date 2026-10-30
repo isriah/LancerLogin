@@ -110,7 +110,7 @@ test("without the plugin, retained Outreach data stays out of new backups, keeps
       VALUES('primary','entry-1','member','activity-1','2026-02-01','UTC','10:00','11:00',1769940000000,1769943600000,0,0,60,'counted','staff','staff_recorded',0,'2026-02-01','2026-02-01');`);
   const client = backupClient(worker, db);
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 44); assert.deepEqual(backup.externalModules, []);
+  assert.equal(backup.schemaVersion, 45); assert.deepEqual(backup.externalModules, []);
   for (const table of moduleKeyed) assert.equal(backup.tables[table].some((row: Record<string, unknown>) => row.module_id === "hour-tracking"), false, table);
   assert.doesNotMatch(JSON.stringify(backup), /hour-tracking|hours_|Synthetic retained activity/);
 

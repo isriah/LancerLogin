@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
-import { openActiveMeetingCalendar } from "./meeting-calendar-fixture";
+import { calendarDay, openActiveMeetingCalendar, selectCalendarDay } from "./meeting-calendar-fixture";
 import { pairedViews } from "./paired-views";
 
 test("Dashboard owns meeting navigation and remembers the selected browser", async ({ page }) => {
@@ -332,9 +332,8 @@ test.describe("meeting creation refresh", () => {
 
     await page.goto("/dashboard");
     if (start.getUTCMonth() !== new Date(now).getUTCMonth()) await page.getByRole("button", { name: "Next month of meetings" }).click();
-    const selectedDay = page.getByRole("button", { name: `${start.toLocaleDateString("en-US", { timeZone: "UTC", dateStyle: "long" })}, 1 meeting`, exact: true });
-    await selectedDay.click();
-    await expect(selectedDay).toHaveAttribute("aria-pressed", "true");
+    const selectedDay = calendarDay(page, start.toLocaleDateString("en-US", { timeZone: "UTC", dateStyle: "long" }), 1);
+    await selectCalendarDay(page, selectedDay, start.toISOString().slice(0, 10));
     await page.getByRole("button", { name: "Add meeting" }).click();
     let dialog = page.getByRole("dialog", { name: "Create meeting" });
     await expect(dialog.getByLabel("Date", { exact: true })).toHaveValue(start.toISOString().slice(0, 10));

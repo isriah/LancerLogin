@@ -317,10 +317,18 @@ test("review shows source, commit, compatibility and declarations without runnin
     assert.equal(review.source, carpoolSource); assert.equal(review.commit, pluginCommit);
     assert.equal(review.metadata?.state, "compatible"); assert.equal(review.metadata?.tablePrefix, "carpool_");
     assert.deepEqual(review.metadata?.migrations, ["0001_carpool.sql"]);
-    assert.match(review.trustStatement, /same access as LancerLogin/); assert.match(review.declaredNote, /does not run plugin code/);
+    assert.match(review.trustStatement, /same access as LancerLogin/); assert.match(review.declaredNote, /does not run module code/);
     assert.equal(review.selectionSha, "0".repeat(40));
     github.pluginPackage = { ...github.pluginPackage as object, lancerlogin: { moduleId: "carpool", contract: 1, core: ">=3.0.0", tablePrefix: "carpool_", entries: {} } };
     assert.equal((await reviewPluginChange(env, add, installed)).metadata?.state, "incompatible");
+    // A repository that declares more than one module is refused, at review and again at commit.
+    const single = github.pluginPackage as { lancerlogin: object };
+    github.pluginPackage = { ...single, lancerlogin: { ...single.lancerlogin, moduleId: ["carpool", "rideshare"] } };
+    await assert.rejects(reviewPluginChange(env, add, installed), { code: "multiple_modules", message: /declares 2 modules \(carpool, rideshare\)\. A module repository must provide exactly one module/ });
+    github.pluginPackage = { ...single, lancerlogin: { ...single.lancerlogin, modules: { carpool: {}, rideshare: {} } } };
+    await assert.rejects(reviewPluginChange(env, add, installed), { code: "multiple_modules" });
+    await assert.rejects(commitPluginChange(env, fresh, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true }, installed), { code: "multiple_modules" });
+    assert.equal(github.calls.some((call) => call.method === "PUT"), false);
     github.pluginPackage = 404;
     assert.equal((await reviewPluginChange(env, add, installed)).metadata?.state, "unknown");
     assert.equal((await reviewPluginChange(env, { ...add, source: "https://git.example.org/example/carpool.git" }, installed)).metadata?.state, "unknown");

@@ -15,16 +15,16 @@
 <main id="main" class="page">
   <h2 id="roles">Roles</h2>
   <p><strong>Admins</strong> manage everything, including settings, access, integrations, modules, data, and updates. <strong>Operators</strong> run the modules they are assigned to: for Attendance, that means meetings, attendance corrections, reports, and kiosk status. Operators can view the roster but not change it. Being on the roster does not give anyone dashboard access.</p>
-  <p>To give someone access, open <span class="ui-path">Settings <span>›</span> Access</span>, create an Admin or Operator account, and optionally link it to their roster entry. Assign Operators to modules in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Manage modules</span>.</p>
+  <p>To give someone access, open <span class="ui-path">Settings <span>›</span> Access</span>, create an Admin or Operator account, and optionally link it to their roster entry. Choose the modules an Operator can use under <strong>Module access</strong> when you edit their account.</p>
 
   <h2 id="navigation">Find your way around</h2>
-  <p>The primary navigation shows <strong>Meetings</strong>, a page for each plugin that is turned on, <strong>Roster</strong>, <strong>Reports</strong>, <strong>Kiosks</strong>, and <strong>Settings</strong>. Admins see these settings pages:</p>
+  <p>The primary navigation shows <strong>Meetings</strong>, a page for each module that is turned on and adds one, <strong>Roster</strong>, <strong>Reports</strong>, <strong>Kiosks</strong>, and <strong>Settings</strong>. Admins see these settings pages:</p>
   <table class="credential-table">
     <thead><tr><th scope="col">Settings page</th><th scope="col">What it controls</th></tr></thead>
     <tbody>
       <tr><td>Organization</td><td>Name, subtitle, logo, and colors.</td></tr>
-      <tr><td>Modules</td><td><strong>Manage modules</strong> turns modules on or off and manages plugins. <strong>Attendance</strong> has the tabs Attendance rules, Labels, Meeting configuration, Fingerprint sharing, Fingerprint recovery, and Attendance setup. Each plugin has its own page.</td></tr>
-      <tr><td>Access</td><td>Admin and Operator accounts and their roster links.</td></tr>
+      <tr><td>Modules</td><td><strong>Manage modules</strong> turns modules on or off and adds, updates, or removes modules. <strong>Attendance</strong> has the tabs Attendance rules, Labels, Meeting configuration, Fingerprint sharing, Fingerprint recovery, and Attendance setup. Each other module with settings has its own page.</td></tr>
+      <tr><td>Access</td><td>Admin and Operator accounts, their roster links, and the modules each Operator can use.</td></tr>
       <tr><td>Integrations</td><td>Google sign-in, Google Calendar, Resend email, and Discord.</td></tr>
       <tr><td>Data</td><td>Backups, restores, and deletion.</td></tr>
       <tr><td>Updates</td><td>The update track and dashboard updates. See <a href="updates.html">Update LancerLogin</a>.</td></tr>
@@ -109,8 +109,8 @@
   <p>The Interactions Endpoint URL goes into Discord only after you save credentials, as described in <a href="#discord-bot">Create the Discord bot</a>. Commands work only in your server and return ephemeral responses, visible only to the member who ran them. <code>/attendance-report</code> reports only on the member's own linked roster entry. The Outreach commands need the Outreach plugin turned on and set up. Exact submission retries reuse the same receipt, and corrections wait for staff review before totals change. If commands go missing, choose <strong>Reconcile Discord commands</strong>.</p>
 
   <h2 id="modules">Turn modules on or off</h2>
-  <p>Open <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Manage modules</span>. Turning a module on opens its setup. Turning a module off hides its pages at once and keeps its data for seven days before deleting it; turn it back on within that time to keep everything. Adding a new plugin to the installation is an update; see <a href="updates.html#plugins">Add, update, or remove plugins</a>.</p>
-  <p>Some plugins ask to use another module, for example Guest Visits recording visits as Outreach team support. Review and grant that in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Module access</span>.</p>
+  <p>Open <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Manage modules</span>. Turning a module on opens its setup. Turning a module off hides its pages at once and keeps its data for seven days before deleting it; turn it back on within that time to keep everything. Adding a new module with <strong>Add module</strong> commits a change that <strong>Apply changes</strong> deploys as an update; see <a href="updates.html#plugins">Add, update, or remove plugins</a>.</p>
+  <p>Some modules ask to use another module, for example Guest Visits recording visits as Outreach team support. Review and grant that in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Module access</span>.</p>
 
   <h2 id="data">Back up, restore, or delete data</h2>
   <p><span class="ui-path">Settings <span>›</span> Data</span> has separate backup, restore, and delete controls for <strong>Meetings and attendance</strong>, <strong>Roster</strong>, and <strong>Entire installation</strong>. A file restores only into its own category, and each restore or deletion asks you to type a confirmation phrase.</p>

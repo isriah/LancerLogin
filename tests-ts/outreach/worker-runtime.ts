@@ -156,34 +156,19 @@ test("successful local login clears prior failed-login state", async () => {
   assert.ok(database.calls.some((call) => call.sql.includes("failed_login_count = 0")));
 });
 
-test("Admin and Operator users can persist their own Debug mode preference", async () => {
-  for (const role of ["admin", "operator"] as const) {
-    const database = new FakeDatabase();
-    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-    assert.equal((await worker.fetch(request("/auth/preferences", { debugMode: "yes" }, { method: "PATCH", cookie: await sessionCookie(role) }), env)).status, 400);
-    const result = await worker.fetch(request("/auth/preferences", { debugMode: true }, { method: "PATCH", cookie: await sessionCookie(role) }), env);
-    assert.equal(result.status, 200);
-    assert.deepEqual(await result.json(), { debugMode: true });
-    const update = database.calls.find((call) => call.sql.includes("UPDATE users SET debug_mode"));
-    assert.deepEqual(update?.values, [1, `${role}-1`]);
-    assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO audit_log") && call.values.includes("user.preferences_updated")));
-  }
-});
-
-test("developer scheduler visibility is a revision-protected per-Admin preference", async () => {
+test("Debug mode and scheduler visibility have no server preference: the endpoints are gone and sessions omit debugMode", async () => {
   const database = new FakeDatabase();
-  database.rows.set("FROM user_preferences", { developerSchedulerEnabled: 0, revision: 4 });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const admin = await sessionCookie("admin");
-  const current = await worker.fetch(request("/admin/preferences", undefined, { cookie: admin }), env);
-  assert.equal(current.status, 200); assert.deepEqual(await current.json(), { developerSchedulerEnabled: false, revision: 4 });
-  assert.equal((await worker.fetch(request("/admin/preferences", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
-  assert.equal((await worker.fetch(request("/admin/preferences", { developerSchedulerEnabled: true, expectedRevision: "4" }, { method: "PUT", cookie: admin }), env)).status, 400);
-  const saved = await worker.fetch(request("/admin/preferences", { developerSchedulerEnabled: true, expectedRevision: 4 }, { method: "PUT", cookie: admin }), env);
-  assert.equal(saved.status, 200); assert.deepEqual(await saved.json(), { developerSchedulerEnabled: true, revision: 5 });
-  const batch = database.batches.at(-1) ?? [];
-  assert.ok(batch.some((call) => call.sql.includes("INSERT INTO user_preferences") && call.values.includes(1) && call.values.includes(4)));
-  assert.ok(batch.some((call) => call.sql.includes("user.developer_preferences_updated")));
+  for (const role of ["admin", "operator"] as const) {
+    const cookie = await sessionCookie(role);
+    assert.equal((await worker.fetch(request("/auth/preferences", { debugMode: true }, { method: "PATCH", cookie }), env)).status, 404);
+    assert.equal((await worker.fetch(request("/admin/preferences", undefined, { cookie }), env)).status, 404);
+    assert.equal((await worker.fetch(request("/admin/preferences", { developerSchedulerEnabled: true, expectedRevision: 0 }, { method: "PUT", cookie }), env)).status, 404);
+    const session = await worker.fetch(request("/auth/session", undefined, { cookie }), env);
+    assert.equal(session.status, 200);
+    assert.equal(Object.hasOwn(((await session.json()) as { user: Record<string, unknown> }).user, "debugMode"), false);
+  }
+  assert.equal(database.calls.some((call) => /debug_mode|user_preferences/.test(call.sql)), false);
 });
 
 test("durable scheduler controls are Admin-only, fixed, and unavailable without an explicit binding", async () => {
@@ -1112,7 +1097,8 @@ test("kiosk attendance is installation-scoped and idempotent by event ID", async
   const attendanceRequest = new Request("https://api.example.test/kiosk/attendance", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ eventId: "offline-event-1", memberId: "ROSTER-001", meetingId: "meeting-1", occurredAt: "2026-09-01T20:02:00.000Z" }) });
   const result = await worker.fetch(attendanceRequest, env);
   assert.equal(result.status, 202);
-  const insert = database.calls.find((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events"));
+  // Kiosk scans are inserted in one batch with the kiosk that recorded them.
+  const insert = [...database.calls, ...database.batches.flat()].find((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events"));
   assert.ok(insert);
   assert.ok(insert.sql.includes("installation_id"));
   assert.ok(database.calls.some((call) => call.sql.includes("external_id = ?") && call.values.filter((value) => value === "ROSTER-001").length === 2));
@@ -1133,7 +1119,7 @@ test("new kiosk credentials accept only scans captured under their exact pairing
   const stale = await worker.fetch(scan("stale-queue-event"), env); assert.equal(stale.status, 409); assert.match(await stale.text(), /different kiosk pairing/i);
   assert.equal(database.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events")), false);
   const accepted = await worker.fetch(scan("current-queue-event", "pairing-2"), env); assert.equal(accepted.status, 202, await accepted.clone().text());
-  assert.ok(database.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events") && call.values.includes("current-queue-event")));
+  assert.ok([...database.calls, ...database.batches.flat()].some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events") && call.values.includes("current-queue-event")));
 });
 
 test("attendance export is authenticated, quoted, and safe to open in spreadsheet software", async () => {
@@ -1234,7 +1220,7 @@ test("kiosk attendance automatically resolves the one eligible meeting from the 
   assert.equal(payload.action, "check_in");
   assert.deepEqual(payload.meeting, { id: "meeting-1", title: "Build session" });
   assert.equal(payload.member.displayName, "Avery Stone");
-  assert.ok(database.calls.find((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events"))?.values.includes("meeting-1"));
+  assert.ok([...database.calls, ...database.batches.flat()].find((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events"))?.values.includes("meeting-1"));
 });
 
 test("kiosk accepts a delayed scan using its original time after the meeting has ended", async () => {
@@ -1251,7 +1237,7 @@ test("kiosk accepts a delayed scan using its original time after the meeting has
   assert.equal(payload.accepted, true);
   assert.equal(payload.member.displayName, "Avery Stone");
   assert.equal(payload.meeting.id, "meeting-1");
-  assert.ok(database.calls.find((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events"))?.values.includes("2026-09-19T14:00:00.000Z"));
+  assert.ok([...database.calls, ...database.batches.flat()].find((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events"))?.values.includes("2026-09-19T14:00:00.000Z"));
 });
 
 test("Resend becomes configured only after an actual email and one-time code", async () => {
@@ -1413,11 +1399,19 @@ test("Discord role preview reconciles the whole server and rejects a stale apply
     assert.equal(multiPage.status, 200);
     const large = await multiPage.json() as { memberCount: number; removals: unknown[] };
     assert.equal(large.memberCount, 1001); assert.equal(large.removals.length, 1);
+    // A two-way label paused after a restore changes nobody's role until an Admin reviews it again.
+    database.rows.set("FROM discord_label_role_mappings x JOIN", { labelId: "label-1", labelName: "FRC 321", active: 1, guildId, roleId, roleName: "FRC 321", createdAt: new Date().toISOString(), syncDirection: "to_discord", twoWayError: "restore_review_required" });
+    const batchesBeforePaused = database.batches.length;
+    for (const [path, input] of [["/admin/integrations/discord/label-roles/preview", { labelId: "label-1" }], ["/admin/integrations/discord/label-roles/apply", { previewId: body.previewId }]] as const) {
+      const paused = await worker.fetch(request(path, input, { cookie: await sessionCookie("admin") }), env);
+      assert.equal(paused.status, 409); assert.match((await paused.json() as { error: string }).error, /paused after a restore/);
+    }
+    assert.equal(database.batches.length, batchesBeforePaused);
   } finally { globalThis.fetch = originalFetch; }
 });
 
 test("dashboard role picker lists roles, links a label, imports roles as labels, and previews every linked label", async () => {
-  const database = new FakeDatabase(); const guildId = "123456789012345678", roleId = "423456789012345678", managedId = "433456789012345678", botId = "523456789012345678", botRoleId = "623456789012345678";
+  const database = new FakeDatabase(); const guildId = "123456789012345678", roleId = "423456789012345678", managedId = "433456789012345678", botId = "523456789012345678", botRoleId = "623456789012345678", lowercaseId = "443456789012345678";
   database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration({ botToken: "secret", guildId }, sessionSecret), verifiedAt: new Date().toISOString(), enabled: 1 });
   database.rows.set("SELECT time_zone AS timeZone", { timeZone: "UTC" });
   database.lists.set("x.role_id AS roleId, x.label_id AS labelId", [{ roleId: managedId, labelId: "label-9", labelName: "Old" }]);
@@ -1426,7 +1420,7 @@ test("dashboard role picker lists roles, links a label, imports roles as labels,
   const originalFetch = globalThis.fetch; const requests: string[] = [];
   globalThis.fetch = async (input) => {
     const url = String(input); requests.push(url);
-    if (url.endsWith("/roles")) return Response.json([{ id: guildId, name: "@everyone", position: 0, permissions: "0" }, { id: botRoleId, name: "Bot", position: 10, permissions: String(1 << 28) }, { id: roleId, name: "Robotics", position: 2, permissions: "0" }, { id: managedId, name: "Integration", position: 3, permissions: "0", managed: true }]);
+    if (url.endsWith("/roles")) return Response.json([{ id: guildId, name: "@everyone", position: 0, permissions: "0" }, { id: botRoleId, name: "Bot", position: 10, permissions: String(1 << 28) }, { id: roleId, name: "Robotics", position: 2, permissions: "0" }, { id: managedId, name: "Integration", position: 3, permissions: "0", managed: true }, { id: lowercaseId, name: "art crew", position: 1, permissions: "0" }]);
     if (url.endsWith("/users/@me")) return Response.json({ id: botId });
     if (url.endsWith(`/members/${botId}`)) return Response.json({ user: { id: botId }, roles: [botRoleId] });
     if (url.includes("/members?limit=1000")) return Response.json([{ user: { id: "111111111111111111", username: "Ada" }, roles: [] }]);
@@ -1436,9 +1430,9 @@ test("dashboard role picker lists roles, links a label, imports roles as labels,
   try {
     assert.equal((await worker.fetch(new Request("https://example.test/admin/integrations/discord/roles", { headers: { cookie: await sessionCookie("operator") } }), env)).status, 403);
     const listed = await (await admin("/admin/integrations/discord/roles")).json() as { roles: { id: string; manageable: boolean; problem?: string; labelName?: string }[] };
-    assert.deepEqual(listed.roles.map((role) => role.id), [botRoleId, managedId, roleId], "highest first, without @everyone");
-    assert.match(listed.roles[0].problem ?? "", /Manage Roles/); assert.match(listed.roles[1].problem ?? "", /Managed by a bot/); assert.equal(listed.roles[1].labelName, "Old");
-    assert.equal(listed.roles[2].manageable, true);
+    assert.deepEqual(listed.roles.map((role) => role.id), [lowercaseId, botRoleId, managedId, roleId], "alphabetical ignoring case, without @everyone");
+    assert.match(listed.roles[1].problem ?? "", /Manage Roles/); assert.match(listed.roles[2].problem ?? "", /Managed by a bot/); assert.equal(listed.roles[2].labelName, "Old");
+    assert.equal(listed.roles[3].manageable, true);
 
     // A role whose name differs from the label still links, and linking writes no role changes.
     const linked = await admin("/admin/integrations/discord/label-roles", { labelId: "label-1", roleId });
@@ -3148,7 +3142,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 44); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 45); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
@@ -3162,13 +3156,13 @@ test("roster backup and restore retain label definitions, dated history, and att
 test("installation backup retains Discord role mappings while roster backup omits provider role IDs", async () => {
   const database = new FakeDatabase(); const cookie = await sessionCookie("admin");
   seedInstallationBackupFoundation(database);
-  database.lists.set("FROM discord_label_role_mappings WHERE", [{ installation_id: "primary", label_id: "label-1", guild_id: "123456789012345678", role_id: "423456789012345678", role_name: "FRC 321", created_by: null, created_at: "2026-09-23T00:00:00Z" }]);
+  database.lists.set("FROM discord_label_role_mappings WHERE", [{ installation_id: "primary", label_id: "label-1", guild_id: "123456789012345678", role_id: "423456789012345678", role_name: "FRC 321", created_by: null, created_at: "2026-09-23T00:00:00Z", sync_direction: "to_discord" }]);
   database.lists.set("FROM saved_report_views WHERE", [{ id: "report-1", installation_id: "primary", owner_user_id: "admin-1", scope: "shared", name: "Class attendance", definition_json: JSON.stringify(defaultReportDefinition(false)), revision: 1, created_by: "admin-1", updated_by: "admin-1", created_at: "2026-09-25T00:00:00Z", updated_at: "2026-09-25T00:00:00Z" }]);
   database.lists.set("FROM saved_report_tabs WHERE", [{ installation_id: "primary", user_id: "admin-1", report_view_id: "report-1", position: 0, pinned_at: "2026-09-25T00:00:00Z" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 44); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 45); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(installation.tables.saved_report_views.length, 1); assert.equal(installation.tables.saved_report_tabs.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   assert.equal(Object.hasOwn(roster.tables, "saved_report_views"), false);
@@ -3466,7 +3460,7 @@ test("contest backups retain rejected submission history, default schema40 and r
   const history = JSON.stringify([{ messageId: "original-message", createdAt: "2026-10-15T10:00:00Z", status: "rejected", resolvedBy: "admin-1", resolvedAt: "2026-10-15T11:00:00Z", reviewNote: "Original review", submittedByDiscordUserId: "synthetic-discord" }]);
   database.lists.set("FROM discord_attendance_contests WHERE", [{ installation_id: "primary", meeting_id: "meeting", member_id: "member", message_id: "new-message", status: "open", resolved_by: null, resolved_at: null, created_at: "2026-10-15T12:00:00Z", submitted_by_discord_user_id: "synthetic-discord", review_note: null, prior_reviews_json: history }]);
   const backup = await (await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie }), env)).json() as any;
-  assert.equal(backup.schemaVersion, 44); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
+  assert.equal(backup.schemaVersion, 45); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
   const restore = (value: unknown) => worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup: value }, { cookie }), env);
   const restored = await restore(backup); assert.equal(restored.status, 200, await restored.clone().text());
   assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("INSERT INTO discord_attendance_contests") && call.values.includes(history)));

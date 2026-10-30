@@ -161,6 +161,9 @@ test("plugin packages declare their module, contract, Core range, prefix and in-
     [(value) => { value.lancerlogin.extra = true; }, /unknown keys: extra/],
     [(value) => { delete value.lancerlogin.core; }, /missing: core/],
     [(value) => { value.lancerlogin.moduleId = "other"; }, /does not match the selected module/],
+    // One repository supplies one module: a list of module IDs or a modules list is refused with a clear reason.
+    [(value) => { value.lancerlogin.moduleId = ["example", "second"]; }, /declares 2 modules \(example, second\)\. A module repository must provide exactly one module/],
+    [(value) => { value.lancerlogin.modules = [{ id: "example" }, { id: "second" }]; }, /declares 2 modules \(example, second\)/],
     [(value) => { value.lancerlogin.contract = 2; }, /needs module contract 2; this Core supports contract 1/],
     [(value) => { value.lancerlogin.contract = "1"; }, /positive integer/],
     [(value) => { value.lancerlogin.core = ">=3.0.0"; }, /supports LancerLogin core >=3\.0\.0; this Core is/],

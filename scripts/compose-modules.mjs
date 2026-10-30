@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import { parseReleaseVersion } from "../packages/shared/src/release-policy.mjs";
 import { moduleContractVersion, moduleSdkPackageName, supportedModuleContractVersions } from "../packages/shared/src/module-contract.ts";
 import { ModuleMigrationError, loadModuleMigrationPackage, tablesAfterStatements, validateTablePrefix } from "../apps/api/src/module-migrations.ts";
-import { SelectionError, allowlistFileName as sharedAllowlistFileName, parseAllowlist, sourceAllowed, maximumSelectedModules, satisfiesCoreRange as sharedSatisfiesCoreRange, parseSelectionFile as parseSharedSelectionFile, pluginTokenVariable as sharedPluginTokenVariable, selectionFileName as sharedSelectionFileName } from "../packages/shared/src/module-selection.ts";
+import { SelectionError, declaredModuleIds, multipleModulesMessage, allowlistFileName as sharedAllowlistFileName, parseAllowlist, sourceAllowed, maximumSelectedModules, satisfiesCoreRange as sharedSatisfiesCoreRange, parseSelectionFile as parseSharedSelectionFile, pluginTokenVariable as sharedPluginTokenVariable, selectionFileName as sharedSelectionFileName } from "../packages/shared/src/module-selection.ts";
 
 export const coreRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const selectionFileName = sharedSelectionFileName;
@@ -155,6 +155,9 @@ export function validatePluginPackage(pkg, { moduleId, pluginRoot, coreVersion }
   if (!isObject(pkg)) fail(`Module ${moduleId} package.json must be an object`);
   if (pkg.type !== "module") fail(`Module ${moduleId} package.json must declare "type": "module"`);
   const field = pkg.lancerlogin; const context = `Module ${moduleId} package.json lancerlogin`;
+  // One repository supplies exactly one module; say so before the generic key check would name the extra field.
+  const declared = declaredModuleIds(field);
+  if (declared) fail(`Module ${moduleId}: ${multipleModulesMessage(declared)}`);
   exactKeys(field, ["moduleId", "contract", "core", "tablePrefix", "entries"], ["migrations", "adoptedCoreMigrations"], context);
   if (field.moduleId !== moduleId) fail(`${context}.moduleId ${JSON.stringify(field.moduleId)} does not match the selected module ${moduleId}`);
   if (!Number.isSafeInteger(field.contract) || field.contract < 1) fail(`${context}.contract must be a positive integer`);

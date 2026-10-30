@@ -8,7 +8,7 @@
   .app .sign-out-button { font-family: var(--font-body); font-size: var(--text-small); font-weight: 750; line-height: 1.2; }
 
   /* Every top-level card uses the shared card padding. */
-  .app main :is(.ui-card.developer-options,.meeting-browser-controls.ui-card) { padding: var(--card-padding); }
+  .app main .meeting-browser-controls.ui-card { padding: var(--card-padding); }
 
   /* Meeting and activity tables: the selection column stays compact so titles keep their width. */
   .app .meeting-directory .ui-table :is(th,td):first-child { width: 3.5rem; min-width: 0; }
@@ -52,7 +52,6 @@
   /* Kiosk list rows keep selection, rename and enrollment on one line. */
   .app .kiosk-device-option { flex-direction: row; align-items: center; gap: var(--space-1); padding-right: var(--space-1); }
   .app .kiosk-device-option .kiosk-device-row { flex: 1; min-width: 0; }
-  .app .kiosk-device-option .kiosk-enrollment-button { order: 1; align-self: center; margin: 0; }
   .app .kiosk-device-option > .kiosk-rename-form { flex-basis: 100%; }
   .app .kiosk-device-option:has(> .kiosk-rename-form) { flex-wrap: wrap; }
 

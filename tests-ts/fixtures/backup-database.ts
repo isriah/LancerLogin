@@ -32,12 +32,15 @@ export class BackupDatabase {
       async first() { return raw.prepare(sql).get(...values as never[]) ?? null; },
       async all() { return { results: raw.prepare(sql).all(...values as never[]) }; },
       async run() { const result = raw.prepare(sql).run(...values as never[]); return { success: true, meta: { changes: Number(result.changes) } }; },
+      // In a batch, as in D1, a read returns its rows (module-scoped reads run as guarded batches). It runs synchronously so
+      // concurrent batches never interleave inside one transaction.
+      batchRun() { if (/^\s*(?:SELECT|WITH)\b/i.test(sql)) return { success: true, results: raw.prepare(sql).all(...values as never[]), meta: { changes: 0 } }; const result = raw.prepare(sql).run(...values as never[]); return { success: true, meta: { changes: Number(result.changes) } }; },
     };
     return statement;
   }
-  async batch(statements: { run(): Promise<unknown> }[]) {
+  async batch(statements: { batchRun(): unknown }[]) {
     this.batches += 1; this.raw.exec("BEGIN");
-    try { const results = []; for (const statement of statements) results.push(await statement.run()); this.raw.exec("COMMIT"); return results; }
+    try { const results = []; for (const statement of statements) results.push(statement.batchRun()); this.raw.exec("COMMIT"); return results; }
     catch (error) { this.raw.exec("ROLLBACK"); throw error; }
   }
   rows<T = Record<string, unknown>>(sql: string, ...values: unknown[]) { return this.raw.prepare(sql).all(...values as never[]).map((row) => ({ ...row })) as T[]; }

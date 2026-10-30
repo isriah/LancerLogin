@@ -106,7 +106,7 @@ test("without the plugin, Carpool lifecycle state stays out of new backups and r
   // Backups contain no Carpool state: this build has no adapter for its data and could not restore its lifecycle rows.
   const client = backupClient(worker, db);
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 44); assert.deepEqual(backup.externalModules, []);
+  assert.equal(backup.schemaVersion, 45); assert.deepEqual(backup.externalModules, []);
   for (const table of moduleKeyed) assert.equal(backup.tables[table].some((row: Record<string, unknown>) => row.module_id === "carpool"), false, table);
   assert.doesNotMatch(JSON.stringify(backup), /carpool|synthetic-encrypted-key/i);
 

@@ -380,6 +380,12 @@ export async function seedInstallation(api, { setupCode, password, step }) {
     await completeSetupStep(api, "attendance", "input");
   });
   await step("past meetings and attendance", async () => {
+    // Since v2.1.0-beta.1 a member's attendance starts the day they join the roster, so the synthetic members start a
+    // month back to take attendance at the past meetings. Releases without the setting answer 404 and need nothing.
+    for (const member of seeded.members) {
+      const set = await api.call("PATCH", `/admin/attendance/members/${encodeURIComponent(member.memberId)}`, { attendanceRequiredFrom: isoDay(Date.now() - 30 * 86_400_000), expected: null });
+      if (set.status !== 200 && set.status !== 404) throw new Error(`PATCH attendance start returned ${set.status}: ${JSON.stringify(set.body)}`);
+    }
     seeded.pastMeetings = [];
     for (const daysAgo of [14, 7]) {
       const start = Date.parse(`${isoDay(Date.now() - daysAgo * 86_400_000)}T17:00:00.000Z`);

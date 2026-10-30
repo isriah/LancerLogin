@@ -3,9 +3,10 @@ import { setDashboardTheme } from "./dashboard-theme";
 import { outreachSnapshot } from "./module-fixtures";
 import { requireOutreachPlugin } from "./outreach-fixtures";
 import { pairedViews } from "./paired-views";
+import { calendarDay, selectCalendarDay } from "./meeting-calendar-fixture";
 
 test.use({ timezoneId: "America/New_York" });
-async function calendarPresentation(page: Page, day: Locator, title: string, detail: string, width: number) {
+async function calendarPresentation(page: Page, day: Locator, title: string, detail: string, width: number, opensOnDesktop = false) {
   const summary = day.locator(".calendar-day-summaries"), dot = day.locator(".calendar-day-indicator");
   await expect(summary).toContainText(title); await expect(summary).toContainText(detail);
   await expect(day).toHaveAccessibleDescription(new RegExp(title));
@@ -15,7 +16,10 @@ async function calendarPresentation(page: Page, day: Locator, title: string, det
     else { await expect(summary).toBeHidden(); await expect(dot).toBeVisible(); await expect(dot).toHaveText("●"); }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
-  await day.focus(); await page.keyboard.press("Enter"); await expect(day).toHaveAttribute("aria-pressed", "true");
+  await day.focus(); await page.keyboard.press("Enter");
+  // A desktop day with exactly one meeting opens it directly instead of selecting the day.
+  if (opensOnDesktop && width > 900) { await expect(page).toHaveURL(/\/meetings\/active-meeting$/); await page.goBack(); }
+  await expect(day).toHaveAttribute("aria-pressed", "true");
 }
 
 const overnight = { id: "active-meeting", title: "Synthetic overnight planning", startsAt: "2026-10-21T03:31:28.123Z", endsAt: "2026-10-21T06:32:28.123Z", attendanceClosesAt: "2026-10-21T07:02:28.123Z", required: true, notes: "Synthetic schedule fixture", audienceMode: "all", audienceLabelIds: [] };
@@ -79,8 +83,8 @@ for (const { theme, width } of pairedViews) test(`Dashboard selected day survive
   await page.setViewportSize({ width, height: 900 }); await prepare(page);
   await meetingRoutes(page, { ...overnight, startsAt: "2026-09-09T17:00:00Z", endsAt: "2026-09-09T18:00:00Z" });
   await page.goto("/dashboard"); await page.getByRole("button", { name: "Previous month of meetings", exact: true }).click();
-  const selected = page.getByRole("button", { name: "September 9, 2026, 1 meeting", exact: true }); await selected.click();
-  await setDashboardTheme(page, theme); await calendarPresentation(page, selected, overnight.title, "1:00 PM - 2:00 PM", width);
+  const selected = calendarDay(page, "September 9, 2026", 1); await selectCalendarDay(page, selected, "2026-09-09");
+  await setDashboardTheme(page, theme); await calendarPresentation(page, selected, overnight.title, "1:00 PM - 2:00 PM", width, true);
   if (theme === "light") await page.screenshot({ path: test.info().outputPath("meeting-calendar.png"), fullPage: true });
   await page.getByRole("radio", { name: "Table", exact: true }).check(); await page.getByRole("radio", { name: "Calendar", exact: true }).check();
   await expect(selected).toHaveAttribute("aria-pressed", "true");

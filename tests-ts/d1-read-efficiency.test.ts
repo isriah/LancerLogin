@@ -170,14 +170,14 @@ test("a request reads its session user once, and reads started beside it keep th
     const admin = await signedIn("admin", "admin"); const operator = await signedIn("operator", "operator");
     const sessionReads = () => database.calls.filter((call) => call.sql.includes("FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND session_epoch = ?")).length;
     // Module routes check the session in the pre-check and again in the handler; an internal call reuses it too.
-    const paths = ["/meetings", "/admin/members/one/history", "/auth/session", "/integrations/capabilities", "/admin/members", "/labels", "/admin/preferences", "/platform/modules"];
+    const paths = ["/meetings", "/admin/members/one/history", "/auth/session", "/integrations/capabilities", "/admin/members", "/labels", "/platform/modules"];
     for (const path of paths) {
       const before = sessionReads();
       assert.equal((await admin(path)).status, 200, path);
       assert.equal(sessionReads() - before, 1, `${path} reads the session user once`);
     }
     // The role check decides before a read that would fail on its own (no update channel row exists here).
-    for (const path of ["/admin/preferences", "/admin/update-channel"]) assert.equal((await operator(path)).status, 403, path);
+    for (const path of ["/admin/users", "/admin/update-channel"]) assert.equal((await operator(path)).status, 403, path);
     assert.equal((await operator("/meetings")).status, 403, "an operator without the module assignment");
     database.sqlite.exec("UPDATE users SET active=0 WHERE id='admin'");
     for (const path of [...paths, "/admin/update-channel", "/discord/contests"]) {

@@ -251,7 +251,7 @@ test("without the optional dashboard update credential, Updates shows how to upd
   await expect(page.getByRole("status").filter({ hasText: "Dashboard updates are not set up yet, so upgrade by running" })).toBeVisible();
   await expect(setupRow(page, "Dashboard update credential")).toContainText("Not set up");
   await expect(setupRow(page, "Update controller workflow")).toContainText("Not checked");
-  await expect(setupRow(page, "Plugin management credential")).toContainText("LANCERLOGIN_MODULE_SELECTION_TOKEN");
+  await expect(setupRow(page, "Module management credential")).toContainText("LANCERLOGIN_MODULE_SELECTION_TOKEN");
   await expect(page.locator(".update-credential-banner")).toHaveCount(0);
   expect(state.prepares).toBe(0);
 });
@@ -272,7 +272,7 @@ test("an expiring credential shows a dismissible warning, a card notice and read
     await expect(setupRow(page, "Dashboard update credential").locator(".update-setup-badge")).toHaveAttribute("data-tone", "warning");
     await expect(setupRow(page, "Update controller workflow")).toContainText("Beta updates need the current controller");
     await expect(setupRow(page, "Update controller workflow").getByRole("link", { name: "Open the update controller workflow" })).toHaveAttribute("href", `https://github.com/${repository}/actions/workflows/upgrade-web.yml`);
-    await expect(setupRow(page, "Plugin management credential").locator(".update-setup-badge")).toHaveAttribute("data-tone", "error");
+    await expect(setupRow(page, "Module management credential").locator(".update-setup-badge")).toHaveAttribute("data-tone", "error");
     const dismiss = banner.getByRole("button", { name: "Dismiss credential expiry warning" });
     const styles = await dismiss.evaluate((element) => { const style = getComputedStyle(element); const probe = document.createElement("span"); probe.style.borderRadius = "var(--radius-control)"; element.closest(".app")!.append(probe); const expectedRadius = getComputedStyle(probe).borderTopLeftRadius; probe.remove(); return { height: element.getBoundingClientRect().height, radius: style.borderTopLeftRadius, expectedRadius, background: style.backgroundColor }; });
     expect(styles.height).toBeGreaterThanOrEqual(44); expect(styles.radius).toBe(styles.expectedRadius); expect(styles.background).not.toBe("rgba(0, 0, 0, 0)");
@@ -324,12 +324,12 @@ test("the update track is a permanent card right below the dashboard update card
   }
 });
 
-test("the plugin management credential is set up with numbered steps linking each page", async ({ page }) => {
+test("the module management credential is set up with numbered steps linking each page", async ({ page }) => {
   const state = await setup(page); state.readiness = readiness({ selectionCredential: { state: "missing", expiresAt: null } });
   await page.goto("/settings/updates");
-  const row = setupRow(page, "Plugin management credential");
-  await expect(row).toContainText("Optional. Without it, edit lancerlogin.modules.json in the deployment repository to change plugins.");
-  const steps = row.getByRole("list", { name: "Steps for plugin management credential" }).getByRole("listitem");
+  const row = setupRow(page, "Module management credential");
+  await expect(row).toContainText("Optional. Without it, edit lancerlogin.modules.json in the deployment repository to add, update or remove modules.");
+  const steps = row.getByRole("list", { name: "Steps for module management credential" }).getByRole("listitem");
   await expect(steps).toHaveCount(6);
   await expect(steps.nth(0).getByRole("link", { name: "Create a GitHub fine-grained token" })).toHaveAttribute("href", "https://github.com/settings/personal-access-tokens/new");
   await expect(steps.nth(1)).toHaveText("Set Resource owner to example. Under Repository access, choose Only select repositories and pick private-install.");
@@ -341,7 +341,7 @@ test("the plugin management credential is set up with numbered steps linking eac
   for (const link of await row.locator(".update-setup-steps a").all()) expect(await link.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
   // A ready credential needs no steps.
   state.readiness = readiness(); await page.reload();
-  await expect(setupRow(page, "Plugin management credential").locator(".update-setup-steps")).toHaveCount(0);
+  await expect(setupRow(page, "Module management credential").locator(".update-setup-steps")).toHaveCount(0);
 });
 
 test("outdated repository workflow files open a pull request to review and merge on GitHub", async ({ page }) => {

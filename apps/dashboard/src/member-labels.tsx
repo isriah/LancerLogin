@@ -1,5 +1,5 @@
 export type MemberLabel = { id: string; name: string; active: boolean | number; formulaEnabled: boolean | number; discordLinked?: boolean | number };
-export type LabelHistory = { id: string; memberId: string; externalMemberId: string; labelId: string; action: "add" | "remove"; effectiveDate: string; createdAt: string };
+export type LabelHistory = { id: string; memberId: string; externalMemberId: string; labelId: string; action: "add" | "remove"; effectiveDate: string; createdAt: string; source?: "dashboard" | "discord" };
 export type WeeklyPeriod = { id: string; labelId: string; startsOn: string; endsOn: string; meetingsPerWeek: number };
 export type LabelData = { labels: MemberLabel[]; history: LabelHistory[]; periods: WeeklyPeriod[]; today: string };
 type Change = { memberId: string; label: string; action: "add" | "remove"; effectiveDate: string };

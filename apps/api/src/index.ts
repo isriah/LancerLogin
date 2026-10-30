@@ -24,12 +24,14 @@ import { fingerprintVaultRoute } from "./fingerprint-vault.ts";
 import { kioskPoll } from "./kiosk-poll.ts";
 import { syncKioskScanReviews, listKioskScanReviews, markKioskScanReviewed, markKioskScansReviewed } from "./kiosk-scan-reviews.ts";
 import { fingerprintMinimumScore, readFingerprintMatch, recordScanMatch, saveFingerprintMinimumScore, validateMinimumScore } from "./fingerprint-match.ts";
+import { acceptedScanStatements, dismissReenrollSuggestion, findImpossibleScan, listPossibleWrongMatches, readReenrollSuggestions, recordFingerprintReenrolled, recordLocalFingerprintEnrollment, recordPossibleWrongMatch, reenrollThreshold } from "./scan-integrity.ts";
 import { readKioskEnrollment, startKioskEnrollment, selectEnrollmentMember, cancelKioskEnrollment, progressKioskEnrollment } from "./kiosk-enrollment.ts";
 import { fingerprintResetRoute } from "./fingerprint-reset.ts";
 import { bundledModuleRegistry } from "../../../packages/shared/src/module-platform.ts";
 import { ModuleRegistrationIncomplete, configureModulePlatform, readModuleAssignments, readModulePlatformSnapshot, readModuleSetup, requireModuleService, requireModuleSetup, requireModuleWorkspace, setModuleAssignments, updateModuleSetup } from "./module-platform.ts";
 import { captureModuleServiceDatabase, captureModuleSetupDatabase, captureModuleWorkspaceDatabase } from "./module-database-scope.ts";
 import { attendanceSetupRoute } from "./attendance-module-setup.ts";
+import { confirmTwoWay, disableTwoWay, forgetTwoWayStatements, hasTwoWayLabels, isTwoWayPaused, pauseRestoredTwoWayStatements, pollTwoWayLabels, previewTwoWay, sortRolesByName, twoWayPausedMessage, twoWayRestorePaused, unmatchedRoleMembers, type TwoWayDependencies, type TwoWayServer } from "./discord-label-two-way.ts";
 import { dispatchModuleDiscordCommand } from "./module-discord.ts";
 import { createApiModuleSet, type ApiModuleContribution, type CoreModuleServices, type ModuleReportFilterOption, type ModuleRouteContext } from "./module-contributions.ts";
 import { installedApiModules } from "./installed-api-modules.ts";
@@ -144,7 +146,7 @@ function moduleScopedEnvironment(env: Env, db: D1Database): Env {
   return { ...env, DB: db, moduleProviderAuthority: async () => { await db.prepare("SELECT 1").first(); } };
 }
 function cookie(request: Request, name: string): string | undefined { return request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1); }
-type SessionUser = { id: string; role: Role; email?: string | null; localUsername?: string | null; debugMode?: number | null };
+type SessionUser = { id: string; role: Role; email?: string | null; localUsername?: string | null };
 type SessionLookup = { claims: Promise<Principal>; current: Promise<{ principal: Principal; user: SessionUser }> };
 /**
  * One session check per Request: the cookie's signature is verified once and the user row read once, however often the
@@ -165,7 +167,7 @@ function sessionLookup(request: Request, env: Env): SessionLookup {
   const current = claims.then(async (principal) => {
     // A token issued under an older session epoch was revoked by logout, password reset or deactivation. The profile
     // columns are what /auth/session returns, so it needs no second read.
-    const user = await requireDatabase(env).prepare("SELECT id, role, email, local_username AS localUsername, debug_mode AS debugMode FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND session_epoch = ?").bind(principal.userId, principal.epoch ?? 0).first<SessionUser>();
+    const user = await requireDatabase(env).prepare("SELECT id, role, email, local_username AS localUsername FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND session_epoch = ?").bind(principal.userId, principal.epoch ?? 0).first<SessionUser>();
     if (!user) throw new HttpError(401, "Session user is unavailable");
     return { principal: { ...principal, role: user.role }, user };
   });
@@ -310,7 +312,7 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
     ...(resetGrant ? [`${setupResetCookie}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`] : []),
     ...(signedIn ? [await localSessionCookie(env.SESSION_KEY!, { id: adminId, role: "admin", sessionEpoch: 0 })] : []),
   ];
-  const result = response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, signedIn, ...(signedIn ? { user: { id: adminId, role: "admin", debugMode: false } } : {}), telemetryAccepted: false }, 201);
+  const result = response({ configured: true, admin: { id: adminId, email: input.adminEmail?.toLowerCase(), localUsername: input.localUsername?.trim().toLowerCase(), role: "admin" }, signedIn, ...(signedIn ? { user: { id: adminId, role: "admin" } } : {}), telemetryAccepted: false }, 201);
   // Appended after response() because it sets headers one name at a time and would keep only one of two cookies.
   for (const value of cookies) result.headers.append("set-cookie", value);
   return result;
@@ -464,7 +466,7 @@ async function localLogin(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); if (!env.SESSION_KEY) throw new HttpError(503, "Local authentication is not configured");
   const input = await parseJson<{ username?: string; password?: string }>(request);
   if (!input.username || !input.password) throw new HttpError(400, "Username and password are required");
-  const user = await db.prepare("SELECT id, role, debug_mode AS debugMode, password_hash AS passwordHash, locked_until AS lockedUntil, session_epoch AS sessionEpoch FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; debugMode: number; passwordHash: string | null; lockedUntil?: string; sessionEpoch?: number }>();
+  const user = await db.prepare("SELECT id, role, password_hash AS passwordHash, locked_until AS lockedUntil, session_epoch AS sessionEpoch FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; passwordHash: string | null; lockedUntil?: string; sessionEpoch?: number }>();
   // A locked account is refused before the expensive hash. Failures are counted atomically in D1, so parallel guesses
   // cannot all read the same count; a concurrent lock also refuses a correct password that was still being checked.
   if (lockActive(user?.lockedUntil)) throw new HttpError(401, "Invalid username or password");
@@ -474,12 +476,12 @@ async function localLogin(request: Request, env: Env): Promise<Response> {
     throw new HttpError(401, "Invalid username or password");
   }
   if (!await clearFailedLogins(db, user.id)) throw new HttpError(401, "Invalid username or password");
-  return response({ ok: true, user: { id: user.id, role: user.role, debugMode: Boolean(user.debugMode) } }, 200, { "set-cookie": await localSessionCookie(env.SESSION_KEY, user) });
+  return response({ ok: true, user: { id: user.id, role: user.role } }, 200, { "set-cookie": await localSessionCookie(env.SESSION_KEY, user) });
 }
 async function authSession(request: Request, env: Env): Promise<Response> {
   // The session lookup read this profile together with its revocation check.
   const { user } = await sessionLookup(request, env).current;
-  return response({ authenticated: true, user: { id: user.id, email: user.email, localUsername: user.localUsername, role: user.role, debugMode: Boolean(user.debugMode) } });
+  return response({ authenticated: true, user: { id: user.id, email: user.email, localUsername: user.localUsername, role: user.role } });
 }
 async function logout(request: Request, env: Env): Promise<Response> {
   // Bump the session epoch so this token, and any copy of it, stops working everywhere, not only in this browser.
@@ -490,43 +492,8 @@ async function logout(request: Request, env: Env): Promise<Response> {
   } catch { /* Clearing the cookie still signs this browser out. */ }
   return response({ ok: true }, 200, { "set-cookie": "lancerlogin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" });
 }
-async function authPreferences(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
-  const input = await parseJson<{ debugMode?: boolean }>(request);
-  if (typeof input.debugMode !== "boolean") throw new HttpError(400, "Debug mode must be true or false");
-  await db.prepare("UPDATE users SET debug_mode = ? WHERE installation_id = 'primary' AND id = ?").bind(input.debugMode ? 1 : 0, principal.userId).run();
-  await writeAudit(db, principal, "user.preferences_updated", "user", principal.userId, { debugMode: input.debugMode });
-  return response({ debugMode: input.debugMode });
-}
-
-async function adminPreferences(request: Request, env: Env): Promise<Response> {
-  const readPreferences = (userId: string) => requireDatabase(env).prepare("SELECT developer_scheduler_enabled AS developerSchedulerEnabled, revision FROM user_preferences WHERE installation_id = 'primary' AND user_id = ?").bind(userId).first<{ developerSchedulerEnabled: number; revision: number }>();
-  if (request.method === "GET") {
-    const [, current] = await authorizedRead(request, env, ["admin"], readPreferences);
-    return response({ developerSchedulerEnabled: Boolean(current?.developerSchedulerEnabled), revision: Number(current?.revision ?? 0) });
-  }
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-  // The save path keeps its original read order; the compare-and-set below does not use this value.
-  await readPreferences(principal.userId);
-  const input = await parseJson<{ developerSchedulerEnabled?: unknown; expectedRevision?: unknown }>(request, 2_048);
-  if (typeof input.developerSchedulerEnabled !== "boolean" || !Number.isSafeInteger(input.expectedRevision) || Number(input.expectedRevision) < 0) throw new HttpError(400, "Provide the current developer preference revision and scheduler visibility");
-  const revision = Number(input.expectedRevision); const next = input.developerSchedulerEnabled ? 1 : 0; const now = new Date().toISOString();
-  const results = await db.batch([
-    db.prepare(`INSERT INTO user_preferences(installation_id,user_id,developer_scheduler_enabled,revision,updated_at)
-      SELECT 'primary',?,?,1,? WHERE EXISTS(SELECT 1 FROM users WHERE installation_id='primary' AND id=? AND active=1 AND role='admin')
-      AND (?=0 OR EXISTS(SELECT 1 FROM user_preferences WHERE installation_id='primary' AND user_id=? AND revision=?))
-      ON CONFLICT(installation_id,user_id) DO UPDATE SET developer_scheduler_enabled=excluded.developer_scheduler_enabled,
-      revision=user_preferences.revision+1,updated_at=excluded.updated_at WHERE user_preferences.revision=?
-      AND EXISTS(SELECT 1 FROM users WHERE installation_id='primary' AND id=? AND active=1 AND role='admin')`)
-      .bind(principal.userId, next, now, principal.userId, revision, principal.userId, revision, revision, principal.userId),
-    db.prepare(`INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,metadata_json,created_at)
-      SELECT ?,'primary',?,'user.developer_preferences_updated','user',?,?,? WHERE EXISTS(
-        SELECT 1 FROM user_preferences WHERE installation_id='primary' AND user_id=? AND revision=?)`)
-      .bind(crypto.randomUUID(), principal.userId, principal.userId, JSON.stringify({ developerSchedulerEnabled: input.developerSchedulerEnabled }), now, principal.userId, revision + 1),
-  ]);
-  if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) throw new HttpError(409, "Developer options changed in another session; reload before saving");
-  return response({ developerSchedulerEnabled: input.developerSchedulerEnabled, revision: revision + 1 });
-}
+// Debug mode is a per-browser dashboard setting and the Background scheduler follows it, so neither has a server preference.
+// The users.debug_mode column and user_preferences table remain for backup compatibility and are no longer read.
 
 async function authWalkthrough(request: Request, env: Env, pageId: string): Promise<Response> {
   const known = Object.hasOwn(walkthroughs, pageId);
@@ -641,7 +608,7 @@ async function labels(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET") {
     const [, [catalog, history, periods, rules, settings, audiences]] = await authorizedRead(request, env, ["admin", "operator"], async () => { const db = requireDatabase(env); return Promise.all([
       db.prepare("SELECT l.id, l.name, l.active, l.formula_enabled AS formulaEnabled, EXISTS (SELECT 1 FROM discord_label_role_mappings x WHERE x.installation_id = l.installation_id AND x.label_id = l.id) AS discordLinked FROM member_labels l WHERE l.installation_id = 'primary' ORDER BY l.name COLLATE NOCASE").all(),
-      db.prepare("SELECT c.id, c.member_id AS memberId, m.external_id AS externalMemberId, c.label_id AS labelId, c.action, c.effective_date AS effectiveDate, c.created_at AS createdAt FROM member_label_changes c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id WHERE c.installation_id = 'primary' ORDER BY c.effective_date, c.created_at, c.id").all(),
+      db.prepare("SELECT c.id, c.member_id AS memberId, m.external_id AS externalMemberId, c.label_id AS labelId, c.action, c.effective_date AS effectiveDate, c.created_at AS createdAt, c.source FROM member_label_changes c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id WHERE c.installation_id = 'primary' ORDER BY c.effective_date, c.created_at, c.id").all(),
       db.prepare("SELECT id, label_id AS labelId, starts_on AS startsOn, ends_on AS endsOn, meetings_per_week AS meetingsPerWeek FROM label_attendance_rules WHERE installation_id = 'primary' AND rule_type = 'weekly_count' AND starts_on IS NOT NULL AND ends_on IS NOT NULL ORDER BY starts_on").all(),
       db.prepare("SELECT id, label_id AS labelId, starts_on AS startsOn, ends_on AS endsOn, rule_type AS ruleType, threshold_percent AS thresholdPercent, meetings_per_week AS meetingsPerWeek, excused_handling AS excusedHandling FROM label_attendance_rules WHERE installation_id = 'primary' ORDER BY label_id, starts_on").all(),
       db.prepare("SELECT time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone: string }>(),
@@ -928,6 +895,14 @@ function kioskAttention(value: unknown): KioskAttention | undefined {
     ...(input.weakMatches === undefined ? {} : { weakMatches: Number(input.weakMatches) }),
     ...(input.readerTemplates === undefined ? {} : { readerTemplates: Number(input.readerTemplates), linkedTemplates: Number(input.linkedTemplates) }) };
 }
+// Rejected scans never make a kiosk degraded: they upload and are reviewed in the background from Debug tools. Kiosks
+// from 2.0.0-beta.14 still raise a category for unreviewed rejected scans or a failed review upload, so the category is
+// derived from the reported causes instead. Attendance scans that cannot upload (an unconfirmed clock, or scans still
+// waiting) keep it, as does a reader fault. Older kiosks report no causes and keep the category they send.
+function kioskErrorCategory(reported: "cloud_sync" | "reader" | "offline_queue" | null | undefined, attention: KioskAttention | undefined, pendingEvents: number) {
+  if (!reported || !attention || reported === "reader") return reported || null;
+  return !attention.clockConfirmed || attention.clockPendingScans ? "offline_queue" : pendingEvents ? "cloud_sync" : null;
+}
 async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; authenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; updatePolicyVersion?: number; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string | null; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null; attention?: unknown }>(request);
   const attention = kioskAttention(input.attention);
@@ -936,8 +911,9 @@ async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContex
   if (typeof input.readerOnline !== "boolean" || input.authenticationMethod !== undefined && !kioskAuthenticationMethods.has(input.authenticationMethod) || !input.releaseVersion?.trim() || input.releaseVersion.length > 40 || input.uptimeSeconds !== undefined && (!Number.isInteger(input.uptimeSeconds) || input.uptimeSeconds < 0 || input.uptimeSeconds > 2_147_483_647) || input.networkType !== undefined && !["wifi", "ethernet", "offline"].includes(input.networkType) || input.networkSignal !== undefined && input.networkSignal !== null && (!Number.isInteger(input.networkSignal) || input.networkSignal < 0 || input.networkSignal > 100) || input.lastWifiScanAt && !validTimestamp(input.lastWifiScanAt) || !Number.isInteger(pendingEvents) || pendingEvents < 0 || pendingEvents > 100_000 || input.lastSyncAt && !validTimestamp(input.lastSyncAt) || input.errorCategory && !["cloud_sync", "reader", "offline_queue"].includes(input.errorCategory)) throw new HttpError(400, "Authentication input status and approved operational diagnostics are required");
   const now = new Date().toISOString();
   const db = requireDatabase(env); const reportedRelease = input.releaseVersion.trim();
+  const errorCategory = kioskErrorCategory(input.errorCategory, attention, pendingEvents);
   await db.prepare("UPDATE kiosks SET update_policy_version = ? WHERE installation_id = 'primary' AND id = ?").bind(input.updatePolicyVersion ?? 1, kiosk.id).run();
-  await db.prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, authentication_method = COALESCE(?, authentication_method), release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ?, scans_need_review = ?, clock_confirmed = ?, clock_pending_scans = ?, review_sync_failing = ?, weak_matches = ?, reader_templates = ?, linked_templates = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.authenticationMethod ?? null, reportedRelease, input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, input.errorCategory || null, attention?.scansNeedReview ?? null, attention ? Number(attention.clockConfirmed) : null, attention?.clockPendingScans ?? null, attention ? Number(attention.reviewSyncFailing) : null, attention?.weakMatches ?? null, attention?.readerTemplates ?? null, attention?.linkedTemplates ?? null, kiosk.id).run();
+  await db.prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, authentication_method = COALESCE(?, authentication_method), release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ?, scans_need_review = ?, clock_confirmed = ?, clock_pending_scans = ?, review_sync_failing = ?, weak_matches = ?, reader_templates = ?, linked_templates = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.authenticationMethod ?? null, reportedRelease, input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, errorCategory, attention?.scansNeedReview ?? null, attention ? Number(attention.clockConfirmed) : null, attention?.clockPendingScans ?? null, attention ? Number(attention.reviewSyncFailing) : null, attention?.weakMatches ?? null, attention?.readerTemplates ?? null, attention?.linkedTemplates ?? null, kiosk.id).run();
   // A kiosk holding unreviewed rejected scans learns how many are still open in the cloud, so a dashboard review
   // reaches it on its next heartbeat instead of its hourly refresh. Kiosks with nothing to review cost no read.
   const openScanReviews = attention?.scansNeedReview ? (await db.prepare("SELECT COUNT(*) AS count FROM kiosk_scan_reviews WHERE installation_id = 'primary' AND review_status = 'open' AND kiosk_id = ?").bind(kiosk.id).first<{ count: number }>())?.count ?? 0 : undefined;
@@ -962,7 +938,7 @@ async function kioskStatus(request: Request, env: Env): Promise<Response> {
 }
 async function kioskConfiguration(request: Request, env: Env): Promise<Response> {
   const kiosk = await kioskFor(request, env); const settings = await requireDatabase(env).prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop FROM organization_settings WHERE installation_id = 'primary'").first();
-  return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings: settings ? { ...settings, authenticationMethod: kiosk.configuredAuthenticationMethod, fingerprintMinimumScore: await fingerprintMinimumScore(requireDatabase(env)).catch(() => 0) } : null });
+  return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings: settings ? { ...settings, authenticationMethod: kiosk.configuredAuthenticationMethod, ...await fingerprintMinimumScore(requireDatabase(env)).catch(() => 0).then(minimumScore => ({ fingerprintMinimumScore: minimumScore, fingerprintReenrollScore: reenrollThreshold(minimumScore) })) } : null });
 }
 type KioskRosterMember = { rosterId: string; memberId: string; firstName: string; lastName: string };
 const kioskRosterCache = new ReportDataCache<KioskRosterMember[]>();
@@ -1041,7 +1017,10 @@ async function kioskEnrollmentProgress(request: Request, env: Env, sessionId: st
   const kiosk = await kioskFor(request, env), input = await parseJson<{ status?: string; message?: string }>(request);
   if (!isObject(input) || Object.keys(input).some(key => !["status", "message"].includes(key))) throw new HttpError(400, "Unsupported enrollment progress");
   // Device-supplied prose is deliberately not persisted or reflected.
-  return response({ session: await progressKioskEnrollment(requireDatabase(env), kiosk.id, sessionId, input.status) });
+  const db = requireDatabase(env), session = await progressKioskEnrollment(db, kiosk.id, sessionId, input.status);
+  // A new enrollment starts the member's match-score history over, clearing any re-enrollment suggestion.
+  if (input.status === "enroll_success" && session.progress === "enroll_success" && session.member) await recordFingerprintReenrolled(db, session.member.rosterId).catch(() => undefined);
+  return response({ session });
 }
 async function queueKioskCommand(request: Request, env: Env, kioskId: string): Promise<Response> {
   if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Kiosk commands require the dashboard origin");
@@ -1112,8 +1091,13 @@ function meetingOccurrences(input: MeetingInput & { startsAt: string; endsAt: st
   if (!input.recurrence) return [{ startsAt: input.startsAt, endsAt: input.endsAt, sequence: null as number | null }];
   const frequency = input.recurrence.frequency; const until = input.recurrence.until;
   if (!frequency || !["daily", "weekly", "biweekly", "monthly"].includes(frequency) || !validTimestamp(until) || Date.parse(until) < Date.parse(input.startsAt)) throw new HttpError(400, "Recurring meetings need a valid frequency and series end date after the first meeting");
-  const duration = Date.parse(input.endsAt) - Date.parse(input.startsAt); const limit = Date.parse(until); const anchorDay = localParts(new Date(input.startsAt), timeZone).day; const occurrences = []; let start = new Date(input.startsAt);
-  while (start.getTime() <= limit && occurrences.length < 500) { occurrences.push({ startsAt: start.toISOString(), endsAt: new Date(start.getTime() + duration).toISOString(), sequence: occurrences.length + 1 }); start = nextOccurrence(start, frequency, anchorDay, timeZone); }
+  // Every occurrence keeps the first meeting's clock times, so an overnight meeting still ends at the same local time after a daylight-saving change.
+  // A clock end that would land at or before its start (inside a repeated hour) keeps the first meeting's elapsed length instead.
+  const clock = (date: Date) => { const parts = localParts(date, timeZone); return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second, parts.millisecond); };
+  const span = clock(new Date(input.endsAt)) - clock(new Date(input.startsAt));
+  const endFor = (start: Date) => { if (start.getTime() === Date.parse(input.startsAt)) return new Date(input.endsAt); const end = new Date(clock(start) + span); const local = localDate({ year: end.getUTCFullYear(), month: end.getUTCMonth() + 1, day: end.getUTCDate(), hour: end.getUTCHours(), minute: end.getUTCMinutes(), second: end.getUTCSeconds(), millisecond: end.getUTCMilliseconds() }, timeZone); return local > start ? local : new Date(start.getTime() + Date.parse(input.endsAt) - Date.parse(input.startsAt)); };
+  const limit = Date.parse(until); const anchorDay = localParts(new Date(input.startsAt), timeZone).day; const occurrences = []; let start = new Date(input.startsAt);
+  while (start.getTime() <= limit && occurrences.length < 500) { occurrences.push({ startsAt: start.toISOString(), endsAt: endFor(start).toISOString(), sequence: occurrences.length + 1 }); start = nextOccurrence(start, frequency, anchorDay, timeZone); }
   if (start.getTime() <= limit) throw new HttpError(400, "Recurring series is too large; shorten the date range to 500 meetings or fewer");
   return occurrences;
 }
@@ -1289,7 +1273,8 @@ async function restoreMeetings(request: Request, env: Env, meetingId: string): P
   const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "restore", deletion.meetingIds);
   return response({ restored: deletion.meetingIds.length, scope: input.scope ?? "occurrence", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
-async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual" | "simulator", actorId?: string): Promise<Response> {
+type KioskScanOrigin = { kioskId: string; refuseWrongMatches: boolean; matchScore?: unknown };
+async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual" | "simulator", actorId?: string, origin?: KioskScanOrigin): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required", undefined, "invalid_scan");
   const existing = await db.prepare("SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?").bind(input.eventId.trim()).first<{ action: AttendanceAction }>();
   if (existing) return response({ accepted: false, duplicate: true, eventId: input.eventId, action: existing.action }, 200);
@@ -1306,7 +1291,16 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   if (participationStartsOn && meeting.startsAt.slice(0, 10) < participationStartsOn) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${participationStartsOn}`, undefined, "participation_not_started");
   const window = scanWindowState(meeting, input.occurredAt, settings?.lateScanMinutes ?? 30);
   if (!window.accepted) throw new HttpError(409, input.meetingId ? window.reason : "No meeting is accepting attendance scans at this time", undefined, input.meetingId ? "scan_window_closed" : "no_eligible_meeting");
-  const prior = await db.prepare("SELECT id, action, occurred_at AS occurredAt FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ? ORDER BY occurred_at, id").bind(member.id, meeting.id).all<{ id: string; action: AttendanceAction; occurredAt: string }>();
+  const occurredAt = new Date(input.occurredAt).toISOString();
+  const [prior, conflict] = await Promise.all([
+    db.prepare("SELECT id, action, occurred_at AS occurredAt FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ? ORDER BY occurred_at, id").bind(member.id, meeting.id).all<{ id: string; action: AttendanceAction; occurredAt: string }>(),
+    origin?.refuseWrongMatches ? findImpossibleScan(db, origin.kioskId, member.id, occurredAt) : Promise.resolve(null),
+  ]);
+  // Same-kiosk repeats keep the duplicate handling below; only another kiosk's accepted scan makes this one impossible.
+  if (origin && conflict) {
+    await recordPossibleWrongMatch(db, { eventId: input.eventId.trim(), kioskId: origin.kioskId, memberId: member.id, occurredAt, matchScore: origin.matchScore }, conflict);
+    throw new HttpError(409, "Scan again", undefined, "possible_wrong_match");
+  }
   const priorEvents = prior.results ?? [];
   const transition = input.desiredAction
     ? priorEvents.some((event) => event.action === input.desiredAction) ? { status: "duplicate" as const, action: input.desiredAction } : input.desiredAction === "check_out" && !priorEvents.some((event) => event.action === "check_in") ? { status: "complete" as const } : { status: "accepted" as const, action: input.desiredAction }
@@ -1314,16 +1308,21 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   if (transition.status === "duplicate") return response({ accepted: false, duplicate: true, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt }, 200);
   if (transition.status === "complete") throw new HttpError(409, "Attendance is already complete for this member and meeting", undefined, "attendance_complete");
   const id = crypto.randomUUID();
-  const result = await db.prepare("INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by, action) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, member.id, meeting.id, source, input.occurredAt, input.eventId.trim(), actorId ?? null, transition.action).run();
+  const insert = db.prepare("INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by, action) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, member.id, meeting.id, source, input.occurredAt, input.eventId.trim(), actorId ?? null, transition.action);
+  // Kiosk scans also remember their kiosk, in the same round trip, so a scan on another kiosk can be checked against them.
+  // A schema before 0088 lacks the table; the scan is then recorded alone, as before.
+  const result = origin ? await db.batch([insert, ...acceptedScanStatements(db, { eventId: input.eventId.trim(), kioskId: origin.kioskId, memberId: member.id, occurredAt })]).then(results => results[0], () => insert.run()) : await insert.run();
   return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt, meeting: { id: meeting.id, title: meeting.title }, member: { id: member.id, externalId: member.externalId, displayName: `${member.firstName} ${member.lastName}`.trim() } }, 202);
 }
 async function kioskAttendance(request: Request, env: Env): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string; matchScore?: unknown }>(request);
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string; matchScore?: unknown; rescanSupported?: unknown }>(request);
   if ((kiosk.pairingBound || input.pairingId !== undefined) && input.pairingId !== kiosk.pairingId) throw new HttpError(409, "This queued scan belongs to a different kiosk pairing and was not attached to the current kiosk", undefined, "pairing_mismatch");
   const db = requireDatabase(env);
   // Recorded whatever the outcome, so rejected scans show their match confidence too. Diagnostics never block attendance.
   if (input.matchScore !== undefined) await recordScanMatch(db, kiosk.id, input.eventId, input.matchScore).catch(() => undefined);
-  return recordAttendance(db, input, "kiosk");
+  // Only kiosks that can ask for a rescan are refused a possible wrong match. Older kiosks retry an unknown refusal
+  // forever, holding up every scan queued behind it, so their scans are recorded as before.
+  return recordAttendance(db, input, "kiosk", undefined, { kioskId: kiosk.id, refuseWrongMatches: input.rescanSupported === true, matchScore: input.matchScore });
 }
 async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -1629,7 +1628,8 @@ const attendanceRuntime = {
     "attendance.discord-channel": ({ env }) => syncDiscordManagedSurface(env),
     "attendance.discord-notices": ({ env }) => processDiscordAttendanceNotifications(env),
     "attendance.discord-anomalies": ({ env }) => processDiscordAnomalyReports(env),
-    "attendance.discord-label-roles": ({ env }) => processDiscordLabelRoleJobs(env),
+    // Two-way labels are checked first so the role changes they queue start in the same pass.
+    "attendance.discord-label-roles": async ({ env }) => { try { await processDiscordTwoWayLabels(env); } finally { await processDiscordLabelRoleJobs(env); } },
   },
   reports: { "attendance.members": async (db, definition, context) => (await attendanceReportProjection(db, definition, context)).rows },
 } satisfies Pick<ApiModuleContribution<Env>, "jobs" | "reports">;
@@ -2970,7 +2970,7 @@ async function attendanceDiscordDatabase(db: D1Database) {
   const generation = await requireModuleService(db, "attendance");
   return captureModuleServiceDatabase(db, "attendance", generation);
 }
-type DiscordLabelMapping = { labelId: string; labelName: string; active: number; guildId: string; roleId: string; roleName: string; createdAt: string };
+type DiscordLabelMapping = { labelId: string; labelName: string; active: number; guildId: string; roleId: string; roleName: string; createdAt: string; syncDirection?: "to_discord" | "two_way"; twoWayEnabledAt?: string | null; twoWayCheckedAt?: string | null; twoWayError?: string | null; twoWayPaused?: boolean };
 type DiscordGuildRole = { id: string; name: string; position: number; permissions: string; managed?: boolean };
 type DiscordGuildMember = { user?: { id?: string; username?: string }; nick?: string | null; roles?: string[] };
 type DiscordRoleChange = { discordUserId: string; displayName: string; memberId?: string };
@@ -2982,7 +2982,7 @@ async function discordLabelAdmin(db: D1Database, discordUserId: string): Promise
   return { ...admin, expiresAt: 0 };
 }
 async function discordLabelMapping(db: D1Database, labelId: string, requireActive = true): Promise<DiscordLabelMapping> {
-  const mapping = await db.prepare("SELECT x.label_id AS labelId, l.name AS labelName, l.active, x.guild_id AS guildId, x.role_id AS roleId, x.role_name AS roleName, x.created_at AS createdAt FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.label_id = ?").bind(labelId).first<DiscordLabelMapping>();
+  const mapping = await db.prepare("SELECT x.label_id AS labelId, l.name AS labelName, l.active, x.guild_id AS guildId, x.role_id AS roleId, x.role_name AS roleName, x.created_at AS createdAt, x.sync_direction AS syncDirection, x.two_way_enabled_at AS twoWayEnabledAt, x.two_way_checked_at AS twoWayCheckedAt, x.two_way_error AS twoWayError FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.label_id = ?").bind(labelId).first<DiscordLabelMapping>();
   if (!mapping) throw new HttpError(404, "This label has no Discord role association");
   if (requireActive && !mapping.active) throw new HttpError(409, "Restore the retired label before syncing its Discord role");
   return mapping;
@@ -3048,6 +3048,8 @@ async function discordLabelSource(db: D1Database, mapping: DiscordLabelMapping, 
 type DiscordServerState = { access: DiscordRoleAccess; guildMembers: DiscordGuildMember[] };
 async function discordRoleSnapshot(db: D1Database, config: Record<string, string>, labelId: string, server?: DiscordServerState): Promise<DiscordRoleSnapshot> {
   const mapping = await discordLabelMapping(db, labelId);
+  // A label paused after a restore changes nobody's role until an Admin reviews it again or switches it to Dashboard to Discord.
+  if (isTwoWayPaused(mapping)) throw new HttpError(409, `${mapping.labelName}: ${twoWayPausedMessage} Or switch it to Dashboard to Discord.`, undefined, "two_way_review_required");
   const role = server ? discordAccessibleRole(server.access, config, mapping.roleId) : await discordManageableRole(config, mapping.roleId);
   const [source, guildMembers] = await Promise.all([discordLabelSource(db, mapping, config.guildId), server?.guildMembers ?? discordAllGuildMembers(config)]);
   const guild = new Map(guildMembers.map((member) => [member.user!.id!, member]));
@@ -3069,13 +3071,15 @@ async function discordRoleSnapshot(db: D1Database, config: Record<string, string
 }
 async function discordLabelMappings(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
-  const rows = await db.prepare("SELECT x.label_id AS labelId, l.name AS labelName, l.active, x.guild_id AS guildId, x.role_id AS roleId, x.role_name AS roleName, x.created_at AS createdAt FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' ORDER BY l.name COLLATE NOCASE").all<DiscordLabelMapping>();
+  const rows = await db.prepare("SELECT x.label_id AS labelId, l.name AS labelName, l.active, x.guild_id AS guildId, x.role_id AS roleId, x.role_name AS roleName, x.created_at AS createdAt, x.sync_direction AS syncDirection, x.two_way_enabled_at AS twoWayEnabledAt, x.two_way_checked_at AS twoWayCheckedAt, x.two_way_error AS twoWayError FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' ORDER BY l.name COLLATE NOCASE").all<DiscordLabelMapping>();
   const integration = await integrationRecord(env, "discord"); const available = Boolean(integration && integration.enabled !== 0 && integration.verifiedAt);
   let config: Record<string, string> | undefined; let access: DiscordRoleAccess | undefined; let accessError = "";
   if (available) config = await discordConfiguration(env);
   if (config && rows.results?.length) try { access = await discordRoleAccess(config); } catch (error) { accessError = (error as Error).message; }
   const settings = await db.prepare("SELECT time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone: string }>(); const timeZone = settings?.timeZone ?? "UTC"; const today = policyLocalDate(new Date().toISOString(), timeZone);
-  const mappings = await Promise.all((rows.results ?? []).map(async (mapping) => {
+  const mappings = await Promise.all((rows.results ?? []).map(async (stored) => {
+    // A label paused after a restore is reported as paused; its reserved marker is not a check failure.
+    const mapping = isTwoWayPaused(stored) ? { ...stored, twoWayPaused: true, twoWayError: null } : stored;
     const latest = await db.prepare("SELECT id, status, created_at AS createdAt, updated_at AS updatedAt, completed_at AS completedAt FROM discord_label_role_jobs WHERE installation_id = 'primary' AND label_id = ? ORDER BY created_at DESC LIMIT 1").bind(mapping.labelId).first<{ id: string; status: string; createdAt: string; updatedAt: string; completedAt?: string }>();
     // Label changes recorded after the last sync, or dated changes that took effect since then. Pairing changes are not tracked here.
     const changed = latest && await db.prepare("SELECT 1 FROM member_label_changes WHERE installation_id = 'primary' AND label_id = ? AND (created_at > ? OR (effective_date > ? AND effective_date <= ?)) LIMIT 1").bind(mapping.labelId, latest.createdAt, policyLocalDate(latest.createdAt, timeZone), today).first();
@@ -3092,7 +3096,7 @@ async function discordLabelUnlink(request: Request, env: Env, labelId: string): 
   const mapping = await discordLabelMapping(db, labelId, false);
   const active = await db.prepare("SELECT id FROM discord_label_role_jobs WHERE installation_id = 'primary' AND label_id = ? AND status IN ('pending', 'running')").bind(labelId).first();
   if (active) throw new HttpError(409, "Wait for this role sync to finish before unlinking the role");
-  await db.prepare("DELETE FROM discord_label_role_mappings WHERE installation_id = 'primary' AND label_id = ?").bind(labelId).run();
+  await db.batch([db.prepare("DELETE FROM discord_label_role_mappings WHERE installation_id = 'primary' AND label_id = ?").bind(labelId), ...forgetTwoWayStatements(db, labelId)]);
   await writeAudit(db, principal, "discord.label_role_unlinked", "member_label", labelId, { guildId: mapping.guildId, roleId: mapping.roleId });
   return response({ unlinked: true, roleAssignmentsUnchanged: true });
 }
@@ -3105,13 +3109,14 @@ async function discordLabelPreview(request: Request, env: Env): Promise<Response
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ labelId?: string }>(request);
   if (!input.labelId) throw new HttpError(400, "Choose a label to preview");
   const db = requireDatabase(env); const config = await discordConfiguration(env); const snapshot = await discordRoleSnapshot(db, config, input.labelId);
+  if (snapshot.mapping.syncDirection === "two_way") throw new HttpError(409, `${snapshot.mapping.labelName} syncs both ways, so Discord is checked every 5 minutes. A full-server sync would also remove the role from Discord users who aren't on the roster.`);
   return response(await saveDiscordLabelPreview(db, principal, config, snapshot));
 }
 /** Previews every active linked label from one load of the server's roles and members. */
 async function discordLabelPreviewAll(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env);
-  const rows = await db.prepare("SELECT x.label_id AS labelId, l.name AS labelName FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND l.active = 1 AND x.guild_id = ? ORDER BY l.name COLLATE NOCASE").bind(config.guildId).all<{ labelId: string; labelName: string }>();
-  if (!rows.results?.length) throw new HttpError(409, "No active labels are linked to roles in this Discord server");
+  const rows = await db.prepare("SELECT x.label_id AS labelId, l.name AS labelName FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND l.active = 1 AND x.guild_id = ? AND x.sync_direction = 'to_discord' ORDER BY l.name COLLATE NOCASE").bind(config.guildId).all<{ labelId: string; labelName: string }>();
+  if (!rows.results?.length) throw new HttpError(409, "No active Dashboard to Discord labels are linked to roles in this Discord server");
   const [access, guildMembers] = await Promise.all([discordRoleAccess(config), discordAllGuildMembers(config)]);
   const previews = []; const skipped: { labelId: string; labelName: string; reason: string }[] = [];
   for (const row of rows.results) {
@@ -3159,12 +3164,12 @@ async function applyDiscordLabelPreview(db: D1Database, principal: Principal, co
   await writeAudit(db, principal, "discord.label_role_sync_requested", "member_label", preview.labelId, { jobId: id, roleId: preview.roleId, adds: snapshot.additions.length, removals: snapshot.removals.length });
   return { jobId: id, labelId: preview.labelId, status: changes.length ? "pending" : "completed", additions: snapshot.additions.length, removals: snapshot.removals.length };
 }
-/** Lists the server's roles for the dashboard role picker, with the reason any role cannot be linked. */
+/** Lists the server's roles for the dashboard role pickers by name, with the reason any role cannot be linked. */
 async function discordGuildRoles(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env);
   const [access, links] = await Promise.all([discordRoleAccess(config), db.prepare("SELECT x.role_id AS roleId, x.label_id AS labelId, l.name AS labelName FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.guild_id = ?").bind(config.guildId).all<{ roleId: string; labelId: string; labelName: string }>()]);
   const linked = new Map((links.results ?? []).map((link) => [link.roleId, link]));
-  const roles = access.roles.filter((role) => role.id !== config.guildId).sort((a, b) => b.position - a.position).map((role) => {
+  const roles = sortRolesByName(access.roles.filter((role) => role.id !== config.guildId)).map((role) => {
     const problem = access.canManageRoles ? access.problem(role) : "The bot needs the Manage Roles permission";
     const link = linked.get(role.id);
     return { id: role.id, name: role.name, manageable: !problem, ...(problem ? { problem } : {}), ...(link ? { labelId: link.labelId, labelName: link.labelName } : {}) };
@@ -3292,6 +3297,46 @@ async function discordLabelRetry(request: Request, env: Env, jobId: string, cont
   await writeAudit(db, principal, "discord.label_role_sync_retried", "member_label", old.labelId, { fromJobId: jobId, jobId: id, retried: changes.length });
   if (context) context.waitUntil(processDiscordLabelRoleJobs(env));
   return response({ jobId: id, retried: changes.length, resolved: (failed.results ?? []).length - changes.length }, 202);
+}
+/** The server as two-way sync needs it: its roles and members loaded once. */
+async function discordTwoWayServer(db: D1Database, config: ProviderConfiguration): Promise<{ server: TwoWayServer; deps: TwoWayDependencies }> {
+  const [access, guildMembers] = await Promise.all([discordRoleAccess(config), discordAllGuildMembers(config)]);
+  const server: TwoWayServer = { guildId: config.guildId, guildMembers, roleName: (roleId) => access.roles.find((role) => role.id === roleId)?.name, roleProblem: (roleId) => { try { discordAccessibleRole(access, config, roleId); return undefined; } catch (error) { return (error as Error).message; } } };
+  return { server, deps: { sourceFingerprint: async (labelId) => (await discordLabelSource(db, await discordLabelMapping(db, labelId), config.guildId)).sourceFingerprint } };
+}
+/** The scheduled two-way check. Discord is called only when an active label syncs both ways. */
+async function processDiscordTwoWayLabels(env: Env): Promise<void> {
+  const db = requireDatabase(env);
+  if (!await hasTwoWayLabels(db)) return;
+  let config: ProviderConfiguration;
+  // Disabled or unverified Discord pauses two-way checks until it is verified again.
+  try { config = await discordConfiguration(env); } catch (error) { if (error instanceof HttpError && error.status === 503) return; throw error; }
+  const { server, deps } = await discordTwoWayServer(db, config);
+  await pollTwoWayLabels(db, server, deps);
+}
+async function discordTwoWayPreview(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ labelId?: string }>(request);
+  if (typeof input.labelId !== "string" || !input.labelId) throw new HttpError(400, "Choose a label to review");
+  const db = requireDatabase(env); const { server, deps } = await discordTwoWayServer(db, await discordConfiguration(env));
+  return response(await previewTwoWay(db, principal.userId, input.labelId, server, deps));
+}
+async function discordTwoWayConfirm(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<Record<string, unknown>>(request);
+  const db = requireDatabase(env); const { server, deps } = await discordTwoWayServer(db, await discordConfiguration(env));
+  const result = await confirmTwoWay(db, principal.userId, input, server, deps);
+  if (result.jobId && context) context.waitUntil(processDiscordLabelRoleJobs(env, result.jobId));
+  return response(result);
+}
+/** Turning two-way sync on needs a reviewed reconciliation, so this only switches a label back to Dashboard to Discord. */
+async function discordLabelDirection(request: Request, env: Env, labelId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ direction?: string }>(request);
+  if (input.direction === "two_way") throw new HttpError(409, "Review the members whose label and role disagree before turning on two-way sync", undefined, "two_way_review_required");
+  if (input.direction !== "to_discord") throw new HttpError(400, "Sync direction must be to_discord or two_way");
+  return response(await disableTwoWay(requireDatabase(env), principal.userId, labelId));
+}
+async function discordUnmatchedRoleMembers(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin"]);
+  return response(await unmatchedRoleMembers(requireDatabase(env)));
 }
 async function discordInteraction(request: Request, env: Env): Promise<Response> {
   const { config, record } = await discordInteractionConfiguration(env); const raw = await request.text();
@@ -3681,8 +3726,8 @@ const tableColumns = {
   user_preferences: ["installation_id", "user_id", "developer_scheduler_enabled", "revision", "updated_at"],
   members: ["id", "installation_id", "external_id", "first_name", "last_name", "email", "discord_user_id", "active", "created_at", "attendance_required_from", "inactive_periods_json"],
   member_labels: ["id", "installation_id", "name", "active", "formula_enabled", "created_by", "created_at"],
-  member_label_changes: ["id", "installation_id", "member_id", "label_id", "action", "effective_date", "created_by", "created_at"],
-  discord_label_role_mappings: ["installation_id", "label_id", "guild_id", "role_id", "role_name", "created_by", "created_at"],
+  member_label_changes: ["id", "installation_id", "member_id", "label_id", "action", "effective_date", "created_by", "created_at", "source"],
+  discord_label_role_mappings: ["installation_id", "label_id", "guild_id", "role_id", "role_name", "created_by", "created_at", "sync_direction"],
   label_weekly_targets: ["id", "installation_id", "label_id", "starts_on", "ends_on", "meetings_per_week", "created_by", "created_at"],
   label_attendance_rules: ["id", "installation_id", "label_id", "starts_on", "ends_on", "rule_type", "threshold_percent", "meetings_per_week", "created_by", "created_at", "updated_at", "excused_handling"],
   saved_report_views: ["id", "installation_id", "owner_user_id", "scope", "name", "definition_json", "revision", "created_by", "updated_by", "created_at", "updated_at"],
@@ -3728,7 +3773,14 @@ const isObject = (value: unknown): value is Record<string, unknown> => Boolean(v
 const safeBackupValue = (value: unknown) => value === null || ["string", "number", "boolean"].includes(typeof value);
 // Schema 43 and 44: modules that moved into plugins (extracted-modules.ts: Carpool at 43, Outreach at 44) left Core's
 // section; their plugins export them in `externalModules`.
-const backupSchemaVersion = 44;
+// Schema 45: each dated label change records its source (dashboard or Discord), and each Discord role link its sync
+// direction. A label exported as two-way restores paused until an Admin reviews it again (discord-label-two-way.ts).
+const backupSchemaVersion = 45;
+/** Exported values computed from other columns: a label paused after a restore is still two-way in a backup. */
+const backupColumnExpressions: Partial<Record<BackupTable, Record<string, string>>> = {
+  discord_label_role_mappings: { sync_direction: `CASE WHEN sync_direction = 'to_discord' AND two_way_error = '${twoWayRestorePaused}' THEN 'two_way' ELSE sync_direction END AS sync_direction` },
+};
+const backupSelectColumns = (table: BackupTable) => tableColumns[table].map((column) => backupColumnExpressions[table]?.[column] ?? column).join(", ");
 const backupEnvelopeFormat = "lancerlogin-community-modular";
 const backupEnvelopeVersion = 1;
 /** Installed plugin modules. Their portable rows travel in the `externalModules` section, outside the first-party Core envelope. */
@@ -3754,7 +3806,7 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const scope = new URL(request.url).searchParams.get("scope") as BackupScope;
   if (!["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Backup scope must be meetings, roster, or installation");
   const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
-    const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${tableColumns[table].join(", ")} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>();
+    const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${backupSelectColumns(table)} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>();
     // Lifecycle, assignment and setup rows of a module whose code is not in this build (a removed plugin, or a module that moved into a
     // plugin that is not composed) stay out: the backup carries none of that module's data, and this build could not restore them.
     const rows = (moduleKeyedTables as readonly string[]).includes(table) ? (result.results ?? []).filter((row) => bundledModuleRegistry.get(String(row.module_id))) : result.results ?? [];
@@ -3874,7 +3926,7 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 40 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -3 : schemaVersion < 31 ? -2 : -1) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -11) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
+    const columns = schemaVersion < 45 && (table === "member_label_changes" || table === "discord_label_role_mappings") ? tableColumns[table].slice(0, -1) : table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 40 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -3 : schemaVersion < 31 ? -2 : -1) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -11) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column])) || (sourceSchemaVersion >= 31 || community22) && Object.keys(row).some((column) => !(columns as readonly string[]).includes(column))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   rows += externalPlan.entries.reduce((total, entry) => total + entry.rows, 0);
@@ -3952,6 +4004,11 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
     if (tables.member_labels.some((row) => row.formula_enabled === 1) || tables.label_attendance_rules.length) tables.organization_settings = tables.organization_settings.map((row) => ({ ...row, attendance_policy_activated_on: new Date().toISOString().slice(0, 10) }));
   }
   tables.label_attendance_rules = tables.label_attendance_rules.map((row) => ({ excused_handling: "exclude", ...row }));
+  // Before schema 45 every label change came from the dashboard and every role link synced Dashboard to Discord.
+  tables.member_label_changes = tables.member_label_changes.map((row) => ({ source: "dashboard", ...row }));
+  if (tables.member_label_changes.some((row) => row.source !== "dashboard" && row.source !== "discord")) throw new HttpError(400, "Backup label change has an invalid source");
+  tables.discord_label_role_mappings = tables.discord_label_role_mappings.map((row) => ({ sync_direction: "to_discord", ...row }));
+  if (tables.discord_label_role_mappings.some((row) => row.sync_direction !== "to_discord" && row.sync_direction !== "two_way")) throw new HttpError(400, "Backup Discord role link has an invalid sync direction");
   if (tables.label_attendance_rules.some((row) => !["exclude", "count_missed"].includes(String(row.excused_handling)))) throw new HttpError(400, "Backup attendance rule has invalid excused-meeting handling");
   if (scope === "installation" && schemaVersion >= 20) {
     const restoredLabels = tables.member_labels.map((row) => ({ id: String(row.id), name: String(row.name), active: Boolean(row.active), formulaEnabled: Boolean(row.formula_enabled) }));
@@ -4064,7 +4121,7 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
     ...tables.members.map((row) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at, attendance_required_from, inactive_periods_json) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = excluded.active, attendance_required_from = excluded.attendance_required_from, inactive_periods_json = excluded.inactive_periods_json").bind(row.id, row.external_id, row.first_name, row.last_name, row.email, row.discord_user_id, row.active, row.created_at, row.attendance_required_from, row.inactive_periods_json)),
     db.prepare("DELETE FROM member_label_changes WHERE installation_id = 'primary'"), db.prepare("DELETE FROM label_attendance_rules WHERE installation_id = 'primary'"), db.prepare("DELETE FROM label_weekly_targets WHERE installation_id = 'primary'"), db.prepare("UPDATE member_labels SET active = 0 WHERE installation_id = 'primary'"),
     ...tables.member_labels.map((row) => db.prepare("INSERT INTO member_labels (id, installation_id, name, active, formula_enabled, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, active = excluded.active, formula_enabled = excluded.formula_enabled").bind(row.id, row.name, row.active, row.formula_enabled, row.created_by, row.created_at)),
-    ...insertBackupRows(db, "member_label_changes", tables.member_label_changes), ...insertBackupRows(db, "label_weekly_targets", tables.label_weekly_targets), ...insertBackupRows(db, "label_attendance_rules", tables.label_attendance_rules), db.prepare("DELETE FROM discord_label_role_mappings WHERE installation_id = 'primary' AND label_id IN (SELECT id FROM member_labels WHERE installation_id = 'primary' AND active = 0)"), db.prepare("UPDATE discord_label_role_jobs SET status = 'stale', lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND status IN ('pending', 'running')").bind(new Date().toISOString(), new Date().toISOString()), db.prepare("UPDATE organization_settings SET attendance_recent_days = ?, attendance_policy_activated_on = ? WHERE installation_id = 'primary'").bind(backup.attendanceRecentDays, backup.attendancePolicyActivatedOn),
+    ...insertBackupRows(db, "member_label_changes", tables.member_label_changes), ...insertBackupRows(db, "label_weekly_targets", tables.label_weekly_targets), ...insertBackupRows(db, "label_attendance_rules", tables.label_attendance_rules), db.prepare("DELETE FROM discord_label_role_mappings WHERE installation_id = 'primary' AND label_id IN (SELECT id FROM member_labels WHERE installation_id = 'primary' AND active = 0)"), ...pauseRestoredTwoWayStatements(db), db.prepare("UPDATE discord_label_role_jobs SET status = 'stale', lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND status IN ('pending', 'running')").bind(new Date().toISOString(), new Date().toISOString()), db.prepare("UPDATE organization_settings SET attendance_recent_days = ?, attendance_policy_activated_on = ? WHERE installation_id = 'primary'").bind(backup.attendanceRecentDays, backup.attendancePolicyActivatedOn),
   ];
   else {
     // Installed plugin tables may not cascade from Core rows, so clear them child-first before Core deletion.
@@ -4075,6 +4132,8 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
       if (authorityTables.has(table)) continue;
       if (table === "member_labels" && backup.schemaVersion >= 14) statements.push(db.prepare("DELETE FROM member_labels WHERE installation_id = 'primary'"));
       statements.push(...(restoredStateTables.has(table) ? restoredModuleStateStatements(db, table, tables[table]) : insertBackupRows(db, table, tables[table])));
+      // Two-way labels restore paused, in the same batch, so no scheduled pass ever sees them syncing.
+      if (table === "discord_label_role_mappings") statements.push(...pauseRestoredTwoWayStatements(db));
     }
     const restoredModules = new Set(tables.platform_modules.map((row) => String(row.module_id)));
     statements.push(...freshExternalModuleStatements(db, installedExternalBackupModules.filter(({ definition }) => !restoredModules.has(definition.id)), new Date().toISOString()), ...insertExternalModuleStatements(db, backup.externalModules.included));
@@ -4207,8 +4266,6 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/auth/local" && request.method === "POST") result = await localLogin(request, env);
     else if (url.pathname === "/auth/session" && request.method === "GET") result = await authSession(request, env);
     else if (/^\/auth\/walkthroughs\/[^/]+$/.test(url.pathname) && ["GET", "PATCH"].includes(request.method)) result = await authWalkthrough(request, env, url.pathname.slice("/auth/walkthroughs/".length));
-    else if (url.pathname === "/auth/preferences" && request.method === "PATCH") result = await authPreferences(request, env);
-    else if (url.pathname === "/admin/preferences" && ["GET", "PUT"].includes(request.method)) result = await adminPreferences(request, env);
     else if (url.pathname === "/auth/logout" && request.method === "POST") result = await logout(request, env);
     else if (url.pathname === "/auth/google/start" && request.method === "GET") result = await googleStart(request, env);
     else if (url.pathname === "/auth/google/callback" && request.method === "GET") result = await googleCallback(request, env);
@@ -4256,6 +4313,13 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
       const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
       if (request.method === "PUT") { const minimumScore = validateMinimumScore(await parseJson(request)); await saveFingerprintMinimumScore(db, minimumScore); await writeAudit(db, principal, "kiosk.fingerprint_minimum_score_changed", "kiosk", null, { minimumScore }); }
       result = response(await readFingerprintMatch(db));
+    }
+    else if (url.pathname === "/admin/kiosks/possible-wrong-matches" && request.method === "GET") { await requireRole(request, env, ["admin"]); result = response(await listPossibleWrongMatches(requireDatabase(env))); }
+    else if (url.pathname === "/admin/kiosks/reenroll-suggestions" && request.method === "GET") { await requireRole(request, env, ["admin", "operator"]); result = response(await readReenrollSuggestions(requireDatabase(env))); }
+    else if (/^\/admin\/kiosks\/reenroll-suggestions\/[^/]+\/dismissal$/.test(url.pathname) && request.method === "POST") {
+      const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const memberId = decodeURIComponent(url.pathname.split("/")[4]);
+      await dismissReenrollSuggestion(db, memberId, principal.userId); await writeAudit(db, principal, "kiosk.reenroll_suggestion_dismissed", "member", memberId);
+      result = response(await readReenrollSuggestions(db));
     }
     else if (url.pathname === "/admin/kiosks/fingerprint-sync") {
       await requireRole(request, env, ["admin"]);
@@ -4316,6 +4380,10 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/integrations/discord/label-roles/apply-all" && request.method === "POST") result = await discordLabelApplyAll(request, env, context);
     else if (url.pathname === "/admin/integrations/discord/roles" && request.method === "GET") result = await discordGuildRoles(request, env);
     else if (url.pathname === "/admin/integrations/discord/label-roles/preview" && request.method === "POST") result = await discordLabelPreview(request, env);
+    else if (url.pathname === "/admin/integrations/discord/label-roles/two-way/preview" && request.method === "POST") result = await discordTwoWayPreview(request, env);
+    else if (url.pathname === "/admin/integrations/discord/label-roles/two-way/confirm" && request.method === "POST") result = await discordTwoWayConfirm(request, env, context);
+    else if (url.pathname === "/admin/integrations/discord/label-roles/unmatched" && request.method === "GET") result = await discordUnmatchedRoleMembers(request, env);
+    else if (/^\/admin\/integrations\/discord\/label-roles\/[^/]+\/direction$/.test(url.pathname) && request.method === "PUT") result = await discordLabelDirection(request, env, decodeURIComponent(url.pathname.split("/")[5]));
     else if (url.pathname === "/admin/integrations/discord/label-roles/apply" && request.method === "POST") result = await discordLabelApply(request, env, context);
     else if (/^\/admin\/integrations\/discord\/label-roles\/[^/]+$/.test(url.pathname) && request.method === "DELETE") result = await discordLabelUnlink(request, env, decodeURIComponent(url.pathname.split("/")[5]));
     else if (/^\/admin\/integrations\/discord\/label-role-jobs\/[^/]+$/.test(url.pathname) && request.method === "GET") result = await discordLabelJobStatus(request, env, decodeURIComponent(url.pathname.split("/")[5]));
@@ -4372,6 +4440,11 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     }
     else if (url.pathname === "/kiosk/enrollment" && request.method === "GET") result = response({ enrollment: await readKioskEnrollment(requireDatabase(env), (await kioskFor(request, env)).id) });
     else if (/^\/kiosk\/enrollment\/[^/]+\/progress$/.test(url.pathname) && request.method === "POST") result = await kioskEnrollmentProgress(request, env, decodeURIComponent(url.pathname.split("/")[3]));
+    // A fingerprint enrolled on the kiosk's own maintenance screen, which never passes through a dashboard session.
+    else if (url.pathname === "/kiosk/fingerprint-enrollments" && request.method === "POST") {
+      const kiosk = await kioskFor(request, env);
+      result = response(await recordLocalFingerprintEnrollment(requireDatabase(env), kiosk, await parseJson(request, 4096)));
+    }
     else if (url.pathname === "/kiosk/scan-reviews" && request.method === "POST") {
       const kiosk = await kioskFor(request, env);
       result = response(await syncKioskScanReviews(requireDatabase(env), { ...kiosk, tokenHash: await sha256(request.headers.get("authorization")!.slice(7)) }, await parseJson(request, 100_000)));

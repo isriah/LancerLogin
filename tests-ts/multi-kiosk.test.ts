@@ -255,6 +255,25 @@ test("heartbeat attention details reach the Kiosks page and report open cloud re
   for (const invalid of [{ ...attention, scansNeedReview: -1 }, { ...attention, clockConfirmed: "no" }, { ...attention, extra: 1 }, [attention]]) assert.equal((await heartbeat(invalid)).status, 400);
 });
 
+test("rejected scans never degrade a kiosk while attendance stuck on it still does", async context => {
+  const { call, pair } = await fixture(context);
+  const device = await pair("Front entrance");
+  const ok = { scansNeedReview: 0, clockConfirmed: true, clockPendingScans: 0, reviewSyncFailing: false };
+  const category = async (errorCategory: string, attention?: Record<string, unknown>, pendingEvents = 0) => {
+    const reply = await call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "2.0.0-beta.14", errorCategory, pendingEvents, ...(attention ? { attention: { ...ok, ...attention } } : {}) }, device.kioskToken);
+    assert.equal(reply.status, 200, await reply.clone().text());
+    return ((await (await call("/admin/kiosks")).json()) as { kiosks: Array<{ errorCategory: string | null; reviewSyncFailing: number | null }> }).kiosks[0]!;
+  };
+  assert.equal((await category("offline_queue", { scansNeedReview: 4 })).errorCategory, null, "unreviewed rejected scans alone");
+  const failing = await category("cloud_sync", { scansNeedReview: 2, reviewSyncFailing: true });
+  assert.equal(failing.errorCategory, null, "a failed review upload alone"); assert.equal(failing.reviewSyncFailing, 1, "the failure stays visible to Debug tools");
+  assert.equal((await category("offline_queue", { scansNeedReview: 4, clockConfirmed: false })).errorCategory, "offline_queue", "an unconfirmed clock holds attendance");
+  assert.equal((await category("offline_queue", { clockPendingScans: 3 })).errorCategory, "offline_queue", "scans saved while the clock was unconfirmed");
+  assert.equal((await category("cloud_sync", { reviewSyncFailing: true }, 5)).errorCategory, "cloud_sync", "attendance waiting to upload behind a review failure");
+  assert.equal((await category("reader", { scansNeedReview: 1 })).errorCategory, "reader");
+  assert.equal((await category("offline_queue")).errorCategory, "offline_queue", "older kiosks report no causes and keep their category");
+});
+
 test("fingerprint match scores are recorded for every uploaded scan and the minimum score reaches kiosks", async context => {
   const { database, call, pair } = await fixture(context);
   const device = await pair("Front entrance");
@@ -318,6 +337,26 @@ test("migration 0085 keeps kiosk command history while allowing the reader clean
   sqlite.exec("INSERT INTO kiosk_commands(id,installation_id,kiosk_id,command_type,created_by,created_at) VALUES ('erase','primary','kiosk','erase_unlinked_fingerprints','admin','2026-10-02')");
   assert.throws(() => sqlite.exec("INSERT INTO kiosk_commands(id,installation_id,kiosk_id,command_type,created_by,created_at) VALUES ('bad','primary','kiosk','format_disk','admin','2026-10-02')"));
   assert.ok(sqlite.prepare("SELECT name FROM sqlite_master WHERE name='idx_kiosk_commands_pending'").get());
+  sqlite.close();
+});
+
+test("migration 0087 dismisses open rejected-scan reviews and keeps their evidence and existing notes", () => {
+  const sqlite = new DatabaseSync(":memory:");
+  const files = readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql")).sort();
+  for (const name of files.filter(name => name < "0087")) sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
+  sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES ('primary','2026-01-01','local');
+    INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('admin','primary','admin','admin','2026-01-01');
+    INSERT INTO pairing_codes(id,installation_id,code_hash,expires_at,created_by,created_at,purpose) VALUES ('code','primary','code-hash','2026-01-02','admin','2026-01-01','hardware');
+    INSERT INTO kiosks(id,installation_id,pairing_code_id,name,token_hash,active,created_at) VALUES ('kiosk','primary','code','Test Kiosk A','hash',1,'2026-01-01');
+    INSERT INTO kiosk_scan_reviews(installation_id,kiosk_id,event_id,record_json,received_at,review_status,reviewed_at,review_note) VALUES
+      ('primary','kiosk','synthetic-open','{"memberId":"SYN-001"}','2026-10-27T00:00:00Z','open',NULL,NULL),
+      ('primary','kiosk','synthetic-reviewed','{"memberId":"SYN-002"}','2026-10-27T00:00:00Z','reviewed','2026-10-28T00:00:00Z','Checked by Test Admin');`);
+  for (const name of files.filter(name => name >= "0087")) sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
+  const rows = sqlite.prepare("SELECT event_id AS eventId,record_json AS record,review_status AS status,reviewed_at AS reviewedAt,review_note AS note FROM kiosk_scan_reviews ORDER BY event_id").all().map(row => ({ ...row })) as Array<Record<string, string>>;
+  assert.deepEqual(rows.map(row => [row.eventId, row.status, row.record]), [["synthetic-open", "reviewed", '{"memberId":"SYN-001"}'], ["synthetic-reviewed", "reviewed", '{"memberId":"SYN-002"}']]);
+  assert.match(rows[0]!.reviewedAt!, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.equal(rows[0]!.note, "Dismissed automatically when rejected-scan review moved to Debug tools");
+  assert.deepEqual([rows[1]!.reviewedAt, rows[1]!.note], ["2026-10-28T00:00:00Z", "Checked by Test Admin"], "earlier reviews keep their notes");
   sqlite.close();
 });
 

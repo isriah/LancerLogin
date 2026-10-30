@@ -12,9 +12,10 @@ async function fixtures(page: Page, view: (typeof pairedViews)[number], carpool:
   if (carpool) { modules.modules[0] = attendanceSnapshot().modules[0]!; modules.capabilities = [...modules.capabilities, ...modules.modules[0]!.effectiveCapabilities]; }
   await page.route("**/platform/modules", route => route.fulfill({ json: modules }));
   await page.route(`**${linkPath}`, route => route.fulfill({ json: { available: true, links: [{ meetingId: "active-meeting", id: "plan-1", title: "Outbound coordinator" }, { meetingId: "active-meeting", id: "plan-2", title: "Second coordinator" }] } }));
-  // L: Carpool meeting links, M: meeting collection, D: one meeting.
+  // L: Carpool meeting links, M: meeting collection, D: one meeting, P: a full page load.
   const requests: string[] = [];
   page.on("request", request => { const path = new URL(request.url()).pathname; if (request.method() === "GET" && request.resourceType() === "fetch" && (path === linkPath || path === "/meetings" || path.startsWith("/meetings/"))) requests.push(path === linkPath ? "L" : path === "/meetings" ? "M" : "D"); });
+  page.on("load", () => requests.push("P"));
   return requests;
 }
 
@@ -35,10 +36,11 @@ for (const view of pairedViews) test(`Carpool meeting slots render inside the Ca
   await expect(badge).toHaveCSS("display", "inline-flex");
   expect(await moduleRoot(page, ".calendar-selected-record .carpool-meeting-marker")).toEqual({ module: "carpool", display: "contents", tag: "span" });
   await page.waitForLoadState("networkidle");
-  // Links load once per loaded meeting collection (plus the development StrictMode mount replay), never once per meeting.
+  // Links load once per loaded meeting collection (plus the development StrictMode mount replay on each page load), never
+  // once per meeting. Selecting a desktop one-meeting day reloads the page, so the calendar can see two page loads.
   const calendar = [...requests];
   expect(count(calendar, "L")).toBeGreaterThan(0);
-  expect(count(calendar, "L")).toBeLessThanOrEqual(count(calendar, "M") + 2);
+  expect(count(calendar, "L")).toBeLessThanOrEqual(count(calendar, "M") + 2 * count(calendar, "P"));
 
   await page.getByRole("radio", { name: "Table", exact: true }).check();
   const directoryBadge = page.locator(".meeting-directory .carpool-meeting-marker").first();

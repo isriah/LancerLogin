@@ -21,6 +21,8 @@ const previewDisplays = {
   offline: { id: "offline", tone: "offline", message: "Saved for sync", detail: "This scan is stored on the kiosk and will sync automatically" },
   unknown: { id: "unknown", tone: "error", message: "Fingerprint not recognized", detail: "Try the same finger again, or ask an operator for help" },
   rejected: { id: "rejected", tone: "error", message: "Scan needs help", detail: "No meeting is accepting attendance scans at this time" },
+  rescan: { id: "rescan", tone: "notice", message: "Scan again", detail: "Place your finger flat on the reader and hold it still." },
+  welcome_weak: { id: "welcome", tone: "success", message: "Welcome", detail: "Arrival recorded", name: "Test Student A", meetingTitle: "Build Night", notice: "Your fingerprint is reading weakly. Ask a mentor to re-enroll it." },
 };
 
 function previewState(request) {

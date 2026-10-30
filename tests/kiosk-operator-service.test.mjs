@@ -12,15 +12,15 @@ import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { for (let n = 0; n < 100; n++) { if (await check()) return; await wait(30); } assert.fail("Synthetic runtime condition did not become true"); }
-async function fixture(t, { method = "fingerprint", modern = false, holdConfiguration = false, holdCommand = false, enrollment = false, confirmClock = true, reviewUnavailable = false, minimumScore, commandType } = {}) {
+async function fixture(t, { method = "fingerprint", modern = false, holdConfiguration = false, holdCommand = false, enrollment = false, confirmClock = true, reviewUnavailable = false, minimumScore, reenrollScore, refuseAttendance = false, commandType, enrollmentReports = "modern" } = {}) {
   const root = await mkdtemp(join(tmpdir(), "kiosk-operator-service-")); await chmod(root, 0o700);
   let rosterMode = "valid", heartbeats = 0, configurationStarted = false, commandStarted = false, releaseConfiguration, releaseCommand;
-  const attendance = [];
+  const attendance = [], attendanceRefusals = [];
   const reviewRequests = [];
   const heartbeatReports = [];
   const commandResults = []; let commandQueued = false;
   let enrollmentSession = enrollment ? { id: "synthetic-session", pairingId: "synthetic-pairing", expiresAt: new Date(Date.now() + 300000).toISOString(), state: "ready", progress: "awaiting_confirmation", member: { memberId: "synthetic-member", rosterId: "synthetic-roster", firstName: "Sample", lastName: "Member" } } : null;
-  const enrollmentProgress = [];
+  const enrollmentProgress = [], enrollmentReportRequests = [], enrollmentReportsAccepted = [];
   const cloud = createServer(async (request, response) => {
     response.setHeader("content-type", "application/json");
     let data = {};
@@ -39,7 +39,7 @@ async function fixture(t, { method = "fingerprint", modern = false, holdConfigur
     else if (request.url === "/kiosk/config") {
       configurationStarted = true;
       if (holdConfiguration) await new Promise(resolve => { releaseConfiguration = resolve; });
-      data = { settings: { authenticationMethod: method, ...(minimumScore === undefined ? {} : { fingerprintMinimumScore: minimumScore }) }, kiosk: { name: "Dashboard configured name" } };
+      data = { settings: { authenticationMethod: method, ...(minimumScore === undefined ? {} : { fingerprintMinimumScore: minimumScore }), ...(reenrollScore === undefined ? {} : { fingerprintReenrollScore: reenrollScore }) }, kiosk: { name: "Dashboard configured name" } };
     } else if (request.url === "/kiosk/commands/synthetic-command/result") {
       commandStarted = true;
       if (holdCommand) await new Promise(resolve => { releaseCommand = resolve; });
@@ -64,9 +64,16 @@ async function fixture(t, { method = "fingerprint", modern = false, holdConfigur
     } else if (request.url === "/kiosk/attendance") {
       const chunks = []; for await (const chunk of request) chunks.push(chunk);
       const event = JSON.parse(Buffer.concat(chunks).toString());
+      if (refuseAttendance) { attendanceRefusals.push(event); response.statusCode = 409; response.end(JSON.stringify({ error: "Scan again", code: "possible_wrong_match" })); return; }
       const duplicate = attendance.some(previous => previous.eventId === event.eventId);
       if (!duplicate) attendance.push(event);
       data = { eventId: event.eventId, ...(duplicate ? { duplicate: true } : { accepted: true }), action: "check_in" };
+    } else if (request.url === "/kiosk/fingerprint-enrollments") {
+      const chunks = []; for await (const chunk of request) chunks.push(chunk);
+      const report = JSON.parse(Buffer.concat(chunks).toString()); enrollmentReportRequests.push(report);
+      // An older Worker has no such route and answers with its generic 404.
+      if (enrollmentReports === "missing") { response.statusCode = 404; data = { error: "Not found" }; }
+      else { const duplicate = enrollmentReportsAccepted.some(previous => previous.eventId === report.eventId); if (!duplicate) enrollmentReportsAccepted.push(report); data = { eventId: report.eventId, accepted: !duplicate, duplicate, reenrolledAt: report.enrolledAt }; }
     } else if (request.url?.includes("fingerprint-reset")) data = { commands: [] };
     else if (request.url?.includes("fingerprint")) data = { enabled: false, peers: [], transfers: [] };
     response.end(JSON.stringify(data));
@@ -98,7 +105,7 @@ async function fixture(t, { method = "fingerprint", modern = false, holdConfigur
     async function stop(orderly = true) { const done = once(child, "exit"); child.send(orderly ? { orderlyStop: true } : { crashStop: true }); await done; }
     return { child, request, reader, presence, stop };
   }
-  return { root, start, attendance, reviewRequests, heartbeatReports, commandResults, queueCommand: () => { commandQueued = true; }, enrollmentProgress, roster: mode=>{rosterMode=mode;}, heartbeats:()=>heartbeats,
+  return { root, start, attendance, attendanceRefusals, reviewRequests, enrollmentReportRequests, enrollmentReportsAccepted, updateWorker: () => { enrollmentReports = "modern"; }, heartbeatReports, commandResults, queueCommand: () => { commandQueued = true; }, enrollmentProgress, roster: mode=>{rosterMode=mode;}, heartbeats:()=>heartbeats,
     configurationStarted: () => configurationStarted, commandStarted: () => commandStarted,
     releaseConfiguration: () => { holdConfiguration = false; releaseConfiguration?.(); }, releaseCommand: () => { holdCommand = false; releaseCommand?.(); },
   };
@@ -337,7 +344,7 @@ test("a real kiosk records the match score with each scan and asks for a rescan 
       await until(async () => (await (await runtime.request("/display-state")).json()).display.message === "Try again");
       await wait(500);
       assert.equal(f.attendance.length, 0, "a match scoring 100 is not recorded below a minimum of 150");
-      assert.deepEqual(JSON.parse(await readFile(join(f.root, "fingerprint-match.json"), "utf8")), { minimumScore: 150 });
+      assert.deepEqual(JSON.parse(await readFile(join(f.root, "fingerprint-match.json"), "utf8")), { minimumScore: 150, reenrollScore: 0 });
     } else {
       await until(() => f.attendance.length === 1);
       assert.equal(f.attendance[0].matchScore, 100, "a match at or above the minimum is recorded with its score");
@@ -345,6 +352,40 @@ test("a real kiosk records the match score with each scan and asks for a rescan 
     assert.equal(f.heartbeatReports[0].attention.weakMatches, 0);
     await runtime.stop();
   }
+});
+
+test("a real kiosk records a weakly reading accepted scan and adds the re-enrollment note only below the threshold", { timeout: 20000 }, async t => {
+  for (const reenrollScore of [80, 120]) {
+    const f = await fixture(t, { minimumScore: 60, reenrollScore }), runtime = await f.start();
+    await until(() => f.heartbeats() > 0);
+    await runtime.presence("attendance"); await wait(350);
+    await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+    await until(() => f.attendance.length === 1);
+    await until(async () => (await (await runtime.request("/display-state")).json()).display.id === "welcome");
+    const { display } = await (await runtime.request("/display-state")).json();
+    assert.equal(f.attendance[0].matchScore, 100, "attendance is recorded either way");
+    assert.equal(display.notice, reenrollScore === 120 ? "Your fingerprint is reading weakly. Ask a mentor to re-enroll it." : undefined);
+    assert.deepEqual(JSON.parse(await readFile(join(f.root, "fingerprint-match.json"), "utf8")), { minimumScore: 60, reenrollScore });
+    await runtime.stop();
+  }
+});
+
+test("a real kiosk asks for a rescan when the Worker refuses a possible wrong match, without queueing it for review", { timeout: 20000 }, async t => {
+  const f = await fixture(t, { refuseAttendance: true }), runtime = await f.start();
+  await until(() => f.heartbeats() > 0);
+  await runtime.presence("attendance"); await wait(350);
+  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+  await until(async () => (await (await runtime.request("/display-state")).json()).display.id === "rescan");
+  const { display } = await (await runtime.request("/display-state")).json();
+  assert.deepEqual([display.message, display.tone], ["Scan again", "notice"]);
+  assert.equal(f.attendanceRefusals.length, 1);
+  assert.equal(f.attendanceRefusals[0].rescanSupported, true);
+  const { attendance } = await (await runtime.request("/health")).json();
+  assert.deepEqual([attendance.pending, attendance.rejected, attendance.needsReview], [0, 0, 0], "the refused scan is neither retried nor kept for review");
+  await wait(300);
+  assert.equal(f.attendanceRefusals.length, 1);
+  assert.equal(f.reviewRequests.length, 0);
+  await runtime.stop();
 });
 
 test("a real kiosk erases only unlinked reader fingerprints on the dashboard command and reports reader counts", { timeout: 20000 }, async t => {
@@ -360,4 +401,41 @@ test("a real kiosk erases only unlinked reader fingerprints on the dashboard com
   await until(() => f.heartbeatReports.length > 0);
   assert.equal(f.heartbeatReports[0].attention.linkedTemplates, 1);
   assert.ok(Number.isInteger(f.heartbeatReports[0].attention.readerTemplates));
+});
+
+test("a maintenance-screen enrollment is reported to the Worker with only the member, time and pairing", { timeout: 20000 }, async t => {
+  const f = await fixture(t), runtime = await f.start(); await runtime.presence("maintenance");
+  assert.equal((await runtime.request("/network/unlock", { pin: "123456" })).status, 200);
+  const before = Date.now();
+  assert.equal((await runtime.request("/enroll", { memberId: "synthetic-member", slot: 1 })).status, 201);
+  await until(() => f.enrollmentReportsAccepted.length === 1);
+  const [report] = f.enrollmentReportsAccepted;
+  assert.deepEqual(Object.keys(report).sort(), ["enrolledAt", "eventId", "pairingId", "rosterId"], "no template or other biometric data");
+  assert.equal(report.rosterId, "synthetic-roster"); assert.equal(report.pairingId, "synthetic-pairing");
+  assert.ok(Date.parse(report.enrolledAt) >= before - 1000 && Date.parse(report.enrolledAt) <= Date.now());
+  await runtime.stop();
+  assert.deepEqual(await createFileQueue(join(f.root, "local-enrollment-reports.json")).pending(), [], "a delivered report leaves the queue");
+  for (const name of ["attendance-queue.json", "attendance-queue.json.outcomes.json", "attendance-queue.json.journal"]) {
+    const text = await readFile(join(f.root, name), "utf8").catch(() => "");
+    assert.doesNotMatch(text, /local-enrollment|synthetic-roster/, `${name} keeps only attendance records`);
+  }
+});
+
+test("an older Worker without the endpoint parks enrollment reports without holding up attendance", { timeout: 25000 }, async t => {
+  const f = await fixture(t, { enrollmentReports: "missing" });
+  let runtime = await f.start(), presence = await runtime.presence("maintenance");
+  assert.equal((await runtime.request("/network/unlock", { pin: "123456" })).status, 200);
+  assert.equal((await runtime.request("/enroll", { memberId: "synthetic-member", slot: 1 })).status, 201);
+  await until(() => f.enrollmentReportRequests.length === 1);
+  presence = await runtime.presence("attendance", presence); await wait(350);
+  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+  await until(() => f.attendance.length === 1);
+  await runtime.stop();
+  const parked = await createFileQueue(join(f.root, "local-enrollment-reports.json")).pending();
+  assert.equal(parked.length, 1, "parked, not dropped");
+  assert.equal(parked[0].rosterId, "synthetic-roster");
+  // Once the Worker is updated, the parked report is delivered after the restart.
+  f.updateWorker(); runtime = await f.start({ initializeClock: false });
+  await until(() => f.enrollmentReportsAccepted.length === 1);
+  assert.equal(f.enrollmentReportsAccepted[0].eventId, parked[0].eventId);
 });

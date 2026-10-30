@@ -109,6 +109,19 @@ test("the roster revision migration starts at the current report revision", asyn
   raw.close();
 });
 
+test("a recurring overnight series keeps its clock end time across a daylight-saving change", async (t) => {
+  const { db, client } = fixture(); t.after(() => db.raw.close());
+  db.raw.exec("UPDATE organization_settings SET time_zone = 'America/New_York' WHERE installation_id = 'primary'");
+  // Synthetic weekly 7 PM to 9 AM meeting starting 2026-10-24 (EDT); New York falls back on 2026-11-01.
+  const created = await client.call("/meetings", { title: "Synthetic overnight", startsAt: "2026-10-24T23:00:00.000Z", endsAt: "2026-10-25T13:00:00.000Z", required: true, recurrence: { frequency: "weekly", until: "2026-11-08T23:59:00.000Z" } });
+  assert.equal(created.status, 201, await created.clone().text());
+  assert.deepEqual(db.rows("SELECT starts_at AS startsAt, ends_at AS endsAt FROM meetings ORDER BY starts_at"), [
+    { startsAt: "2026-10-24T23:00:00.000Z", endsAt: "2026-10-25T13:00:00.000Z" },
+    { startsAt: "2026-10-31T23:00:00.000Z", endsAt: "2026-11-01T14:00:00.000Z" },
+    { startsAt: "2026-11-08T00:00:00.000Z", endsAt: "2026-11-08T14:00:00.000Z" },
+  ]);
+});
+
 test("meeting overlap reads only meetings near the proposed window, and branding skips it unless the late window grows", async (t) => {
   const { db, client } = fixture(); t.after(() => db.raw.close());
   const far = Array.from({ length: 40 }, (_, index) => meetingRow(`far-${index}`, new Date(Date.UTC(2025, 0, 1 + index * 3, 18)).toISOString(), new Date(Date.UTC(2025, 0, 1 + index * 3, 20)).toISOString())).join("\n");

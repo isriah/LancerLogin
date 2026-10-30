@@ -66,7 +66,7 @@ test("invalid Carpool rows are refused before writes and schema 29 archives regi
   const database = new FakeDatabase(); const cookie = await sessionCookie("admin"); seedWithCarpool(database);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Backup;
-  assert.equal(installation.schemaVersion, 44); assert.equal(carpoolTables.some((table) => table in installation.tables), false);
+  assert.equal(installation.schemaVersion, 45); assert.equal(carpoolTables.some((table) => table in installation.tables), false);
   const savedAt = "2026-09-29T00:00:00Z";
   const rows = {
     carpool_plans: [{ installation_id: "primary", id: "plan-1", title: "Tampered", destination: "Arena", event_reference: null, event_title_snapshot: null, event_starts_at_snapshot: null, radius_miles: 12, preferred_radius_miles: 4, notes: "", archived: 0, revision: 0, created_by: "admin-1", created_at: savedAt, updated_at: savedAt, meeting_id: null, trip_scope: "both", group_settings_json: "[]", last_rebuild_json: null, time_zone: "UTC", outbound_departure_at: null, return_departure_at: null }],
@@ -94,7 +94,7 @@ test("Carpool meeting links survive strict schema33 recovery and older archives 
   database.lists.set("FROM carpool_plans WHERE", [{ installation_id: "primary", id: "plan-1", title: "Synthetic navigation", destination: "", event_reference: null, event_title_snapshot: null, event_starts_at_snapshot: null, radius_miles: 12, preferred_radius_miles: 4, notes: "", archived: 0, revision: 0, created_by: "admin-1", created_at: savedAt, updated_at: savedAt, meeting_id: "unavailable-meeting", trip_scope: "both", group_settings_json: "[]", last_rebuild_json: null, time_zone: "UTC", outbound_departure_at: null, return_departure_at: null }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Backup;
-  assert.equal(current.schemaVersion, 44); assert.equal(section(current).tables.carpool_plans[0].meeting_id, "unavailable-meeting");
+  assert.equal(current.schemaVersion, 45); assert.equal(section(current).tables.carpool_plans[0].meeting_id, "unavailable-meeting");
   const restore = (backup: unknown) => worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
   const missing = structuredClone(current); delete section(missing).tables.carpool_plans[0].meeting_id;
   assert.equal((await restore(missing)).status, 400);
@@ -118,7 +118,7 @@ test("Carpool schema37 preserves trip scope and pin provenance and defaults sche
   database.lists.set("FROM carpool_plans WHERE", [{ installation_id: "primary", id: "plan-1", title: "Synthetic return plan", destination: "Synthetic venue", event_reference: null, event_title_snapshot: null, event_starts_at_snapshot: null, radius_miles: 12, preferred_radius_miles: 4, notes: "", archived: 0, revision: 0, created_by: "admin-1", created_at: savedAt, updated_at: savedAt, meeting_id: null, trip_scope: "return", group_settings_json: "[]", last_rebuild_json: null, time_zone: "UTC", outbound_departure_at: null, return_departure_at: null }]);
   database.lists.set("FROM carpool_people WHERE", [{ installation_id: "primary", plan_id: "plan-1", id: "person-1", member_id: null, display_name: "Synthetic rider", contact: "", source_row: null, import_identity: null, import_snapshot_json: null, outbound_status: "unknown", outbound_address: "", outbound_lat: null, outbound_lon: null, outbound_seats: null, return_status: "needs-ride", return_address: "Synthetic address", return_lat: 40, return_lon: -74, return_seats: null, return_same_as_outbound: 0, notes: "", revision: 0, created_at: savedAt, updated_at: savedAt, outbound_location_source: null, outbound_location_label: null, return_location_source: "lookup", return_location_label: "Synthetic matched address" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Backup; assert.equal(current.schemaVersion, 44);
+  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Backup; assert.equal(current.schemaVersion, 45);
   const restore = (backup: unknown) => worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
   const mutations = [(tables: Backup) => { delete tables.carpool_plans[0].trip_scope; }, (tables: Backup) => { tables.carpool_plans[0].trip_scope = "unexpected"; }, (tables: Backup) => { tables.carpool_people[0].return_location_source = "no-match"; }, (tables: Backup) => { delete tables.carpool_people[0].return_location_label; }];
   for (const mutate of mutations) { const bad = structuredClone(current); mutate(section(bad).tables); assert.equal((await restore(bad)).status, 400); }
@@ -134,7 +134,7 @@ test("Carpool schema38 validates group labels and complete rebuild recovery whil
   database.lists.set("FROM carpool_plans WHERE", [{ installation_id: "primary", id: "plan-1", title: "Synthetic groups", destination: "Synthetic venue", event_reference: null, event_title_snapshot: null, event_starts_at_snapshot: null, radius_miles: 20, preferred_radius_miles: 6, notes: "", archived: 0, revision: 3, created_by: "admin-1", created_at: savedAt, updated_at: savedAt, meeting_id: null, trip_scope: "both", group_settings_json: settings, last_rebuild_json: JSON.stringify(snapshot), time_zone: "UTC", outbound_departure_at: null, return_departure_at: null }]);
   database.lists.set("FROM carpool_people WHERE", ["driver", "rider"].map(id => ({ installation_id: "primary", plan_id: "plan-1", id, member_id: null, display_name: "Synthetic " + id, contact: "", source_row: null, import_identity: null, import_snapshot_json: null, outbound_status: id === "driver" ? "offer" : "needs-ride", outbound_address: "Synthetic pickup", outbound_lat: 40, outbound_lon: -74, outbound_seats: id === "driver" ? 1 : null, return_status: "transit", return_address: "", return_lat: null, return_lon: null, return_seats: null, return_same_as_outbound: 0, notes: "", revision: 0, created_at: savedAt, updated_at: savedAt, outbound_location_source: "manual", outbound_location_label: null, return_location_source: null, return_location_label: null })));
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Backup; assert.equal(current.schemaVersion, 44);
+  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Backup; assert.equal(current.schemaVersion, 45);
   const restore = (backup: unknown) => worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
   const mutations = [(tables: Backup) => { delete tables.carpool_plans[0].group_settings_json; }, (tables: Backup) => { tables.carpool_plans[0].group_settings_json = JSON.stringify([{ direction: "outbound", vehiclePersonId: "missing", label: "Group", color: "blue" }]); }, (tables: Backup) => { tables.carpool_plans[0].last_rebuild_json = JSON.stringify({ ...snapshot, revision: 4 }); }, (tables: Backup) => { tables.carpool_plans[0].last_rebuild_json = JSON.stringify({ ...snapshot, assignments: [...snapshot.assignments, ...snapshot.assignments] }); }, (tables: Backup) => { tables.carpool_people[0].outbound_seats = 0; }];
   for (const mutate of mutations) { const bad = structuredClone(current); mutate(section(bad).tables); assert.equal((await restore(bad)).status, 400); }
@@ -147,7 +147,7 @@ test("Carpool schema39 validates trip timing before writes and defaults schema38
   const database = new FakeDatabase(); const cookie = await sessionCookie("admin"); seedWithCarpool(database); const savedAt = "2026-10-14T00:00:00Z";
   database.lists.set("FROM carpool_plans WHERE", [{ installation_id: "primary", id: "plan-1", title: "Synthetic timed event", destination: "Synthetic venue", event_reference: null, event_title_snapshot: null, event_starts_at_snapshot: null, radius_miles: 12, preferred_radius_miles: 4, notes: "", archived: 0, revision: 0, created_by: "admin-1", created_at: savedAt, updated_at: savedAt, meeting_id: null, trip_scope: "both", group_settings_json: "[]", last_rebuild_json: null, time_zone: "America/New_York", outbound_departure_at: "2026-10-14T12:00:00.000Z", return_departure_at: "2026-10-14T22:00:00.000Z" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Backup; assert.equal(current.schemaVersion, 44);
+  const current = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as Backup; assert.equal(current.schemaVersion, 45);
   const restore = (backup: unknown) => worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
   const mutations = [(row: Backup) => { delete row.time_zone; }, (row: Backup) => { row.time_zone = null; }, (row: Backup) => { row.time_zone = "Invalid/Zone"; }, (row: Backup) => { row.outbound_departure_at = "2026-02-30T12:00:00.000Z"; }, (row: Backup) => { row.outbound_departure_at = ""; }, (row: Backup) => { row.return_departure_at = row.outbound_departure_at; }];
   for (const mutate of mutations) { const bad = structuredClone(current); mutate(section(bad).tables.carpool_plans[0]); assert.equal((await restore(bad)).status, 400); }
@@ -183,7 +183,7 @@ test("a real schema 42 backup exported while Carpool was first-party restores th
 
   // The next backup carries Carpool in its plugin section, with the same rows, and Core's section no longer owns Carpool.
   const current = await client.backup("installation");
-  assert.equal(current.schemaVersion, 44);
+  assert.equal(current.schemaVersion, 45);
   assert.equal(carpoolTables.some((table) => table in current.tables), false);
   // Outreach also moved into a plugin (schema 44), so Core's ownership metadata lists only Attendance.
   assert.deepEqual(current.ownership.modules.map((module: { id: string }) => module.id), ["attendance"]);
@@ -209,7 +209,7 @@ test("installation recovery preserves Carpool defaults and removes nonportable c
     INSERT INTO carpool_location_resolution VALUES('primary','lookup-plan','synthetic-input','running','synthetic-lease','2099-01-01T00:00:00Z',NULL);`);
   const client = backupClient(worker, db);
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 44); assert.equal(section(backup).tables.carpool_settings[0].preferred_radius_miles, 6);
+  assert.equal(backup.schemaVersion, 45); assert.equal(section(backup).tables.carpool_settings[0].preferred_radius_miles, 6);
   assert.equal("carpool_geocoding_credentials" in section(backup).tables, false); assert.doesNotMatch(JSON.stringify(backup), /synthetic-encrypted-key/);
   assert.equal("carpool_location_resolution" in section(backup).tables, false); assert.doesNotMatch(JSON.stringify(backup), /synthetic-lease|synthetic-input/);
   assert.equal((await client.restore(backup)).status, 200);

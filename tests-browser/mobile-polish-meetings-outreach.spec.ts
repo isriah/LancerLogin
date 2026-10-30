@@ -2,6 +2,7 @@ import { expect, test, type Page, type Locator } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
 import { pairedViews } from "./paired-views";
 import { requireOutreachPlugin } from "./outreach-fixtures";
+import { calendarDay, selectCalendarDay } from "./meeting-calendar-fixture";
 
 const meeting = { id: "active-meeting", title: "Synthetic planning", startsAt: "2026-09-28T14:00:00Z", endsAt: "2026-09-28T16:30:00Z", attendanceClosesAt: "2026-09-28T17:00:00Z", required: true, notes: "Bring the synthetic project plan.", audienceMode: "all", audienceLabelIds: [] };
 const activity = { id: "synthetic-service", mode: "event", labelIds: [], labels: [], serviceDate: "2026-09-28", teamId: null, title: "Synthetic service day", description: "Sort practice materials", location: "Synthetic library", impactRelevant: true, archived: false, revision: 0, eventStartLocal: null, eventEndLocal: null, eventStartOccurrence: null, eventEndOccurrence: null };
@@ -23,8 +24,11 @@ for (const { viewport, theme } of pairedViews) {
     await expect(page.getByRole("radio", { name: "Calendar", exact: true })).toBeChecked();
     await expect(page.getByRole("combobox", { name: "Meeting", exact: true })).toHaveCount(0);
     await expect(page.locator(".calendar-selected-day")).toContainText(meeting.notes);
-    const day = page.getByRole("button", { name: "September 30, 2026, 1 meeting", exact: true });
-    await day.focus(); await page.keyboard.press("Enter"); await expect(day).toHaveAttribute("aria-pressed", "true");
+    const day = calendarDay(page, "September 30, 2026", 1);
+    await day.focus(); await page.keyboard.press("Enter");
+    // A desktop day with exactly one meeting opens it directly instead of selecting the day.
+    if (viewport.width > 900) { await expect(page).toHaveURL(/\/meetings\/later$/); await page.goBack(); await selectCalendarDay(page, day, "2026-09-30"); }
+    await expect(day).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator(".calendar-selected-day")).toContainText("Later synthetic planning");
     await page.getByRole("button", { name: "Next month of meetings" }).click();
     await expect(page.locator(".compact-month-navigation > strong")).toHaveText("October 2026");

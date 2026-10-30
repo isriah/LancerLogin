@@ -152,10 +152,10 @@ test("Access renders mixed-case email addresses in lowercase", async ({ page }) 
   await context(page);
   await page.route("**/admin/users", route => route.fulfill({ json: { users: [{ id: "user-1", email: "Avery@Example.Test", role: "admin", active: 1, createdAt: "2026-09-01" }] } }));
   await page.goto("/settings/access");
-  const account = page.locator(".user-list article");
+  const account = page.locator(".user-list tr.settings-account");
   await expect(account.locator("strong")).toHaveText("avery@example.test");
-  await expect(account.locator("span")).toContainText("avery@example.test");
-  await expect(account.locator("span")).toHaveCSS("text-transform", "none");
+  await expect(account.locator("td[data-label='Sign-in']")).toHaveText("avery@example.test");
+  await expect(account.locator("td[data-label='Sign-in']")).toHaveCSS("text-transform", "none");
 });
 
 test("Operator can change theme and sign out through Settings without Admin access", async ({ page }) => {

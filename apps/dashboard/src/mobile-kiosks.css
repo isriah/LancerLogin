@@ -3,7 +3,19 @@
 .kiosk-management-section > summary { min-height: var(--control-min-block-size); padding: var(--space-3) 0; color: var(--ui-text); font-size: var(--text-body); cursor: pointer; }
 .kiosk-management-section[open] { padding-bottom: var(--space-3); }
 .kiosk-management-section .kiosk-authentication-form { margin-top: 0; }
-.kiosk-manage-link, .kiosk-update-action { margin-block: var(--space-3); }
+/* The card's action row owns the spacing: `.app a.ui-button` resets link margins, so a margin on the link is lost. */
+.kiosk-card-actions, .kiosk-update-action { margin-block: var(--space-3); }
+/* Side by side on wider screens: a long kiosk name wraps inside the enrollment button instead of pushing Manage kiosk down. */
+.kiosk-card-actions { display: flex; align-items: flex-start; gap: var(--space-2); }
+.kiosk-enrollment-action { display: grid; flex: 0 1 auto; gap: var(--space-1); min-width: 0; }
+.app .kiosk-card-actions > .kiosk-manage-link { flex: none; }
+.app .kiosk-card-actions .kiosk-enrollment-button { max-width: 100%; margin: 0; overflow-wrap: anywhere; }
+.kiosk-enrollment-action small { color: var(--ui-text-muted); font-size: var(--text-caption); }
+.kiosk-debug-tools { display: grid; gap: var(--space-4); min-width: 0; padding-top: var(--space-4); border-top: 1px solid var(--ui-border); }
+.kiosk-debug-tools-heading h2, .kiosk-debug-tools-heading p { margin: 0; }
+.kiosk-debug-tools-heading p { margin-top: var(--space-1); color: var(--ui-text-muted); font-size: var(--text-small); }
+.kiosk-debug-panels { display: grid; gap: var(--space-4); min-width: 0; }
+.kiosk-debug-panels .panel-heading h3 { margin: 0; }
 .app .kiosk-device-row button.kiosk-edit-button { display: inline-flex; justify-content: center; align-items: center; padding: 0; min-height: var(--control-min-block-size); }
 .app .kiosk-device-row button.kiosk-edit-button svg { display: block; margin: 0; flex: none; }
 .fingerprint-sharing-page > .settings-card { padding: var(--space-4); }
@@ -12,17 +24,17 @@
 @media (max-width: 760px) {
   .kiosk-diagnostics dt, .kiosk-diagnostics dd { font-size: var(--text-small); }
   .kiosk-diagnostics dd { overflow-wrap: anywhere; }
-  .app .kiosk-manage-link, .kiosk-update-action > button { width: 100%; justify-content: center; }
+  .kiosk-card-actions { flex-direction: column; align-items: stretch; }
+  .app .kiosk-card-actions > .kiosk-manage-link, .app .kiosk-card-actions .kiosk-enrollment-button, .kiosk-update-action > button { width: 100%; justify-content: center; }
   .simulator-page .simulator-controls .primary-button { justify-self: stretch; width: 100%; margin-top: 0; }
   .simulator-page .simulator-controls { gap: var(--space-4); }
 }
 
 .fingerprint-sharing-page .kiosk-actions { display: flex; align-items: center; flex-wrap: wrap; }
 .fingerprint-sharing-page .kiosk-actions button { width: auto; }
-/* Enrollment stays with its device; the modal follows the shared dialog tokens. */
+/* Enrollment starts from the selected kiosk's action row; the modal follows the shared dialog tokens. */
 .kiosk-device-option { display: flex; flex-direction: column; }
 .kiosk-device-option .kiosk-device-row { order: -1; }
-.kiosk-enrollment-button { align-self: flex-start; margin-top: var(--space-2); }
 .kiosk-enrollment-dialog { width: min(100%, 36rem); }
 .kiosk-enrollment-members { display: grid; gap: var(--space-2); max-height: 18rem; overflow-y: auto; }
 .kiosk-enrollment-members button { display: flex; justify-content: space-between; gap: var(--space-3); text-align: left; overflow-wrap: anywhere; }

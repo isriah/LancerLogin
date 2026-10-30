@@ -219,9 +219,9 @@ test("first-Admin setup with a local password signs the Admin in with the local 
   const input = { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple" };
   const created = await call(env, "/setup/bootstrap", { body: input });
   assert.equal(created.status, 201, await created.clone().text());
-  const body = await created.json() as { signedIn: boolean; user?: { id: string; role: string; debugMode: boolean }; admin: { id: string } };
+  const body = await created.json() as { signedIn: boolean; user?: { id: string; role: string }; admin: { id: string } };
   assert.equal(body.signedIn, true);
-  assert.deepEqual(body.user, { id: body.admin.id, role: "admin", debugMode: false });
+  assert.deepEqual(body.user, { id: body.admin.id, role: "admin" });
   const [issued, ...others] = created.headers.getSetCookie();
   assert.equal(others.length, 0, "a first setup without a reset grant sets only the session cookie");
   assert.match(issued!, /^lancerlogin_session=[^;]+; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=28800$/);

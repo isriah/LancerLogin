@@ -126,14 +126,14 @@ const errors: Record<string, string> = {
   run_mismatch: "The workflow run could not be matched to this request safely, so its status is not trusted. Open the diagnostic run in GitHub and inspect it. Do not start another update.",
   dispatch_ambiguous: "GitHub's dispatch response was uncertain. LancerLogin is reconciling this request; do not start another update.",
   dispatch_unresolved: "No unique workflow run could be matched to this request. Open the update controller workflow's runs in GitHub to find out whether it ran. Do not start another update until you know.",
-  selection_credential_required: `Plugin changes need the plugin selection credential. ${selectionTokenSteps}`,
-  selection_credential_expired: `The plugin selection credential (${selectionSecretName}) has expired. ${selectionTokenSteps}`,
-  selection_credential_rejected: `GitHub rejected the plugin selection credential (${selectionSecretName}). It was revoked, regenerated or has expired. ${selectionTokenSteps}`,
-  selection_credential_permission: `The plugin selection credential (${selectionSecretName}) cannot access the deployment repository. Edit the fine-grained token so it covers the deployment repository with Contents: Read and write, then run the "Refresh web update credential" workflow.`,
-  selection_unavailable: "The plugin selection could not be read from the private deployment repository. Try again later.",
+  selection_credential_required: `Module changes need the module selection credential. ${selectionTokenSteps}`,
+  selection_credential_expired: `The module selection credential (${selectionSecretName}) has expired. ${selectionTokenSteps}`,
+  selection_credential_rejected: `GitHub rejected the module selection credential (${selectionSecretName}). It was revoked, regenerated or has expired. ${selectionTokenSteps}`,
+  selection_credential_permission: `The module selection credential (${selectionSecretName}) cannot access the deployment repository. Edit the fine-grained token so it covers the deployment repository with Contents: Read and write, then run the "Refresh web update credential" workflow.`,
+  selection_unavailable: "The module selection could not be read from the private deployment repository. Try again later.",
   selection_invalid: "lancerlogin.modules.json in the deployment repository is invalid. Fix it on the main branch, then prepare the update again.",
-  module_selection_changed: "The plugin selection changed after this update was prepared. Prepare it again and download its associated backup.",
-  module_selection_preflight: "The plugin selection deployed by this update did not match the prepared one, so nothing changed. Prepare it again.",
+  module_selection_changed: "The module selection changed after this update was prepared. Prepare it again and download its associated backup.",
+  module_selection_preflight: "The module selection deployed by this update did not match the prepared one, so nothing changed. Prepare it again.",
   superseded_by_later_release: "A later reviewed release repaired this installation. The earlier update remains in history and no longer blocks writes.",
   preflight_failed: `The update stopped during its preflight checks, before anything changed. ${diagnosticRun}, fix what it reports, then prepare the update again.`,
   workflow_stopped_unchanged: `The update workflow was cancelled, timed out or failed before any migration or deployment, so nothing changed and writes resumed. ${diagnosticRun}, then prepare the update again.`,
@@ -199,7 +199,7 @@ const migrationLabels: Record<string, string> = { carpool: "Carpool", "hour-trac
 export function webUpdateError(code?: string | null, fallback = "The web update could not be completed.") {
   if (code?.startsWith("module_migration_required")) {
     const names = code.split(":")[1]?.split(",").filter(Boolean).map((id) => migrationLabels[id] ?? id) ?? [];
-    return `${names.length ? names.join(" and ") : "A module"} ${names.length > 1 ? "are" : "is"} in use and now a separate plugin. Nothing changed. Keep it by adding its plugin, or disable it in Settings > Modules, then prepare the update again.`;
+    return `${names.length ? names.join(" and ") : "A module"} ${names.length > 1 ? "are" : "is"} in use and now a separate module. Nothing changed. Keep it by adding it in Settings > Modules, or turn it off there, then prepare the update again.`;
   }
   return code ? errors[code] ?? fallback : fallback;
 }
@@ -216,10 +216,10 @@ export function webUpdateStatus(request: WebUpdateRequest) {
     recovery_required: "Recovery required. Do not start another update. Open the diagnostic run in GitHub, then follow Manual recovery in the installation guide to repair the installation.",
     expired: "This prepared update expired. Prepare a new update and download its associated backup.",
   };
-  const subject = request.mode === "modules" ? `Plugin changes for ${request.targetTag}` : `Update to ${request.targetTag}`;
+  const subject = request.mode === "modules" ? `Module changes for ${request.targetTag}` : `Update to ${request.targetTag}`;
   return `${subject}. ${statuses[request.state]}${request.errorCode ? ` ${webUpdateError(request.errorCode)}` : ""}${request.maintenance ? " Installation writes are paused; kiosk scans remain queued for replay." : ""}`;
 }
-/** A plugin-changes request keeps the release version, so a tab loaded before it finished needs a reload to use it. */
+/** A module-changes request keeps the release version, so a tab loaded before it finished needs a reload to use it. */
 export function canReloadPluginChanges(request: WebUpdateRequest | undefined, loadedAt: number) {
   return Boolean(request && request.mode === "modules" && request.state === "succeeded" && request.reloadReady && !request.maintenance && Date.parse(request.updatedAt) > loadedAt);
 }

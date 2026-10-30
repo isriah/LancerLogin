@@ -1,0 +1,55 @@
+/* Two-way label and Discord role sync: the turn-on review card and the unmatched Discord users panel. Colors come from the
+   shared --ui-* tokens, so the light and dark themes both apply. */
+.discord-reconcile { display: grid; gap: var(--space-4); min-width: 0; }
+.discord-reconcile-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
+.discord-reconcile-heading h2 { margin: 0; font-family: var(--font-display); font-size: var(--text-section-heading); font-weight: 400; letter-spacing: .02em; }
+.discord-reconcile-subline { margin: var(--space-1) 0 0; color: var(--ui-text-muted); overflow-wrap: anywhere; }
+.discord-reconcile-heading .status-pill { flex: 0 0 auto; border: 1px solid currentColor; }
+.discord-reconcile > p { margin: 0; }
+.discord-reconcile-callout { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid currentColor; border-radius: var(--radius-card); }
+.discord-reconcile-callout p { margin: 0; color: var(--ui-text); }
+.discord-reconcile-callout .checkbox-field { display: flex; align-items: center; gap: var(--space-2); width: fit-content; color: var(--ui-text); font-weight: 700; }
+.discord-reconcile-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-3); }
+.discord-reconcile-toolbar p { margin: 0; font-weight: 700; }
+.discord-reconcile-everyone { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); color: var(--ui-text-muted); }
+.reconcile-segmented { display: inline-flex; width: fit-content; border: 1px solid var(--ui-border); border-radius: var(--radius-control); overflow: hidden; }
+.app .reconcile-segmented > button { border: 0; border-radius: 0; background: var(--ui-surface); white-space: nowrap; }
+.app .reconcile-segmented > button + button { border-left: 1px solid var(--ui-border); }
+.app .reconcile-segmented > button[aria-pressed="true"] { color: var(--on-primary); background: var(--primary); font-weight: 700; }
+.discord-reconcile-table tbody th { color: var(--ui-text); background: transparent; font-size: var(--text-body); letter-spacing: normal; text-transform: none; }
+.discord-reconcile-table td { vertical-align: middle; }
+.discord-reconcile-table th[scope="row"] small,.discord-reconcile-choice small { display: block; color: var(--ui-text-muted); font-weight: 400; }
+.discord-reconcile-name { display: block; font-weight: 700; overflow-wrap: anywhere; }
+.discord-reconcile-choice { display: grid; gap: var(--space-1); justify-items: start; }
+.discord-reconcile-choice small[data-unset] { font-style: italic; }
+.discord-reconcile-note { color: var(--ui-text-muted); font-size: var(--text-small); }
+.discord-reconcile-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--ui-border); }
+.discord-reconcile-summary { margin: 0; color: var(--ui-text-muted); }
+.discord-reconcile-footer .dialog-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-left: auto; }
+@media (max-width: 760px) {
+  .discord-reconcile-heading { flex-direction: column; }
+  .discord-reconcile-table thead { display: none; }
+  .discord-reconcile-table,.discord-reconcile-table tbody { display: block; }
+  .discord-reconcile-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2) var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--ui-border); }
+  .discord-reconcile-table tr > * { display: block; padding: 0; border: 0; }
+  .discord-reconcile-table tbody th,.discord-reconcile-table td[data-label="Correct side"] { grid-column: 1 / -1; }
+  .discord-reconcile-table td[data-label]::before { display: block; content: attr(data-label); color: var(--ui-text-muted); font-size: var(--text-caption); font-weight: 700; }
+  .discord-reconcile-footer,.discord-reconcile-footer .dialog-actions { flex-direction: column; align-items: stretch; margin-left: 0; }
+  .discord-reconcile-footer .dialog-actions .ui-button { width: 100%; }
+  .discord-reconcile .table-scroll { overflow: visible; }
+}
+
+.discord-unmatched { display: grid; gap: var(--space-3); min-width: 0; }
+.discord-unmatched > p { margin: 0; }
+.discord-unmatched-label { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--ui-border); border-radius: var(--radius-card); background: var(--ui-surface-subtle); }
+.discord-unmatched-label h3 { margin: 0; overflow-wrap: anywhere; }
+.discord-unmatched-label .compact-list { margin: 0; overflow-wrap: anywhere; }
+.discord-unmatched-label small,.discord-unmatched-checked { color: var(--ui-text-muted); }
+
+/* The Labels page's per-label sync direction control. */
+.label-sync-direction { min-width: 12rem; }
+.labels-table .label-discord-role .label-sync-direction { width: auto; min-height: 2.25rem; padding-block: var(--space-1); }
+/* A two-way label paused after a restore, in the Discord roles card. */
+.label-two-way-paused { display: grid; gap: var(--space-2); }
+.label-two-way-paused p { margin: 0; }
+.label-two-way-paused .dialog-actions { margin: 0; }

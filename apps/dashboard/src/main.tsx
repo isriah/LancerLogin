@@ -18,6 +18,7 @@ import { normalizePath, usePath } from "./router";
 import { WalkthroughSessionProvider } from "./page-walkthrough";
 import { AppErrorFallback, ErrorBoundary } from "./error-boundary";
 import { clearWalkthroughSession } from "./walkthrough-session";
+import { readStorage, writeStorage } from "./browser-storage";
 import { product, type ThemeColors } from "../../../packages/shared/src/product.ts";
 // Loaded last so desktop consistency rules follow every page and mobile stylesheet.
 import "./desktop-layout.css";
@@ -33,6 +34,8 @@ type SetupStatus = { configured: boolean; installation?: { authMode: "google" | 
 const startingTheme = (status: SetupStatus): ThemeColors => status.defaultTheme ?? product.defaultTheme;
 const themeStorageKey = "lancerlogin-theme";
 function savedTheme(): "light" | "dark" { try { return localStorage.getItem(themeStorageKey) === "light" ? "light" : "dark"; } catch { return "dark"; } }
+// Debug mode belongs to this browser, not the account: it starts off on every new device and is never sent to the server.
+const debugModeStorageKey = "lancerlogin-debug-mode";
 
 function ThemeToggle({ theme, onTheme }: { theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
   const dark = theme === "dark";
@@ -166,6 +169,7 @@ function ConfiguredInstallation({ initialSession, initialModules, status, onStat
   const [moduleRequest, setModuleRequest] = useState(() => initialModules);
   const [checking, setChecking] = useState(true);
   const [sessionUnavailable, setSessionUnavailable] = useState(false);
+  const [debugPreference, setDebugPreference] = useState(() => readStorage("local", debugModeStorageKey) === "true");
   const mounted = useRef(true);
   function checkSession(request: Promise<DashboardSession | undefined>) {
     setChecking(true); setSessionUnavailable(false);
@@ -186,7 +190,7 @@ function ConfiguredInstallation({ initialSession, initialModules, status, onStat
   }, []);
   if (checking) return <section className="centered-state auth-check" aria-live="polite" aria-busy="true"><p className="kicker">Secure sign-in</p><h1>Checking your session…</h1><p>Confirming whether this browser already has an active dashboard session.</p></section>;
   if (sessionUnavailable) return <section className="centered-state auth-check" aria-live="polite"><p className="kicker">Secure sign-in</p><h1>Session check unavailable</h1><p>LancerLogin could not confirm your session. Check your connection and try again.</p><button className="primary-button" type="button" onClick={() => checkSession(loadDashboardSession())}>Try again</button></section>;
-  if (session) return <WalkthroughSessionProvider userId={session.id}><AppShell initialModules={moduleRequest} themeControl={<ThemeToggle theme={theme} onTheme={onTheme} />} role={session.role} debugMode={session.debugMode} onDebugModeChanged={async (debugMode) => { const response = await fetch(`${apiBaseUrl}/auth/preferences`, { method: "PATCH", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ debugMode }) }); if (!response.ok) throw new Error("Could not save Debug mode."); setSession((current) => current ? { ...current, debugMode } : current); }} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: startingTheme(status).primary, secondaryColor: startingTheme(status).secondary, appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSessionExpired={() => { setModuleRequest(undefined); setSession(undefined); }} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => { clearWalkthroughSession(session.id); setModuleRequest(undefined); setSession(undefined); }); }} /></WalkthroughSessionProvider>;
+  if (session) return <WalkthroughSessionProvider userId={session.id}><AppShell initialModules={moduleRequest} themeControl={<ThemeToggle theme={theme} onTheme={onTheme} />} role={session.role} debugMode={session.role === "admin" && debugPreference} onDebugModeChanged={(debugMode) => { writeStorage("local", debugModeStorageKey, String(debugMode)); setDebugPreference(debugMode); }} branding={status.settings ?? { organizationName: "LancerLogin", subtitle: "", logoData: "", primaryColor: startingTheme(status).primary, secondaryColor: startingTheme(status).secondary, appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 }} onBrandingChanged={(settings) => onStatusChange({ ...status, settings })} onSessionExpired={() => { setModuleRequest(undefined); setSession(undefined); }} onSignedOut={() => { void fetch(`${apiBaseUrl}/auth/logout`, { method: "POST", credentials: "include" }).finally(() => { clearWalkthroughSession(session.id); setModuleRequest(undefined); setSession(undefined); }); }} /></WalkthroughSessionProvider>;
   return <><EntryHeader branding={status.settings} theme={theme} onTheme={onTheme} /><LocalLogin status={status} onSignedIn={setSession} /></>;
 }
 
@@ -196,10 +200,10 @@ function signInFailureMessage(status: number) {
   return "Invalid username or password. Check your details or wait before trying again.";
 }
 
-function LocalLogin({ status, onSignedIn }: { status: SetupStatus; onSignedIn: (user: { id: string; role: "admin" | "operator"; debugMode: boolean }) => void }) {
+function LocalLogin({ status, onSignedIn }: { status: SetupStatus; onSignedIn: (user: DashboardSession) => void }) {
   const mode = status.installation?.authMode ?? "local";
   const [username, setUsername] = useState(""); const [password, setPassword] = useState(""); const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent) { event.preventDefault(); setMessage(""); setBusy(true); try { const response = await fetch(`${apiBaseUrl}/auth/local`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ username, password }) }); if (response.ok) onSignedIn((await response.json() as { user: { id: string; role: "admin" | "operator"; debugMode: boolean } }).user); else setMessage(signInFailureMessage(response.status)); } catch { setMessage("Sign-in service unavailable. Check your connection and try again."); } finally { setBusy(false); } }
+  async function submit(event: FormEvent) { event.preventDefault(); setMessage(""); setBusy(true); try { const response = await fetch(`${apiBaseUrl}/auth/local`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ username, password }) }); if (response.ok) onSignedIn((await response.json() as { user: DashboardSession }).user); else setMessage(signInFailureMessage(response.status)); } catch { setMessage("Sign-in service unavailable. Check your connection and try again."); } finally { setBusy(false); } }
   const messageId = message ? "sign-in-message" : undefined;
   return <main id="dashboard-content" className="login-card ui-card" aria-labelledby="sign-in-title"><div className="form-intro"><p className="kicker">{status.settings?.organizationName ?? "LancerLogin"}</p><h1 id="sign-in-title">{status.justCreated ? "Sign in to finish setup" : "Sign in"}</h1><p>{status.justCreated ? mode === "google" ? "Your installation is ready. Continue with Google using the first Admin email to finish setup." : "Your installation is ready. Sign in with the Admin account you just created to finish setup." : "Sign in to manage attendance."}</p></div>{mode !== "google" && <form className="ui-form" onSubmit={submit} aria-describedby={messageId}><label htmlFor="sign-in-username">Username<input id="sign-in-username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><label htmlFor="sign-in-password">Password<input id="sign-in-password" required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><button className="primary-button" disabled={busy} type="submit">{busy ? "Signing in…" : "Sign in"}</button></form>}{mode === "both" && <div className="auth-divider" aria-hidden="true"><span>or</span></div>}{mode !== "local" && <a className="google-button action-link" href={`${apiBaseUrl}/auth/google/start`}>Continue with Google</a>}{message && <p id="sign-in-message" className="ui-status auth-message" data-tone="error" role="alert" tabIndex={-1}>{message}</p>}</main>;
 }

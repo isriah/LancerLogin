@@ -89,6 +89,10 @@ export async function sendKioskEnrollmentProgress(config, sessionId, progress, {
 // misrouted deploy or proxy, 405, 410, 413, an HTML error page) is treated as
 // transient, so the scan stays queued and is retried with backoff.
 export const permanentScanRejections = new Set(["roster_inactive", "no_eligible_meeting", "attendance_complete", "participation_not_started", "pairing_mismatch", "scan_window_closed", "invalid_scan"]);
+// The Worker refused the scan because the member scanned on another kiosk seconds before or after it, so the reader
+// most likely matched someone else's finger. Nothing was recorded and there is nothing to review: the person rescans.
+// Uploads say `rescanSupported` so the Worker refuses only kiosks that understand this; older Workers ignore it.
+export const rescanScanRefusals = new Set(["possible_wrong_match"]);
 
 // Older APIs send no code. Recognize only their exact semantic messages.
 function legacyRejectionCode(status, error) {
@@ -126,18 +130,48 @@ export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) 
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/attendance`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
-    body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt, ...(event.pairingId ? { pairingId: event.pairingId } : {}), ...(Number.isInteger(event.matchScore) ? { matchScore: event.matchScore } : {}) }),
+    body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt, ...(event.pairingId ? { pairingId: event.pairingId } : {}), ...(Number.isInteger(event.matchScore) ? { matchScore: event.matchScore } : {}), rescanSupported: true }),
   });
   if (response.status >= 400 && response.status < 500) {
     const contentType = response.headers.get("content-type") ?? "";
     const body = /^application\/json(?:\s*;|\s*$)/i.test(contentType) ? await response.json().catch(() => ({})) : (await response.body?.cancel(), {});
     const error = typeof body?.error === "string" ? body.error.slice(0, 300) : "";
+    if (response.status === 409 && rescanScanRefusals.has(body?.code)) return { accepted: false, duplicate: false, rescan: true, status: response.status, code: body.code, error, eventId: event.eventId };
     const code = typeof body?.code === "string" && permanentScanRejections.has(body.code) ? body.code : legacyRejectionCode(response.status, error);
     if (code) return { accepted: false, rejected: true, status: response.status, code, error };
     throw new TransientDeliveryError(response.status, error);
   }
   const result = await parseResponse(response);
   if (result?.eventId !== event.eventId || (result.accepted !== true && result.duplicate !== true)) throw new Error("The attendance response did not confirm this scan");
+  return result;
+}
+
+// Reasons the Worker refuses a local enrollment report on its merits. Resending cannot change them, so the kiosk
+// drops the report: the member left the roster, the kiosk was paired again, or the report is malformed.
+export const permanentEnrollmentRejections = new Set(["roster_inactive", "pairing_mismatch", "invalid_enrollment"]);
+
+// A Worker older than the kiosk has no local enrollment endpoint. The report stays parked in its queue and is
+// retried with a long backoff until the Worker is updated; attendance never waits on it.
+export class MissingEndpointError extends TransientDeliveryError {
+  constructor(status) { super(status, `LancerLogin API returned ${status} for local enrollment reports; the report stays queued until the Worker is updated`); this.missing = true; }
+}
+
+/** Report that a fingerprint was enrolled on this kiosk. Only the member, time and pairing are sent, never templates. */
+export async function sendLocalEnrollment(config, report, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/fingerprint-enrollments`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
+    body: JSON.stringify({ eventId: report.eventId, rosterId: report.rosterId, enrolledAt: report.enrolledAt, ...(report.pairingId ? { pairingId: report.pairingId } : {}) }),
+  });
+  if (response.status >= 400 && response.status < 500) {
+    const contentType = response.headers.get("content-type") ?? "";
+    const body = /^application\/json(?:\s*;|\s*$)/i.test(contentType) ? await response.json().catch(() => ({})) : (await response.body?.cancel(), {});
+    if (typeof body?.code === "string" && permanentEnrollmentRejections.has(body.code)) return { accepted: false, dropped: true, status: response.status, code: body.code };
+    if ([404, 405].includes(response.status)) throw new MissingEndpointError(response.status);
+    throw new TransientDeliveryError(response.status, typeof body?.error === "string" ? body.error.slice(0, 300) : "");
+  }
+  const result = await parseResponse(response);
+  if (result?.eventId !== report.eventId || (result.accepted !== true && result.duplicate !== true)) throw new Error("The enrollment report response did not confirm this report");
   return result;
 }
 

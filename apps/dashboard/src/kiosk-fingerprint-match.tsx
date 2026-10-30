@@ -12,7 +12,8 @@ const valid = (value: unknown): value is Match => {
 const share = (count: number, total: number) => total ? `${count} (${Math.round(count / total * 100)}%)` : "0";
 
 // The reader reports a score with every fingerprint match. A minimum score makes the kiosk ask for a rescan on weak
-// matches, which can be another member's finger, instead of checking that member in or out.
+// matches, which can be another member's finger, instead of checking that member in or out. This panel sits in Debug
+// tools; kiosks enforce the saved minimum whether or not Debug mode is on.
 export function KioskFingerprintMatch() {
   const [match, setMatch] = useState<Match>(), [value, setValue] = useState(""), [busy, setBusy] = useState(true), [notice, setNotice] = useState<Notice>();
   function apply(result: unknown) {
@@ -34,7 +35,7 @@ export function KioskFingerprintMatch() {
   }
   const recent = match?.recent;
   return <section className="task-card kiosk-fingerprint-match" aria-labelledby="fingerprint-match-title">
-    <div className="panel-heading"><div><h2 id="fingerprint-match-title">Fingerprint matching</h2><p>Each fingerprint match has a score; a weak match can be another member's finger. Below the minimum, the kiosk asks the member to try again instead of checking them in or out.</p></div></div>
+    <div className="panel-heading"><div><h3 id="fingerprint-match-title">Fingerprint matching</h3><p>Each fingerprint match has a score; a weak match can be another member's finger. Below the minimum, the kiosk asks the member to try again instead of checking them in or out.</p></div></div>
     {recent && <dl className="kiosk-diagnostics">
       <div><dt>Scans in the last {recent.days} days</dt><dd>{recent.scans}</dd></div>
       <div><dt>Lowest score</dt><dd>{recent.lowest ?? "None yet"}</dd></div>

@@ -4,6 +4,8 @@ export type CalendarSelection = { offset: number; selectedDate: string };
 const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const validDate = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T12:00:00`)) && dateKey(new Date(`${value}T12:00:00`)) === value;
 export function calendarMonth(today: string, offset: number) { const [year, month] = today.split("-").map(Number); return dateKey(new Date(year!, month! - 1 + offset, 1, 12)); }
+// Changing months keeps a day selected: the 1st of the new month, or today when back on the current month.
+export function selectionForMonth(today: string, offset: number): CalendarSelection { return { offset, selectedDate: offset === 0 ? today : calendarMonth(today, offset) }; }
 export function selectionForDate(today: string, selectedDate: string): CalendarSelection {
   const base = new Date(`${today}T12:00:00`); const selected = new Date(`${selectedDate}T12:00:00`);
   return { offset: (selected.getFullYear() - base.getFullYear()) * 12 + selected.getMonth() - base.getMonth(), selectedDate };

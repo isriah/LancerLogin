@@ -118,6 +118,7 @@ test("contest review popup links each member to their member page in a new tab w
   await expect(link).toHaveAttribute("target", "_blank");
   await expect(link).toHaveAttribute("rel", "noopener noreferrer");
   await expect(link).toContainText("Test Student A"); await expect(link).toContainText("TEST A/1");
+  await expect(link).not.toContainText("↗"); await expect(link.locator(".contest-member-link-cue")).toHaveCount(0);
   const checkbox = dialog.getByRole("checkbox", { name: "Select contest for Test Student A at Build session" });
   await checkbox.focus(); await page.keyboard.press("Tab"); await expect(link).toBeFocused();
   for (const target of [link.locator("strong").getByText("Test Student A", { exact: false }).first(), link.locator("small")]) {

@@ -26,7 +26,9 @@ const activity = {
 };
 
 async function routeOutreach(page: Page, role: "admin" | "operator", state: { progress: Progress }) {
-  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: `${role}-1`, role, debugMode: true } } }));
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: `${role}-1`, role } } }));
+  // Debug mode is per device and Admin-only; Operators keep it off even when this browser has it on.
+  await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode", "true"));
   await page.route("**/platform/modules", (route) => route.fulfill({ json: outreachSnapshot() }));
   await page.route("**/integrations/capabilities", (route) => route.fulfill({ json: { integrations: { google: { enabled: false, configured: false }, resend: { enabled: false, configured: false }, discord: { enabled: true, configured: true } } } }));
   await page.route("**/auth/walkthroughs/outreach", async (route) => {
@@ -122,6 +124,7 @@ for (const view of [
 
     await page.reload();
     await expect(panel).toHaveCount(0);
+    if (view.role === "operator") { await expect(page.getByText("Page help (debug)", { exact: true })).toHaveCount(0); return; }
     await page.getByText("Page help (debug)", { exact: true }).click();
     const reset = page.getByRole("button", { name: "Reset page walkthrough" });
     await expect(reset).toBeVisible();
@@ -133,7 +136,7 @@ for (const view of [
 
 test("Outreach walkthrough stays unavailable without module workspace access", async ({ page }) => {
   let walkthroughRequests = 0;
-  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: "operator-1", role: "operator", debugMode: true } } }));
+  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: "operator-1", role: "operator" } } }));
   await page.route("**/platform/modules", (route) => route.fulfill({ json: outreachSnapshot({ access: false }) }));
   await page.route("**/auth/walkthroughs/outreach", async (route) => { walkthroughRequests += 1; await route.fulfill({ json: { error: "Unexpected walkthrough request" }, status: 500 }); });
   await page.goto("/hours");

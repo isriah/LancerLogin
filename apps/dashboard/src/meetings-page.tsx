@@ -8,9 +8,13 @@ import type { MemberLabel } from "./member-labels";
 import { ModuleSlot, ModuleSlotData } from "./module-slots";
 
 export type { Meeting } from "./meeting-management";
-export function MeetingCreationDialog({ open, meetings, discordEnabled, onClose, onCreated, practice = false }: { practice?: boolean; open: boolean; meetings: Meeting[]; discordEnabled: boolean; onClose: () => void; onCreated: (created: number, calendarSync?: CalendarSync, calendarDelivery?: CalendarDelivery, createdMeetingIds?: string[]) => Promise<void> }) {
-  const dialog = useRef<HTMLElement>(null); const errorAlert = useRef<HTMLParagraphElement>(null); const [form, setForm] = useState<MeetingForm>(initialMeetingForm); const [categories, setCategories] = useState<MeetingWeightCategory[]>([]); const [categoryNotice, setCategoryNotice] = useState(""); const [frequency, setFrequency] = useState<"once" | Frequency>("once"); const [seriesUntil, setSeriesUntil] = useState(""); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+export function MeetingCreationDialog({ open, initialDate, meetings, discordEnabled, onClose, onCreated, practice = false }: { practice?: boolean; open: boolean; initialDate?: string; meetings: Meeting[]; discordEnabled: boolean; onClose: () => void; onCreated: (created: number, calendarSync?: CalendarSync, calendarDelivery?: CalendarDelivery, createdMeetingIds?: string[]) => Promise<void> }) {
+  const dialog = useRef<HTMLElement>(null); const errorAlert = useRef<HTMLParagraphElement>(null); const [form, setForm] = useState<MeetingForm>(() => initialMeetingForm(initialDate)); const [categories, setCategories] = useState<MeetingWeightCategory[]>([]); const [categoryNotice, setCategoryNotice] = useState(""); const [frequency, setFrequency] = useState<"once" | Frequency>("once"); const [seriesUntil, setSeriesUntil] = useState(""); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const reset = () => { setForm(initialMeetingForm()); setFrequency("once"); setSeriesUntil(""); setError(""); };
+  // Each opening starts on the caller's day (the calendar's selected day), or the default when none is given.
+  const [openedFor, setOpenedFor] = useState(open ? initialDate ?? "" : undefined);
+  const opening = open ? initialDate ?? "" : undefined;
+  if (opening !== openedFor) { setOpenedFor(opening); if (opening !== undefined) setForm(initialMeetingForm(initialDate)); }
   const close = () => { if (busy) return; reset(); onClose(); };
   useModalFocus(dialog, open && !practice, busy, close);
   useEffect(() => { if (error) errorAlert.current?.focus(); }, [error]);

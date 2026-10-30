@@ -9,7 +9,9 @@ type FilterOption = { kioskId: string; kioskName: string; reasonCode: string };
 type ReviewPage = { records: ScanReview[]; hasMore: boolean; matchingCount?: number; selection?: SelectedScan[] | null; filters?: FilterOption[] };
 const reviewKey = (record: SelectedScan) => JSON.stringify([record.kioskId, record.eventId]);
 
-export function KioskScanReviews() {
+// A Debug tools panel. Kiosks upload rejected scans in the background and never become degraded because of them, so a
+// failed review upload is reported only here, by the names of the online kiosks reporting it.
+export function KioskScanReviews({ uploadFailures = [] }: { uploadFailures?: string[] }) {
   const { path, navigate } = usePath();
   const [status, setStatus] = useState<"open" | "reviewed">("open");
   const [offsets, setOffsets] = useState([0]);
@@ -73,7 +75,8 @@ export function KioskScanReviews() {
   }
 
   return <section className="task-card kiosk-scan-reviews" aria-labelledby="scan-reviews-title">
-    <div className="panel-heading"><div><h2 id="scan-reviews-title">Rejected scans</h2><p>Review uploaded scan evidence from all kiosks, including retired devices. A rejected scan does not count as attendance.</p></div><button className="ui-button" type="button" disabled={loading || Boolean(busy)} onClick={() => { clearSelection(); setRevision((value) => value + 1); }}>Refresh rejected scans</button></div>
+    <div className="panel-heading"><div><h3 id="scan-reviews-title">Rejected scans</h3><p>Review uploaded scan evidence from all kiosks, including retired devices. A rejected scan does not count as attendance.</p></div><button className="ui-button" type="button" disabled={loading || Boolean(busy)} onClick={() => { clearSelection(); setRevision((value) => value + 1); }}>Refresh rejected scans</button></div>
+    {uploadFailures.length > 0 && <p className="ui-status" data-tone="warning" role="status">{uploadFailures.length === 1 ? `${uploadFailures[0]} could not send its rejected scans for review.` : `${uploadFailures.length} kiosks could not send their rejected scans for review: ${uploadFailures.join(", ")}.`} Kiosks retry every minute; attendance scans upload separately.</p>}
     <div className="scan-review-filters">
       <label className="scan-review-status">Review status<select className="ui-control ui-native-select" value={status} disabled={Boolean(busy)} onChange={(event) => { setStatus(event.target.value as typeof status); changeFilter(); }}><option value="open">Needs review</option><option value="reviewed">Reviewed</option></select></label>
       <label className="scan-review-status">Kiosk<select className="ui-control ui-native-select" value={kioskId} disabled={Boolean(busy)} onChange={event => { setKioskId(event.target.value); changeFilter(); }}><option value="">All kiosks</option>{[...new Map(filters.map(option => [option.kioskId, option])).values()].map(option => <option key={option.kioskId} value={option.kioskId}>{option.kioskName || option.kioskId}</option>)}</select></label>
@@ -93,7 +96,7 @@ export function KioskScanReviews() {
       <p>Dismiss up to 500 scans at once. {page.selection === null ? "More than 500 scans match. Narrow the kiosk or rejection reason, or select a page." : "All matching selects the scans in this loaded view. New uploads are not included."}</p>
     </div>}
     {status === "open" && selected.length > 0 && <form className="ui-form scan-review-bulk" onSubmit={event => void dismissSelected(event)} aria-label="Dismiss selected rejected scans">
-      <h3>Dismiss {selected.length} selected {selected.length === 1 ? "scan" : "scans"}?</h3>
+      <h4>Dismiss {selected.length} selected {selected.length === 1 ? "scan" : "scans"}?</h4>
       <p>Each selected scan will be marked reviewed with the shared note below. Evidence is retained and attendance is unchanged. Already reviewed scans keep their existing notes.</p>
       <label htmlFor="scan-bulk-note">Shared review note</label><textarea className="ui-control" id="scan-bulk-note" rows={3} maxLength={500} required value={bulkNote} disabled={Boolean(busy)} aria-invalid={Boolean(bulkError) || undefined} aria-describedby={bulkError ? "scan-bulk-error" : undefined} onChange={event => setBulkNote(event.target.value)} />
       {bulkError && <p id="scan-bulk-error" className="ui-status" data-tone="error" role="alert">{bulkError}</p>}
@@ -110,7 +113,7 @@ export function KioskScanReviews() {
           <p className="ui-status" data-tone={record.clock?.verified ? "neutral" : "warning"}>{record.clock?.verified ? "The kiosk reported a verified clock. Check the scan against the event before correcting attendance." : "The kiosk clock was unverified or clock evidence is missing. The recorded scan time may be wrong. Do not infer an arrival or departure time from it."}</p>
           <dl><div><dt>Member ID</dt><dd>{record.memberId}</dd></div><div><dt>Event ID</dt><dd>{record.eventId}</dd></div><div><dt>Kiosk ID</dt><dd>{record.kioskId}</dd></div><div><dt>Rejection reason</dt><dd>{record.reasonCode}</dd></div><div><dt>Recorded scan time</dt><dd>{record.occurredAt || "Not supplied"}</dd></div><div><dt>Received by cloud</dt><dd>{record.receivedAt || "Not supplied"}</dd></div>{record.clock?.source && <div><dt>Clock source</dt><dd>{record.clock.source}</dd></div>}{record.clock?.observedAt && <div><dt>Clock evidence time</dt><dd>{record.clock.observedAt}</dd></div>}{record.pairingId && <div><dt>Pairing ID</dt><dd>{record.pairingId}</dd></div>}{record.meetingId && <div><dt>Associated meeting ID</dt><dd>{record.meetingId}</dd></div>}</dl>
           {record.meetingId && <RouteLink href={`/meetings/${encodeURIComponent(record.meetingId)}`} currentPath={path} navigate={navigate}>Open associated meeting attendance</RouteLink>}
-          {record.reviewStatus === "reviewed" ? <div><h3>Review note</h3><p className="scan-review-note">{record.reviewNote || "No note supplied"}</p><p>Review recorded by cloud: {record.reviewedAt || "Time not supplied"}</p></div> : <form className="ui-form" onSubmit={(event) => void markReviewed(event, record)}>
+          {record.reviewStatus === "reviewed" ? <div><h4>Review note</h4><p className="scan-review-note">{record.reviewNote || "No note supplied"}</p><p>Review recorded by cloud: {record.reviewedAt || "Time not supplied"}</p></div> : <form className="ui-form" onSubmit={(event) => void markReviewed(event, record)}>
             <label htmlFor={noteId}>Review note</label><textarea className="ui-control" id={noteId} required maxLength={500} rows={3} value={notes[key] ?? ""} disabled={Boolean(busy)} aria-invalid={Boolean(rowErrors[key]) || undefined} aria-describedby={rowErrors[key] ? errorId : undefined} onChange={(event) => setNotes((current) => ({ ...current, [key]: event.target.value }))} />
             <p>Describe the correction made, or why no correction is needed.</p>
             {rowErrors[key] && <p className="ui-status" data-tone="error" role="alert" id={errorId}>{rowErrors[key]}</p>}

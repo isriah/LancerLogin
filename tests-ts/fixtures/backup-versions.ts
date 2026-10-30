@@ -19,6 +19,10 @@ export function omitContestResubmissionFields(backup: any) {
   const extracted = extractedModuleOwnership(backup.scope, backup.schemaVersion);
   if (backup.ownership?.modules) for (const module of extracted) if (!backup.ownership.modules.some((item: { id: string }) => item.id === module.id)) backup.ownership.modules.push(module);
   if (backup.tables) for (const table of extractedModuleTables(backup.scope, backup.schemaVersion)) backup.tables[table] ??= [];
+  if (backup.schemaVersion < 45) {
+    for (const row of backup.tables?.member_label_changes ?? []) delete row.source;
+    for (const row of backup.tables?.discord_label_role_mappings ?? []) delete row.sync_direction;
+  }
   if (backup.schemaVersion >= 41) return;
   for (const row of backup.tables?.organization_settings ?? []) delete row.discord_block_recontests_after_rejection;
   for (const row of backup.tables?.discord_attendance_contests ?? []) delete row.prior_reviews_json;

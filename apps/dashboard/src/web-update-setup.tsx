@@ -109,7 +109,7 @@ export function setupRows(setup: UpdateSetup): Row[] {
   return [
     credentialRow("dispatch", "Dashboard update credential", setup.dispatchCredential, dispatchSecretName, `Optional. ${manualUpgradeText} ${enableDashboardUpdatesText}`, repository),
     controller,
-    credentialRow("selection", "Plugin management credential", setup.selectionCredential, selectionSecretName, "Optional. Without it, edit lancerlogin.modules.json in the deployment repository to change plugins. To change plugins from Settings > Modules instead, set up the plugin management token:", repository),
+    credentialRow("selection", "Module management credential", setup.selectionCredential, selectionSecretName, "Optional. Without it, edit lancerlogin.modules.json in the deployment repository to add, update or remove modules. To do that from Settings > Modules instead, set up the module management token:", repository),
     ...(setup.refreshRun ? [refreshRunRow(setup.refreshRun, setup)] : []),
     ...(setup.repositoryFiles ? [repositoryFilesRow(setup.repositoryFiles, setup)] : []),
   ];

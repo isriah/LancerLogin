@@ -4,18 +4,18 @@ This page describes dashboard behavior in detail. Task instructions are on the d
 
 ## Navigation and access
 
-After Attendance setup is complete, the primary navigation shows **Meetings**, a page for each enabled plugin, **Roster**, **Reports**, **Kiosks**, and **Settings**. Before Attendance is ready, the first item reads **Dashboard** and **Kiosks** is hidden.
+After Attendance setup is complete, the primary navigation shows **Meetings**, a page for each enabled module that adds one, **Roster**, **Reports**, **Kiosks**, and **Settings**. Before Attendance is ready, the first item reads **Dashboard** and **Kiosks** is hidden.
 
 Admins see these settings pages:
 
 | Page | Contents |
 | --- | --- |
 | Organization | Name, subtitle, logo and colors. |
-| Modules | **Manage modules** (enable, disable, Operator assignments, plugins, module access), **Attendance**, and one page per plugin. Attendance has the tabs Attendance rules, Labels, Meeting configuration, Fingerprint sharing, Fingerprint recovery and Attendance setup. |
-| Access | Admin and Operator accounts and their roster links. |
+| Modules | **Manage modules** (turn modules on or off, **Add module**, update or remove modules, **Apply changes**, module access), **Attendance**, and one page per module that has settings. Attendance has the tabs Attendance rules, Labels, Meeting configuration, Fingerprint sharing, Fingerprint recovery and Attendance setup. |
+| Access | Admin and Operator accounts, their roster links and the modules each Operator can use. |
 | Integrations | Google sign-in, Google Calendar, Resend and Discord. |
 | Data | Category backups, restores and typed-confirmation deletion. |
-| Updates | Update track, dashboard updates and plugin deployment status. |
+| Updates | Update track, dashboard updates and module deployment status. |
 
 Operators see their own session settings and the modules they are assigned to.
 
@@ -31,7 +31,7 @@ Roster membership never grants dashboard access. Accounts are managed in **Setti
 
 ## Page walkthroughs
 
-First-visit walkthroughs introduce Meetings, Roster, member detail, Reports, the meeting workspace, Kiosks, the browser simulator and plugin pages that provide one. Settings pages have none. Walkthroughs use practice previews that cannot save or delete records and never send provider actions or device commands; the Kiosks tour shows a labelled example device when none is paired. **Not now** postpones the invitation and **Don't show automatically again** stops it for that page. Progress follows the signed-in account across browsers.
+First-visit walkthroughs introduce Meetings, Roster, member detail, Reports, the meeting workspace, Kiosks, the browser simulator and module pages that provide one. Settings pages have none. Walkthroughs use practice previews that cannot save or delete records and never send provider actions or device commands; the Kiosks tour shows a labelled example device when none is paired. **Not now** postpones the invitation and **Don't show automatically again** stops it for that page. Progress follows the signed-in account across browsers.
 
 Every user can turn on **Debug mode** in the Settings navigation. It reveals diagnostic history such as member label history and recent roster imports, and a **Reset page walkthrough** button on pages with a walkthrough, for that user only.
 

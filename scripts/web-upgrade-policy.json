@@ -430,6 +430,21 @@
       "name": "0086_module_interface_grants.sql",
       "sha256": "dcf155484f081f2e0cb609c2f45a5492d1fb9c42f5afd60fb82f2be1b1fadeef",
       "forwardCompatible": true
+    },
+    {
+      "name": "0087_dismiss_open_scan_reviews.sql",
+      "sha256": "9e7221686e0e7f6edcb3b068565517c933f35f02f89150fbff26cf3ce209437e",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0088_scan_integrity.sql",
+      "sha256": "34d8fabd11b5815aa3c45e956d9ea705a38464f12eab3e2701943f37ac7df6df",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0089_discord_label_two_way.sql",
+      "sha256": "238980f365aa56c3972f89984c8f1afcac65e77ff63d946f65bcc3ce0dfbf3b6",
+      "forwardCompatible": true
     }
   ]
 }

@@ -32,12 +32,15 @@ function kioskFor(state: KioskState, authenticationMethod = "fingerprint") {
   }];
 }
 
-async function useKioskContext(page: Page, { role = "admin", state = "healthy", discordConfigured = true, configuredAuthenticationMethod = "fingerprint", reportedAuthenticationMethod = "fingerprint" }: { role?: Role; state?: KioskState; discordConfigured?: boolean; configuredAuthenticationMethod?: string; reportedAuthenticationMethod?: string } = {}) {
+async function useKioskContext(page: Page, { role = "admin", state = "healthy", discordConfigured = true, configuredAuthenticationMethod = "fingerprint", reportedAuthenticationMethod = "fingerprint", debugMode = false }: { role?: Role; state?: KioskState; discordConfigured?: boolean; configuredAuthenticationMethod?: string; reportedAuthenticationMethod?: string; debugMode?: boolean } = {}) {
   await page.route("**/admin/update-channel", route => route.fulfill({ json: { channel: "stable", revision: 0 } }));
   await page.route("**/admin/kiosks/scan-reviews?**", route => route.fulfill({ json: { records: [], hasMore: false } }));
   await page.route("**/admin/kiosks/fingerprint-sync", route => route.fulfill({ json: { enabled: false } }));
   await page.route("**/admin/kiosks/fingerprint-match", route => route.fulfill({ json: { minimumScore: 0, recent: { days: 30, scans: 0, lowest: null, below50: 0, below100: 0, below150: 0, below200: 0 } } }));
   await page.route("**/admin/kiosks/fingerprint-vault", route => route.fulfill({ json: { enabled: false, keyStatus: "ready", storedFingerprints: 0, serverManagedKeys: true } }));
+  await page.route("**/admin/kiosks/possible-wrong-matches", route => route.fulfill({ json: { windowSeconds: 30, matches: [] } }));
+  await page.route("**/admin/kiosks/reenroll-suggestions", route => route.fulfill({ json: { threshold: 70, scans: 5, members: [] } }));
+  await page.route("**/admin/integrations/discord/label-roles/unmatched", route => route.fulfill({ json: { labels: [] } }));
   await page.route("**/setup/status", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
@@ -57,6 +60,8 @@ async function useKioskContext(page: Page, { role = "admin", state = "healthy", 
     }),
   }));
   await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role } }) }));
+  // Debug mode is a per-device switch that only Admins see; Operators keep it off even when this browser has it on.
+  await page.addInitScript((enabled) => localStorage.setItem("lancerlogin-debug-mode", enabled), String(debugMode));
   await page.route("**/admin/setup/progress", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }) }));
   await page.route("**/integrations/capabilities", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: false, configured: false }, discord: { enabled: discordConfigured, configured: discordConfigured } } }) }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [...kioskFor(state, reportedAuthenticationMethod).map(kiosk => ({ ...kiosk, configuredAuthenticationMethod })), retiredKiosk], authenticationMethod: configuredAuthenticationMethod }) }));
@@ -78,6 +83,16 @@ for (const width of [390, 1280]) test(`Per-kiosk enrollment popup selects a memb
   });
   await page.goto("/kiosks");
   const begin = page.getByRole("button", { name: `Begin enrollment on ${longDeviceName}` });
+  await expect(page.getByRole("button", { name: /^Begin enrollment/ })).toHaveCount(1);
+  await expect(page.locator(".kiosk-device-switcher").getByRole("button", { name: /^Begin enrollment/ })).toHaveCount(0);
+  // One enrollment button for the selected kiosk shares the card's bottom row with Manage kiosk.
+  const manage = page.getByRole("link", { name: "Manage kiosk", exact: true });
+  const [beginBox, manageBox, summaryBox] = [await begin.boundingBox(), await manage.boundingBox(), await page.locator(".kiosk-summary").boundingBox()];
+  expect(beginBox!.y - summaryBox!.y - summaryBox!.height).toBeGreaterThanOrEqual(8);
+  expect(await begin.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(await page.locator(".app").evaluate(element => { const probe = document.createElement("span"); probe.style.background = "var(--primary)"; element.append(probe); const color = getComputedStyle(probe).backgroundColor; probe.remove(); return color; }));
+  if (width === 1280) { expect(manageBox!.y).toBeCloseTo(beginBox!.y, 0); expect(manageBox!.x).toBeGreaterThan(beginBox!.x); }
+  else { const card = (await page.locator(".kiosk-device-card .kiosk-card-actions").boundingBox())!; expect(manageBox!.y).toBeGreaterThan(beginBox!.y + beginBox!.height - 1); for (const box of [beginBox!, manageBox!]) expect(box.width).toBeCloseTo(card.width, 0); }
+  await expect(page.locator("#kiosk-enrollment-reason")).toHaveCount(0);
   await begin.click();
   const dialog = page.getByRole("dialog", { name: "Fingerprint enrollment" });
   await expect(dialog).toBeVisible(); await expect(dialog.getByText(longDeviceName, { exact: true })).toBeVisible();
@@ -93,6 +108,21 @@ for (const width of [390, 1280]) test(`Per-kiosk enrollment popup selects a memb
   await begin.click(); await dialog.getByRole("button", { name: "Cancel enrollment", exact: true }).click();
   await expect(dialog).toHaveCount(0); expect(cancellations).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+});
+
+for (const { name, options, kiosk, reason } of [
+  { name: "an offline kiosk", options: { state: "offline" }, kiosk: {}, reason: "Kiosk offline" },
+  { name: "an offline reader", options: {}, kiosk: { readerOnline: 0 }, reason: "Fingerprint reader offline" },
+  { name: "badge sign-in", options: { configuredAuthenticationMethod: "rfid", reportedAuthenticationMethod: "rfid" }, kiosk: {}, reason: "This kiosk uses badge sign-in" },
+] as Array<{ name: string; options: NonNullable<Parameters<typeof useKioskContext>[1]>; kiosk: Record<string, unknown>; reason: string }>) test(`Begin enrollment explains why it is unavailable for ${name}`, async ({ page }) => {
+  await useKioskContext(page, options);
+  const [device] = kioskFor(options.state ?? "healthy", options.reportedAuthenticationMethod);
+  await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: [{ ...device, configuredAuthenticationMethod: options.configuredAuthenticationMethod ?? "fingerprint", ...kiosk }, retiredKiosk] } }));
+  await page.goto("/kiosks");
+  const begin = page.getByRole("button", { name: `Begin enrollment on ${longDeviceName}` });
+  await expect(begin).toBeDisabled();
+  await expect(page.locator("#kiosk-enrollment-reason")).toHaveText(reason);
+  await expect(begin).toHaveAttribute("aria-describedby", "kiosk-enrollment-reason");
 });
 
 test("Unconfigured simulator links to guided setup and operators cannot start enrollment", async ({ page }) => {
@@ -289,8 +319,10 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await page.keyboard.press("Enter"); await expect(page.getByLabel("Device name", { exact: true })).toBeFocused();
       await page.keyboard.press("Escape"); await expect(edit).toBeFocused();
       await expect(page.getByText("Healthy", { exact: true })).toHaveAttribute("data-tone", "success");
-      await expect(page.getByText("Latest stable release", { exact: true })).toBeVisible();
+      await expect(page.getByText("Stable track", { exact: true })).toBeVisible();
       await expect(page.getByText("Update available", { exact: true })).toBeVisible();
+      // Every diagnostics label stays on one line beside its value.
+      for (const label of await page.locator(".kiosk-summary dt").evaluateAll(items => items.map(item => { const range = document.createRange(); range.selectNodeContents(item); return { text: item.textContent, lines: new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size }; }))) expect(label, label.text ?? "").toEqual({ text: label.text, lines: 1 });
       await expect(page.getByRole("heading", { name: "Device history" })).toHaveCount(0);
       await expect(page.getByRole("link", { name: "Open simulator" })).toHaveAttribute("href", "/simulator");
       const controls = page.locator(".kiosk-device-card button, .kiosk-simulator-card a, .kiosk-simulator-card button");
@@ -320,7 +352,7 @@ for (const state of ["degraded", "offline", "unpaired"] as const) {
     if (state === "degraded") {
       await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
       await page.getByText("Diagnostics", { exact: true }).click();
-      await expect(page.getByText("Saved scans need attention. Open maintenance on this kiosk to check its clock and review rejected scans.", { exact: true })).toBeVisible();
+      await expect(page.getByText("Saved attendance scans are stuck on this kiosk and cannot upload. Check the kiosk's clock and network connection.", { exact: true })).toBeVisible();
       await expect(page.getByText("17", { exact: true })).toBeVisible();
     }
     if (state === "unpaired") await expect(page.getByRole("button", { name: "Add kiosk" })).toBeVisible();
@@ -330,16 +362,54 @@ for (const state of ["degraded", "offline", "unpaired"] as const) {
 test("Kiosks names each reported cause of a degraded kiosk without opening diagnostics", async ({ page }) => {
   await useKioskContext(page, { state: "degraded" });
   const [kiosk] = kioskFor("degraded");
-  await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: [{ ...kiosk, readerOnline: 1, pendingEvents: 0, configuredAuthenticationMethod: "fingerprint", scansNeedReview: 4, clockConfirmed: 1, clockPendingScans: 0, reviewSyncFailing: 0 }, retiredKiosk], authenticationMethod: "fingerprint" } }));
+  await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: [{ ...kiosk, readerOnline: 1, pendingEvents: 0, configuredAuthenticationMethod: "fingerprint", scansNeedReview: 4, clockConfirmed: 0, clockPendingScans: 2, reviewSyncFailing: 0 }, retiredKiosk], authenticationMethod: "fingerprint" } }));
   await page.goto("/kiosks");
+  await expect(page.getByText("Degraded", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Needs attention", { exact: true })).toBeVisible();
-  await expect(page.getByText("4 scans rejected and not yet reviewed. Review them under Rejected scans; the kiosk clears this within two minutes.", { exact: true })).toBeVisible();
-  await expect(page.getByText("Saved scans need attention.", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("Clock not confirmed.", { exact: false })).toBeVisible();
+  await expect(page.getByText("2 scans saved while the clock was unconfirmed. They upload once the clock is confirmed.", { exact: true })).toBeVisible();
+  await expect(page.locator(".kiosk-summary")).not.toContainText("rejected");
   await expectResponsiveFit(page);
 });
 
+for (const debugMode of [false, true]) test(`rejected scans never degrade a kiosk and a failed review upload shows only in Debug tools (debug ${debugMode ? "on" : "off"})`, async ({ page }) => {
+  await useKioskContext(page, { debugMode });
+  const [kiosk] = kioskFor("healthy");
+  await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: [{ ...kiosk, configuredAuthenticationMethod: "fingerprint", errorCategory: "offline_queue", scansNeedReview: 4, clockConfirmed: 1, clockPendingScans: 0, reviewSyncFailing: 1 }, retiredKiosk], authenticationMethod: "fingerprint" } }));
+  await page.goto("/kiosks");
+  await expect(page.locator(".kiosk-device-switcher").getByText("Healthy", { exact: true })).toBeVisible();
+  await expect(page.getByText("Needs attention", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".kiosk-device-card")).not.toContainText("rejected");
+  const failure = page.getByText(`${longDeviceName} could not send its rejected scans for review.`, { exact: false });
+  await expect(failure).toHaveCount(debugMode ? 1 : 0);
+  if (debugMode) await expect(page.getByRole("region", { name: "Debug tools" }).getByRole("region", { name: "Rejected scans", exact: true })).toContainText("Kiosks retry every minute");
+});
+
+test("Debug tools hold rejected scans, fingerprint matching and weak-match diagnostics only in Debug mode", async ({ page }) => {
+  for (const debugMode of [false, true]) {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await useKioskContext(page, { debugMode });
+    const [kiosk] = kioskFor("healthy");
+    await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: [{ ...kiosk, configuredAuthenticationMethod: "fingerprint", weakMatches: 3, clockConfirmed: 1, clockPendingScans: 0, scansNeedReview: 0, reviewSyncFailing: 0 }, retiredKiosk] } }));
+    await page.goto("/kiosks");
+    await expect(page.getByRole("heading", { level: 1, name: "Kiosks" })).toBeVisible();
+    const tools = page.getByRole("region", { name: "Debug tools" });
+    await expect(tools).toHaveCount(debugMode ? 1 : 0);
+    await expect(page.getByRole("region", { name: "Rejected scans", exact: true })).toHaveCount(debugMode ? 1 : 0);
+    await expect(page.getByRole("region", { name: "Fingerprint matching" })).toHaveCount(debugMode ? 1 : 0);
+    for (const name of ["Possible wrong matches", "Re-enroll suggested", "Discord users not on the roster"]) await expect(page.getByRole("region", { name, exact: true })).toHaveCount(debugMode ? 1 : 0);
+    if (debugMode) await expect(tools.getByRole("heading", { level: 3 })).toHaveText(["Rejected scans", "Fingerprint matching", "Possible wrong matches", "Re-enroll suggested", "Discord users not on the roster"]);
+    if (debugMode) { await expect(tools.getByRole("region", { name: "Rejected scans", exact: true })).toBeVisible(); await expect(tools.getByRole("region", { name: "Fingerprint matching" })).toBeVisible(); await expectResponsiveFit(page); }
+    await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
+    await page.getByText("Diagnostics", { exact: true }).click();
+    await expect(page.getByText("Pending scans", { exact: true })).toBeVisible();
+    await expect(page.getByText("Weak matches asked to rescan", { exact: true })).toHaveCount(debugMode ? 1 : 0);
+    await expect(page.getByRole("region", { name: "Debug tools" })).toHaveCount(0);
+  }
+});
+
 test("Admins see recent fingerprint match scores and save a minimum score for kiosks", async ({ page }) => {
-  await useKioskContext(page);
+  await useKioskContext(page, { debugMode: true });
   let saved: unknown;
   const recent = { days: 30, scans: 200, lowest: 38, below50: 2, below100: 9, below150: 40, below200: 120 };
   await page.route("**/admin/kiosks/fingerprint-match", async route => {
@@ -469,8 +539,9 @@ test("release label stays neutral until the server confirms Beta", async ({ page
   await page.route("**/admin/releases/latest?channel=beta", route => route.fulfill({ json: discovered({ tag_name: "v2.0.0-beta.4", prerelease: true }, Date.now(), "beta") }));
   await page.goto("/kiosks");
   await expect(page.getByText("Latest release", { exact: true })).toBeVisible();
-  await expect(page.getByText("Latest stable release", { exact: true })).toHaveCount(0);
-  confirm(); await expect(page.getByText("Latest beta release", { exact: true })).toBeVisible();
+  await expect(page.getByText(/^(Stable|Beta) track$/)).toHaveCount(0);
+  confirm(); await expect(page.getByText("Beta track", { exact: true })).toBeVisible();
+  await expect(page.getByText("Latest release", { exact: true })).toBeVisible();
 });
 
 test("Cloud storage fills the sharing row without an empty peer column", async ({ page }) => {
@@ -634,7 +705,7 @@ for (const role of ["admin", "operator"] as const) for (const state of ["offline
 
 
 test("Admin reviews rejected scans from retired kiosks without changing attendance", async ({ page }) => {
-  await useKioskContext(page, { state: "unpaired" });
+  await useKioskContext(page, { state: "unpaired", debugMode: true });
   let reviewed = false, attempts = 0, loadFailed = true;
   const writes: string[] = [];
   const record = { kioskId: "retired-1", kioskName: "Retired entrance kiosk", eventId: "event-1", memberId: "member-record-1", occurredAt: "2020-01-01T07:00:00Z", receivedAt: "2026-10-25T12:00:00Z", reasonCode: "outside_meeting_window", reviewStatus: "open", clock: { verified: false, observedAt: "2020-01-01T06:00:00Z", source: "offline" }, meetingId: "meeting-1" };
@@ -699,7 +770,7 @@ test("Admin reviews rejected scans from retired kiosks without changing attendan
 });
 
 test("Operators cannot open rejected-scan reviews or request their records", async ({ page }) => {
-  await useKioskContext(page, { role: "operator" });
+  await useKioskContext(page, { role: "operator", debugMode: true });
   let reads = 0;
   await page.route("**/admin/kiosks/scan-reviews?**", route => { reads++; return route.fulfill({ status: 403, json: { error: "Forbidden" } }); });
   await page.goto("/kiosks");
@@ -712,7 +783,7 @@ for (const { theme, width } of pairedViews) {
   test(`Admin bulk dismissal freezes matching scans and preserves retries at ${width} in ${theme}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
-    await useKioskContext(page, { state: "unpaired" });
+    await useKioskContext(page, { state: "unpaired", debugMode: true });
     const base = { memberId: "synthetic-member", occurredAt: "2020-01-01T07:00:00Z", receivedAt: "2026-10-25T12:00:00Z", reasonCode: "clock_unverified", reviewStatus: "open" };
     const initial = [{ ...base, kioskId: "a:b", kioskName: "Retired North", eventId: "c" }, { ...base, kioskId: "a", kioskName: "Retired South", eventId: "b:c" }, { ...base, kioskId: "a", kioskName: "Retired South", eventId: "third" }];
     let remaining = [...initial], failed = false;
@@ -765,7 +836,7 @@ for (const { theme, width } of pairedViews) {
 }
 
 test("bulk dismissal limits all-matching while allowing a selected page", async ({ page }) => {
-  await useKioskContext(page);
+  await useKioskContext(page, { debugMode: true });
   const record = { kioskId: "retired-a", kioskName: "Retired kiosk", eventId: "limited-event", memberId: "member-a", reasonCode: "clock_unverified", occurredAt: "2020-01-01T07:00:00Z", receivedAt: "2026-10-25T12:00:00Z", reviewStatus: "open" };
   let reviewed = false;
   await page.route("**/admin/kiosks/scan-reviews?**", route => route.fulfill({ json: { records: reviewed ? [] : [record], hasMore: true, matchingCount: reviewed ? 500 : 501, selection: null, filters: [] } }));

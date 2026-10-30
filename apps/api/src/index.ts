@@ -5,7 +5,7 @@ import { createSessionCodec, createSignedStateCodec, hashPassword, verifyPasswor
 import { authRateLimits, bootstrapClaimKey, clearFailedLogins, consumeAuthRateLimit, lockActive, pruneAuthProtection, recordFailedLogin, setupResetCookie, setupResetGrantKey, setupResetGrantMs } from "./auth-protection.ts";
 import { decryptIntegration, encryptIntegration, moduleCredentials } from "./integration-crypto.ts";
 import { moduleEmailIdempotencyKey, moduleEmailMessage, resendModuleEmailPayload } from "./module-email.ts";
-import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance } from "./web-updates.ts";
+import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance, updateRepositoryFiles, recheckUpdateSetup } from "./web-updates.ts";
 import { commitPluginChange, currentSelectionSha, freshUntil, lookupPluginRelease, pluginManagementState, requiredModuleMigrations, requireNoModuleMigration, reviewPluginChange, selectionCredentialState } from "./plugin-selection.ts";
 import { discoveryForChannel, releaseRequestHeaders, resolveOfficialRelease } from "./release-discovery.ts";
 import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
@@ -122,7 +122,9 @@ class GoogleCalendarProviderError extends Error {
   readonly providerStatus: number;
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
-  constructor(providerStatus: number, message: string, retryable: boolean, retryAfterMs?: number) { super(message); this.providerStatus = providerStatus; this.retryable = retryable; this.retryAfterMs = retryAfterMs; }
+  /** True when only a new Google Calendar authorization by an Admin can fix the failure. */
+  readonly reauthorize: boolean;
+  constructor(providerStatus: number, message: string, retryable: boolean, retryAfterMs?: number, reauthorize = false) { super(message); this.providerStatus = providerStatus; this.retryable = retryable; this.retryAfterMs = retryAfterMs; this.reauthorize = reauthorize; }
 }
 async function parseJson<T>(request: Request, maxBytes = 262_144): Promise<T> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new HttpError(415, "Content-Type must be application/json");
@@ -142,20 +144,71 @@ function moduleScopedEnvironment(env: Env, db: D1Database): Env {
   return { ...env, DB: db, moduleProviderAuthority: async () => { await db.prepare("SELECT 1").first(); } };
 }
 function cookie(request: Request, name: string): string | undefined { return request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1); }
+type SessionUser = { id: string; role: Role; email?: string | null; localUsername?: string | null; debugMode?: number | null };
+type SessionLookup = { claims: Promise<Principal>; current: Promise<{ principal: Principal; user: SessionUser }> };
+/**
+ * One session check per Request: the cookie's signature is verified once and the user row read once, however often the
+ * module-route pre-check, the route handler and a module's ctx.requireRole ask. worker.fetch drops the entry when a
+ * request starts, so a reused Request object never carries a principal into a later request.
+ */
+const sessionLookups = new WeakMap<Request, SessionLookup>();
+function sessionLookup(request: Request, env: Env): SessionLookup {
+  const existing = sessionLookups.get(request);
+  if (existing) return existing;
+  const claims = (async () => {
+    if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
+    const token = cookie(request, "lancerlogin_session");
+    const principal = token ? await createSessionCodec(env.SESSION_KEY).verify(token) : undefined;
+    if (!principal) throw new HttpError(401, "Sign in required");
+    return principal;
+  })();
+  const current = claims.then(async (principal) => {
+    // A token issued under an older session epoch was revoked by logout, password reset or deactivation. The profile
+    // columns are what /auth/session returns, so it needs no second read.
+    const user = await requireDatabase(env).prepare("SELECT id, role, email, local_username AS localUsername, debug_mode AS debugMode FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND session_epoch = ?").bind(principal.userId, principal.epoch ?? 0).first<SessionUser>();
+    if (!user) throw new HttpError(401, "Session user is unavailable");
+    return { principal: { ...principal, role: user.role }, user };
+  });
+  // Every caller still sees a failure through its own await; this only keeps an unawaited copy from being reported.
+  claims.catch(() => undefined); current.catch(() => undefined);
+  const lookup = { claims, current };
+  sessionLookups.set(request, lookup);
+  return lookup;
+}
+/** A Request built from an authenticated one for an internal handler call shares its session check. */
+function withSession(source: Request, derived: Request): Request {
+  const lookup = sessionLookups.get(source);
+  if (lookup) sessionLookups.set(derived, lookup);
+  return derived;
+}
 async function principalFor(request: Request, env: Env): Promise<Principal> {
-  if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
-  const token = cookie(request, "lancerlogin_session");
-  const principal = token ? await createSessionCodec(env.SESSION_KEY).verify(token) : undefined;
-  if (!principal) throw new HttpError(401, "Sign in required");
-  // A token issued under an older session epoch was revoked by logout, password reset or deactivation.
-  const current = await requireDatabase(env).prepare("SELECT id, role FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND session_epoch = ?").bind(principal.userId, principal.epoch ?? 0).first<{ id: string; role: Role }>();
-  if (!current) throw new HttpError(401, "Session user is unavailable");
-  return { ...principal, role: current.role };
+  return { ...(await sessionLookup(request, env).current).principal };
 }
 async function requireRole(request: Request, env: Env, roles: Role[]): Promise<Principal> {
   const principal = await principalFor(request, env);
   if (!roles.includes(principal.role)) throw new HttpError(403, "Your role cannot perform this action");
   return principal;
+}
+/**
+ * Start independent reads together and settle them all, then rethrow the first failure in argument order, so the error
+ * a caller sees is the one sequential awaits would have produced. Each read is a thunk so a synchronous throw cannot
+ * leave the others unobserved.
+ */
+async function allInOrder<T extends readonly (() => unknown)[]>(...reads: T): Promise<{ -readonly [K in keyof T]: T[K] extends () => infer R ? Awaited<R> : never }> {
+  const settled = await Promise.allSettled(reads.map(async (read) => read()));
+  const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failure) throw failure.reason;
+  return settled.map((result) => (result as PromiseFulfilledResult<unknown>).value) as never;
+}
+/**
+ * requireRole and a read for the signed-in user in one D1 round trip: the read starts once the cookie's signature is
+ * verified, beside the user lookup that checks revocation and role. The role check still decides first, so a signed-out,
+ * revoked or unauthorized caller gets requireRole's 401 or 403 and the read's result or error is discarded. Use only for
+ * reads without side effects that need nothing from the check except the token's user ID.
+ */
+async function authorizedRead<T>(request: Request, env: Env, roles: Role[], read: (userId: string) => Promise<T>): Promise<[Principal, Awaited<T>]> {
+  const { claims } = sessionLookup(request, env);
+  return allInOrder(() => requireRole(request, env, roles), async () => read((await claims).userId));
 }
 async function sha256(value: string): Promise<string> {
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
@@ -179,12 +232,14 @@ async function writeAudit(db: D1Database, principal: Principal, action: string, 
 
 async function setupStatus(env: Env): Promise<Response> {
   const db = requireDatabase(env);
-  const installation = await db.prepare("SELECT id, auth_mode AS authMode, telemetry_accepted_at AS telemetryAcceptedAt FROM installations WHERE id = ?").bind("primary").first<{ id: string; authMode: AuthMode; telemetryAcceptedAt?: string }>();
+  // One round trip: organization_settings is keyed by installation_id, so the LEFT JOIN adds at most its one row, and a
+  // missing row leaves settingsInstallationId null, which reports settings: null as the separate read did.
+  const row = await db.prepare("SELECT i.id, i.auth_mode AS authMode, s.installation_id AS settingsInstallationId, s.organization_name AS organizationName, s.subtitle, s.logo_data AS logoData, s.primary_color AS primaryColor, s.secondary_color AS secondaryColor, s.appearance, s.time_zone AS timeZone, s.logo_backdrop AS logoBackdrop, s.late_scan_minutes AS lateScanMinutes, s.discord_contest_window_hours AS discordContestWindowHours, s.attendance_reporting_starts_on AS attendanceReportingStartsOn, s.anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, s.anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes FROM installations i LEFT JOIN organization_settings s ON s.installation_id = i.id WHERE i.id = ?").bind("primary").first<{ id: string; authMode: AuthMode; settingsInstallationId?: string | null } & Record<string, unknown>>();
   // Development Workers set DEFAULT_THEME=development so their dashboards keep a distinct starting palette.
   const defaultTheme = resolveDefaultTheme(env.DEFAULT_THEME);
-  if (!installation) return response({ configured: false, defaultTheme });
-  const settings = await db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, appearance, time_zone AS timeZone, logo_backdrop AS logoBackdrop, late_scan_minutes AS lateScanMinutes, discord_contest_window_hours AS discordContestWindowHours, attendance_reporting_starts_on AS attendanceReportingStartsOn, anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes FROM organization_settings WHERE installation_id = ?").bind(installation.id).first();
-  return response({ configured: true, installation: { id: installation.id, authMode: installation.authMode, telemetryAccepted: false }, settings, defaultTheme });
+  if (!row) return response({ configured: false, defaultTheme });
+  const { id, authMode, settingsInstallationId, ...settings } = row;
+  return response({ configured: true, installation: { id, authMode, telemetryAccepted: false }, settings: settingsInstallationId == null ? null : settings, defaultTheme });
 }
 function validateBootstrap(input: BootstrapInput): string[] {
   const errors: string[] = [];
@@ -262,14 +317,16 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
 }
 
 async function modulePlatform(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, request.method === "GET" ? ["admin", "operator"] : ["admin"]);
-  const db = requireDatabase(env);
   if (request.method === "GET") {
-    try { return response(await readModulePlatformSnapshot(db, principal.userId)); }
+    // authorizedRead rethrows its 401 or 403 first, so a registration gap is only acted on for an authorized caller.
+    try { return response((await authorizedRead(request, env, ["admin", "operator"], (userId) => readModulePlatformSnapshot(requireDatabase(env), userId)))[1]); }
     catch (error) { if (!(error instanceof ModuleRegistrationIncomplete) || await webUpdateMaintenance(env)) throw error; }
+    const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
     await reconcileInstalledModules(db);
     return response(await readModulePlatformSnapshot(db, principal.userId, { unregistered: "show" }));
   }
+  const principal = await requireRole(request, env, ["admin"]);
+  const db = requireDatabase(env);
   const input = await parseJson(request);
   // Record installed definitions before any module can be enabled, so retained data stays deletable without its code.
   await reconcileInstalledModules(db);
@@ -303,8 +360,8 @@ async function discoverRelease(request: Request, env: Env): Promise<Response> {
     result.retryAt ? { "retry-after": String(Math.max(1, Math.ceil((result.retryAt - Date.now()) / 1000))) } : undefined);
 }
 async function updateChannel(request: Request, env: Env): Promise<Response> {
+  if (request.method === "GET") return response((await authorizedRead(request, env, ["admin"], () => readUpdateChannel(env)))[1]);
   const principal = await requireRole(request, env, ["admin"]);
-  if (request.method === "GET") return response(await readUpdateChannel(env));
   if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Update settings require the dashboard origin");
   const input = await parseJson<Record<string, unknown>>(request, 2_048);
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "Invalid update setting");
@@ -326,6 +383,28 @@ async function webUpdates(request: Request, env: Env): Promise<Response> {
     return response(await prepareWebUpdate(env, principal.userId, { mode, selectionSha, guard: () => requireNoModuleMigration(env) }));
   }
   return response(await startWebUpdate(env, input, principal.userId), 202);
+}
+/**
+ * Settings > Updates > Setup status: proposes the installed release's workflow files in a pull request in the deployment
+ * repository. Like preparing a web update it needs an Admin and the dashboard origin. It needs no fresh re-authentication:
+ * nothing changes until the installer reviews and merges the pull request on GitHub, which GitHub authenticates itself.
+ */
+async function repositoryFiles(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]);
+  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Repository file updates require the dashboard origin");
+  const input = await parseJson<Record<string, unknown>>(request, 1_024);
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length) throw new HttpError(400, "Repository file updates accept no parameters");
+  const result = await updateRepositoryFiles(env);
+  if (result.created) await writeAudit(requireDatabase(env), principal, "web_update.repository_files_proposed", "repository", env.UPDATE_REPOSITORY ?? null, { release: result.release, files: result.files, pullRequest: result.pullRequest.number });
+  return response(result, result.created ? 201 : 200);
+}
+/** Settings > Updates > Setup status > Check again: an Admin on the dashboard origin rereads the GitHub setup checks, rate limited in web-updates.ts. */
+async function recheckSetup(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin"]);
+  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Setup checks require the dashboard origin");
+  const input = await parseJson<Record<string, unknown>>(request, 1_024);
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length) throw new HttpError(400, "Setup checks accept no parameters");
+  return response({ setup: await recheckUpdateSetup(env) });
 }
 const sessionCookie = (token: string) => `lancerlogin_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`;
 /** The dashboard session cookie for a user who just proved a local password: local sign-in and first-Admin setup. */
@@ -398,10 +477,9 @@ async function localLogin(request: Request, env: Env): Promise<Response> {
   return response({ ok: true, user: { id: user.id, role: user.role, debugMode: Boolean(user.debugMode) } }, 200, { "set-cookie": await localSessionCookie(env.SESSION_KEY, user) });
 }
 async function authSession(request: Request, env: Env): Promise<Response> {
-  const principal = await principalFor(request, env);
-  const user = await requireDatabase(env).prepare("SELECT id, email, local_username AS localUsername, role, debug_mode AS debugMode FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; email?: string; localUsername?: string; role: Role; debugMode: number }>();
-  if (!user) throw new HttpError(401, "Session user is unavailable");
-  return response({ authenticated: true, user: { ...user, debugMode: Boolean(user.debugMode) } });
+  // The session lookup read this profile together with its revocation check.
+  const { user } = await sessionLookup(request, env).current;
+  return response({ authenticated: true, user: { id: user.id, email: user.email, localUsername: user.localUsername, role: user.role, debugMode: Boolean(user.debugMode) } });
 }
 async function logout(request: Request, env: Env): Promise<Response> {
   // Bump the session epoch so this token, and any copy of it, stops working everywhere, not only in this browser.
@@ -422,9 +500,14 @@ async function authPreferences(request: Request, env: Env): Promise<Response> {
 }
 
 async function adminPreferences(request: Request, env: Env): Promise<Response> {
+  const readPreferences = (userId: string) => requireDatabase(env).prepare("SELECT developer_scheduler_enabled AS developerSchedulerEnabled, revision FROM user_preferences WHERE installation_id = 'primary' AND user_id = ?").bind(userId).first<{ developerSchedulerEnabled: number; revision: number }>();
+  if (request.method === "GET") {
+    const [, current] = await authorizedRead(request, env, ["admin"], readPreferences);
+    return response({ developerSchedulerEnabled: Boolean(current?.developerSchedulerEnabled), revision: Number(current?.revision ?? 0) });
+  }
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-  const current = await db.prepare("SELECT developer_scheduler_enabled AS developerSchedulerEnabled, revision FROM user_preferences WHERE installation_id = 'primary' AND user_id = ?").bind(principal.userId).first<{ developerSchedulerEnabled: number; revision: number }>();
-  if (request.method === "GET") return response({ developerSchedulerEnabled: Boolean(current?.developerSchedulerEnabled), revision: Number(current?.revision ?? 0) });
+  // The save path keeps its original read order; the compare-and-set below does not use this value.
+  await readPreferences(principal.userId);
   const input = await parseJson<{ developerSchedulerEnabled?: unknown; expectedRevision?: unknown }>(request, 2_048);
   if (typeof input.developerSchedulerEnabled !== "boolean" || !Number.isSafeInteger(input.expectedRevision) || Number(input.expectedRevision) < 0) throw new HttpError(400, "Provide the current developer preference revision and scheduler visibility");
   const revision = Number(input.expectedRevision); const next = input.developerSchedulerEnabled ? 1 : 0; const now = new Date().toISOString();
@@ -446,13 +529,15 @@ async function adminPreferences(request: Request, env: Env): Promise<Response> {
 }
 
 async function authWalkthrough(request: Request, env: Env, pageId: string): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]);
-  if (!Object.hasOwn(walkthroughs, pageId)) throw new HttpError(404, "Page walkthrough is unavailable");
-  const db = requireDatabase(env);
+  const known = Object.hasOwn(walkthroughs, pageId);
   if (request.method === "GET") {
-    const progress = await db.prepare("SELECT page_id AS pageId, content_version AS version, status, step_id AS stepId FROM user_walkthroughs WHERE installation_id = 'primary' AND user_id = ? AND page_id = ?").bind(principal.userId, pageId).first<WalkthroughProgress>();
+    const [, progress] = await authorizedRead(request, env, ["admin", "operator"], async (userId) => known ? requireDatabase(env).prepare("SELECT page_id AS pageId, content_version AS version, status, step_id AS stepId FROM user_walkthroughs WHERE installation_id = 'primary' AND user_id = ? AND page_id = ?").bind(userId, pageId).first<WalkthroughProgress>() : null);
+    if (!known) throw new HttpError(404, "Page walkthrough is unavailable");
     return response({ progress: progress ?? initialWalkthroughProgress(pageId as WalkthroughPage) });
   }
+  const principal = await requireRole(request, env, ["admin", "operator"]);
+  if (!known) throw new HttpError(404, "Page walkthrough is unavailable");
+  const db = requireDatabase(env);
   const origin = request.headers.get("origin");
   if (origin !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Walkthrough preferences require the dashboard origin");
   const input = await parseJson<unknown>(request, 2048);
@@ -553,17 +638,18 @@ async function resolveMeetingWeightAssignment(db: D1Database, categoryId: string
 }
 type LabelMutation = { memberId: string; label: string; action?: "add" | "remove"; effectiveDate?: string };
 async function labels(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, request.method === "GET" ? ["admin", "operator"] : ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") {
-    const [catalog, history, periods, rules, settings] = await Promise.all([
-      db.prepare("SELECT id, name, active, formula_enabled AS formulaEnabled FROM member_labels WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE").all(),
+    const [, [catalog, history, periods, rules, settings, audiences]] = await authorizedRead(request, env, ["admin", "operator"], async () => { const db = requireDatabase(env); return Promise.all([
+      db.prepare("SELECT l.id, l.name, l.active, l.formula_enabled AS formulaEnabled, EXISTS (SELECT 1 FROM discord_label_role_mappings x WHERE x.installation_id = l.installation_id AND x.label_id = l.id) AS discordLinked FROM member_labels l WHERE l.installation_id = 'primary' ORDER BY l.name COLLATE NOCASE").all(),
       db.prepare("SELECT c.id, c.member_id AS memberId, m.external_id AS externalMemberId, c.label_id AS labelId, c.action, c.effective_date AS effectiveDate, c.created_at AS createdAt FROM member_label_changes c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id WHERE c.installation_id = 'primary' ORDER BY c.effective_date, c.created_at, c.id").all(),
       db.prepare("SELECT id, label_id AS labelId, starts_on AS startsOn, ends_on AS endsOn, meetings_per_week AS meetingsPerWeek FROM label_attendance_rules WHERE installation_id = 'primary' AND rule_type = 'weekly_count' AND starts_on IS NOT NULL AND ends_on IS NOT NULL ORDER BY starts_on").all(),
       db.prepare("SELECT id, label_id AS labelId, starts_on AS startsOn, ends_on AS endsOn, rule_type AS ruleType, threshold_percent AS thresholdPercent, meetings_per_week AS meetingsPerWeek, excused_handling AS excusedHandling FROM label_attendance_rules WHERE installation_id = 'primary' ORDER BY label_id, starts_on").all(),
       db.prepare("SELECT time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone: string }>(),
-    ]);
-    return response({ labels: catalog.results ?? [], history: history.results ?? [], periods: periods.results ?? [], rules: rules.results ?? [], today: policyLocalDate(new Date().toISOString(), settings?.timeZone ?? "UTC") });
+      db.prepare("SELECT label_id AS labelId, COUNT(*) AS meetings FROM meeting_audience_labels WHERE installation_id = 'primary' GROUP BY label_id").all<{ labelId: string; meetings: number }>(),
+    ]); });
+    return response({ labels: catalog.results ?? [], history: history.results ?? [], periods: periods.results ?? [], rules: rules.results ?? [], meetingCounts: Object.fromEntries((audiences.results ?? []).map((row) => [row.labelId, row.meetings])), today: policyLocalDate(new Date().toISOString(), settings?.timeZone ?? "UTC") });
   }
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   const input = await parseJson<{ name?: string; formulaEnabled?: boolean }>(request);
   const name = input.name?.trim(); if (!name || name.length > 80 || typeof input.formulaEnabled !== "undefined" && typeof input.formulaEnabled !== "boolean") throw new HttpError(400, "Label name must be 1 to 80 characters");
   const id = crypto.randomUUID(); const now = new Date().toISOString();
@@ -705,8 +791,14 @@ async function attendancePolicies(request: Request, env: Env, apply?: boolean): 
   return response({ applied: true, impact: preview.impact });
 }
 async function members(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, request.method === "GET" ? ["admin", "operator"] : ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const result = await db.prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.email, m.discord_user_id AS discordUserId, m.active, m.created_at AS rosterAddedAt, EXISTS(SELECT 1 FROM users u WHERE u.installation_id = m.installation_id AND u.member_id = m.id AND u.active = 1) AS hasDashboardAccess FROM members m WHERE m.installation_id = 'primary' ORDER BY m.last_name, m.first_name").all(); const discord = await integrationRecord(env, "discord"); const discordConfigured = Boolean(discord?.verifiedAt && discord.enabled !== 0); return response({ members: result.results ?? [], discordConfigured }); }
+  if (request.method === "GET") {
+    const [, [result, discord]] = await authorizedRead(request, env, ["admin", "operator"], () => allInOrder(
+      () => requireDatabase(env).prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.email, m.discord_user_id AS discordUserId, m.active, m.created_at AS rosterAddedAt, EXISTS(SELECT 1 FROM users u WHERE u.installation_id = m.installation_id AND u.member_id = m.id AND u.active = 1) AS hasDashboardAccess FROM members m WHERE m.installation_id = 'primary' ORDER BY m.last_name, m.first_name").all(),
+      () => integrationRecord(env, "discord"),
+    ));
+    const discordConfigured = Boolean(discord?.verifiedAt && discord.enabled !== 0); return response({ members: result.results ?? [], discordConfigured });
+  }
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   const input = await parseJson<{ members?: MemberInput[]; mode?: "merge" | "replace" }>(request); const mode = input.mode ?? "merge";
   if (!["merge", "replace"].includes(mode)) throw new HttpError(400, "Roster import mode must be merge or replace");
   if (!Array.isArray(input.members) || !input.members.length || input.members.length > 500) throw new HttpError(400, "Provide between 1 and 500 roster members");
@@ -776,8 +868,8 @@ async function memberHistory(request: Request, env: Env, externalId: string): Pr
     return { ...row, disposition: inactiveAt(member.inactivePeriodsJson, row.startsAt) ? "not_required" : derived === "active" ? "absent" : derived };
   });
   const meanAnomalyMinutes = meanAnomalousMinutes(history, settings?.anomalyLateThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES, settings?.anomalyEarlyThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES);
-  const { rosterAddedAt: _rosterAddedAt, inactivePeriodsJson: _inactivePeriodsJson, ...memberResponse } = member;
-  const [labelResult, policy] = await Promise.all([labels(new Request(request.url, { headers: request.headers }), env), policyReport(db, { meetingType: "all", roster: "all", membership: "current", memberId: member.id, useBaseline: true })]);
+  const { inactivePeriodsJson: _inactivePeriodsJson, ...memberResponse } = member;
+  const [labelResult, policy] = await Promise.all([labels(withSession(request, new Request(request.url, { headers: request.headers })), env), policyReport(db, { meetingType: "all", roster: "all", membership: "current", memberId: member.id, useBaseline: true })]);
   const labelData = await labelResult.json() as { labels: PolicyLabel[]; history: ({ memberId: string; labelId: string; action: string; effectiveDate: string; createdAt: string })[] };
   const ownHistory = labelData.history.filter((item) => item.memberId === member.id);
   const summary = policy.members[0]; const policyRows = new Map(summary?.rows.map((row) => [row.meetingId, row]) ?? []);
@@ -1065,8 +1157,8 @@ async function meetingAudienceText(db: D1Database, meetingId: string): Promise<s
   return (result.results ?? []).map((row) => row.name).join(", ") || "Selected labels";
 }
 async function meetings(request: Request, env: Env): Promise<Response> {
+  if (request.method === "GET") { const [, [result, settings, audiences]] = await authorizedRead(request, env, ["admin", "operator"], async () => { const db = requireDatabase(env); return Promise.all([db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes, is_test AS isTest, series_id AS seriesId, recurrence_frequency AS recurrenceFrequency, recurrence_until AS recurrenceUntil, recurrence_sequence AS recurrenceSequence, weight_category_id AS weightCategoryId, weight_category_name AS weightCategoryName, attendance_weight AS attendanceWeight, audience_mode AS audienceMode FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at DESC LIMIT 1000").all<{ id: string; title: string; startsAt: string; endsAt: string; required: number; notes?: string; isTest: number; seriesId?: string; recurrenceFrequency?: RecurrenceFrequency; recurrenceUntil?: string; recurrenceSequence?: number; weightCategoryId?: string; weightCategoryName?: string; attendanceWeight: number; audienceMode: "all" | "labels" }>(), db.prepare("SELECT late_scan_minutes AS lateScanMinutes, attendance_reporting_starts_on AS attendanceReportingStartsOn, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number; attendanceReportingStartsOn?: string; timeZone?: string }>(), meetingAudienceIds(db)]); }); return response({ meetings: (result.results ?? []).map((meeting) => ({ ...meeting, attendanceWeight: Number(meeting.attendanceWeight ?? 1), audienceLabelIds: audiences.get(meeting.id) ?? [], attendanceClosesAt: attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30) })), lateScanMinutes: settings?.lateScanMinutes ?? 30, attendanceReportingStartsOn: settings?.attendanceReportingStartsOn ?? null, timeZone: settings?.timeZone ?? "UTC" }); }
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
-  if (request.method === "GET") { const [result, settings, audiences] = await Promise.all([db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt, required, notes, is_test AS isTest, series_id AS seriesId, recurrence_frequency AS recurrenceFrequency, recurrence_until AS recurrenceUntil, recurrence_sequence AS recurrenceSequence, weight_category_id AS weightCategoryId, weight_category_name AS weightCategoryName, attendance_weight AS attendanceWeight, audience_mode AS audienceMode FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at DESC LIMIT 1000").all<{ id: string; title: string; startsAt: string; endsAt: string; required: number; notes?: string; isTest: number; seriesId?: string; recurrenceFrequency?: RecurrenceFrequency; recurrenceUntil?: string; recurrenceSequence?: number; weightCategoryId?: string; weightCategoryName?: string; attendanceWeight: number; audienceMode: "all" | "labels" }>(), db.prepare("SELECT late_scan_minutes AS lateScanMinutes, attendance_reporting_starts_on AS attendanceReportingStartsOn, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number; attendanceReportingStartsOn?: string; timeZone?: string }>(), meetingAudienceIds(db)]); return response({ meetings: (result.results ?? []).map((meeting) => ({ ...meeting, attendanceWeight: Number(meeting.attendanceWeight ?? 1), audienceLabelIds: audiences.get(meeting.id) ?? [], attendanceClosesAt: attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30) })), lateScanMinutes: settings?.lateScanMinutes ?? 30, attendanceReportingStartsOn: settings?.attendanceReportingStartsOn ?? null, timeZone: settings?.timeZone ?? "UTC" }); }
   const input = await parseJson<MeetingInput>(request); validateMeetingInput(input); const settings = await db.prepare("SELECT time_zone AS timeZone, late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone?: string; lateScanMinutes?: number }>(); const occurrences = meetingOccurrences(input, settings?.timeZone && validTimeZone(settings.timeZone) ? settings.timeZone : "UTC"); await assertNoMeetingOverlap(db, occurrences.map((occurrence) => ({ ...occurrence, title: input.title })), settings?.lateScanMinutes ?? 30); const assignment = await resolveMeetingWeightAssignment(db, input.weightCategoryId, input.startsAt, input.endsAt); const seriesId = input.recurrence ? crypto.randomUUID() : null; const now = new Date().toISOString(); const ids = occurrences.map(() => crypto.randomUUID());
   const audience = await resolveAudience(db, input);
   const statements = occurrences.map((occurrence, index) => db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at, is_test, series_id, recurrence_frequency, recurrence_until, recurrence_sequence, weight_category_id, weight_category_name, attendance_weight, audience_mode) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)").bind(ids[index], input.title.trim(), occurrence.startsAt, occurrence.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now, seriesId, input.recurrence?.frequency ?? null, input.recurrence?.until ?? null, occurrence.sequence, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1, audience.mode));
@@ -1115,7 +1207,7 @@ async function meetingImpact(request: Request, env: Env, meetingId: string): Pro
 async function updateMeeting(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const input = await parseJson<MeetingInput>(request); validateMeetingInput(input);
-  const current = await db.prepare("SELECT required, audience_mode AS audienceMode FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(meetingId).first<{ required: number; audienceMode: "all" | "labels" }>();
+  const current = await db.prepare("SELECT required, audience_mode AS audienceMode, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(meetingId).first<{ required: number; audienceMode: "all" | "labels"; startsAt: string; endsAt: string }>();
   if (!current) throw new HttpError(404, "Meeting not found");
   const currentIds = (await meetingAudienceIds(db, [meetingId])).get(meetingId) ?? [];
   const audience = await resolveAudience(db, { ...input, audienceMode: input.audienceMode ?? current.audienceMode, audienceLabelIds: input.audienceLabelIds ?? currentIds }, currentIds);
@@ -1130,8 +1222,10 @@ async function updateMeeting(request: Request, env: Env, meetingId: string): Pro
     : db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, audience_mode = ?, is_test = 0, weight_category_id = ?, weight_category_name = ?, attendance_weight = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, audience.mode, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1, meetingId);
   const now = new Date().toISOString(); const statements = [update, db.prepare("DELETE FROM meeting_audience_labels WHERE installation_id = 'primary' AND meeting_id = ?").bind(meetingId), ...audience.labelIds.map((labelId) => db.prepare("INSERT INTO meeting_audience_labels (installation_id, meeting_id, label_id) VALUES ('primary', ?, ?)").bind(meetingId, labelId)), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.updated', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, meetingId, JSON.stringify({ audience, historicalImpact: impact.completed && impact.changed ? impact.impact : [], ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 }) }), now)];
   await db.batch(statements);
+  const rescheduled = Date.parse(current.startsAt) !== Date.parse(input.startsAt) || Date.parse(current.endsAt) !== Date.parse(input.endsAt);
+  const discordNotices = historicalChange || rescheduled ? await retractDiscordAttendanceNotices(env, principal, [meetingId]) : [];
   const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", [meetingId]);
-  return response({ meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null, audienceMode: audience.mode, audienceLabelIds: audience.labelIds, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }) }, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
+  return response({ discordNotices, meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null, audienceMode: audience.mode, audienceLabelIds: audience.labelIds, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }) }, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function updateMeetingSeries(request: Request, env: Env, seriesId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<MeetingInput & { meetingId?: string }>(request); validateMeetingInput(input);
@@ -1153,7 +1247,8 @@ async function updateMeetingSeries(request: Request, env: Env, seriesId: string)
   const updatedCount = statements.length;
   for (const meeting of proposed) { statements.push(db.prepare("DELETE FROM meeting_audience_labels WHERE installation_id = 'primary' AND meeting_id = ?").bind(meeting.id)); for (const labelId of audience.labelIds) statements.push(db.prepare("INSERT INTO meeting_audience_labels (installation_id, meeting_id, label_id) VALUES ('primary', ?, ?)").bind(meeting.id, labelId)); }
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.series_updated', 'meeting_series', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, seriesId, JSON.stringify({ fromMeetingId: input.meetingId, updated: updatedCount, audience, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 }) }), new Date().toISOString()));
-  await db.batch(statements); const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", proposed.map((meeting) => meeting.id)); return response({ seriesId, updated: updatedCount, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
+  await db.batch(statements); const discordNotices = await retractDiscordAttendanceNotices(env, principal, proposed.map((meeting) => meeting.id));
+  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", proposed.map((meeting) => meeting.id)); return response({ seriesId, updated: updatedCount, discordNotices, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function deleteMeetings(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "occurrence" | "future" }>(request);
@@ -1199,7 +1294,7 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   const existing = await db.prepare("SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?").bind(input.eventId.trim()).first<{ action: AttendanceAction }>();
   if (existing) return response({ accepted: false, duplicate: true, eventId: input.eventId, action: existing.action }, 200);
   const [member, settings] = await Promise.all([
-    db.prepare("SELECT id, external_id AS externalId, first_name AS firstName, last_name AS lastName, attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id = 'primary' AND (id = ? OR external_id = ?) AND active = 1").bind(input.memberId, input.memberId).first<{ id: string; externalId: string; firstName: string; lastName: string; attendanceRequiredFrom?: string }>(),
+    db.prepare("SELECT id, external_id AS externalId, first_name AS firstName, last_name AS lastName, attendance_required_from AS attendanceRequiredFrom, created_at AS rosterAddedAt FROM members WHERE installation_id = 'primary' AND (id = ? OR external_id = ?) AND active = 1").bind(input.memberId, input.memberId).first<{ id: string; externalId: string; firstName: string; lastName: string; attendanceRequiredFrom?: string | null; rosterAddedAt?: string | null }>(),
     db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number }>(),
   ]);
   const meeting = input.meetingId
@@ -1207,7 +1302,8 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
     : await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND starts_at <= ? ORDER BY starts_at DESC LIMIT 1").bind(input.occurredAt).first<{ id: string; title: string; startsAt: string; endsAt: string }>();
   if (!member) throw new HttpError(404, "This identity is not linked to an active roster member", undefined, "roster_inactive");
   if (!meeting) throw new HttpError(409, "No meeting is accepting attendance scans at this time", undefined, "no_eligible_meeting");
-  if (member.attendanceRequiredFrom && meeting.startsAt.slice(0, 10) < member.attendanceRequiredFrom) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${member.attendanceRequiredFrom}`, undefined, "participation_not_started");
+  const participationStartsOn = member.attendanceRequiredFrom ?? member.rosterAddedAt?.slice(0, 10) ?? "";
+  if (participationStartsOn && meeting.startsAt.slice(0, 10) < participationStartsOn) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${participationStartsOn}`, undefined, "participation_not_started");
   const window = scanWindowState(meeting, input.occurredAt, settings?.lateScanMinutes ?? 30);
   if (!window.accepted) throw new HttpError(409, input.meetingId ? window.reason : "No meeting is accepting attendance scans at this time", undefined, input.meetingId ? "scan_window_closed" : "no_eligible_meeting");
   const prior = await db.prepare("SELECT id, action, occurred_at AS occurredAt FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ? ORDER BY occurred_at, id").bind(member.id, meeting.id).all<{ id: string; action: AttendanceAction; occurredAt: string }>();
@@ -1813,10 +1909,13 @@ async function discordAnomalyReportSettings(request: Request, env: Env): Promise
   return response({ enabled: input.enabled, channelId: channelId ?? "" });
 }
 async function integrationCapabilities(request: Request, env: Env): Promise<Response> {
-  await requireRole(request, env, ["admin", "operator"]); const flags = await integrationFlags(env);
-  const records = await requireDatabase(env).prepare("SELECT provider, verified_at AS verifiedAt FROM encrypted_integrations WHERE installation_id = 'primary'").all<{ provider: IntegrationProvider; verifiedAt?: string | null }>();
+  const [, [flags, records, calendar]] = await authorizedRead(request, env, ["admin", "operator"], () => allInOrder(
+    () => integrationFlags(env),
+    () => requireDatabase(env).prepare("SELECT provider, verified_at AS verifiedAt FROM encrypted_integrations WHERE installation_id = 'primary'").all<{ provider: IntegrationProvider; verifiedAt?: string | null }>(),
+    () => googleCalendarAuthorizationRecord(env),
+  ));
   const verified = new Map((records.results ?? []).map((item) => [item.provider, Boolean(item.verifiedAt)]));
-  const calendar = await googleCalendarAuthorizationRecord(env); const googleCalendarEnabled = Boolean(calendar?.enabled);
+  const googleCalendarEnabled = Boolean(calendar?.enabled);
   return response({ integrations: { ...Object.fromEntries([...integrationProviders].map((provider) => [provider, { enabled: Boolean(flags[integrationFlagColumns[provider]]), configured: Boolean(flags[integrationFlagColumns[provider]]) && Boolean(verified.get(provider)) }])), google_calendar: { enabled: googleCalendarEnabled, configured: googleCalendarEnabled && Boolean(calendar?.verifiedAt) } } });
 }
 async function requireLocalAdminSignIn(db: D1Database): Promise<void> {
@@ -1972,10 +2071,29 @@ async function googleCalendarProviderRequest(accessToken: string, path: string, 
   const result = await fetch(`https://www.googleapis.com/calendar/v3${path}`, { ...init, headers: { authorization: `Bearer ${accessToken}`, accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers } });
   const body = await result.json().catch(() => ({})) as Record<string, unknown>;
   if (result.ok) return { response: result, body };
-  if (result.status === 401) throw new GoogleCalendarProviderError(401, "Google Calendar authorization needs to be renewed.", false);
-  if (result.status === 403 || result.status === 429) throw new GoogleCalendarProviderError(result.status, "Google Calendar is rate limiting or denying this request. Check the selected calendar and try again.", true, googleCalendarRetryAfter(result));
-  if (result.status >= 500) throw new GoogleCalendarProviderError(result.status, "Google Calendar is temporarily unavailable. LancerLogin will retry automatically.", true, googleCalendarRetryAfter(result));
-  throw new GoogleCalendarProviderError(result.status, `Google Calendar rejected the request (${result.status}). Check the Calendar connection.`, false);
+  throw googleCalendarProviderFailure(result, body, path);
+}
+/** Google's machine-readable reasons (errors[].reason, status, details[].reason) and its short message; only used to classify, never shown. */
+function googleCalendarErrorReasons(body: Record<string, unknown>): { reasons: Set<string>; message: string } {
+  const error = body.error && typeof body.error === "object" ? body.error as { status?: unknown; message?: unknown; errors?: unknown; details?: unknown } : {}; const reasonsOf = (list: unknown) => Array.isArray(list) ? list.map((item) => item && typeof item === "object" ? (item as { reason?: unknown }).reason : undefined) : [];
+  return { reasons: new Set([error.status, ...reasonsOf(error.errors), ...reasonsOf(error.details)].filter((value): value is string => typeof value === "string")), message: typeof error.message === "string" ? error.message.slice(0, 1_000) : "" };
+}
+/** One short, token-free message per Google refusal. `retryable` drives the operation queue, so a refusal that needs an Admin never retries forever. */
+function googleCalendarProviderFailure(result: Response, body: Record<string, unknown>, path: string): GoogleCalendarProviderError {
+  const { reasons, message } = googleCalendarErrorReasons(body); const has = (...codes: string[]) => codes.some((code) => reasons.has(code)); const status = result.status;
+  if (status === 401) return new GoogleCalendarProviderError(401, "Google Calendar authorization needs to be renewed.", false, undefined, true);
+  if (status === 429 || (status === 403 && has("rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "RATE_LIMIT_EXCEEDED", "RESOURCE_EXHAUSTED"))) return new GoogleCalendarProviderError(status, "Google Calendar is rate limiting requests. LancerLogin will retry automatically.", true, googleCalendarRetryAfter(result));
+  if (status === 403 && (has("accessNotConfigured", "SERVICE_DISABLED") || /has not been used in project|is disabled/i.test(message))) return new GoogleCalendarProviderError(403, "The Google Calendar API is not enabled in this Google Cloud project. Enable it in the Google Cloud console, wait a minute, then try again.", false);
+  if (status === 403 && has("insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT")) return new GoogleCalendarProviderError(403, "Google Calendar access was not fully granted. Authorize Google Calendar again and approve both permissions.", false, undefined, true);
+  if ((status === 403 && has("forbidden", "requiredAccessLevel")) || (status === 404 && path.startsWith("/users/me/calendarList/"))) return new GoogleCalendarProviderError(status, "This Google account can no longer write to the selected calendar. Choose another calendar or restore access.", false);
+  if (status === 403) return new GoogleCalendarProviderError(403, "Google Calendar refused this request (403). Check the Calendar connection.", false);
+  if (status >= 500) return new GoogleCalendarProviderError(status, "Google Calendar is temporarily unavailable. LancerLogin will retry automatically.", true, googleCalendarRetryAfter(result));
+  return new GoogleCalendarProviderError(status, `Google Calendar rejected the request (${status}). Check the Calendar connection.`, false);
+}
+/** Admin routes that call Google Calendar directly report its refusal as a handled error (409 re-authorize, 503 retryable, 502 otherwise) instead of a generic 500. The operation queue records the original error itself. */
+async function withCalendarProviderErrors<T>(action: () => Promise<T>): Promise<T> {
+  try { return await action(); }
+  catch (error) { if (error instanceof GoogleCalendarProviderError) throw new HttpError(error.reauthorize ? 409 : error.retryable ? 503 : 502, error.message); throw error; }
 }
 async function googleCalendarAccessToken(env: Env, requireVerified = false): Promise<{ accessToken: string; secret: GoogleCalendarSecret }> {
   const { record, secret } = await googleCalendarSecret(env, requireVerified);
@@ -1985,9 +2103,11 @@ async function googleCalendarAccessToken(env: Env, requireVerified = false): Pro
   const body = await result.json().catch(() => ({})) as { access_token?: string; error?: unknown };
   if (!result.ok || !body.access_token) {
     if (result.status >= 500 || result.status === 429) throw new GoogleCalendarProviderError(result.status, "Google authorization is temporarily unavailable. LancerLogin will retry automatically.", true, googleCalendarRetryAfter(result));
+    // A disabled or blocked OAuth client is fixed in the Google Cloud console, not by re-authorizing, so authorized_at stays.
+    if (result.status === 403 || body.error === "disabled_client") throw new GoogleCalendarProviderError(result.status, `Google refused the Calendar OAuth client (${result.status}). Check that the OAuth client is enabled in the Google Cloud console, then try again.`, false);
     // A revoked or expired refresh token never recovers on retry. Clearing authorized_at (only for the credentials that failed) marks re-authorization as required; the calendar choice stays.
     if (body.error === "invalid_grant" || result.status === 400 || result.status === 401) await requireDatabase(env).prepare("UPDATE google_calendar_authorizations SET authorized_at = NULL, updated_at = ? WHERE installation_id = 'primary' AND ciphertext = ? AND authorized_at IS NOT NULL").bind(new Date().toISOString(), record.ciphertext).run();
-    throw new GoogleCalendarProviderError(result.status, "Google Calendar authorization needs to be renewed. An Admin must authorize Google Calendar again.", false);
+    throw new GoogleCalendarProviderError(result.status, "Google Calendar authorization needs to be renewed. An Admin must authorize Google Calendar again.", false, undefined, true);
   }
   return { accessToken: body.access_token, secret };
 }
@@ -2060,14 +2180,14 @@ async function completeGoogleCalendarAuthorization(request: Request, env: Env): 
   return new Response(null, { status: 302, headers });
 }
 async function listGoogleCalendars(request: Request, env: Env): Promise<Response> {
-  await requireRole(request, env, ["admin"]); const { accessToken } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, "/users/me/calendarList?minAccessRole=writer&showHidden=false&maxResults=250", {}, env.moduleProviderAuthority);
+  await requireRole(request, env, ["admin"]); const { body } = await withCalendarProviderErrors(async () => googleCalendarProviderRequest((await googleCalendarAccessToken(env)).accessToken, "/users/me/calendarList?minAccessRole=writer&showHidden=false&maxResults=250", {}, env.moduleProviderAuthority));
   const items = Array.isArray(body.items) ? body.items as Array<Record<string, unknown>> : [];
   return response({ calendars: items.filter((item) => writableCalendarRole(item.accessRole) && typeof item.id === "string").map((item) => ({ id: String(item.id), name: String(item.summary ?? "Writable calendar").slice(0, 200), primary: Boolean(item.primary), accessRole: item.accessRole })) });
 }
 async function selectGoogleCalendar(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ calendarId?: string }>(request); const calendarId = input.calendarId?.trim();
   if (!calendarId || calendarId.length > 1_024) throw new HttpError(400, "Choose one writable Google Calendar");
-  const { accessToken, secret } = await googleCalendarAccessToken(env); const { body } = await googleCalendarProviderRequest(accessToken, `/users/me/calendarList/${encodeURIComponent(calendarId)}`, {}, env.moduleProviderAuthority);
+  const { secret, body } = await withCalendarProviderErrors(async () => { const { accessToken, secret } = await googleCalendarAccessToken(env); return { secret, ...await googleCalendarProviderRequest(accessToken, `/users/me/calendarList/${encodeURIComponent(calendarId)}`, {}, env.moduleProviderAuthority) }; });
   if (!writableCalendarRole(body.accessRole)) throw new HttpError(400, "Choose a Google Calendar where this account can edit events");
   const changed = Boolean(secret.calendarId && secret.calendarId !== calendarId); const next = { ...secret, calendarId, calendarLabel: String(body.summary ?? "Selected calendar").slice(0, 200) }; const encrypted = await encryptIntegration(next, env.INTEGRATION_KEY!); const now = new Date().toISOString(); const db = requireDatabase(env);
   await db.batch([
@@ -2533,6 +2653,13 @@ async function startDiscordVerification(request: Request, env: Env): Promise<Res
   await writeAudit(db, principal, "integration.verification_started", "integration", "discord", { guildId: config.guildId, channelId: config.channelId, messageId });
   return response({ provider: "discord", verificationPending: true, expiresAt, messageId }, 202);
 }
+// Opening Settings > Integrations runs the maintenance pass's own guarded reconcile while commands are pending, so the
+// status settles in seconds instead of at the next pass. The attempt claim keeps it from overlapping a maintenance run.
+async function checkDiscordCommands(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin"]);
+  if ((await discordCommandStatus(env)).commandStatus === "pending") await autoReconcileDiscordCommands(env);
+  return response(await discordCommandStatus(env));
+}
 async function reconcileDiscordCommands(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env);
   const reconciled = await reconcileDiscordApplicationCommands(config);
@@ -2551,6 +2678,8 @@ async function linkedAbsentMembers(db: D1Database, meetingId: string): Promise<{
   const data = await policyData(db, { meetingId }); const meeting = data.meetings.find((item) => item.id === meetingId);
   if (!meeting || !meeting.required) return [];
   const expected = new Set(evaluateAttendance({ ...data, meetings: [meeting], now: new Date(Math.max(Date.now(), Date.parse(meeting.attendanceClosesAt) + 1)).toISOString() }).filter((item) => item.member.active && item.rows.some((row) => row.meetingId === meetingId && row.eligibility === "required" && (row.disposition === "absent" || Date.now() >= Date.parse(meeting.attendanceClosesAt) && row.disposition === "active"))).map((item) => item.member.id));
+  // The evaluation above projects to the close, where an open check-in counts as absent. Until then that member is still attending.
+  if (Date.now() < Date.parse(meeting.attendanceClosesAt)) for (const observation of data.observations) if (observation.meetingId === meetingId && observation.disposition === "active") expected.delete(observation.memberId);
   if (!expected.size) return [];
   const linked = await db.prepare("SELECT id, discord_user_id AS discordUserId FROM members WHERE installation_id = 'primary' AND active = 1 AND discord_user_id IS NOT NULL").all<{ id: string; discordUserId: string }>();
   return (linked.results ?? []).filter((member) => expected.has(member.id));
@@ -2656,26 +2785,56 @@ async function expireDiscordAttendanceNotifications(env: Env, config: Record<str
   for (const notice of delivered.results ?? []) {
     const expiry = notice.expiresAt ? Date.parse(notice.expiresAt) : Date.parse(notice.processedAt ?? "") + contestWindowHours * 3_600_000;
     if (!Number.isFinite(expiry) || expiry > now || notice.channelId && notice.channelId !== config.channelId) continue;
-    const messageIds = new Set([notice.messageId]);
-    if (notice.deliveryId) {
-      const chunks = await db.prepare("SELECT DISTINCT message_id AS messageId FROM discord_attendance_recipients WHERE installation_id = 'primary' AND meeting_id = ? AND delivery_id = ?").bind(notice.meetingId, notice.deliveryId).all<{ messageId: string }>();
-      for (const chunk of chunks.results ?? []) messageIds.add(chunk.messageId);
-    }
-    let failed = false;
-    for (const messageId of messageIds) {
-      try {
-        await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
-      } catch (error) {
-        if (!discordMessageMissing(error)) {
-          await db.prepare("UPDATE discord_attendance_notifications SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(error instanceof Error ? error.message.slice(0, 300) : "Discord deletion failed", new Date().toISOString(), notice.meetingId).run();
-          failed = true;
-        }
-      }
-    }
-    if (failed) continue;
+    if (!(await deleteDiscordAttendanceMessages(db, config, notice))) continue;
     const deletedAt = new Date(now).toISOString();
     await db.prepare("UPDATE discord_attendance_notifications SET deleted_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(deletedAt, deletedAt, notice.meetingId, notice.messageId).run();
   }
+}
+// Deletes every chunk of a delivered notice. A refused deletion is recorded on the notice and reported as false.
+async function deleteDiscordAttendanceMessages(db: D1Database, config: Record<string, string>, notice: { meetingId: string; messageId: string; deliveryId?: string }): Promise<boolean> {
+  const messageIds = new Set([notice.messageId]);
+  if (notice.deliveryId) {
+    const chunks = await db.prepare("SELECT DISTINCT message_id AS messageId FROM discord_attendance_recipients WHERE installation_id = 'primary' AND meeting_id = ? AND delivery_id = ?").bind(notice.meetingId, notice.deliveryId).all<{ messageId: string }>();
+    for (const chunk of chunks.results ?? []) messageIds.add(chunk.messageId);
+  }
+  let failed = false;
+  for (const messageId of messageIds) {
+    try {
+      await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
+    } catch (error) {
+      if (!discordMessageMissing(error)) {
+        await db.prepare("UPDATE discord_attendance_notifications SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(error instanceof Error ? error.message.slice(0, 300) : "Discord deletion failed", new Date().toISOString(), notice.meetingId).run();
+        failed = true;
+      }
+    }
+  }
+  return !failed;
+}
+type DiscordNoticeRetraction = { meetingId: string; outcome: "retracted" | "pending_deletion" | "failed" };
+// A meeting edit can change who is absent, so a live notice evaluated against the old schedule is withdrawn. Removing its tracking
+// row lets the scheduler post a fresh notice once the edited meeting's attendance closes, or on its next pass when that has passed.
+// A deletion Discord refuses expires the notice instead, so the scheduled cleanup keeps retrying and no new notice is posted.
+async function retractDiscordAttendanceNotices(env: Env, principal: Principal, meetingIds: string[]): Promise<DiscordNoticeRetraction[]> {
+  if (!meetingIds.length) return [];
+  const db = requireDatabase(env); const now = new Date().toISOString();
+  const notices = await db.prepare("SELECT meeting_id AS meetingId, message_id AS messageId, channel_id AS channelId, delivery_id AS deliveryId FROM discord_attendance_notifications WHERE installation_id = 'primary' AND meeting_id IN (SELECT value FROM json_each(?)) AND status = 'delivered' AND message_id IS NOT NULL AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)").bind(JSON.stringify(meetingIds), now).all<{ meetingId: string; messageId: string; channelId?: string; deliveryId?: string }>();
+  const outcomes: DiscordNoticeRetraction[] = [];
+  for (const notice of notices.results ?? []) {
+    let outcome: DiscordNoticeRetraction["outcome"] = "failed";
+    try {
+      const config = await discordConfiguration(env);
+      if (notice.channelId && notice.channelId !== config.channelId || !(await deleteDiscordAttendanceMessages(db, config, notice))) {
+        await db.prepare("UPDATE discord_attendance_notifications SET expires_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(now, now, notice.meetingId, notice.messageId).run();
+        outcome = "pending_deletion";
+      } else {
+        await db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(notice.meetingId, notice.messageId).run();
+        outcome = "retracted";
+      }
+      await writeAudit(db, principal, "discord.missing_notice_retracted", "meeting", notice.meetingId, { outcome, messageId: notice.messageId });
+    } catch { /* The meeting edit is saved; the stale notice still expires on schedule. */ }
+    outcomes.push({ meetingId: notice.meetingId, outcome });
+  }
+  return outcomes;
 }
 async function processDiscordAttendanceNotifications(env: Env, now = Date.now()): Promise<void> {
   const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0 || !discord.verifiedAt) return;
@@ -2757,10 +2916,13 @@ async function discordMissing(request: Request, env: Env): Promise<Response> {
   return response(await sendDiscordAttendanceNotification(env, meeting, { force: true, actor: principal }), 202);
 }
 async function discordContests(request: Request, env: Env): Promise<Response> {
-  await requireRole(request, env, ["admin", "operator"]); await requireIntegrationConfigured(env, "discord"); const meetingId = new URL(request.url).searchParams.get("meetingId"); const where = meetingId ? "AND c.meeting_id = ?" : "";
-  const statement = requireDatabase(env).prepare(`SELECT c.meeting_id AS meetingId, mt.title AS meetingTitle, mt.starts_at AS meetingStartsAt, c.member_id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, c.status, c.created_at AS createdAt, c.resolved_at AS resolvedAt, c.review_note AS reviewNote, c.prior_reviews_json AS priorReviewsJson, (SELECT SUM(1 + json_array_length(history.prior_reviews_json)) FROM discord_attendance_contests history WHERE history.installation_id = c.installation_id AND history.member_id = c.member_id) AS lifetimeContestCount, EXISTS (SELECT 1 FROM attendance_events check_in WHERE check_in.installation_id = c.installation_id AND check_in.meeting_id = c.meeting_id AND check_in.member_id = c.member_id AND check_in.action = 'check_in') AS hasRawCheckIn, EXISTS (SELECT 1 FROM attendance_events check_out WHERE check_out.installation_id = c.installation_id AND check_out.meeting_id = c.meeting_id AND check_out.member_id = c.member_id AND check_out.action = 'check_out') AS hasRawCheckOut FROM discord_attendance_contests c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id JOIN meetings mt ON mt.id = c.meeting_id AND mt.installation_id = c.installation_id WHERE c.installation_id = 'primary' ${where} ORDER BY CASE WHEN c.status = 'open' THEN 0 ELSE 1 END, c.created_at DESC`);
+  const meetingId = new URL(request.url).searchParams.get("meetingId"); const where = meetingId ? "AND c.meeting_id = ?" : "";
   type ContestRow = Record<string, unknown> & { lifetimeContestCount?: number; hasRawCheckIn?: number; hasRawCheckOut?: number; priorReviewsJson?: string };
-  const result = meetingId ? await statement.bind(meetingId).all<ContestRow>() : await statement.all<ContestRow>();
+  // The Discord check gates the response: allInOrder rethrows its 409 before any contest read result is used.
+  const [, [, result]] = await authorizedRead(request, env, ["admin", "operator"], () => allInOrder(() => requireIntegrationConfigured(env, "discord"), () => {
+    const statement = requireDatabase(env).prepare(`SELECT c.meeting_id AS meetingId, mt.title AS meetingTitle, mt.starts_at AS meetingStartsAt, c.member_id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, c.status, c.created_at AS createdAt, c.resolved_at AS resolvedAt, c.review_note AS reviewNote, c.prior_reviews_json AS priorReviewsJson, (SELECT SUM(1 + json_array_length(history.prior_reviews_json)) FROM discord_attendance_contests history WHERE history.installation_id = c.installation_id AND history.member_id = c.member_id) AS lifetimeContestCount, EXISTS (SELECT 1 FROM attendance_events check_in WHERE check_in.installation_id = c.installation_id AND check_in.meeting_id = c.meeting_id AND check_in.member_id = c.member_id AND check_in.action = 'check_in') AS hasRawCheckIn, EXISTS (SELECT 1 FROM attendance_events check_out WHERE check_out.installation_id = c.installation_id AND check_out.meeting_id = c.meeting_id AND check_out.member_id = c.member_id AND check_out.action = 'check_out') AS hasRawCheckOut FROM discord_attendance_contests c JOIN members m ON m.id = c.member_id AND m.installation_id = c.installation_id JOIN meetings mt ON mt.id = c.meeting_id AND mt.installation_id = c.installation_id WHERE c.installation_id = 'primary' ${where} ORDER BY CASE WHEN c.status = 'open' THEN 0 ELSE 1 END, c.created_at DESC`);
+    return meetingId ? statement.bind(meetingId).all<ContestRow>() : statement.all<ContestRow>();
+  }));
   const contests = (result.results ?? []).map(({ hasRawCheckIn, hasRawCheckOut, priorReviewsJson, ...contest }) => ({
     ...contest,
     priorReviews: JSON.parse(priorReviewsJson ?? "[]"),
@@ -2825,22 +2987,39 @@ async function discordLabelMapping(db: D1Database, labelId: string, requireActiv
   if (requireActive && !mapping.active) throw new HttpError(409, "Restore the retired label before syncing its Discord role");
   return mapping;
 }
-async function discordManageableRole(config: Record<string, string>, roleId: string): Promise<DiscordGuildRole> {
-  if (!discordSnowflake(roleId) || roleId === config.guildId) throw new HttpError(400, "Choose a manageable Discord role, not @everyone");
+type DiscordRoleAccess = { roles: DiscordGuildRole[]; canManageRoles: boolean; problem: (role: DiscordGuildRole) => string | undefined };
+/** Loads the server's roles once and explains why the bot could not manage any one of them. */
+async function discordRoleAccess(config: Record<string, string>): Promise<DiscordRoleAccess> {
   const [rolesResult, botResult] = await Promise.all([
     discordRequest<DiscordGuildRole[]>(config, `/guilds/${config.guildId}/roles`, { method: "GET" }),
     discordRequest<{ id?: string }>(config, "/users/@me", { method: "GET" }),
   ]);
   if (!Array.isArray(rolesResult.body) || !discordSnowflake(botResult.body.id)) throw new HttpError(502, "Discord did not return valid role and bot identities");
-  const roles = rolesResult.body; const role = roles.find((item) => item.id === roleId);
-  if (!role) throw new HttpError(409, "The mapped Discord role no longer exists");
+  const roles = rolesResult.body;
   const bot = await discordRequest<DiscordGuildMember>(config, `/guilds/${config.guildId}/members/${botResult.body.id}`, { method: "GET" });
   const botRoles = roles.filter((item) => bot.body.roles?.includes(item.id));
   const highest = Math.max(0, ...botRoles.map((item) => item.position));
   const permissions = botRoles.reduce((value, item) => value | BigInt(item.permissions || "0"), BigInt(roles.find((item) => item.id === config.guildId)?.permissions || "0"));
-  if (!(permissions & (1n << 28n)) && !(permissions & 8n)) throw new DiscordPermissionError("roles");
-  if (role.managed || !Number.isInteger(role.position) || role.position >= highest || BigInt(role.permissions || "0") & (8n | 1n << 28n)) throw new HttpError(409, "This Discord role is managed, privileged, or above the bot's highest role");
+  const canManageRoles = Boolean(permissions & (1n << 28n)) || Boolean(permissions & 8n);
+  return { roles, canManageRoles, problem: (role) => role.id === config.guildId ? "This is the @everyone role" : role.managed ? "Managed by a bot or integration" : BigInt(role.permissions || "0") & (8n | 1n << 28n) ? "Has Administrator or Manage Roles permission" : !Number.isInteger(role.position) || role.position >= highest ? "Above the bot's highest role" : undefined };
+}
+const discordRoleProblemFixes: Record<string, string> = {
+  "Managed by a bot or integration": "Choose a role that no bot or integration controls.",
+  "Has Administrator or Manage Roles permission": "Remove Administrator and Manage Roles from it, or choose another role.",
+  "Above the bot's highest role": "In Server Settings > Roles, drag the LancerLogin bot's role above it.",
+};
+function discordAccessibleRole(access: DiscordRoleAccess, config: Record<string, string>, roleId: string): DiscordGuildRole {
+  if (!discordSnowflake(roleId) || roleId === config.guildId) throw new HttpError(400, "Choose a manageable Discord role, not @everyone");
+  const role = access.roles.find((item) => item.id === roleId);
+  if (!role) throw new HttpError(409, "The mapped Discord role no longer exists");
+  if (!access.canManageRoles) throw new DiscordPermissionError("roles");
+  const problem = access.problem(role);
+  if (problem) throw new HttpError(409, `LancerLogin can't manage the ${role.name} role: ${problem}. ${discordRoleProblemFixes[problem] ?? "Choose another role."}`);
   return role;
+}
+async function discordManageableRole(config: Record<string, string>, roleId: string): Promise<DiscordGuildRole> {
+  if (!discordSnowflake(roleId) || roleId === config.guildId) throw new HttpError(400, "Choose a manageable Discord role, not @everyone");
+  return discordAccessibleRole(await discordRoleAccess(config), config, roleId);
 }
 async function discordAllGuildMembers(config: Record<string, string>): Promise<DiscordGuildMember[]> {
   const members: DiscordGuildMember[] = []; let after = "0"; const seen = new Set<string>();
@@ -2866,10 +3045,11 @@ async function discordLabelSource(db: D1Database, mapping: DiscordLabelMapping, 
   const sourceFingerprint = await sha256(JSON.stringify({ labelId: mapping.labelId, roleId: mapping.roleId, guildId, today, active: mapping.active, roster }));
   return { roster, sourceFingerprint };
 }
-async function discordRoleSnapshot(db: D1Database, config: Record<string, string>, labelId: string): Promise<DiscordRoleSnapshot> {
+type DiscordServerState = { access: DiscordRoleAccess; guildMembers: DiscordGuildMember[] };
+async function discordRoleSnapshot(db: D1Database, config: Record<string, string>, labelId: string, server?: DiscordServerState): Promise<DiscordRoleSnapshot> {
   const mapping = await discordLabelMapping(db, labelId);
-  const role = await discordManageableRole(config, mapping.roleId);
-  const [source, guildMembers] = await Promise.all([discordLabelSource(db, mapping, config.guildId), discordAllGuildMembers(config)]);
+  const role = server ? discordAccessibleRole(server.access, config, mapping.roleId) : await discordManageableRole(config, mapping.roleId);
+  const [source, guildMembers] = await Promise.all([discordLabelSource(db, mapping, config.guildId), server?.guildMembers ?? discordAllGuildMembers(config)]);
   const guild = new Map(guildMembers.map((member) => [member.user!.id!, member]));
   const qualified = new Map(source.roster.filter((member) => member.active && member.labelAction === "add" && member.discordUserId).map((member) => [member.discordUserId!, member]));
   const additions: DiscordRoleChange[] = []; const removals: DiscordRoleChange[] = [];
@@ -2891,14 +3071,19 @@ async function discordLabelMappings(request: Request, env: Env): Promise<Respons
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const rows = await db.prepare("SELECT x.label_id AS labelId, l.name AS labelName, l.active, x.guild_id AS guildId, x.role_id AS roleId, x.role_name AS roleName, x.created_at AS createdAt FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' ORDER BY l.name COLLATE NOCASE").all<DiscordLabelMapping>();
   const integration = await integrationRecord(env, "discord"); const available = Boolean(integration && integration.enabled !== 0 && integration.verifiedAt);
-  let config: Record<string, string> | undefined;
+  let config: Record<string, string> | undefined; let access: DiscordRoleAccess | undefined; let accessError = "";
   if (available) config = await discordConfiguration(env);
+  if (config && rows.results?.length) try { access = await discordRoleAccess(config); } catch (error) { accessError = (error as Error).message; }
+  const settings = await db.prepare("SELECT time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone: string }>(); const timeZone = settings?.timeZone ?? "UTC"; const today = policyLocalDate(new Date().toISOString(), timeZone);
   const mappings = await Promise.all((rows.results ?? []).map(async (mapping) => {
     const latest = await db.prepare("SELECT id, status, created_at AS createdAt, updated_at AS updatedAt, completed_at AS completedAt FROM discord_label_role_jobs WHERE installation_id = 'primary' AND label_id = ? ORDER BY created_at DESC LIMIT 1").bind(mapping.labelId).first<{ id: string; status: string; createdAt: string; updatedAt: string; completedAt?: string }>();
-    if (!config || !mapping.active) return { ...mapping, health: !mapping.active ? "retired" : "integration_unavailable", latestJob: latest };
-    if (mapping.guildId !== config.guildId) return { ...mapping, health: "different_server", latestJob: latest };
-    try { const role = await discordManageableRole(config, mapping.roleId); return { ...mapping, roleName: role.name, health: "ready", latestJob: latest }; }
-    catch (error) { return { ...mapping, health: "unavailable", healthDetail: (error as Error).message, latestJob: latest }; }
+    // Label changes recorded after the last sync, or dated changes that took effect since then. Pairing changes are not tracked here.
+    const changed = latest && await db.prepare("SELECT 1 FROM member_label_changes WHERE installation_id = 'primary' AND label_id = ? AND (created_at > ? OR (effective_date > ? AND effective_date <= ?)) LIMIT 1").bind(mapping.labelId, latest.createdAt, policyLocalDate(latest.createdAt, timeZone), today).first();
+    const syncState = !latest || mapping.createdAt > latest.createdAt ? "never_synced" : changed ? "label_changes" : "no_label_changes";
+    if (!config || !mapping.active) return { ...mapping, health: !mapping.active ? "retired" : "integration_unavailable", syncState, latestJob: latest };
+    if (mapping.guildId !== config.guildId) return { ...mapping, health: "different_server", syncState, latestJob: latest };
+    try { if (!access) throw new HttpError(502, accessError || "Discord roles are unavailable"); const role = discordAccessibleRole(access, config, mapping.roleId); return { ...mapping, roleName: role.name, health: "ready", syncState, latestJob: latest }; }
+    catch (error) { return { ...mapping, health: "unavailable", healthDetail: (error as Error).message, syncState, latestJob: latest }; }
   }));
   return response({ mappings, integrationAvailable: available });
 }
@@ -2911,20 +3096,56 @@ async function discordLabelUnlink(request: Request, env: Env, labelId: string): 
   await writeAudit(db, principal, "discord.label_role_unlinked", "member_label", labelId, { guildId: mapping.guildId, roleId: mapping.roleId });
   return response({ unlinked: true, roleAssignmentsUnchanged: true });
 }
+async function saveDiscordLabelPreview(db: D1Database, principal: Principal, config: Record<string, string>, snapshot: DiscordRoleSnapshot) {
+  const id = crypto.randomUUID(); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
+  await db.prepare("INSERT INTO discord_label_role_previews (id, installation_id, label_id, guild_id, role_id, fingerprint, actor_user_id, expires_at, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, snapshot.mapping.labelId, config.guildId, snapshot.mapping.roleId, snapshot.fingerprint, principal.userId, expiresAt, now.toISOString()).run();
+  return { previewId: id, expiresAt, labelId: snapshot.mapping.labelId, labelName: snapshot.mapping.labelName, roleId: snapshot.mapping.roleId, roleName: snapshot.roleName, memberCount: snapshot.memberCount, additions: snapshot.additions, removals: snapshot.removals, unpaired: snapshot.unpaired, absent: snapshot.absent, inactive: snapshot.inactive };
+}
 async function discordLabelPreview(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ labelId?: string }>(request);
   if (!input.labelId) throw new HttpError(400, "Choose a label to preview");
   const db = requireDatabase(env); const config = await discordConfiguration(env); const snapshot = await discordRoleSnapshot(db, config, input.labelId);
-  const id = crypto.randomUUID(); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
-  await db.prepare("INSERT INTO discord_label_role_previews (id, installation_id, label_id, guild_id, role_id, fingerprint, actor_user_id, expires_at, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, snapshot.mapping.labelId, config.guildId, snapshot.mapping.roleId, snapshot.fingerprint, principal.userId, expiresAt, now.toISOString()).run();
-  return response({ previewId: id, expiresAt, labelId: snapshot.mapping.labelId, roleId: snapshot.mapping.roleId, roleName: snapshot.roleName, memberCount: snapshot.memberCount, additions: snapshot.additions, removals: snapshot.removals, unpaired: snapshot.unpaired, absent: snapshot.absent, inactive: snapshot.inactive });
+  return response(await saveDiscordLabelPreview(db, principal, config, snapshot));
+}
+/** Previews every active linked label from one load of the server's roles and members. */
+async function discordLabelPreviewAll(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env);
+  const rows = await db.prepare("SELECT x.label_id AS labelId, l.name AS labelName FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND l.active = 1 AND x.guild_id = ? ORDER BY l.name COLLATE NOCASE").bind(config.guildId).all<{ labelId: string; labelName: string }>();
+  if (!rows.results?.length) throw new HttpError(409, "No active labels are linked to roles in this Discord server");
+  const [access, guildMembers] = await Promise.all([discordRoleAccess(config), discordAllGuildMembers(config)]);
+  const previews = []; const skipped: { labelId: string; labelName: string; reason: string }[] = [];
+  for (const row of rows.results) {
+    try { previews.push(await saveDiscordLabelPreview(db, principal, config, await discordRoleSnapshot(db, config, row.labelId, { access, guildMembers }))); }
+    catch (error) { if (!(error instanceof HttpError)) throw error; skipped.push({ ...row, reason: error.message }); }
+  }
+  return response({ previews, skipped });
 }
 async function discordLabelApply(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ previewId?: string }>(request);
   if (!input.previewId) throw new HttpError(400, "A current role sync preview is required");
-  const db = requireDatabase(env); const preview = await db.prepare("SELECT id, label_id AS labelId, guild_id AS guildId, role_id AS roleId, fingerprint, actor_user_id AS actorUserId, expires_at AS expiresAt, used_at AS usedAt FROM discord_label_role_previews WHERE installation_id = 'primary' AND id = ?").bind(input.previewId).first<{ id: string; labelId: string; guildId: string; roleId: string; fingerprint: string; actorUserId: string; expiresAt: string; usedAt?: string }>();
+  const db = requireDatabase(env); const config = await discordConfiguration(env);
+  const result = await applyDiscordLabelPreview(db, principal, config, input.previewId);
+  if (result.status === "pending" && context) context.waitUntil(processDiscordLabelRoleJobs(env));
+  return response(result, 202);
+}
+/** Starts sync jobs for several reviewed previews. Each preview is checked against the server as it is now. */
+async function discordLabelApplyAll(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ previewIds?: string[] }>(request);
+  if (!Array.isArray(input.previewIds) || input.previewIds.length < 1 || input.previewIds.length > 100 || input.previewIds.some((id) => typeof id !== "string") || new Set(input.previewIds).size !== input.previewIds.length) throw new HttpError(400, "Current role sync previews are required");
+  const db = requireDatabase(env); const config = await discordConfiguration(env);
+  const [access, guildMembers] = await Promise.all([discordRoleAccess(config), discordAllGuildMembers(config)]);
+  const jobs = []; const failed: { previewId: string; error: string }[] = [];
+  for (const previewId of input.previewIds) {
+    try { jobs.push(await applyDiscordLabelPreview(db, principal, config, previewId, { access, guildMembers })); }
+    catch (error) { if (!(error instanceof HttpError)) throw error; failed.push({ previewId, error: error.message }); }
+  }
+  if (jobs.some((job) => job.status === "pending") && context) context.waitUntil(processDiscordLabelRoleJobs(env));
+  return response({ jobs, failed }, 202);
+}
+async function applyDiscordLabelPreview(db: D1Database, principal: Principal, config: Record<string, string>, previewId: string, server?: DiscordServerState) {
+  const preview = await db.prepare("SELECT id, label_id AS labelId, guild_id AS guildId, role_id AS roleId, fingerprint, actor_user_id AS actorUserId, expires_at AS expiresAt, used_at AS usedAt FROM discord_label_role_previews WHERE installation_id = 'primary' AND id = ?").bind(previewId).first<{ id: string; labelId: string; guildId: string; roleId: string; fingerprint: string; actorUserId: string; expiresAt: string; usedAt?: string }>();
   if (!preview || preview.actorUserId !== principal.userId || preview.usedAt || preview.expiresAt <= new Date().toISOString()) throw new HttpError(409, "This role sync preview expired or was already used. Preview again.");
-  const config = await discordConfiguration(env); const snapshot = await discordRoleSnapshot(db, config, preview.labelId);
+  const snapshot = await discordRoleSnapshot(db, config, preview.labelId, server);
   if (preview.guildId !== config.guildId || preview.roleId !== snapshot.mapping.roleId || preview.fingerprint !== snapshot.fingerprint) throw new HttpError(409, "Roster or Discord roles changed since the preview. Preview again before syncing.");
   const active = await db.prepare("SELECT id FROM discord_label_role_jobs WHERE installation_id = 'primary' AND label_id = ? AND status IN ('pending', 'running')").bind(preview.labelId).first();
   if (active) throw new HttpError(409, "A sync for this label is already in progress");
@@ -2936,8 +3157,66 @@ async function discordLabelApply(request: Request, env: Env, context?: WorkerCon
     ...changes.map((item) => db.prepare("INSERT INTO discord_label_role_job_items (installation_id, job_id, discord_user_id, action, status) VALUES ('primary', ?, ?, ?, 'pending')").bind(id, item.discordUserId, item.action)),
   ]);
   await writeAudit(db, principal, "discord.label_role_sync_requested", "member_label", preview.labelId, { jobId: id, roleId: preview.roleId, adds: snapshot.additions.length, removals: snapshot.removals.length });
-  if (changes.length && context) context.waitUntil(processDiscordLabelRoleJobs(env));
-  return response({ jobId: id, status: changes.length ? "pending" : "completed", additions: snapshot.additions.length, removals: snapshot.removals.length }, 202);
+  return { jobId: id, labelId: preview.labelId, status: changes.length ? "pending" : "completed", additions: snapshot.additions.length, removals: snapshot.removals.length };
+}
+/** Lists the server's roles for the dashboard role picker, with the reason any role cannot be linked. */
+async function discordGuildRoles(request: Request, env: Env): Promise<Response> {
+  await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env);
+  const [access, links] = await Promise.all([discordRoleAccess(config), db.prepare("SELECT x.role_id AS roleId, x.label_id AS labelId, l.name AS labelName FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.guild_id = ?").bind(config.guildId).all<{ roleId: string; labelId: string; labelName: string }>()]);
+  const linked = new Map((links.results ?? []).map((link) => [link.roleId, link]));
+  const roles = access.roles.filter((role) => role.id !== config.guildId).sort((a, b) => b.position - a.position).map((role) => {
+    const problem = access.canManageRoles ? access.problem(role) : "The bot needs the Manage Roles permission";
+    const link = linked.get(role.id);
+    return { id: role.id, name: role.name, manageable: !problem, ...(problem ? { problem } : {}), ...(link ? { labelId: link.labelId, labelName: link.labelName } : {}) };
+  });
+  return response({ roles, canManageRoles: access.canManageRoles });
+}
+async function saveDiscordLabelMapping(db: D1Database, principal: Principal, label: { id: string; name: string }, role: DiscordGuildRole, guildId: string) {
+  const conflict = await db.prepare("SELECT label_id AS labelId FROM discord_label_role_mappings WHERE installation_id = 'primary' AND (label_id = ? OR (guild_id = ? AND role_id = ?))").bind(label.id, guildId, role.id).first<{ labelId: string }>();
+  if (conflict) throw new HttpError(409, conflict.labelId === label.id ? `${label.name} is already linked to a Discord role. Unlink it first.` : `${role.name} is already linked to another label. Unlink it first.`);
+  const now = new Date().toISOString();
+  try { await db.prepare("INSERT INTO discord_label_role_mappings (installation_id, label_id, guild_id, role_id, role_name, created_by, created_at) VALUES ('primary', ?, ?, ?, ?, ?, ?)").bind(label.id, guildId, role.id, role.name, principal.userId, now).run(); }
+  catch (error) { if (/unique|constraint/i.test(String(error))) throw new HttpError(409, "That label or role was just linked by another Admin. Reload and review it."); throw error; }
+  await writeAudit(db, principal, "discord.label_role_associated", "member_label", label.id, { guildId, roleId: role.id, source: "dashboard" });
+  return { labelId: label.id, labelName: label.name, roleId: role.id, roleName: role.name };
+}
+/** Links an active label to a role the bot can manage. Linking alone changes nobody's roles. */
+async function discordLabelLink(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ labelId?: string; roleId?: string }>(request);
+  if (typeof input.labelId !== "string" || !discordSnowflake(input.roleId)) throw new HttpError(400, "Choose a label and a Discord role");
+  const db = requireDatabase(env); const config = await discordConfiguration(env);
+  const label = await db.prepare("SELECT id, name FROM member_labels WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.labelId).first<{ id: string; name: string }>();
+  if (!label) throw new HttpError(404, "Choose an active label");
+  const role = await discordManageableRole(config, input.roleId);
+  return response({ mapping: await saveDiscordLabelMapping(db, principal, label, role, config.guildId), roleAssignmentsUnchanged: true }, 201);
+}
+/** Creates a label named after each chosen role, or reuses an unlinked active label with that name, and links them. */
+async function discordLabelsFromRoles(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ roleIds?: string[] }>(request);
+  if (!Array.isArray(input.roleIds) || input.roleIds.length < 1 || input.roleIds.length > 25 || !input.roleIds.every(discordSnowflake) || new Set(input.roleIds).size !== input.roleIds.length) throw new HttpError(400, "Choose 1 to 25 Discord roles");
+  const db = requireDatabase(env); const config = await discordConfiguration(env); const access = await discordRoleAccess(config);
+  const roles = input.roleIds.map((roleId) => discordAccessibleRole(access, config, roleId));
+  // Check every role before writing so a bad choice leaves nothing half-linked.
+  const plans = [];
+  for (const role of roles) {
+    const name = role.name.trim(); if (!name || name.length > 80) throw new HttpError(400, `${role.name} cannot be a label name. Label names are 1 to 80 characters.`);
+    const label = await db.prepare("SELECT id, name, active FROM member_labels WHERE installation_id = 'primary' AND name = ? COLLATE NOCASE").bind(name).first<{ id: string; name: string; active: number }>();
+    if (label && !label.active) throw new HttpError(409, `Restore the retired label ${label.name} before linking it.`);
+    const conflict = await db.prepare("SELECT 1 FROM discord_label_role_mappings WHERE installation_id = 'primary' AND (guild_id = ? AND role_id = ?" + (label ? " OR label_id = ?" : "") + ")").bind(...(label ? [config.guildId, role.id, label.id] : [config.guildId, role.id])).first();
+    if (conflict) throw new HttpError(409, `${role.name} or its label is already linked. Unlink it first.`);
+    plans.push({ role, name, label });
+  }
+  const linked = [];
+  for (const plan of plans) {
+    let label = plan.label;
+    if (!label) {
+      const id = crypto.randomUUID(); const now = new Date().toISOString();
+      await db.batch([db.prepare("INSERT INTO member_labels (id, installation_id, name, formula_enabled, created_by, created_at) VALUES (?, 'primary', ?, 0, ?, ?)").bind(id, plan.name, principal.userId, now), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'label.created', 'member_label', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ name: plan.name, formulaEnabled: false, discordRoleId: plan.role.id }), now)]);
+      label = { id, name: plan.name, active: 1 };
+    }
+    linked.push({ ...await saveDiscordLabelMapping(db, principal, label, plan.role, config.guildId), created: !plan.label });
+  }
+  return response({ linked, roleAssignmentsUnchanged: true }, 201);
 }
 async function discordLabelJobStatus(request: Request, env: Env, jobId: string): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
@@ -3881,6 +4160,7 @@ async function platformScheduler(request: Request, env: Env): Promise<Response> 
 
 const worker = { async fetch(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const url = new URL(request.url); let result: Response;
+  sessionLookups.delete(request);
   const binding = env.DB;
   const usage = env.DB ? measureD1(env.DB) : undefined;
   if (usage) env = { ...env, DB: usage.database };
@@ -3895,15 +4175,14 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     let moduleUserId: string | undefined;
     if (request.method !== "OPTIONS" && moduleRoute) {
       const db = requireDatabase(env);
+      // The session lookup and the module access check run together; a 401 or 403 from the session still wins.
       if (moduleRoute.route.access === "workspace") {
-        const principal = await requireRole(request, env, ["admin", "operator"]); moduleUserId = principal.userId;
-        const generation = await requireModuleWorkspace(db, principal.userId, moduleRoute.module.id);
+        const [principal, generation] = await authorizedRead(request, env, ["admin", "operator"], (userId) => requireModuleWorkspace(db, userId, moduleRoute.module.id)); moduleUserId = principal.userId;
         const capability = moduleRoute.module.capabilities.find((item) => item.operator)?.id;
         if (!capability) throw new HttpError(500, "Module workspace capability is unavailable");
         env = moduleScopedEnvironment(env, captureModuleWorkspaceDatabase(db, moduleRoute.module.id, generation, principal.userId, capability));
       } else if (moduleRoute.route.access === "setup") {
-        const principal = await requireRole(request, env, ["admin"]); moduleUserId = principal.userId;
-        const generation = await requireModuleSetup(db, principal.userId, moduleRoute.module.id);
+        const [principal, generation] = await authorizedRead(request, env, ["admin"], (userId) => requireModuleSetup(db, userId, moduleRoute.module.id)); moduleUserId = principal.userId;
         env = moduleScopedEnvironment(env, captureModuleSetupDatabase(db, moduleRoute.module.id, generation, principal.userId));
       } else {
         const generation = await requireModuleService(db, moduleRoute.module.id);
@@ -3920,6 +4199,8 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/releases/latest" && request.method === "GET") result = await discoverRelease(request, env);
     else if (url.pathname === "/admin/update-channel" && ["GET", "PUT"].includes(request.method)) result = await updateChannel(request, env);
     else if (url.pathname === "/admin/web-updates/status" && request.method === "GET" || ["/admin/web-updates/prepare", "/admin/web-updates/start"].includes(url.pathname) && request.method === "POST") result = await webUpdates(request, env);
+    else if (url.pathname === "/admin/web-updates/repository-files" && request.method === "POST") result = await repositoryFiles(request, env);
+    else if (url.pathname === "/admin/web-updates/setup/recheck" && request.method === "POST") result = await recheckSetup(request, env);
     else if (url.pathname === "/admin/plugins" && request.method === "GET") result = await pluginManagement(request, env, "state");
     else if (url.pathname === "/admin/plugins/migrations" && request.method === "GET") { await requireRole(request, env, ["admin"]); result = response({ required: await requiredModuleMigrations(env) }); }
     else if (["/admin/plugins/review", "/admin/plugins/change", "/admin/plugins/reauthenticate", "/admin/plugins/release"].includes(url.pathname) && request.method === "POST") result = await pluginManagement(request, env, url.pathname.slice("/admin/plugins/".length) as "review" | "change" | "reauthenticate" | "release");
@@ -4027,7 +4308,13 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/integrations/resend/verify/complete" && request.method === "POST") result = await completeResendVerification(request, env);
     else if (url.pathname === "/admin/integrations/discord/verify/start" && request.method === "POST") result = await startDiscordVerification(request, env);
     else if (url.pathname === "/admin/integrations/discord/commands/reconcile" && request.method === "POST") result = await reconcileDiscordCommands(request, env);
+    else if (url.pathname === "/admin/integrations/discord/commands/check" && request.method === "POST") result = await checkDiscordCommands(request, env);
     else if (url.pathname === "/admin/integrations/discord/label-roles" && request.method === "GET") result = await discordLabelMappings(request, env);
+    else if (url.pathname === "/admin/integrations/discord/label-roles" && request.method === "POST") result = await discordLabelLink(request, env);
+    else if (url.pathname === "/admin/integrations/discord/label-roles/from-roles" && request.method === "POST") result = await discordLabelsFromRoles(request, env);
+    else if (url.pathname === "/admin/integrations/discord/label-roles/preview-all" && request.method === "POST") result = await discordLabelPreviewAll(request, env);
+    else if (url.pathname === "/admin/integrations/discord/label-roles/apply-all" && request.method === "POST") result = await discordLabelApplyAll(request, env, context);
+    else if (url.pathname === "/admin/integrations/discord/roles" && request.method === "GET") result = await discordGuildRoles(request, env);
     else if (url.pathname === "/admin/integrations/discord/label-roles/preview" && request.method === "POST") result = await discordLabelPreview(request, env);
     else if (url.pathname === "/admin/integrations/discord/label-roles/apply" && request.method === "POST") result = await discordLabelApply(request, env, context);
     else if (/^\/admin\/integrations\/discord\/label-roles\/[^/]+$/.test(url.pathname) && request.method === "DELETE") result = await discordLabelUnlink(request, env, decodeURIComponent(url.pathname.split("/")[5]));

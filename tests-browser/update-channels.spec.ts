@@ -15,7 +15,7 @@ async function setup(page: Page, installed = "1.2.6", setting = { channel: "stab
   return { setting, writes, prepares };
 }
 test("track selection requires consent, starts no update and never offers a downgrade on opt-out", async ({ page }) => {
-  const state = await setup(page, "2.0.0-beta.1"); await page.goto("/settings/updates"); await page.getByText("Change update track", { exact: true }).click();
+  const state = await setup(page, "2.0.0-beta.1"); await page.goto("/settings/updates");
   const select = page.getByLabel("Installation update track"); const save = page.getByRole("button", { name: "Save update track" });
   await expect(select).toHaveValue("stable"); await expect(save).toBeDisabled();
   await expect(page.getByRole("button", { name: "Back up and begin update" }).and(page.locator(":enabled"))).toHaveCount(0);
@@ -34,7 +34,7 @@ test("track selection requires consent, starts no update and never offers a down
 test("other tabs refresh server settings without accepting browser authority or losing an unsaved choice", async ({ page, context }) => {
   const first = await setup(page);
   const other = await context.newPage(); const second = await setup(other, "1.2.6", first.setting);
-  await page.goto("/settings/updates"); await page.getByText("Change update track", { exact: true }).click(); await other.goto("/settings/updates"); await other.getByText("Change update track", { exact: true }).click();
+  await page.goto("/settings/updates"); await other.goto("/settings/updates");
   const choice = other.getByLabel("Installation update track"); const save = other.getByRole("button", { name: "Save update track" });
   await expect(choice).toHaveValue("stable");
   await page.evaluate(() => localStorage.setItem("lancerlogin-update-channel-notice", "beta"));
@@ -51,7 +51,7 @@ test("other tabs refresh server settings without accepting browser authority or 
   expect([...first.prepares, ...second.prepares]).toEqual([]);
 });
 test("beta option reveals matching notes and preserves backup-first and controller bootstrap errors", async ({ page }) => {
-  const state = await setup(page); await page.goto("/settings/updates"); await page.getByText("Change update track", { exact: true }).click();
+  const state = await setup(page); await page.goto("/settings/updates");
   await page.getByLabel("Installation update track").selectOption("beta"); await page.getByRole("checkbox", { name: /I understand beta/ }).check(); await page.getByRole("button", { name: "Save update track" }).click();
   const prepare = page.getByRole("button", { name: "Back up and begin update" }); await expect(prepare).toBeEnabled();
   await expect(page.getByText("Example beta notes")).toBeVisible(); await prepare.click();
@@ -63,7 +63,7 @@ test("track controls use shared branded styles, square checkboxes and keyboard f
   for (const theme of ["light", "dark"]) for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), theme);
-    await page.goto("/settings/updates"); await page.getByText("Change update track", { exact: true }).click(); const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Update track", exact: true }) });
+    await page.goto("/settings/updates"); const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Update track", exact: true }) });
     await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
     const select = page.getByLabel("Installation update track"); await select.selectOption("beta");
     const checkbox = card.getByRole("checkbox"); await checkbox.check(); const save = card.getByRole("button", { name: "Save update track" }); await expect(save).toBeEnabled(); await checkbox.focus(); await page.keyboard.press("Tab"); await expect(save).toBeFocused();

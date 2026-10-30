@@ -19,7 +19,7 @@ function pluginState(overrides: Partial<PluginState> = {}): PluginState {
     credential: { state: "ready", expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() },
     selection: { sha: selectionSha, present: true, officialModules: true, modules: [] },
     installed: [official], pending: [],
-    allowlist: { state: "none" }, protection: { state: "not_configured" }, activeUpdate: null,
+    allowlist: { state: "none" }, activeUpdate: null,
     reauthentication: { freshUntil: null, password: true, google: false }, error: null,
     ...overrides,
   };
@@ -72,7 +72,9 @@ test("Admin adds a plugin with review, trust confirmation and fresh re-authentic
   await page.goto("/settings/modules");
   const plugins = page.locator(".plugin-management");
   await expect(plugins.getByRole("heading", { name: "Plugins", exact: true })).toBeVisible();
-  await expect(plugins.getByText("Production approval is not configured. We recommend required reviewers")).toBeVisible();
+  // No recommendation or check of the production environment's reviewers is shown.
+  await expect(plugins).not.toContainText("Production approval");
+  await expect(plugins).not.toContainText("required reviewers");
   const officialRow = plugins.locator(".plugin-row").filter({ hasText: "hour-tracking" });
   await expect(officialRow).toContainText("Included with LancerLogin");
   // An unpinned official plugin follows LancerLogin's pin; it has no selection entry, so no track is claimed.
@@ -126,11 +128,10 @@ test("Admin adds a plugin with review, trust confirmation and fresh re-authentic
 });
 
 test("removal is blocked while a module is enabled, incompatible plugins cannot be committed and a missing credential disables changes", async ({ page }) => {
-  const mock = await setup(page, pluginState({ installed: [official, { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" }], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit, phase: "enabled" }] }, protection: { state: "configured", reviewers: 2 } }));
+  const mock = await setup(page, pluginState({ installed: [official, { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" }], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit, phase: "enabled" }] } }));
   await page.route("**/admin/plugins/review", (route) => route.fulfill({ json: { ...review, action: "upgrade", commit: next, previousCommit: commit, metadata: { state: "incompatible", reason: "The plugin supports LancerLogin >=3.0.0." } } }));
   await page.goto("/settings/modules");
   const plugins = page.locator(".plugin-management");
-  await expect(plugins.getByText("Production approval is required (2 reviewers)")).toBeVisible();
   await expect(plugins.getByRole("button", { name: "Remove carpool" })).toBeDisabled();
   await expect(plugins).toContainText("Disable this module above before removing its plugin.");
   await plugins.getByRole("button", { name: "Upgrade carpool" }).click();
@@ -144,7 +145,7 @@ test("removal is blocked while a module is enabled, incompatible plugins cannot 
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(plugins.getByRole("button", { name: "Upgrade carpool" })).toBeFocused();
-  mock.state = pluginState({ credential: { state: "missing", expiresAt: null }, selection: null, installed: [official, { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" }], protection: { state: "unknown" } });
+  mock.state = pluginState({ credential: { state: "missing", expiresAt: null }, selection: null, installed: [official, { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" }] });
   await page.reload();
   await expect(plugins.getByText("Plugin management from the dashboard is not set up yet.")).toBeVisible();
   // Only the Actions-scoped update token is configured: the optional selection token is explained, not reported as broken.
@@ -167,7 +168,7 @@ test("removal is blocked while a module is enabled, incompatible plugins cannot 
     await expect(unread).not.toContainText("Pinned by LancerLogin");
     await expect(unread).not.toHaveAttribute("data-track", /.*/);
   }
-  await expect(plugins.getByText(/could not be checked \(unknown\)/)).toBeVisible();
+  await expect(plugins).not.toContainText("Production approval");
   await expect(plugins.getByRole("button", { name: "Add plugin" })).toBeDisabled();
   expect(mock.posts.filter((post) => post.path === "change")).toEqual([]);
 });
@@ -224,6 +225,49 @@ test("Admin moves a plugin to the testing-only Nightly track, and Upgrade offers
   // Reopening Upgrade keeps the plugin on its track.
   await plugins.getByRole("button", { name: "Upgrade carpool" }).click();
   await expect(page.getByRole("dialog", { name: "Upgrade plugin" }).getByLabel("Release track")).toHaveValue("nightly");
+});
+
+test("plugin rows show current and latest versions, accent Upgrade when outdated, versioned pending changes and an unavailable state", async ({ page }) => {
+  const outreach = { ...official, track: "stable" as const, version: "v0.2.0", latest: { tag: "v0.2.0", kind: "stable" as const, commit: official.commit }, latestUnavailable: false, updateAvailable: false, releasePinVersion: "v0.2.0" };
+  const carpool = { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" as const, track: "stable" as const, version: "v1.0.0", latest: { tag: "v1.0.1", kind: "stable" as const, commit: next }, latestUnavailable: false, updateAvailable: true };
+  const mock = await setup(page, pluginState({ installed: [outreach, carpool], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit: next, phase: "enabled" }] }, pending: [{ kind: "upgrade", id: "carpool", source, commit: next, installedCommit: commit, version: "v1.0.1", installedVersion: "v1.0.0" }] }));
+  await page.goto("/settings/modules");
+  const plugins = page.locator(".plugin-management");
+  const installedList = plugins.locator(".plugin-list").first();
+  const outreachRow = installedList.locator(".plugin-row").filter({ hasText: "hour-tracking" });
+  await expect(outreachRow).toContainText(`v0.2.0 · Commit ${official.commit.slice(0, 12)}`);
+  await expect(outreachRow).toContainText("Latest on Stable: v0.2.0 · Up to date");
+  await expect(outreachRow).toContainText(`Included with LancerLogin ${version}: v0.2.0`);
+  await expect(outreachRow).toHaveAttribute("data-version-status", "current");
+  const carpoolRow = installedList.locator(".plugin-row").filter({ hasText: "carpool" });
+  await expect(carpoolRow).toContainText(`v1.0.0 · Commit ${commit.slice(0, 12)}`);
+  await expect(carpoolRow).toContainText("Latest on Stable: v1.0.1 · Update available");
+  await expect(carpoolRow).not.toContainText("Included with LancerLogin");
+  // The accent style marks the plugin that has a newer release; an up-to-date plugin keeps the secondary style.
+  const accent = (name: string) => plugins.getByRole("button", { name }).evaluate((element) => {
+    const probe = document.createElement("span"); probe.style.backgroundColor = "var(--primary)"; element.append(probe);
+    const same = getComputedStyle(element).backgroundColor === getComputedStyle(probe).backgroundColor; probe.remove(); return same;
+  });
+  expect(await accent("Upgrade carpool")).toBe(true);
+  expect(await accent("Upgrade hour-tracking")).toBe(false);
+  await expect(plugins.locator(".plugin-pending")).toContainText("Change carpool from v1.0.0 to v1.0.1");
+  await expect(plugins).not.toContainText("Production approval");
+  // Unknown versions fall back to short commits, an unreleased commit says so, and an unavailable lookup is muted, not an error.
+  mock.state = pluginState({ installed: [{ ...official, latestUnavailable: true, latest: null, version: null, updateAvailable: false }, { ...carpool, version: null, updateAvailable: false }], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit: next, phase: "enabled" }] }, pending: [{ kind: "upgrade", id: "carpool", source, commit: next, installedCommit: commit, version: null, installedVersion: null }] });
+  await page.reload();
+  const unavailableRow = installedList.locator(".plugin-row").filter({ hasText: "hour-tracking" });
+  await expect(unavailableRow).toContainText(`Commit ${official.commit.slice(0, 12)}`);
+  await expect(unavailableRow).not.toContainText("Unreleased commit");
+  const muted = unavailableRow.getByText("Latest version unavailable");
+  await expect(muted).toBeVisible();
+  expect(await muted.evaluate((element) => { const probe = document.createElement("span"); probe.style.color = "var(--ui-text-muted)"; element.append(probe); const same = getComputedStyle(element).color === getComputedStyle(probe).color; probe.remove(); return same; })).toBe(true);
+  await expect(plugins.getByRole("alert")).toHaveCount(0);
+  const unreleasedRow = installedList.locator(".plugin-row").filter({ hasText: "carpool" });
+  await expect(unreleasedRow).toContainText(`Unreleased commit · Commit ${commit.slice(0, 12)}`);
+  await expect(unreleasedRow).toContainText("Latest on Stable: v1.0.1");
+  await expect(unreleasedRow).not.toContainText("Update available");
+  expect(await accent("Upgrade carpool")).toBe(false);
+  await expect(plugins.locator(".plugin-pending")).toContainText(`Change carpool from ${commit.slice(0, 12)} to ${next.slice(0, 12)}`);
 });
 
 test("plugin controls use shared themed styles at desktop and mobile in light and dark", async ({ page }) => {

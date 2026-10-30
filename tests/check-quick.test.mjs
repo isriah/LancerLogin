@@ -17,7 +17,7 @@ const tests = new Map([
   ["tests/foundation.test.mjs", 'await readFile(".github/workflows/ci.yml", "utf8"); await readFile("scripts/release-publication.mjs");'],
   ["tests/web-test-runner.test.mjs", 'import "../scripts/run-web-tests.mjs";'],
   ["tests/check-quick.test.mjs", 'import "../scripts/check-quick.mjs";'],
-  ["tests/kiosk-poll-service.test.mjs", 'import "../apps/kiosk/src/poll-service.mjs";'],
+  ["tests/kiosk-poll-service.test.mjs", 'import "../apps/kiosk/src/kiosk-poll.mjs";'],
   ["tests/kiosk-artifacts.test.mjs", 'await readFile(".github/workflows/ci.yml");'],
   ["tests-ts/module-platform.test.ts", 'import "../packages/shared/src/module-platform.ts";'],
   ["tests-ts/dashboard-conformance.test.ts", 'import "../apps/dashboard/src/main.tsx";'],
@@ -48,7 +48,7 @@ test("root build files typecheck everything and add the default set", () => {
 });
 
 test("changed tests run directly, while slow and device-bound suites are only reported", () => {
-  const plan = selectQuickChecks({ changes: ["tests/foundation.test.mjs", ".github/workflows/ci.yml", "apps/kiosk/src/poll-service.mjs"], tests });
+  const plan = selectQuickChecks({ changes: ["tests/foundation.test.mjs", ".github/workflows/ci.yml", "apps/kiosk/src/kiosk-poll.mjs"], tests });
   assert.deepEqual(names(plan.javascript), ["tests/foundation.test.mjs"]);
   assert.deepEqual(names(plan.skipped), ["tests/kiosk-artifacts.test.mjs", "tests/kiosk-poll-service.test.mjs"]);
   assert.deepEqual(names(plan.typecheck), ["@lancerlogin/kiosk"]);

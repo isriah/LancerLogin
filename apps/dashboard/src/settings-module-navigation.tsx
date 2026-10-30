@@ -12,7 +12,7 @@ type Props = {
 
 export function SettingsModuleNavigation({ currentPath, navigate, attendanceReady, modules: contributed }: Props) {
   const modules: ModuleSettingsNavigation[] = [
-    ...(attendanceReady ? [{ id: "attendance", label: "Attendance", href: "/settings/attendance", paths: ["/settings/configuration", "/settings/guided-setup", "/settings/fingerprint-sharing", "/settings/fingerprint-recovery"] }] : []),
+    ...(attendanceReady ? [{ id: "attendance", label: "Attendance", href: "/settings/attendance", paths: ["/settings/labels", "/settings/configuration", "/settings/guided-setup", "/settings/fingerprint-sharing", "/settings/fingerprint-recovery"] }] : []),
     ...contributed,
   ];
   const activeModule = modules.find((module) => [module.href, ...(module.paths ?? [])].some((href) => currentPath === href || currentPath.startsWith(`${href}/`)))?.id;

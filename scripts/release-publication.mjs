@@ -4,6 +4,7 @@ import { lstat, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { compareReleaseVersions } from "../packages/shared/src/release-policy.mjs";
 import { assertLatestPromotion, releasePublicationPolicy } from "./release-channel.mjs";
 
 export const repository = "isriah/LancerLogin";
@@ -113,12 +114,67 @@ function existingRelease(gh, tag) {
   }
   throw new Error("release_lookup_limit_exceeded");
 }
+// Every release reviews its documentation. The previous release is the highest-versioned published (non-draft) release
+// older than TAG in the same line: stable after stable, beta after beta, since each line is cut from its own trusted branch.
+// When the line has no earlier release (the first beta of a version), the highest older published release of either line is used.
+export const docsUnchangedReasonLimit = 300;
+export function docsUnchangedReason(value) {
+  if (value === undefined) return;
+  const reason = typeof value === "string" ? value.trim() : "";
+  if (!reason || reason.length > docsUnchangedReasonLimit) throw new Error(`docs_unchanged_reason_required: --docs-unchanged needs a non-empty reason of at most ${docsUnchangedReasonLimit} characters.`);
+  return reason;
+}
+export function previousRelease(tag, releases) {
+  const { prerelease } = releasePublicationPolicy(tag);
+  const older = releases.filter((release) => release?.draft === false && typeof release.tag_name === "string" && release.tag_name.startsWith("v")
+    && compareReleaseVersions(release.tag_name, tag) === -1).map((release) => release.tag_name);
+  const newest = (tags) => tags.reduce((best, item) => !best || compareReleaseVersions(item, best) === 1 ? item : best, undefined);
+  const previous = newest(older.filter((item) => releasePublicationPolicy(item).prerelease === prerelease)) ?? newest(older);
+  if (!previous) throw new Error("previous_published_release_required");
+  return previous;
+}
+function publishedReleases(gh) {
+  const all = [];
+  for (let page = 1; page <= 10; page++) {
+    const releases = api(gh, `releases?per_page=100&page=${page}`);
+    if (!Array.isArray(releases)) throw new Error("release_lookup_failed");
+    all.push(...releases);
+    if (releases.length < 100) return all;
+  }
+  throw new Error("release_lookup_limit_exceeded");
+}
+// Blob SHAs of every reviewed documentation file at a commit: docs-site/ and docs/ except docs/releases/.
+function documentationFiles(gh, commitSha) {
+  const files = new Map();
+  const root = api(gh, `git/trees/${commitSha}`);
+  if (!Array.isArray(root.tree) || root.truncated) throw new Error("documentation_tree_unavailable");
+  for (const folder of ["docs-site", "docs"]) {
+    const entry = root.tree.find((item) => item.path === folder && item.type === "tree");
+    if (!entry) continue;
+    const tree = api(gh, `git/trees/${entry.sha}?recursive=1`);
+    if (!Array.isArray(tree.tree) || tree.truncated) throw new Error("documentation_tree_unavailable");
+    for (const item of tree.tree) if (item.type === "blob" && !(folder === "docs" && item.path.startsWith("releases/"))) files.set(`${folder}/${item.path}`, item.sha);
+  }
+  return files;
+}
+export function reviewDocumentation(gh, context, reason) {
+  const previous = previousRelease(context.tag, publishedReleases(gh));
+  const previousSha = api(gh, `commits/${previous}`).sha;
+  if (!shaPattern.test(previousSha)) throw new Error("previous_release_commit_required");
+  const before = documentationFiles(gh, previousSha), after = documentationFiles(gh, context.sha);
+  const files = new Set([...before.keys(), ...after.keys()].filter((path) => before.get(path) !== after.get(path))).size;
+  if (files > 0) return { previous, changed: true, files };
+  if (!reason) throw new Error(`documentation_review_required: nothing under docs-site/ or docs/ (excluding docs/releases/) changed since ${previous}. `
+    + "Update the documentation for this release's user-visible changes, or pass --docs-unchanged \"<reason>\" when none needed to change.");
+  return { previous, changed: false, reason };
+}
 function assertAssets(release, digests) {
   if (!Array.isArray(release.assets) || JSON.stringify(release.assets.map((asset) => asset.name).sort()) !== JSON.stringify(Object.keys(digests).sort())
     || release.assets.some((asset) => asset.digest !== `sha256:${digests[asset.name]}`)) throw new Error("uploaded_release_assets_mismatch");
 }
-export async function publishRelease(tag, runId, { publish = false, gh = github } = {}) {
+export async function publishRelease(tag, runId, { publish = false, gh = github, docsUnchanged } = {}) {
   if (!validRun(runId)) throw new Error("invalid_release_run");
+  const reason = docsUnchangedReason(docsUnchanged);
   const context = resolveRelease(tag, gh);
   const run = api(gh, `actions/runs/${runId}`);
   if (run.id !== Number(runId) || run.repository?.full_name !== repository || run.head_repository?.full_name !== repository || run.status !== "completed" || run.conclusion !== "success"
@@ -133,6 +189,7 @@ export async function publishRelease(tag, runId, { publish = false, gh = github 
   const latest = api(gh, "releases/latest").tag_name;
   if (!releasePublicationPolicy(latest).latest) throw new Error("stable_latest_required");
   assertLatestPromotion(tag, latest);
+  const docs = reviewDocumentation(gh, context, reason);
   const artifactList = api(gh, `actions/runs/${runId}/artifacts?per_page=100`);
   const artifacts = artifactList.artifacts;
   if (artifactList.total_count !== 1 || artifacts?.length !== 1) throw new Error("one_exact_release_bundle_required");
@@ -154,7 +211,7 @@ export async function publishRelease(tag, runId, { publish = false, gh = github 
     if (sourceNotes.encoding !== "base64" || typeof sourceNotes.content !== "string" || !Number.isSafeInteger(sourceNotes.size)
       || sourceNotes.size <= 0 || sourceNotes.size > 32_000) throw new Error("release_notes_mismatch");
     const digests = await validateBundle(directory, context, run, Buffer.from(sourceNotes.content, "base64"));
-    if (!publish) return { ...context, runId: String(runId), assets: 6, published: false };
+    if (!publish) return { ...context, runId: String(runId), assets: 6, docs, published: false };
     // Recheck immediately before writes. Only drafts may be resumed.
     if (api(gh, "immutable-releases").enabled !== true) throw new Error("immutable_releases_required");
     if (api(gh, `commits/${tag}`).sha !== context.sha) throw new Error("release_tag_changed");
@@ -175,8 +232,18 @@ export async function publishRelease(tag, runId, { publish = false, gh = github 
     if (result?.draft !== false || result.immutable !== true || result.prerelease !== context.prerelease) throw new Error("published_release_verification_failed");
     assertAssets(result, digests);
     if (api(gh, "releases/latest").tag_name !== (context.latest ? tag : latest)) throw new Error("latest_verification_failed");
-    return { ...context, runId: String(runId), assets: 6, published: true, url: result.html_url };
+    return { ...context, runId: String(runId), assets: 6, docs, published: true, url: result.html_url };
   } finally { await rm(directory, { recursive: true, force: true }); }
+}
+const usage = "Use resolve TAG, bundle TAG SHA SOURCE DIRECTORY in Linux CI, or publish TAG RUN_ID [--publish] [--docs-unchanged \"REASON\"].";
+export function publishOptions(flags) {
+  const options = {};
+  for (let index = 0; index < flags.length; index++) {
+    if (flags[index] === "--publish" && !options.publish) options.publish = true;
+    else if (flags[index] === "--docs-unchanged" && options.docsUnchanged === undefined && index + 1 < flags.length) options.docsUnchanged = flags[++index];
+    else throw new Error(usage);
+  }
+  return options;
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
@@ -184,7 +251,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (command === "resolve" && args.length === 0) for (const [key, value] of Object.entries(resolveRelease(tag))) console.log(`${key}=${value}`);
     else if (command === "bundle" && args.length === 3 && process.platform === "linux" && process.env.GITHUB_ACTIONS === "true")
       await createBundle(tag, args[0], args[1], args[2], { runId: process.env.GITHUB_RUN_ID, producerSha: process.env.GITHUB_SHA });
-    else if (command === "publish" && (args.length === 1 || args.length === 2 && args[1] === "--publish")) console.log(JSON.stringify(await publishRelease(tag, args[0], { publish: args[1] === "--publish" })));
-    else throw new Error("Use resolve TAG, bundle TAG SHA SOURCE DIRECTORY in Linux CI, or publish TAG RUN_ID [--publish].");
+    else if (command === "publish" && args.length >= 1) console.log(JSON.stringify(await publishRelease(tag, args[0], publishOptions(args.slice(1)))));
+    else throw new Error(usage);
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

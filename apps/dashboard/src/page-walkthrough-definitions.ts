@@ -16,7 +16,7 @@ const definitions = {
       { id: "member-rows", title: "Open a member profile", description: "A member's name opens their profile and complete attendance history. Each row also shows identifiers, current labels, roster status, and available integration identity.", targets: '[data-walkthrough="roster-list"]' },
       { id: "attendance", title: "Interpret attendance", description: "Regular attendance matches the default Reports calculation. Assigned label policies can use their own windows and targets, so a member may show more than one result.", targets: '.roster-attendance-rate, [data-walkthrough="roster-list"]' },
       { id: "member-actions", title: "Understand member actions", description: "Admins can add or edit a member, change active status, and delete a record only when no attendance history prevents it. Operators can inspect the same roster without mutation controls.", targets: '[data-walkthrough="roster-actions"], [data-walkthrough="roster-list"]' },
-      { id: "bulk-tools", title: "Update groups carefully", description: "Admins can use Bulk edit for label or roster changes, and CSV import previews changes before applying them. Operators can review the roster without these tools.", targets: '[data-walkthrough="roster-bulk"]' },
+      { id: "bulk-tools", title: "Update groups carefully", description: "Admins can tick members in Bulk edit to change labels or roster status together, and Import labels previews CSV label changes before applying them. Operators can review the roster without these tools.", targets: '[data-walkthrough="roster-bulk"]' },
     ],
   },
   member: {

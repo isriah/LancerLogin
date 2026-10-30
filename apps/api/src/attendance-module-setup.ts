@@ -148,13 +148,14 @@ async function input(request: Request, db: D1Database, userId: string) {
   const now = new Date().toISOString(); const eventId = typeof body.eventId === "string" && body.eventId.trim() ? body.eventId.trim() : `simulator-${crypto.randomUUID()}`;
   if (eventId.length > 100) throw new HttpError(400, "Attendance event identity is too long");
   const [member, selectedMeeting, settings, simulator] = await Promise.all([
-    db.prepare("SELECT id,external_id AS externalId,first_name AS firstName,attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id=? AND external_id=? AND active=1").bind(installationId, body.memberId).first<{ id: string; externalId: string; firstName: string; attendanceRequiredFrom: string | null }>(),
+    db.prepare("SELECT id,external_id AS externalId,first_name AS firstName,attendance_required_from AS attendanceRequiredFrom,created_at AS rosterAddedAt FROM members WHERE installation_id=? AND external_id=? AND active=1").bind(installationId, body.memberId).first<{ id: string; externalId: string; firstName: string; attendanceRequiredFrom: string | null; rosterAddedAt: string | null }>(),
     db.prepare("SELECT id,title,starts_at AS startsAt,ends_at AS endsAt FROM meetings WHERE installation_id=? AND id=? AND deleted_at IS NULL AND is_test=0").bind(installationId, body.meetingId).first<{ id: string; title: string; startsAt: string; endsAt: string }>(),
     db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id=?").bind(installationId).first<{ lateScanMinutes: number }>(),
     db.prepare("SELECT 1 AS ready FROM simulated_kiosk_sessions WHERE installation_id=? AND active=1 AND online=1").bind(installationId).first(),
   ]);
   if (!member || !selectedMeeting || !settings || !simulator) throw new HttpError(409, "Start the simulator and choose an active member and meeting");
-  if (member.attendanceRequiredFrom && selectedMeeting.startsAt.slice(0, 10) < member.attendanceRequiredFrom) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${member.attendanceRequiredFrom}`);
+  const participationStartsOn = member.attendanceRequiredFrom ?? member.rosterAddedAt?.slice(0, 10) ?? "";
+  if (participationStartsOn && selectedMeeting.startsAt.slice(0, 10) < participationStartsOn) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${participationStartsOn}`);
   if (Date.parse(now) < Date.parse(selectedMeeting.startsAt) || Date.parse(now) > Date.parse(selectedMeeting.endsAt) + settings.lateScanMinutes * 60_000) throw new HttpError(409, "Choose a meeting whose attendance window is open now");
   const result = await db.prepare(`INSERT OR IGNORE INTO attendance_events(id,installation_id,member_id,meeting_id,source,occurred_at,kiosk_event_id,created_by,action)
     SELECT ?,?,?,?,?,?,?,?,'check_in' WHERE EXISTS(SELECT 1 FROM simulated_kiosk_sessions WHERE installation_id=? AND active=1 AND online=1)`)

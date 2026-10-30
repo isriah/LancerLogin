@@ -11,11 +11,12 @@ import { WebUpdateError, absentSelectionSha, startedUpdate, type WebUpdateEnv } 
 import { firstPartyModules } from "../../../packages/shared/src/module-platform.ts";
 import { supportedModuleContractVersions } from "../../../packages/shared/src/module-contract.ts";
 import { allowlistFileName, entryTrack, parseAllowlist, sourceAllowed, type AllowedSource, type Allowlist, parseModuleSource, parseSelectionFile, satisfiesCoreRange, selectionFileName, selectionTracks, serializeSelection, SelectionError, moduleIdPattern, commitPattern, type SelectionDocument, type SelectionEntry, type SelectionTrack } from "../../../packages/shared/src/module-selection.ts";
-import { newestPluginRelease, parseReleaseVersion, pluginReleaseKind } from "../../../packages/shared/src/release-policy.mjs";
+import { compareReleaseVersions, newestPluginRelease, parseReleaseVersion, pluginReleaseKind } from "../../../packages/shared/src/release-policy.mjs";
+import officialModulePins from "../../../scripts/official-modules.json" with { type: "json" };
 import { externalModuleSources } from "./generated/external-module-data.ts";
 import { extractedModulesInUse } from "./extracted-modules.ts";
 import { knownModule } from "./known-modules.ts";
-import { credentialStatus, credentialUsable, observeCredentialResponse } from "./github-credential.ts";
+import { credentialStatus, observeCredentialResponse } from "./github-credential.ts";
 
 export interface PluginSelectionEnv extends WebUpdateEnv { MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string }
 export type InstalledPlugins = Readonly<Record<string, { readonly source: string; readonly commit: string; readonly official?: boolean; readonly selected?: boolean }>>;
@@ -116,25 +117,6 @@ async function readAllowlist(env: PluginSelectionEnv): Promise<Allowlist> {
   return file ? parseAllowlist(file.text) : { state: "none" };
 }
 
-export type Protection = { state: "configured" | "not_configured" | "unknown"; reviewers?: number };
-/** Required reviewers on the production environment, read with whichever available credential GitHub accepts. */
-export async function readProductionProtection(env: PluginSelectionEnv): Promise<Protection> {
-  let repo: string;
-  try { repo = repository(env); } catch { return { state: "unknown" }; }
-  const tokens = [selectionCredentialState(env).state === "ready" ? env.MODULE_SELECTION_TOKEN : undefined, credentialUsable("dispatch", env.WEB_UPDATE_TOKEN, env.WEB_UPDATE_TOKEN_EXPIRES_AT) ? env.WEB_UPDATE_TOKEN : undefined].filter((token): token is string => Boolean(token));
-  for (const token of tokens) {
-    let response: Response;
-    try { response = await fetch(`https://api.github.com/repos/${repo}/environments/production`, { headers: githubHeaders(token), redirect: "manual", signal: AbortSignal.timeout(4_000) }); }
-    catch { return { state: "unknown" }; }
-    if (!response.ok) continue;
-    const environment = await response.json().catch(() => undefined) as { protection_rules?: Array<{ type?: string; reviewers?: unknown[] }> } | undefined;
-    if (!environment || !Array.isArray(environment.protection_rules)) return { state: "unknown" };
-    const reviewers = environment.protection_rules.filter((rule) => rule.type === "required_reviewers").reduce((count, rule) => count + (Array.isArray(rule.reviewers) ? rule.reviewers.length : 0), 0);
-    return reviewers > 0 ? { state: "configured", reviewers } : { state: "not_configured" };
-  }
-  return { state: "unknown" };
-}
-
 type Db = NonNullable<PluginSelectionEnv["DB"]>;
 type Phase = "disabled" | "enabled" | "retained" | "deleting" | "deleted";
 async function modulePhases(db: Db): Promise<Map<string, Phase>> {
@@ -143,7 +125,7 @@ async function modulePhases(db: Db): Promise<Map<string, Phase>> {
 }
 const firstPartyIds = new Set(firstPartyModules.map((module) => module.id));
 
-export type PendingChange = { kind: "add" | "upgrade" | "remove" | "revert"; id: string; source?: string; commit?: string; installedCommit?: string };
+export type PendingChange = { kind: "add" | "upgrade" | "remove" | "revert"; id: string; source?: string; commit?: string; installedCommit?: string; version?: string | null; installedVersion?: string | null };
 /**
  * Changes the committed selection makes to the plugins this build runs. Official modules are included unless the selection
  * opts out; one listed in the selection uses its pin, and one not listed uses LancerLogin's pin for this release.
@@ -174,22 +156,37 @@ export async function pluginManagementState(env: PluginSelectionEnv, options: Pl
   const credential = selectionCredentialState(env);
   let configured = true;
   try { repository(env); } catch { configured = false; }
-  const [phases, active, protection] = await Promise.all([modulePhases(db), startedUpdate(env), configured ? readProductionProtection(env) : Promise.resolve<Protection>({ state: "unknown" })]);
+  const [phases, active] = await Promise.all([modulePhases(db), startedUpdate(env)]);
   let selection: SelectionSnapshot | null = null; let allowlist: Allowlist | { state: "unknown" } = { state: "unknown" }; let error: { code: string; message: string } | null = null;
   if (configured && credential.state === "ready") {
     try { selection = await readSelection(env); allowlist = await readAllowlist(env); }
     catch (cause) { if (!(cause instanceof WebUpdateError)) throw cause; error = { code: cause.code, message: cause.message }; }
   }
   const phase = (id: string) => phases.get(id) ?? null;
+  const chosen = new Map(selection?.document.modules.map((entry) => [entry.id, entry]) ?? []);
+  const releasePin = (id: string) => (officialModulePins as { modules?: Array<{ id: string; source: string; commit: string }> }).modules?.find((entry) => entry.id === id);
+  // Versions are looked up concurrently and cached; a failed lookup only marks the latest version unavailable.
+  const plugins = await Promise.all(Object.entries(installed).map(async ([id, value]) => {
+    const entry = chosen.get(id); const track = entryTrack(entry);
+    const info = await pluginVersionInfo(value.source, value.commit, track);
+    // An official plugin that this installation does not pin follows LancerLogin's pin for the release.
+    const pin = value.official && !value.selected && !entry ? releasePin(id) : undefined;
+    const releasePinVersion = pin ? pin.commit === value.commit ? info.version : await pluginVersionAt(pin.source, pin.commit) : undefined;
+    return { id, source: value.source, commit: value.commit, official: Boolean(value.official), selected: Boolean(value.selected), phase: phase(id), track, ...info, ...(pin ? { releasePinVersion } : {}) };
+  }));
+  const pending = selection ? await Promise.all(pendingChanges(selection.document, installed).map(async (change) => {
+    const source = change.source ?? installed[change.id]?.source;
+    const [version, installedVersion] = await Promise.all([pluginVersionAt(change.source ?? source, change.commit), pluginVersionAt(installed[change.id]?.source, change.installedCommit)]);
+    return { ...change, ...(change.commit ? { version } : {}), ...(change.installedCommit ? { installedVersion } : {}) };
+  })) : [];
   return {
     releaseVersion: env.RELEASE_VERSION ?? "development",
     repository: configured ? env.UPDATE_REPOSITORY : null,
     credential,
     selection: selection ? { sha: selection.sha, present: selection.present, officialModules: selection.document.officialModules !== false, modules: selection.document.modules.map((entry) => ({ id: entry.id, source: entry.source, commit: entry.commit, track: entryTrack(entry), phase: phase(entry.id) })) } : null,
-    installed: Object.entries(installed).map(([id, value]) => ({ id, source: value.source, commit: value.commit, official: Boolean(value.official), selected: Boolean(value.selected), phase: phase(id) })),
-    pending: selection ? pendingChanges(selection.document, installed) : [],
+    installed: plugins,
+    pending,
     allowlist: allowlist.state === "configured" ? { state: "configured", sources: allowlist.sources.map((entry) => entry.owner ? `${entry.host}/${entry.owner}` : entry.host) } : { state: allowlist.state },
-    protection,
     activeUpdate: active ? { requestId: active.id, mode: active.mode ?? "release", state: active.state } : null,
     reauthentication: { freshUntil: freshUntil(options.principal), password: options.passwordAvailable, google: options.googleAvailable },
     error,
@@ -390,6 +387,83 @@ export async function newestTrackRelease(source: string, track: SelectionTrack):
   const page = typeof release.html_url === "string" && release.html_url.startsWith(`https://github.com/${owner}/${name}/releases/`) ? release.html_url : null;
   return { track, release: { tag, kind: pluginReleaseKind(tag)!, commit, url: page } };
 }
+/** A plugin repository's published releases and the commit each tag points to, read anonymously from GitHub. */
+type ReleaseIndex = { releases: Array<{ tag_name?: unknown; draft?: unknown; prerelease?: unknown; immutable?: unknown }>; tags: Map<string, string> };
+export const releaseIndexTtlMs = 10 * 60_000;
+const releaseIndexFailureTtlMs = 60_000;
+const releaseIndexCache = new Map<string, { expires: number; value: Promise<ReleaseIndex | null> }>();
+/** For tests: forget cached plugin release lookups. */
+export function clearPluginReleaseCache(): void { releaseIndexCache.clear(); }
+function githubRepository(source: string): { owner: string; name: string } | null {
+  let url: URL;
+  try { url = new URL(source); } catch { return null; }
+  if (url.hostname !== "github.com") return null;
+  const [, owner, name] = url.pathname.replace(/\.git$/, "").split("/");
+  return owner && name && /^[A-Za-z0-9_.-]+$/.test(owner) && /^[A-Za-z0-9_.-]+$/.test(name) ? { owner, name } : null;
+}
+async function readReleaseIndex(owner: string, name: string): Promise<ReleaseIndex | null> {
+  // Every page (bounded), so the highest version wins rather than the most recent publication.
+  const pages = async (path: string): Promise<unknown[] | null> => {
+    const items: unknown[] = [];
+    for (let page = 1; page <= 10; page++) {
+      let response: Response;
+      try { response = await fetch(`https://api.github.com/repos/${owner}/${name}${path}?per_page=100&page=${page}`, { headers: githubHeaders(), redirect: "manual", signal: AbortSignal.timeout(4_000) }); }
+      catch { return null; }
+      if (!response.ok) return null;
+      const batch = await response.json().catch(() => undefined) as unknown;
+      if (!Array.isArray(batch)) return null;
+      items.push(...batch);
+      if (batch.length < 100) break;
+    }
+    return items;
+  };
+  const [releases, tags] = await Promise.all([pages("/releases"), pages("/tags")]);
+  if (!releases || !tags) return null;
+  const commits = new Map<string, string>();
+  for (const tag of tags as Array<{ name?: unknown; commit?: { sha?: unknown } }>) if (typeof tag?.name === "string" && typeof tag.commit?.sha === "string" && commitPattern.test(tag.commit.sha)) commits.set(tag.name, tag.commit.sha);
+  return { releases: releases.filter((release): release is ReleaseIndex["releases"][number] => Boolean(release) && typeof release === "object"), tags: commits };
+}
+/** Cached for ten minutes per repository; a failed lookup is retried after a minute. Never throws. */
+function cachedReleaseIndex(source: string): Promise<ReleaseIndex | null> {
+  const repository = githubRepository(source);
+  if (!repository) return Promise.resolve(null);
+  const key = `${repository.owner}/${repository.name}`.toLowerCase(); const now = Date.now();
+  const cached = releaseIndexCache.get(key);
+  if (cached && cached.expires > now) return cached.value;
+  const entry = { expires: now + releaseIndexTtlMs, value: readReleaseIndex(repository.owner, repository.name).catch(() => null) };
+  void entry.value.then((index) => { if (!index) entry.expires = Date.now() + releaseIndexFailureTtlMs; });
+  releaseIndexCache.set(key, entry);
+  return entry.value;
+}
+/** The highest published release tag whose commit is exactly `commit`, or null for an unreleased commit. */
+function releaseVersionAt(index: ReleaseIndex, commit: string | undefined): string | null {
+  if (!commit) return null;
+  const tags = index.releases.filter((release) => release.draft === false && typeof release.tag_name === "string" && pluginReleaseKind(release.tag_name) && index.tags.get(release.tag_name) === commit).map((release) => release.tag_name as string);
+  return tags.sort((a, b) => compareReleaseVersions(b, a, { nightly: true }) ?? 0)[0] ?? null;
+}
+export type PluginVersionInfo = { version: string | null; latest: { tag: string; kind: "stable" | "beta" | "nightly"; commit: string | null } | null; latestUnavailable: boolean; updateAvailable: boolean };
+/**
+ * Current and latest versions of one plugin for Settings > Modules. The latest release on a track is chosen exactly as the
+ * Upgrade dialog chooses it (newestPluginRelease). Any failure, another host or a private repository reports
+ * latestUnavailable instead of failing the status.
+ */
+export async function pluginVersionInfo(source: string, commit: string, track: SelectionTrack): Promise<PluginVersionInfo> {
+  const index = await cachedReleaseIndex(source);
+  if (!index) return { version: null, latest: null, latestUnavailable: true, updateAvailable: false };
+  const version = releaseVersionAt(index, commit);
+  const newest = newestPluginRelease(index.releases, track);
+  const latest = newest && typeof newest.tag_name === "string" ? { tag: newest.tag_name, kind: pluginReleaseKind(newest.tag_name)!, commit: index.tags.get(newest.tag_name) ?? null } : null;
+  // Only a known release can be compared; an unreleased commit is not reported as outdated.
+  const updateAvailable = Boolean(latest && version && latest.commit !== commit && compareReleaseVersions(latest.tag, version, { nightly: true }) === 1);
+  return { version, latest, latestUnavailable: false, updateAvailable };
+}
+/** The release tag at a commit of a plugin repository, or null when unknown or unavailable. */
+export async function pluginVersionAt(source: string | undefined, commit: string | undefined): Promise<string | null> {
+  if (!source || !commit) return null;
+  const index = await cachedReleaseIndex(source);
+  return index ? releaseVersionAt(index, commit) : null;
+}
+
 /** Admin lookup for the Upgrade dialog: { id, source, track }. Read-only; the selection credential is never used. */
 export async function lookupPluginRelease(input: Record<string, unknown>) {
   if (Object.keys(input).some((key) => !["id", "source", "track"].includes(key))) fail(400, "invalid_request", "Only the module ID, source and release track are accepted.");

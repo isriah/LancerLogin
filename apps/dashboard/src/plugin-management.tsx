@@ -7,15 +7,15 @@ import { diagnosticUrl, type WebUpdateResponse } from "./web-update";
 
 type Phase = "disabled" | "enabled" | "retained" | "deleting" | "deleted" | null;
 type Track = "stable" | "nightly";
-type Pending = { kind: "add" | "upgrade" | "remove" | "revert"; id: string; source?: string; commit?: string; installedCommit?: string };
+type Pending = { kind: "add" | "upgrade" | "remove" | "revert"; id: string; source?: string; commit?: string; installedCommit?: string; version?: string | null; installedVersion?: string | null };
+type LatestRelease = { tag: string; kind: "stable" | "beta" | "nightly"; commit: string | null };
 export type PluginState = {
   releaseVersion: string; repository: string | null;
   credential: { state: "ready" | "missing" | "expired"; expiresAt: string | null };
   selection: { sha: string; present: boolean; officialModules: boolean; modules: Array<{ id: string; source: string; commit: string; track?: Track; phase: Phase }> } | null;
-  installed: Array<{ id: string; source: string; commit: string; official: boolean; selected: boolean; phase: Phase }>;
+  installed: Array<{ id: string; source: string; commit: string; official: boolean; selected: boolean; phase: Phase; track?: Track; version?: string | null; latest?: LatestRelease | null; latestUnavailable?: boolean; updateAvailable?: boolean; releasePinVersion?: string | null }>;
   pending: Pending[];
   allowlist: { state: "none" | "configured" | "invalid" | "unknown"; sources?: string[] };
-  protection: { state: "configured" | "not_configured" | "unknown"; reviewers?: number };
   activeUpdate: { requestId: string; mode: string; state: string } | null;
   reauthentication: { freshUntil: number | null; password: boolean; google: boolean };
   error: { code: string; message: string } | null;
@@ -38,13 +38,16 @@ export async function request<T>(path: string, body?: unknown): Promise<T> {
   return result;
 }
 const short = (sha?: string | null) => sha ? sha.slice(0, 12) : "";
+// A release version when the commit is a known release, otherwise the short commit.
+const versionOr = (version: string | null | undefined, sha?: string | null) => version || short(sha);
 const pendingText: Record<Pending["kind"], (change: Pending) => string> = {
-  add: (change) => `Add ${change.id} at ${short(change.commit)}`,
-  upgrade: (change) => `Change ${change.id} from ${short(change.installedCommit)} to ${short(change.commit)}`,
-  remove: (change) => `Remove ${change.id} (installed at ${short(change.installedCommit)})`,
+  add: (change) => `Add ${change.id} at ${versionOr(change.version, change.commit)}`,
+  upgrade: (change) => `Change ${change.id} from ${versionOr(change.installedVersion, change.installedCommit)} to ${versionOr(change.version, change.commit)}`,
+  remove: (change) => `Remove ${change.id} (installed at ${versionOr(change.installedVersion, change.installedCommit)})`,
   revert: (change) => `Return ${change.id} to the commit LancerLogin pins for this release`,
 };
 const trackLabel: Record<Track, string> = { stable: "Stable", nightly: "Nightly (testing only)" };
+const latestTrackName: Record<Track, string> = { stable: "Stable", nightly: "Nightly" };
 const nightlyWarning = "Nightly releases are testing builds. Use the Nightly track only on a test installation, never on one people depend on.";
 /**
  * Fresh authentication for changes in Settings > Modules: the Admin's own password, or signing in with Google again. Either
@@ -183,7 +186,6 @@ export function PluginManagement() {
   // The selection credential is optional: without it the installation works and the selection is edited in the repository.
   const optionalCredentialText = "Reading and changing the plugin selection from the dashboard needs the optional module selection token, LANCERLOGIN_MODULE_SELECTION_TOKEN. Without it, installed plugins keep working; edit lancerlogin.modules.json in the private deployment repository instead. See \"Plugin selection credential\" in docs/MODULE-PLUGINS.md.";
   const credentialText = !state ? "" : state.credential.state === "missing" ? "Plugin management from the dashboard is not set up yet. Settings > Updates shows how to add the plugin selection credential." : state.credential.state === "expired" ? "The plugin selection credential (LANCERLOGIN_MODULE_SELECTION_TOKEN) has expired. Replace the production environment secret with a new token, then run the \"Refresh web update credential\" workflow." : !state.repository ? "The private deployment repository is not configured." : `Changes are committed to ${state.repository}. ${state.credential.expiresAt ? `Credential valid until ${new Date(state.credential.expiresAt).toLocaleDateString()}.` : "The credential has no expiry."}`;
-  const protectionText = state?.protection.state === "configured" ? `Production approval is required (${state.protection.reviewers} reviewer${state.protection.reviewers === 1 ? "" : "s"}). A plugin change cannot be deployed from this dashboard alone.` : state?.protection.state === "not_configured" ? "Production approval is not configured. We recommend required reviewers on the production environment, so a compromised Admin session cannot deploy plugin code by itself." : "Production approval could not be checked (unknown). We recommend required reviewers on the production environment of the private deployment repository.";
   return <section className="module-controls plugin-management" aria-labelledby={`${id}-title`}>
     <div className="panel-heading"><div><h2 id={`${id}-title`}>Plugins</h2><p>Plugins add modules from a git repository pinned to an exact commit. They run with the same access as LancerLogin.</p></div>
       <button className="ui-button ui-button--primary primary-button" type="button" disabled={!ready || locked} onClick={() => { setNotice(""); setDraft({ action: "add", id: "", source: "", commit: "" }); }}>Add plugin</button></div>
@@ -191,7 +193,6 @@ export function PluginManagement() {
     {error && <p className="ui-status" data-tone="error" role="alert">{error}</p>}
     {state && <>
       <p className="ui-status" data-tone={ready || !state.error && state.credential.state === "missing" ? "neutral" : "warning"}>{state.error ? state.error.message : credentialText}</p>
-      <p className="ui-status plugin-protection" data-tone={state.protection.state === "configured" ? "success" : "warning"}>{protectionText}</p>
       {state.allowlist.state === "configured" && <p className="field-help">Allowed plugin sources: {state.allowlist.sources!.join(", ")}.</p>}
       {state.allowlist.state === "invalid" && <p className="ui-status" data-tone="error">The plugin source allowlist in the private repository is invalid, so no plugin can be added or upgraded.</p>}
       {locked && <p className="ui-status" data-tone="warning" role="status">A web update is in progress. Plugin changes are locked until it finishes.</p>}
@@ -202,8 +203,14 @@ export function PluginManagement() {
         const track = entry?.track ?? "stable";
         // A track label only describes a selection entry that was read; unpinned official plugins follow LancerLogin's pin, and without the selection the track is unknown.
         const trackLabel = entry ? (track === "stable" ? " · Stable track" : "") : row.official && state.selection ? " · Pinned by LancerLogin" : "";
-        return <li key={row.id} className="plugin-row" data-track={entry ? track : undefined}><div><strong>{row.id}</strong><small>{row.source}</small><small>Commit <code>{short(row.commit)}</code>{row.official ? " · Included with LancerLogin" : ""}{row.selected ? " · Pinned by this installation" : ""}{trackLabel}</small>{track === "nightly" && <span className="plugin-track-badge">Nightly track · testing only</span>}{blocked && <small>{blocked}</small>}</div>
-          <div className="module-actions"><button className="ui-button" type="button" disabled={!ready || locked} aria-label={`Upgrade ${row.id}`} onClick={() => { setNotice(""); setDraft({ action: "upgrade", id: row.id, source: entry?.source ?? row.source, commit: "", track }); }}>Upgrade</button>
+        // Versions come from the plugin's published releases; when they cannot be read, the commit alone is shown.
+        const info = "notInstalled" in row ? undefined : row as PluginState["installed"][number];
+        const unavailable = !info || info.latestUnavailable !== false;
+        const versionText = unavailable ? "" : `${info!.version ?? "Unreleased commit"} · `;
+        const status = unavailable ? "unavailable" : info!.updateAvailable ? "update" : info!.version && info!.latest ? "current" : "unknown";
+        const latestText = unavailable ? "Latest version unavailable" : `Latest on ${latestTrackName[info!.track ?? track]}: ${info!.latest?.tag ?? "no published release"}`;
+        return <li key={row.id} className="plugin-row" data-track={entry ? track : undefined} data-version-status={status}><div><strong>{row.id}</strong><small>{row.source}</small><small>{versionText}Commit <code>{short(row.commit)}</code>{row.official ? " · Included with LancerLogin" : ""}{row.selected ? " · Pinned by this installation" : ""}{trackLabel}</small><small className="plugin-version">{latestText}{status === "update" ? <> · <span className="plugin-version-status">Update available</span></> : status === "current" ? <> · <span className="plugin-version-status">Up to date</span></> : null}</small>{info?.releasePinVersion && <small>Included with LancerLogin {state.releaseVersion}: {info.releasePinVersion}</small>}{track === "nightly" && <span className="plugin-track-badge">Nightly track · testing only</span>}{blocked && <small>{blocked}</small>}</div>
+          <div className="module-actions"><button className={`ui-button${status === "update" ? " ui-button--primary primary-button" : ""}`} type="button" disabled={!ready || locked} aria-label={`Upgrade ${row.id}`} onClick={() => { setNotice(""); setDraft({ action: "upgrade", id: row.id, source: entry?.source ?? row.source, commit: "", track }); }}>Upgrade</button>
             {entry && <button className="ui-button" type="button" disabled={!ready || locked || Boolean(blocked)} aria-label={row.official ? `Use LancerLogin's pin for ${row.id}` : `Remove ${row.id}`} onClick={() => { setNotice(""); setDraft({ action: "remove", id: row.id, source: "", commit: "" }); }}>{row.official ? "Use LancerLogin's pin" : "Remove"}</button>}</div></li>;
       })}</ul>
       <section className="plugin-pending" aria-labelledby={`${id}-pending-title`}>

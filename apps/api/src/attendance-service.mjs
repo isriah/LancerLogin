@@ -16,7 +16,7 @@ export function createAttendanceService({ now = () => new Date().toISOString() }
       requireCapability(principal, "manage-users");
       if (!member.id || !member.externalId || !member.firstName || !member.lastName) throw new Error("Invalid member");
       if ([...members.values()].some((existing) => existing.externalId === member.externalId)) throw new Error("Duplicate member ID");
-      members.set(member.id, { ...member, active: true });
+      members.set(member.id, { ...member, rosterAddedAt: member.rosterAddedAt ?? now(), active: true });
       writeAudit(principal, "member.created", "member", member.id);
     },
     createMeeting(principal, meeting) {
@@ -49,7 +49,7 @@ export function createAttendanceService({ now = () => new Date().toISOString() }
       return [...members.values()].filter((member) => member.active).map((member) => {
         const correction = corrections.get(`${member.id}:${meetingId}`);
         const memberEvents = events.filter((event) => event.memberId === member.id && event.meetingId === meetingId);
-        const required = !member.attendanceRequiredFrom || meetings.get(meetingId)?.startsAt.slice(0, 10) >= member.attendanceRequiredFrom;
+        const required = meetings.get(meetingId)?.startsAt.slice(0, 10) >= (member.attendanceRequiredFrom ?? member.rosterAddedAt.slice(0, 10));
         return { member, disposition: required ? attendanceDisposition(memberEvents, correction?.disposition) : "not_required", correction };
       });
     },

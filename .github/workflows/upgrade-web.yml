@@ -41,6 +41,8 @@ jobs:
       DATABASE_NAME: ${{ vars.LANCERLOGIN_DATABASE_NAME }}
       DATABASE_ID: ${{ vars.LANCERLOGIN_DATABASE_ID }}
       API_URL: ${{ vars.LANCERLOGIN_API_URL }}
+      # Optional Worker placement hint such as aws:us-east-1; unset deploys with Smart Placement.
+      LANCERLOGIN_WORKER_PLACEMENT_REGION: ${{ vars.LANCERLOGIN_WORKER_PLACEMENT_REGION }}
       # Secrets are not set here. Only the final step receives them, so the validation step and npm ci (with its
       # dependency lifecycle scripts) never run with Cloudflare or plugin credentials in their environment.
       WRANGLER_SEND_METRICS: "false"

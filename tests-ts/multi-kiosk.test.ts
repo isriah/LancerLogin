@@ -392,3 +392,19 @@ test("additive per-kiosk migration preserves the effective configured method and
     assert.throws(() => database.exec("UPDATE kiosks SET configured_authentication_method='camera'"), /CHECK constraint/);
   } finally { database.close(); }
 });
+
+test("manual attendance treats a blank participation start as the roster-added date and an explicit date still wins", async context => {
+  const { database, call } = await fixture(context);
+  database.sqlite.exec(`INSERT INTO members(id,installation_id,external_id,first_name,last_name,email,created_at,attendance_required_from) VALUES
+      ('test-a','primary','TEST-A','Test Student','A','student-a@example.test','2026-09-15T08:00:00Z',NULL),
+      ('test-b','primary','TEST-B','Test Student','B','student-b@example.test','2026-09-15T08:00:00Z','2026-09-05');
+    INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) VALUES
+      ('test-before','primary','Test meeting before roster','2026-09-10T18:00:00Z','2026-09-10T20:00:00Z','admin','2026-09-01'),
+      ('test-after','primary','Test meeting after roster','2026-09-20T18:00:00Z','2026-09-20T20:00:00Z','admin','2026-09-01');`);
+  const record = (eventId: string, memberId: string, meetingId: string, day: string) => call("/attendance", { eventId, memberId, meetingId, occurredAt: `${day}T18:05:00Z` });
+  const before = await record("test-blank-before", "TEST-A", "test-before", "2026-09-10"); assert.equal(before.status, 409);
+  assert.deepEqual(await before.json().then((body: { code?: string; error?: string }) => [body.code, body.error]), ["participation_not_started", "Attendance for Test Student begins on 2026-09-15"]);
+  assert.equal((await record("test-blank-after", "TEST-A", "test-after", "2026-09-20")).status, 202);
+  assert.equal((await record("test-explicit-before", "TEST-B", "test-before", "2026-09-10")).status, 202, "an explicit earlier date overrides the roster-added date");
+  assert.deepEqual(database.sqlite.prepare("SELECT member_id AS memberId,meeting_id AS meetingId FROM attendance_events WHERE kiosk_event_id LIKE 'test-%' ORDER BY kiosk_event_id").all().map(row => ({ ...row })), [{ memberId: "test-a", meetingId: "test-after" }, { memberId: "test-b", meetingId: "test-before" }]);
+});

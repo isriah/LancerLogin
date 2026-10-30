@@ -41,6 +41,8 @@ jobs:
       INPUT_OPERATION: ${{ inputs.operation }}
       RELEASE_SELECTION: ${{ inputs.release }}
       DATABASE_NAME: ${{ vars.LANCERLOGIN_DATABASE_NAME }}
+      # Optional Worker placement hint such as aws:us-east-1; unset deploys with Smart Placement.
+      LANCERLOGIN_WORKER_PLACEMENT_REGION: ${{ vars.LANCERLOGIN_WORKER_PLACEMENT_REGION }}
       INSTALLATION_SLUG: ${{ inputs.installation_slug }}
       REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
       LANCERLOGIN_UPDATE_WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/workflows/provision-template.yml

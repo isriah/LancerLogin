@@ -7,7 +7,7 @@ import { join } from "node:path";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
 import { latestUpdate, recordUpdateBackup, startWebUpdate } from "../apps/api/src/web-updates.ts";
-import { commitPluginChange, freshUntil, lookupPluginRelease, newestTrackRelease, parseAllowlist, pendingChanges, reauthenticationWindowMs, reviewPluginChange, selectionCredentialState, sourceAllowed, type InstalledPlugins } from "../apps/api/src/plugin-selection.ts";
+import { clearPluginReleaseCache, commitPluginChange, freshUntil, lookupPluginRelease, newestTrackRelease, parseAllowlist, pendingChanges, pluginManagementState, pluginVersionInfo, releaseIndexTtlMs, reauthenticationWindowMs, reviewPluginChange, selectionCredentialState, sourceAllowed, type InstalledPlugins } from "../apps/api/src/plugin-selection.ts";
 import { resetCredentialObservations } from "../apps/api/src/github-credential.ts";
 import { parseSelectionFile, serializeSelection } from "../packages/shared/src/module-selection.ts";
 
@@ -47,11 +47,10 @@ function environment(database = new D1()): Env & { DB: D1 } {
 }
 const blob = (text: string) => createHash("sha1").update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest("hex");
 
-/** A synthetic GitHub: the private repository's files, environment protection, plugin package metadata and dispatch. */
+/** A synthetic GitHub: the private repository's files, plugin package metadata and dispatch. */
 class GitHub {
   files = new Map<string, string>();
   calls: Array<{ url: string; method: string; authorization: string | null; body?: string }> = [];
-  protection: object | number = { protection_rules: [{ type: "required_reviewers", reviewers: [{ type: "User" }] }] };
   pluginPackage: object | number = { name: "carpool", version: "1.0.0", type: "module", lancerlogin: { moduleId: "carpool", contract: 1, core: ">=2.0.0-beta.11 <3.0.0", tablePrefix: "carpool_", entries: { manifest: "./src/manifest.ts", api: "./src/api.ts" }, migrations: "./migrations" } };
   conflictNextPut = false; putStatus?: number;
   /** The plugin repository's published releases, newest publication first, and what each tag resolves to. */
@@ -64,6 +63,8 @@ class GitHub {
     { tag_name: "v0.9.0-beta.1", draft: false, prerelease: true, immutable: true },
   ];
   tags: Record<string, string> = { "v1.0.0": "1".repeat(40), "v1.1.0-nightly.20261025": "2".repeat(40) };
+  /** The official Outreach plugin repository, for LancerLogin's release pin. */
+  outreach: { releases: object[]; tags: Record<string, string> } | number = 404;
   install(): () => void {
     const previous = globalThis.fetch;
     globalThis.fetch = async (input, init) => {
@@ -73,7 +74,6 @@ class GitHub {
       assert.equal(url.origin, "https://api.github.com");
       const path = url.pathname;
       if (path === "/repos/example/private-install") return Response.json({ private: true });
-      if (path === "/repos/example/private-install/environments/production") return typeof this.protection === "number" ? new Response(null, { status: this.protection }) : Response.json(this.protection);
       const file = /^\/repos\/example\/private-install\/contents\/(.+)$/.exec(path);
       if (file) {
         assert.equal(headers.get("authorization"), `Bearer ${selectionToken}`);
@@ -95,6 +95,18 @@ class GitHub {
         assert.equal(headers.get("authorization"), null, "plugin repositories never receive a credential");
         if (typeof this.releases === "number") return new Response(null, { status: this.releases });
         return Response.json(url.searchParams.get("page") === "1" ? this.releases : []);
+      }
+      if (path === "/repos/example/lancerlogin-carpool/tags") {
+        assert.equal(headers.get("authorization"), null, "plugin repositories never receive a credential");
+        if (typeof this.releases === "number") return new Response(null, { status: this.releases });
+        return Response.json(url.searchParams.get("page") === "1" ? Object.entries(this.tags).map(([name, sha]) => ({ name, commit: { sha } })) : []);
+      }
+      const outreach = /^\/repos\/isriah\/lancerlogin-outreach\/(releases|tags)$/.exec(path);
+      if (outreach) {
+        assert.equal(headers.get("authorization"), null, "plugin repositories never receive a credential");
+        if (typeof this.outreach === "number") return new Response(null, { status: this.outreach });
+        if (url.searchParams.get("page") !== "1") return Response.json([]);
+        return Response.json(outreach[1] === "releases" ? this.outreach.releases : Object.entries(this.outreach.tags).map(([name, sha]) => ({ name, commit: { sha } })));
       }
       const tag = /^\/repos\/example\/lancerlogin-carpool\/commits\/(.+)$/.exec(path);
       if (tag) {
@@ -181,6 +193,77 @@ test("Upgrade offers the newest published, immutable release on the plugin's tra
     assert.ok(github.calls.length > 0);
     for (const call of github.calls) { assert.equal(call.authorization, null); assert.equal(call.method, "GET"); assert.equal(call.url.includes("private-install"), false); }
   });
+});
+
+const published = (tag_name: string) => ({ tag_name, draft: false, prerelease: !/^v\d+\.\d+\.\d+$/.test(tag_name), immutable: true });
+const versionReleases = () => ({
+  releases: [published("v1.2.0-nightly.20261027"), published("v1.1.0-beta.1"), published("v1.0.1"), published("v1.0.0"), { ...published("v0.9.0"), draft: true }],
+  tags: { "v1.2.0-nightly.20261027": "5".repeat(40), "v1.1.0-beta.1": "4".repeat(40), "v1.0.1": "3".repeat(40), "v1.0.0": "1".repeat(40), "v0.9.0": "9".repeat(40) } as Record<string, string>,
+});
+
+test("plugin versions: the release at the pinned commit and the newest release on its track, read anonymously and cached", async () => {
+  clearPluginReleaseCache();
+  const github = new GitHub(); Object.assign(github, versionReleases());
+  const realNow = Date.now; let now = realNow();
+  Date.now = () => now;
+  try {
+    await withGitHub(async () => {
+      // Stable offers stable releases only.
+      assert.deepEqual(await pluginVersionInfo(carpoolSource, "1".repeat(40), "stable"), { version: "v1.0.0", latest: { tag: "v1.0.1", kind: "stable", commit: "3".repeat(40) }, latestUnavailable: false, updateAvailable: true });
+      assert.deepEqual(await pluginVersionInfo(carpoolSource, "3".repeat(40), "stable"), { version: "v1.0.1", latest: { tag: "v1.0.1", kind: "stable", commit: "3".repeat(40) }, latestUnavailable: false, updateAvailable: false });
+      // Nightly also offers beta and nightly prereleases; the highest version wins.
+      assert.deepEqual((await pluginVersionInfo(carpoolSource, "3".repeat(40), "nightly")).latest, { tag: "v1.2.0-nightly.20261027", kind: "nightly", commit: "5".repeat(40) });
+      assert.equal((await pluginVersionInfo(carpoolSource, "4".repeat(40), "nightly")).updateAvailable, true);
+      // An unreleased commit, and a draft release's commit, have no version and are never reported as outdated.
+      assert.deepEqual(await pluginVersionInfo(carpoolSource, "8".repeat(40), "stable"), { version: null, latest: { tag: "v1.0.1", kind: "stable", commit: "3".repeat(40) }, latestUnavailable: false, updateAvailable: false });
+      assert.equal((await pluginVersionInfo(carpoolSource, "9".repeat(40), "stable")).version, null);
+      // Cached for ten minutes per repository: one read of releases and one of tags so far.
+      const reads = () => github.calls.filter((call) => /lancerlogin-carpool\/(releases|tags)/.test(call.url)).length;
+      assert.equal(reads(), 2);
+      github.releases = [published("v2.0.0"), ...versionReleases().releases]; github.tags = { ...versionReleases().tags, "v2.0.0": "6".repeat(40) };
+      assert.equal((await pluginVersionInfo(carpoolSource, "1".repeat(40), "stable")).latest?.tag, "v1.0.1");
+      now += releaseIndexTtlMs + 1;
+      assert.equal((await pluginVersionInfo(carpoolSource, "1".repeat(40), "stable")).latest?.tag, "v2.0.0");
+      assert.equal(reads(), 4);
+      // A failure never throws: the latest version is unavailable, and the lookup is retried after a minute.
+      now += releaseIndexTtlMs + 1; github.releases = 500;
+      assert.deepEqual(await pluginVersionInfo(carpoolSource, "1".repeat(40), "stable"), { version: null, latest: null, latestUnavailable: true, updateAvailable: false });
+      await new Promise((resolve) => setImmediate(resolve));
+      Object.assign(github, versionReleases());
+      assert.equal((await pluginVersionInfo(carpoolSource, "1".repeat(40), "stable")).latestUnavailable, true, "a failure is cached briefly");
+      now += 61_000;
+      assert.equal((await pluginVersionInfo(carpoolSource, "1".repeat(40), "stable")).latestUnavailable, false);
+      // Other hosts are not looked up.
+      assert.equal((await pluginVersionInfo("https://git.example.org/example/carpool.git", "1".repeat(40), "stable")).latestUnavailable, true);
+      for (const call of github.calls) { assert.equal(call.authorization, null); assert.equal(call.url.includes("git.example.org"), false); }
+    }, github);
+  } finally { Date.now = realNow; clearPluginReleaseCache(); }
+});
+
+test("the plugin status carries versions per installed plugin, LancerLogin's pinned version and versioned pending changes", async () => {
+  clearPluginReleaseCache();
+  const env = environment();
+  const github = new GitHub(); Object.assign(github, versionReleases());
+  const pin = (JSON.parse(readFileSync("scripts/official-modules.json", "utf8")) as { modules: Array<{ id: string; commit: string }> }).modules.find((entry) => entry.id === "hour-tracking")!;
+  github.outreach = { releases: [published("v0.2.1"), published("v0.2.0")], tags: { "v0.2.1": "7".repeat(40), "v0.2.0": pin.commit } };
+  github.files.set("lancerlogin.modules.json", serializeSelection({ modules: [{ id: "carpool", source: carpoolSource, commit: "3".repeat(40) }] }));
+  const plugins: InstalledPlugins = { "hour-tracking": { source: outreachSource, commit: pin.commit, official: true }, carpool: { source: carpoolSource, commit: "1".repeat(40), official: false, selected: true } };
+  try {
+    await withGitHub(async () => {
+      const state = await pluginManagementState(env, { installed: plugins, principal: fresh, passwordAvailable: true, googleAvailable: false });
+      const outreach = state.installed.find((item) => item.id === "hour-tracking")!; const carpool = state.installed.find((item) => item.id === "carpool")!;
+      assert.deepEqual({ version: outreach.version, latest: outreach.latest?.tag, updateAvailable: outreach.updateAvailable, releasePinVersion: outreach.releasePinVersion, track: outreach.track }, { version: "v0.2.0", latest: "v0.2.1", updateAvailable: true, releasePinVersion: "v0.2.0", track: "stable" });
+      assert.deepEqual({ version: carpool.version, latest: carpool.latest?.tag, updateAvailable: carpool.updateAvailable }, { version: "v1.0.0", latest: "v1.0.1", updateAvailable: true });
+      assert.equal("releasePinVersion" in carpool, false, "only official plugins following LancerLogin's pin report it");
+      assert.deepEqual(state.pending, [{ kind: "upgrade", id: "carpool", source: carpoolSource, commit: "3".repeat(40), installedCommit: "1".repeat(40), version: "v1.0.1", installedVersion: "v1.0.0" }]);
+      // GitHub failures leave the status intact and mark the latest version unavailable.
+      clearPluginReleaseCache(); github.releases = 503; github.outreach = 503;
+      const degraded = await pluginManagementState(env, { installed: plugins, principal: fresh, passwordAvailable: true, googleAvailable: false });
+      assert.equal(degraded.error, null);
+      for (const item of degraded.installed) { assert.equal(item.latestUnavailable, true); assert.equal(item.latest, null); assert.equal(item.version, null); }
+      assert.deepEqual(degraded.pending.map((change) => [change.version, change.installedVersion]), [[null, null]]);
+    }, github);
+  } finally { clearPluginReleaseCache(); }
 });
 
 test("changing a plugin's release track is a reviewed, re-authenticated, audited plugin change", async () => {
@@ -329,7 +412,7 @@ test("routes require an active Admin, the exact dashboard Origin and fresh re-au
     const text = await state.text();
     for (const value of [selectionToken, dispatchToken, secret]) assert.equal(text.includes(value), false);
     const view = JSON.parse(text);
-    assert.equal(view.credential.state, "ready"); assert.equal(view.protection.state, "configured"); assert.equal(view.reauthentication.freshUntil, null); assert.equal(view.reauthentication.password, true);
+    assert.equal(view.credential.state, "ready"); assert.equal("protection" in view, false); assert.equal(view.reauthentication.freshUntil, null); assert.equal(view.reauthentication.password, true);
     assert.deepEqual(view.installed.map((item: { id: string }) => item.id), []);
     assert.equal((await call("/admin/plugins/review", admin, add, "https://evil.example")).status, 403);
     assert.equal((await call("/admin/plugins/release", admin, { id: "carpool", source: carpoolSource, track: "nightly" }, "https://evil.example")).status, 403);
@@ -348,8 +431,8 @@ test("routes require an active Admin, the exact dashboard Origin and fresh re-au
     assert.equal(changed.status, 201);
     assert.equal(JSON.stringify(await changed.json()).includes(selectionToken), false);
     assert.equal(env.DB.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'auth.reauthenticated'").get()?.n, 1);
-    github.protection = 403;
-    assert.equal((await (await call("/admin/plugins", admin)).json()).protection.state, "unknown");
+    // The status never reads the production environment's protection rules.
+    assert.equal(github.calls.some((entry) => entry.url.includes("/environments/")), false);
   });
 });
 

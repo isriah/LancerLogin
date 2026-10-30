@@ -1,5 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { buildProvisionConfig } from "../scripts/prepare-cloudflare-provision.mjs";
 import { resourceExists } from "../scripts/cloudflare-resource-state.mjs";
 import { selectCloudflareAccount } from "../scripts/select-cloudflare-account.mjs";
@@ -41,6 +46,50 @@ test("generated Worker configuration records only a validated private updater UR
     if (prior === undefined) delete process.env.LANCERLOGIN_UPDATE_WORKFLOW_URL;
     else process.env.LANCERLOGIN_UPDATE_WORKFLOW_URL = prior;
   }
+});
+
+test("generated Worker configuration runs near D1 with Smart Placement or a validated placement hint", () => {
+  const prior = process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION;
+  const placement = () => buildProvisionConfig("example-club", [], "1.2.3").config.placement;
+  try {
+    delete process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION;
+    assert.deepEqual(placement(), { mode: "smart" });
+    // An unset GitHub variable reaches the job environment as an empty string.
+    process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION = "";
+    assert.deepEqual(placement(), { mode: "smart" });
+    for (const region of ["aws:us-east-1", "gcp:us-east4", "azure:eastus2"]) {
+      process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION = region;
+      assert.deepEqual(placement(), { region }, region);
+    }
+    for (const region of ["us-east-1", "aws:US-EAST-1", "oracle:us-east-1", "aws:", "aws:us east 1", "aws:us-east-1\n", "smart"]) {
+      process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION = region;
+      assert.throws(placement, /Invalid Worker placement region: set LANCERLOGIN_WORKER_PLACEMENT_REGION/, JSON.stringify(region));
+    }
+  } finally {
+    if (prior === undefined) delete process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION;
+    else process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION = prior;
+  }
+});
+
+test("the provisioning script writes the placement the workflow deploys and refuses an invalid hint", async () => {
+  const work = await mkdtemp(join(tmpdir(), "lancerlogin-provision-placement-"));
+  const script = resolve("scripts/prepare-cloudflare-provision.mjs");
+  const run = (region) => {
+    const environment = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...(region === undefined ? {} : { LANCERLOGIN_WORKER_PLACEMENT_REGION: region }) };
+    return spawnSync(process.execPath, [script, "example-club"], { cwd: work, env: environment, encoding: "utf8", timeout: 30_000 });
+  };
+  const written = async () => JSON.parse(await readFile(join(work, ".provision/wrangler.json"), "utf8")).placement;
+  try {
+    assert.equal(run(undefined).status, 0);
+    assert.deepEqual(await written(), { mode: "smart" });
+    assert.equal(run("gcp:us-east4").status, 0);
+    assert.deepEqual(await written(), { region: "gcp:us-east4" });
+    await rm(join(work, ".provision"), { recursive: true, force: true });
+    const refused = run("us-east-1");
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /Invalid Worker placement region/);
+    assert.equal(existsSync(join(work, ".provision/wrangler.json")), false, "no configuration is written for an invalid hint");
+  } finally { await rm(work, { recursive: true, force: true }); }
 });
 
 test("Pages project discovery is resumable", () => {

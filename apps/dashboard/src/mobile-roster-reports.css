@@ -3,15 +3,12 @@
 .app button.member-pencil-button:hover,.member-history-correction > summary:hover { border-color: var(--primary); }
 .member-history-correction > summary::-webkit-details-marker { display: none; }
 .member-history-correction > summary { list-style: none; }
-.member-history-correction > summary:focus-visible,.member-roster-link:focus-visible,.roster-label-csv > summary:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+.member-history-correction > summary:focus-visible,.member-roster-link:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
 .app .roster-page .roster-row { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) var(--control-min-block-size); }
 .app .roster-page .roster-row.with-discord { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) var(--control-min-block-size); }
 .app .roster-page .roster-row.bulk-selecting { grid-template-columns: var(--control-min-block-size) minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) var(--control-min-block-size); }
 .app .roster-page .roster-row.with-discord.bulk-selecting { grid-template-columns: var(--control-min-block-size) minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) var(--control-min-block-size); }
 .app .roster-page .roster-row :is(.roster-identity,.member-link,.member-link strong,.roster-member-id) { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
-.roster-label-csv { padding: var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-card); }
-.roster-label-csv > summary { display: flex; align-items: center; min-height: var(--control-min-block-size); cursor: pointer; }
-.roster-label-csv[open] > summary { margin-bottom: var(--space-3); }
 .roster-member-dialog { position: relative; z-index: 1; }
 .roster-member-dialog form > label:has(> span) { display: block; }
 .roster-member-dialog form > label > span { color: var(--ui-text-muted); font-size: var(--text-small); }
@@ -47,6 +44,9 @@
 @media (max-width: 900px) {
   .app .roster-page .roster-row,.app .roster-page .roster-row.with-discord,.app .roster-page .roster-row.bulk-selecting,.app .roster-page .roster-row.with-discord.bulk-selecting { grid-template-columns: minmax(0,1fr) minmax(0,.7fr) var(--control-min-block-size); grid-template-rows: auto auto auto; gap: var(--space-1) var(--space-2); padding: var(--space-3) var(--space-2); align-items: start; }
   .app .roster-page .roster-row.header { display: none; }
+  .app .roster-page .roster-row.header.bulk-selecting { display: flex; padding-block: var(--space-1); }
+  .app .roster-page .roster-row.header.bulk-selecting > [role="columnheader"]:not(:first-child) { display: none; }
+  .app .roster-page .roster-row.header.bulk-selecting .bulk-select-all-text { display: inline; color: var(--ui-text); font-size: var(--text-body); text-transform: none; letter-spacing: normal; }
   .app .roster-page .roster-identity { grid-column: 1; grid-row: 1 / 4; align-self: start; }
   .app .roster-page .roster-row .roster-member-id { grid-column: 2; grid-row: 1; justify-self: stretch; text-align: right; }
   .app .roster-page .roster-row .roster-member-id::before { content: none; }

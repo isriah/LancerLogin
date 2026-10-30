@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { buildProvisionConfig } from "./prepare-cloudflare-provision.mjs";
+import { buildProvisionConfig, workerPlacement } from "./prepare-cloudflare-provision.mjs";
 import { buildPagesProxy } from "./prepare-pages-proxy.mjs";
 
 import { resolveDatabaseName } from "./database-identity.mjs";
@@ -24,6 +24,8 @@ export function validateUpgradeEnvironment(env, { credentials = true } = {}) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.UPDATE_REPOSITORY ?? "") || env.UPDATE_REPOSITORY.toLowerCase() === "isriah/lancerlogin") throw new Error("private_repository_required");
   if (!idPattern.test(env.REQUEST_ID ?? "") || !env.RELEASE_TAG?.startsWith("v") || !parseReleaseVersion(env.RELEASE_TAG) || !shaPattern.test(env.RELEASE_SHA ?? "") || !/^[1-9][0-9]*$/.test(env.EXECUTOR_RUN_ID ?? "")) throw new Error("invalid_request");
   if (!/^[a-z][a-z0-9-]{2,40}$/.test(env.INSTALLATION_SLUG ?? "") || !idPattern.test(env.DATABASE_ID ?? "")) throw new Error("fixed_resources_required");
+  // The deployed Worker config carries this placement hint (buildProvisionConfig); refuse a bad one before any change.
+  try { workerPlacement(env.LANCERLOGIN_WORKER_PLACEMENT_REGION); } catch { throw new Error("worker_placement_region_invalid"); }
   if (!env.API_URL) throw new Error("api_url_required");
   let api;
   try { api = new URL(env.API_URL); } catch { throw new Error("fixed_api_origin_required"); }
@@ -444,6 +446,7 @@ export const upgradeHelp = {
   api_url_required: `LANCERLOGIN_API_URL is not set: add it as a production environment variable with the Worker API URL from ${updatesSummary}, for example https://<slug>-api.<subdomain>.workers.dev, then start the update again.`,
   fixed_api_origin_required: `LANCERLOGIN_API_URL must be exactly the installation's Worker origin, https://<slug>-api.<subdomain>.workers.dev with no path: correct the production environment variable from ${updatesSummary}.`,
   fixed_database_name_invalid: "LANCERLOGIN_DATABASE_NAME must be a lowercase D1 database name that ends in -data: correct or remove the production environment variable.",
+  worker_placement_region_invalid: "LANCERLOGIN_WORKER_PLACEMENT_REGION must be aws:, gcp: or azure: followed by a region, for example aws:us-east-1: correct the production environment variable, or remove it to use Smart Placement.",
   scoped_account_credential_required: "CLOUDFLARE_API_TOKEN must be an Account API token (it starts with cfat_) and CLOUDFLARE_ACCOUNT_ID the 32-character account ID: create the token in the Cloudflare dashboard (Manage account > Account API tokens) and replace the secrets.",
   dispatch_credential_rejected: "The GitHub token for dashboard updates has expired or been revoked: create a new fine-grained token, replace LANCERLOGIN_WEB_UPDATE_TOKEN, then run Refresh web update credential.",
   dispatch_credential_access_denied: "LANCERLOGIN_WEB_UPDATE_TOKEN cannot read this repository: give the fine-grained token access to this repository with Actions: Read and write, run Refresh web update credential, then start the update again.",

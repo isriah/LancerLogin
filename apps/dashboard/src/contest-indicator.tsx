@@ -3,9 +3,10 @@ import { api } from "./dashboard-api";
 import { ContestReviewList, contestsChangedEvent, type Contest } from "./contest-review-list";
 import { useModalFocus } from "./modal-focus";
 
+/** `enabled` is the app shell's shared answer to whether Discord is configured, so only the contests themselves are requested here. */
 export function ContestIndicator({ enabled }: { enabled: boolean }) {
   const [contests, setContests] = useState<Contest[]>([]); const [available, setAvailable] = useState(false); const [open, setOpen] = useState(false); const [notice, setNotice] = useState(""); const dialog = useRef<HTMLElement>(null);
-  const load = useCallback(async () => { const capabilities = await api<{ integrations: { discord: { configured: boolean } } }>("/integrations/capabilities"); const configured = capabilities.integrations.discord.configured; setAvailable(configured); if (!configured) { setContests([]); setOpen(false); return; } const result = await api<{ contests: Contest[] }>("/discord/contests"); setContests(result.contests.filter((contest) => contest.status === "open")); }, []);
+  const load = useCallback(async () => { const result = await api<{ contests: Contest[] }>("/discord/contests"); setAvailable(true); setContests(result.contests.filter((contest) => contest.status === "open")); }, []);
   function close() { setOpen(false); setNotice(""); }
   useEffect(() => {
     if (!enabled) { setAvailable(false); setContests([]); setOpen(false); setNotice(""); return; }

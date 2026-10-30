@@ -4,7 +4,7 @@ This guide is for Administrators and Operators. Administrators manage roster rec
 
 ## Roster
 
-Administrators add a member in **Roster** or select **Add member** and choose CSV import. CSV imports require `memberId`, `firstName`, and `lastName`; `email`, `discordUserId`, and `attendanceRequiredFrom` (`YYYY-MM-DD`) are optional. The dashboard validates the file and shows a preview before any change is written.
+Administrators add one member in **Roster** with **Add member**, or many from a spreadsheet with **Import > Members from CSV**. CSV imports require Member ID, First name and Last name columns; Email and Discord user ID are optional. Header names are matched loosely (for example `First Name`, `first_name` or `firstName`), other columns are ignored with a warning, and **Download template** saves a starter `roster-template.csv`. The dashboard validates the file and shows a preview before any change is written.
 
 Choose **Add to or update the current roster** to merge rows. Choose **Replace the active roster** only when that is intentional: omitted active members become inactive, while their attendance history and dashboard accounts remain preserved. An attendance-required date excludes earlier meetings from that person's attendance obligation and reporting denominator; it does not remove earlier scans or corrections.
 

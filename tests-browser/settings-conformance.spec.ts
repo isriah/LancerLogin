@@ -238,7 +238,7 @@ test("disabled modules and Operator-only sections retain their visibility rules"
   await expect(menu.getByRole("link", { name: "Carpool", exact: true })).toHaveCount(0);
   await useSettingsContext(page, "operator"); await page.goto("/settings/attendance");
   const sections = page.getByRole("navigation", { name: "Attendance settings sections" });
-  await expect(sections.getByRole("link")).toHaveCount(1);
+  await expect(sections.getByRole("link")).toHaveText(["Attendance rules", "Labels"]);
   await expect(page.getByRole("link", { name: "Attendance setup", exact: true })).toHaveCount(0);
   await page.goto("/settings/configuration");
   await expect(page.getByRole("heading", { name: "Page unavailable" })).toBeVisible();
@@ -523,7 +523,9 @@ test("Settings validation, integration states and data dialogs remain explicit a
   await expect(page.getByText("Verification required", { exact: true })).toHaveAttribute("data-tone", "warning");
   await expect(page.getByText("Disabled", { exact: true }).first()).toHaveAttribute("data-tone", "neutral");
   const resend = page.locator(".integration-card").filter({ hasText: "Resend email" });
-  if (!await resend.getByLabel("Sending API key").isVisible()) await resend.getByText("Configure integration", { exact: true }).click();
+  const replaceResend = resend.getByRole("button", { name: "Replace credentials", exact: true });
+  if (!await replaceResend.isVisible() && !await resend.getByLabel("Sending API key").isVisible()) await resend.locator(".integration-details > summary").click();
+  if (await replaceResend.isVisible()) await replaceResend.click();
   await expect(resend.getByLabel("Sending API key")).toBeVisible();
 
   await page.goto("/settings/privacy");
@@ -557,6 +559,7 @@ for (const { viewport, theme } of pairedViews) {
 
       await page.getByText("Manage configuration", { exact: true }).click();
       const googleCard = page.locator(".integration-card").filter({ hasText: "Google OAuth" });
+      await googleCard.getByRole("button", { name: "Replace credentials", exact: true }).click();
       const guideLink = googleCard.getByRole("link", { name: /Open the complete Google OAuth guide/ });
       await expect(guideLink).toHaveAttribute("href", "https://isriah.github.io/LancerLogin/setup.html#google-oauth");
       await guideLink.focus();
@@ -588,6 +591,7 @@ for (const { viewport, theme } of pairedViews) {
       await page.goto("/settings/integrations");
 
       const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+      await card.getByRole("button", { name: "Replace credentials", exact: true }).click();
       await expect(card.getByLabel("Application ID")).toBeVisible();
       await expect(card.getByText(/creates or updates only the guild-scoped/)).toBeVisible();
       await expect(card.locator(".copy-value code")).toHaveText(/^http:\/\/127\.0\.0\.1:\d+\/api\/discord\/interactions$/);
@@ -651,6 +655,30 @@ for (const { viewport, theme } of pairedViews) {
       await expectResponsiveFit(page);
     });
   }
+
+test("pending Discord commands are checked once when Integrations opens and settle to ready", async ({ page }) => {
+  await useSettingsContext(page);
+  const integrations = (commandStatus?: "pending" | "ready") => JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: true, state: "configured", pendingOperations: 0, failedOperations: 0, ...(commandStatus ? { commandStatus } : {}) }] });
+  await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: integrations("pending") }));
+  let checks = 0; let releaseCheck = () => {}; const checkHeld = new Promise<void>((resolve) => { releaseCheck = resolve; });
+  await page.route("**/admin/integrations/discord/commands/check", async (route) => { checks += 1; await checkHeld; await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ commandStatus: "ready", commandsUpdatedAt: "2026-10-29T15:00:00Z" }) }); });
+  await page.goto("/settings/integrations");
+  const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+  await card.getByText("Manage configuration", { exact: true }).click();
+  await expect(card.getByRole("status").filter({ hasText: "Command setup is pending. Checking the Discord commands now." })).toBeVisible();
+  releaseCheck();
+  await expect(card.getByRole("status").filter({ hasText: /^Commands current as of / })).toBeVisible();
+  await expect(card.getByText(/Command setup is pending/)).toHaveCount(0);
+  expect(checks).toBe(1);
+
+  // A status that is not pending never triggers the check, so ready commands are not reconciled again on each visit.
+  await page.unroute("**/admin/integrations");
+  await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: integrations("ready") }));
+  await page.reload();
+  await expect(page.locator(".integration-card").filter({ hasText: "Discord bot" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(checks).toBe(1);
+});
 
 test("Operator role cannot open administrative Settings routes", async ({ page }) => {
   await useSettingsContext(page, "operator");
@@ -891,6 +919,7 @@ test("integration setup uses status URLs and guidance when the API provides them
   await page.route("**/admin/integrations", (route) => route.fulfill({ json: { integrations: [{ provider: "google", enabled: true, saved: true, configured: false, state: "verification_required", redirectUri: "https://dev.example.test/api/auth/google/callback" }, { provider: "google_calendar", enabled: true, saved: false, authorized: false, configured: false, state: "not_configured", redirectUri: "https://dev.example.test/api/admin/integrations/google-calendar/callback" }, { provider: "resend", enabled: true, saved: false, configured: false, state: "not_configured" }, { provider: "discord", enabled: true, saved: true, configured: false, state: "verification_required", interactionsUrl: "https://dev.example.test/api/discord/interactions" }] } }));
   await page.goto("/settings/integrations");
   const google = page.locator(".integration-card").filter({ hasText: "Google OAuth" });
+  await google.getByRole("button", { name: "Replace credentials", exact: true }).click();
   await expect(google.locator(".copy-value code")).toHaveText("https://dev.example.test/api/auth/google/callback");
   await expect(google.getByText(/add each staff Google account under/)).toBeVisible();
   await expect(google.locator(".verification-panel").getByText(/active Admin whose LancerLogin email matches/)).toBeVisible();
@@ -905,11 +934,51 @@ test("integration setup uses status URLs and guidance when the API provides them
   await expect(resend.locator(".guide-note").filter({ hasText: "with no display name" })).toBeVisible();
   const discord = page.locator(".integration-card").filter({ hasText: "Discord bot" });
   await expect(discord.locator(".copy-value code")).toHaveText("https://dev.example.test/api/discord/interactions");
+  await discord.getByRole("button", { name: "Replace credentials", exact: true }).click();
   await expect(discord.getByText(/Create Public Threads, Create Events, Manage Events, and Manage Roles/)).toBeVisible();
   await expect(discord.getByText("Server Members Intent", { exact: true })).toBeVisible();
   await expect(discord.getByText(/Guild Members/)).toHaveCount(0);
   await expect(discord.getByText(/plus the private anomaly report channel if you use one/)).toBeVisible();
   await expectResponsiveFit(page);
+});
+
+test("integration credential fields opt out of sign-in autofill and password managers", async ({ page }) => {
+  await useSettingsContext(page);
+  await page.route("**/admin/integrations", (route) => route.fulfill({ json: { integrations: [{ provider: "google", enabled: true, saved: false, configured: false, state: "not_configured" }, { provider: "google_calendar", enabled: true, saved: false, authorized: false, configured: false, state: "not_configured" }, { provider: "resend", enabled: true, saved: true, configured: false, state: "verification_required" }, { provider: "discord", enabled: true, saved: false, configured: false, state: "not_configured" }] } }));
+  await page.goto("/settings/integrations");
+  const cards = page.locator(".integration-card");
+  await cards.filter({ hasText: "Resend email" }).getByRole("button", { name: "Replace credentials", exact: true }).click();
+  await expect(cards.getByLabel("Calendar OAuth client ID", { exact: true })).toBeVisible();
+  const passwords = cards.locator('input[type="password"]');
+  await expect(passwords).toHaveCount(4);
+  for (const input of await passwords.all()) {
+    await expect(input).toHaveAttribute("autocomplete", "new-password");
+    await expect(input).toHaveAttribute("data-1p-ignore", "");
+    await expect(input).toHaveAttribute("data-lpignore", "true");
+    await expect(input).toHaveAttribute("data-bwignore", "");
+    await expect(input).toHaveAttribute("data-form-type", "other");
+  }
+  const fields = await cards.locator('input:not([type="checkbox"])').evaluateAll((inputs) => inputs.map((input) => ({ name: input.getAttribute("name") ?? "", id: input.id, type: input.getAttribute("type") ?? "text" })));
+  expect(fields.length).toBeGreaterThan(10);
+  for (const field of fields) {
+    expect(field.name).toMatch(/^integration-/);
+    expect(field.id).toBe(field.name);
+    expect(field.name).not.toMatch(/^(username|password|email)$/i);
+    expect(field.type).not.toBe("email");
+  }
+  expect(new Set(fields.map((field) => field.id)).size).toBe(fields.length);
+  for (const label of ["OAuth client ID", "Calendar OAuth client ID", "From address", "Application ID", "Application public key", "Server ID", "Attendance channel ID", "Private report channel ID", "Address to receive the test code", "Six-digit code"]) {
+    const input = cards.getByLabel(label, { exact: true });
+    await expect(input).toHaveAttribute("type", "text");
+    await expect(input).toHaveAttribute("autocomplete", "off");
+    await expect(input).toHaveAttribute("data-1p-ignore", "");
+  }
+  for (const form of await cards.locator("form").all()) await expect(form).toHaveAttribute("autocomplete", "off");
+  const from = cards.getByLabel("From address", { exact: true });
+  await from.fill("Test Sender <attendance@example.test>");
+  expect(await from.evaluate((input: HTMLInputElement) => input.checkValidity())).toBe(false);
+  await from.fill("attendance@example.test");
+  expect(await from.evaluate((input: HTMLInputElement) => input.checkValidity())).toBe(true);
 });
 
 for (const provider of ["google", "google_calendar"] as const) test(`integrationError for ${provider} shows its message on the card and leaves the URL`, async ({ page }) => {
@@ -955,4 +1024,29 @@ test("Edit roster member renders the Active roster member checkbox as a checkbox
   expect(box.appearance).toBe(reference.appearance);
   expect(await active.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(reference.radius);
   await active.focus(); await page.keyboard.press("Space"); await expect(active).not.toBeChecked();
+});
+
+test("saved integration credentials show a saved date and open the form only to replace them", async ({ page }) => {
+  await useSettingsContext(page);
+  const writes: unknown[] = [];
+  await page.route("**/admin/integrations", (route) => route.fulfill({ json: { integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled" }, { provider: "resend", enabled: true, saved: true, configured: false, state: "verification_required", updatedAt: "2026-10-29T19:47:20.430Z" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] } }));
+  await page.route("**/admin/integrations/resend", (route) => { writes.push(route.request().method()); return route.fulfill({ json: { created: false } }); });
+  await page.goto("/settings/integrations");
+  const resend = page.locator(".integration-card").filter({ hasText: "Resend email" });
+  const saved = resend.locator(".saved-credentials");
+  await expect(saved.getByRole("status")).toHaveText(/^Credentials saved on .*2026\.$/);
+  await expect(resend.getByLabel("Sending API key")).toHaveCount(0);
+  await expect(resend.locator("input[type=\"password\"]")).toHaveCount(0);
+  const replace = saved.getByRole("button", { name: "Replace credentials", exact: true });
+  expect((await replace.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await replace.click();
+  await expect(resend.getByText(/replaces all of the saved credentials at once, and this integration must be verified again/)).toBeVisible();
+  await resend.getByLabel("Sending API key").fill("re_test_value_for_cancel");
+  await resend.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(saved.getByRole("status")).toBeVisible();
+  await expect(resend.getByLabel("Sending API key")).toHaveCount(0);
+  await replace.click();
+  await expect(resend.getByLabel("Sending API key")).toHaveValue("");
+  expect(writes).toEqual([]);
+  await expectResponsiveFit(page);
 });

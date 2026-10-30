@@ -11,7 +11,7 @@ Admins see these settings pages:
 | Page | Contents |
 | --- | --- |
 | Organization | Name, subtitle, logo and colors. |
-| Modules | **Manage modules** (enable, disable, Operator assignments, plugins, module access), **Attendance**, and one page per plugin. Attendance has the tabs Attendance rules, Meeting configuration, Fingerprint sharing, Fingerprint recovery and Attendance setup. |
+| Modules | **Manage modules** (enable, disable, Operator assignments, plugins, module access), **Attendance**, and one page per plugin. Attendance has the tabs Attendance rules, Labels, Meeting configuration, Fingerprint sharing, Fingerprint recovery and Attendance setup. |
 | Access | Admin and Operator accounts and their roster links. |
 | Integrations | Google sign-in, Google Calendar, Resend and Discord. |
 | Data | Category backups, restores and typed-confirmation deletion. |
@@ -45,7 +45,7 @@ Attendance contest review supports individual and bulk acceptance or rejection w
 
 ## Roster and reports
 
-The roster importer previews every change before writing. Required columns are `memberId`, `firstName` and `lastName`; `email`, `discordUserId` and `attendanceRequiredFrom` are optional. **Add to or update the current roster** keeps people not in the file; **Replace the active roster** makes omitted people inactive while preserving their history and dashboard accounts. See [data workflows](DATA-WORKFLOWS.md) and [labels and attendance policies](ATTENDANCE-POLICIES.md).
+The roster importer previews every change before writing. Required columns are Member ID, First name and Last name; Email and Discord user ID are optional. **Download template** saves `roster-template.csv` with the header row and one example. Headers are matched loosely: case, spaces, underscores, hyphens and dots are ignored, and common aliases work (`id` or `Student ID` for Member ID, `First` or `Given name`, `Last`, `Surname` or `Family name`, `Email address` or `Mail`, `Discord ID` or `Discord`), so the camelCase `memberId`, `firstName`, `lastName`, `email` and `discordUserId` still work. Other columns are ignored and listed as a warning. Spreadsheet rows pasted without a header must use the template column order. **Add to or update the current roster** keeps people not in the file; **Replace the active roster** makes omitted people inactive while preserving their history and dashboard accounts. See [data workflows](DATA-WORKFLOWS.md) and [labels and attendance policies](ATTENDANCE-POLICIES.md).
 
 **Reports** opens a routed tab workspace. **Leaderboard** is always first, with its own period, meeting, roster, label, membership, sorting and pagination controls, policy alerts, the team regular-attendance trend and contests awaiting review. Saved reports appear as account-synced tabs; **Browse reports** finds personal and shared reports and **+** opens a draft. Closing a tab unpins it without deleting the report. Admins and Operators can create, edit or delete shared reports; a personal report is visible only to its owner.
 

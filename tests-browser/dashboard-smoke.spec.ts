@@ -19,12 +19,14 @@ test("roster stays primary and Admin actions open focused dialogs", async ({ pag
   await expect(page.getByRole("table", { name: "Roster members" })).toContainText("Avery Stone");
 
   await page.getByRole("button", { name: "Add member" }).click();
-  const dialog = page.getByRole("dialog", { name: "Add roster member" });
+  const dialog = page.getByRole("dialog", { name: /^(Add roster member|Import roster)$/ });
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: "Import CSV instead" }).click();
-  await expect(dialog.getByRole("heading", { name: "Import roster" })).toBeVisible();
-  await dialog.getByRole("button", { name: "Back to one member" }).click();
+  await expect(page.getByRole("dialog", { name: "Add roster member" })).toBeVisible();
   await page.getByRole("button", { name: "Close add member dialog" }).click();
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Members from CSV" }).click();
+  await expect(page.getByRole("dialog", { name: "Import roster" }).getByRole("heading", { name: "Import roster" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Close roster import" }).click();
 });
 
 test("roster columns stay vertically centered with actions at the desktop right edge", async ({ page }) => {

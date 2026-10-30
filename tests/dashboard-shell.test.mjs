@@ -202,8 +202,10 @@ test("dashboard consolidates meeting navigation and keeps roster accounts togeth
   assert.match(importer, /Replace the active roster/);
   assert.match(roster, /Add roster member/);
   assert.doesNotMatch(roster, /roster-summary-card/);
-  assert.match(roster, /Import CSV instead/);
-  assert.match(roster, /RosterImportPanel members=\{members\}/);
+  assert.doesNotMatch(roster, /Import CSV instead/);
+  assert.match(roster, /Members from CSV/);
+  assert.match(roster, /Labels from CSV/);
+  assert.match(roster, /RosterImportPanel embedded members=\{members\}/);
   assert.doesNotMatch(roster, /importOpen/);
   assert.match(users, /Roster link <span>\(optional\)<\/span>/);
   assert.match(users, /Non-rostered Admin or Operator/);
@@ -404,7 +406,8 @@ test("pending contests use meeting detail, the global notifier, and the Reports 
   assert.match(shell, /ContestIndicator/);
   assert.match(shell, /ContestIndicator enabled=\{attendanceReady && integrations\.discord\.configured\}/);
   assert.match(indicator, /\/discord\/contests/);
-  assert.match(indicator, /capabilities\.integrations\.discord\.configured/);
+  // The shell's shared capabilities read decides whether Discord is configured; the indicator requests only the contests.
+  assert.doesNotMatch(indicator, /\/integrations\/capabilities/);
   assert.match(indicator, /aria-haspopup="dialog"/);
   assert.match(indicator, /useModalFocus/);
   assert.match(indicator, /contestsChangedEvent/);
@@ -497,7 +500,9 @@ test("roster discovery searches every requested member field and scopes active m
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   assert.match(roster, /const\s*\[query,\s*setQuery\]\s*=\s*useState\(""\)/);
-  assert.match(roster, /const\s*\[scope,\s*setScope\]\s*=\s*useState<"active"\s*\|\s*"all">\("active"\)/);
+  // Active members by default; the Labels page links here with ?scope=all&label=<id>.
+  assert.match(roster, /const\s*\[scope,\s*setScope\]\s*=\s*useState<"active"\s*\|\s*"all">\(\(\)=>new URLSearchParams\(window\.location\.search\)\.get\("scope"\)==="all"\?"all":"active"\)/);
+  assert.match(roster, /const \[labelFilter,setLabelFilter\]=useState\(\(\)=>new URLSearchParams\(window\.location\.search\)\.get\("label"\)\?\?""\)/);
   assert.match(roster, /\$\{member\.firstName\} \$\{member\.lastName\} \$\{member\.email\s*\?\?\s*""\} \$\{member\.memberId\}/);
   assert.match(roster, /scope\s*===\s*"all"\s*\|\|\s*member\.active/);
   assert.match(roster, /placeholder="Name, email, or member ID"/);
@@ -638,7 +643,10 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(shell, /ReportsPage discordEnabled=\{attendanceReady && integrations\.discord\.configured\}/);
   assert.match(shell, /KiosksPage role=\{role\} discordConfigured=\{integrations\.discord\.configured\}/);
   assert.doesNotMatch(meetings, /Sync all to Discord/);
-  assert.match(attendance, /capabilities\.integrations\.discord\.configured/);
+  // The meeting workspace gates Discord work on the shell's shared capabilities read instead of requesting its own.
+  assert.match(attendance, /capabilities\.discord\.configured/);
+  assert.match(shell, /<AttendanceWorkspace [^>]*readIntegrations=\{readIntegrations\}/);
+  assert.doesNotMatch(attendance, /\/integrations\/capabilities/);
   assert.match(attendance, /Send Discord absence notice/);
   assert.match(attendance, /Sync configured calendars/);
   assert.doesNotMatch(source, /Previous credentials were replaced|\/test"/);

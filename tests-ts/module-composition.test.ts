@@ -56,6 +56,8 @@ function pluginRepository(t: test.TestContext, change?: (directory: string) => v
 /** A temporary output root standing in for a Core checkout that has the dashboard module contract. */
 function outputRoot(t: test.TestContext, dashboardContract = true) {
   const root = temporary(t, "compose-output");
+  // Match a real Core checkout, whose package.json makes the generated files ES modules for every loader.
+  writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module" }));
   if (dashboardContract) { mkdirSync(join(root, "apps/dashboard/src"), { recursive: true }); writeFileSync(join(root, "apps/dashboard/src/module-contributions.ts"), "export type DashboardModuleContribution = unknown;\n"); }
   return root;
 }
@@ -127,13 +129,18 @@ test("selection files accept only exact, pinned https entries", () => {
   assert.equal(parse({ format: 1, modules: [{ ...entry, source: "file:///tmp/plugin" }] }, true)[0]!.source, "file:///tmp/plugin");
 });
 
-test("Core ranges follow package.json comparators with npm's beta rule", () => {
+test("Core ranges follow package.json comparators, with a beta Core sorting just below its release", () => {
   assert.equal(satisfiesCoreRange("2.0.0-beta.11", ">=2.0.0-beta.0 <3.0.0"), true);
   assert.equal(satisfiesCoreRange("2.0.0", ">=2.0.0-beta.0 <3.0.0"), true);
   assert.equal(satisfiesCoreRange("2.4.1", ">=2.0.0-beta.0 <3.0.0"), true);
   assert.equal(satisfiesCoreRange("3.0.0", ">=2.0.0-beta.0 <3.0.0"), false);
   assert.equal(satisfiesCoreRange("3.0.0-beta.1", ">=2.0.0-beta.0 <3.0.0"), false);
-  assert.equal(satisfiesCoreRange("2.1.0-beta.1", ">=2.0.0-beta.0 <3.0.0"), false);
+  // A newer minor's beta satisfies the ranges the official plugins declare, but an upper bound excludes its own release's betas.
+  assert.equal(satisfiesCoreRange("2.1.0-beta.1", ">=2.0.0-beta.0 <3.0.0"), true);
+  assert.equal(satisfiesCoreRange("2.1.0-beta.1", ">=2.0.0-beta.15 <3.0.0"), true);
+  assert.equal(satisfiesCoreRange("2.1.0-beta.1", "<2.1.0"), false);
+  assert.equal(satisfiesCoreRange("2.1.0-beta.1", ">=2.1.0"), false);
+  assert.equal(satisfiesCoreRange("2.0.0-beta.11", ">=2.0.0"), false);
   assert.equal(satisfiesCoreRange("2.0.0-beta.11", ">=2.0.0-beta.12"), false);
   assert.equal(satisfiesCoreRange("2.0.0-beta.11", "=2.0.0-beta.11"), true);
   assert.equal(satisfiesCoreRange("1.2.6", ">=2.0.0 || >=1.2.0 <1.3.0"), true);

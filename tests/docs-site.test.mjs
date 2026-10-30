@@ -163,7 +163,7 @@ test("operations guide matches the current navigation and recovery paths", async
   const operations = await read("operations.html");
   assert.match(operations, /<strong>Meetings<\/strong>/);
   for (const page of ["Organization", "Modules", "Access", "Integrations", "Data", "Updates"]) assert.match(operations, new RegExp(`<td>${page}</td>`));
-  assert.match(operations, /Attendance rules, Meeting configuration, Fingerprint sharing, Fingerprint recovery, and Attendance setup/);
+  assert.match(operations, /Attendance rules, Labels, Meeting configuration, Fingerprint sharing, Fingerprint recovery, and Attendance setup/);
   assert.match(operations, /Add to or update the current roster/);
   assert.match(operations, /Replace the active roster/);
   assert.match(operations, /Sync configured calendars/);

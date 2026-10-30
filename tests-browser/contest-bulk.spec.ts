@@ -106,3 +106,28 @@ for (const theme of ["light", "dark"]) for (const width of [1280, 390]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 }
+
+test("contest review popup links each member to their member page in a new tab without toggling selection", async ({ page, context }) => {
+  const contest = { meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "synthetic-internal", externalId: "TEST A/1", firstName: "Test Student", lastName: "A", status: "open", createdAt: "2026-09-03T20:05:00Z", lifetimeContestCount: 1, hasPartialScan: false, rawScanStatus: "none" };
+  await page.route(/\/discord\/contests(?:\?.*)?$/, route => route.fulfill({ json: { contests: [contest] } }));
+  await page.goto("/dashboard");
+  await page.getByRole("button", { name: "1 attendance contest awaiting review. Open contest review." }).click();
+  const dialog = page.getByRole("dialog", { name: "Contests awaiting review" });
+  const link = dialog.getByRole("link", { name: "Open Test Student A's member page in a new tab" });
+  await expect(link).toHaveAttribute("href", "/roster/TEST%20A%2F1");
+  await expect(link).toHaveAttribute("target", "_blank");
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(link).toContainText("Test Student A"); await expect(link).toContainText("TEST A/1");
+  const checkbox = dialog.getByRole("checkbox", { name: "Select contest for Test Student A at Build session" });
+  await checkbox.focus(); await page.keyboard.press("Tab"); await expect(link).toBeFocused();
+  for (const target of [link.locator("strong").getByText("Test Student A", { exact: false }).first(), link.locator("small")]) {
+    const opened = context.waitForEvent("page");
+    await target.click();
+    const tab = await opened; await tab.waitForLoadState("domcontentloaded");
+    expect(new URL(tab.url()).pathname).toBe("/roster/TEST%20A%2F1");
+    await tab.close();
+    await expect(checkbox).not.toBeChecked();
+    await expect(dialog.getByRole("button", { name: /selected contest/ })).toHaveCount(0);
+  }
+  await expect(page).toHaveURL(/\/dashboard$/);
+});

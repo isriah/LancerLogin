@@ -212,6 +212,23 @@ for (const { viewport, theme } of pairedViews) {
     });
   }
 
+for (const theme of ["light", "dark"] as const) {
+  test(`+ Add meeting keeps the primary accent in calendar and table views in ${theme} mode`, async ({ page }) => {
+    await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+    await page.goto("/dashboard");
+    await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+    // Resolve --primary through a probe element so the comparison uses the same rgb() form as the computed button background.
+    const primary = await page.locator(".app").evaluate((app) => { const probe = document.createElement("div"); probe.style.background = "var(--primary)"; app.appendChild(probe); const colour = getComputedStyle(probe).backgroundColor; probe.remove(); return colour; });
+    expect(primary).not.toBe("rgba(0, 0, 0, 0)");
+    for (const view of ["Calendar", "Table"]) {
+      await page.getByRole("radio", { name: view }).check();
+      const add = page.getByRole("button", { name: "Add meeting", exact: true });
+      await expect(add).toHaveCount(1);
+      await expect(add).toHaveCSS("background-color", primary);
+    }
+  });
+}
+
 test("Add meeting opens a keyboard-contained dialog and restores focus when dismissed", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/dashboard");

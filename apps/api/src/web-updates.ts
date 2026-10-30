@@ -3,6 +3,7 @@ import { completeOfficialRelease, compareReleaseVersions, parseReleaseVersion, t
 import { readUpdateChannel } from "./update-channel.ts";
 import { resolveOfficialRelease } from "./release-discovery.ts";
 import { credentialExpiry, credentialStatus, credentialUsable, observeCredentialResponse, type CredentialStatus } from "./github-credential.ts";
+import { latestRefreshRun, proposeRepositoryFiles, repositoryFilesStatus, unknownRefreshRun, unknownRepositoryFiles, type GitHubCall, type RefreshRun, type RepositoryFiles, type RepositoryFilesProposal } from "./repository-files.ts";
 type Result<T = unknown> = { results?: T[]; meta?: { changes?: number } };
 interface Statement { bind(...values: unknown[]): Statement; first<T = unknown>(): Promise<T | null>; all<T = unknown>(): Promise<Result<T>>; run(): Promise<Result>; }
 interface Database { prepare(sql: string): Statement; batch?(statements: Statement[]): Promise<unknown[]>; }
@@ -190,11 +191,50 @@ export async function webUpdateMaintenance(env: WebUpdateEnv): Promise<boolean> 
 export const updateChannelControllerName = "Upgrade LancerLogin web (update channels v2)";
 /** current: supports update channels. upgrade_required: an earlier controller. missing: absent or inactive. unknown: not checked. */
 export type ControllerState = "current" | "upgrade_required" | "missing" | "unknown";
-export type UpdateSetup = { repository: string | null; dispatchCredential: CredentialStatus; selectionCredential: CredentialStatus; controller: ControllerState };
+export type UpdateSetup = {
+  repository: string | null; dispatchCredential: CredentialStatus; selectionCredential: CredentialStatus; controller: ControllerState;
+  /** Whether the repository's own workflow files match the installed release. */
+  repositoryFiles: RepositoryFiles;
+  /** The latest Refresh web update credential run, with its failure code. */
+  refreshRun: RefreshRun;
+};
 const controllerTtlMs = 10 * 60_000; const controllerRetryMs = 60_000;
 let controllerCache: { key: string; until: number; state: ControllerState } | undefined;
-/** Test hook: forget the cached controller check. */
-export function resetControllerCache(): void { controllerCache = undefined; }
+let filesCache: { key: string; until: number; value: RepositoryFiles } | undefined;
+let refreshRunCache: { key: string; until: number; value: RefreshRun } | undefined;
+/** Check again may skip the caches at most once per isolate every 30 seconds, so repeated clicks or several tabs cannot hammer GitHub. */
+const recheckIntervalMs = 30_000; let lastRecheck = 0;
+/** Test hook: forget the cached controller, repository file and refresh run checks. */
+export function resetControllerCache(): void { controllerCache = undefined; filesCache = undefined; refreshRunCache = undefined; lastRecheck = 0; }
+const probe = (env: WebUpdateEnv): GitHubCall => (path, init) => github(path, env, init, "probe");
+/** Bounded to one comparison per isolate every ten minutes; a proposal clears it. */
+async function repositoryFilesState(env: WebUpdateEnv, repo: string): Promise<RepositoryFiles> {
+  const key = `${repo}
+${env.WEB_UPDATE_TOKEN}
+${env.RELEASE_VERSION}`;
+  if (filesCache?.key === key && Date.now() < filesCache.until) return filesCache.value;
+  const value = await repositoryFilesStatus(probe(env), repo, env.RELEASE_VERSION);
+  filesCache = { key, until: Date.now() + (value.state === "unknown" ? controllerRetryMs : controllerTtlMs), value };
+  return value;
+}
+/** Rechecked every 30 seconds while a run is in progress, otherwise every two minutes. */
+async function refreshRunState(env: WebUpdateEnv, repo: string): Promise<RefreshRun> {
+  const key = `${repo}
+${env.WEB_UPDATE_TOKEN}`;
+  if (refreshRunCache?.key === key && Date.now() < refreshRunCache.until) return refreshRunCache.value;
+  const value = await latestRefreshRun(probe(env), repo);
+  refreshRunCache = { key, until: Date.now() + (value.state === "running" || value.state === "unknown" ? 30_000 : 2 * 60_000), value };
+  return value;
+}
+/**
+ * Settings > Updates: proposes the installed release's workflow files in a pull request in the deployment repository.
+ * The installer reviews and merges it on GitHub; nothing is merged here.
+ */
+export async function updateRepositoryFiles(env: WebUpdateEnv): Promise<RepositoryFilesProposal> {
+  const repo = repository(env); credential(env);
+  try { return await proposeRepositoryFiles(probe(env), fail, repo, env.RELEASE_VERSION); }
+  finally { filesCache = undefined; }
+}
 function configuredRepository(env: WebUpdateEnv): string | null {
   try { return repository(env); } catch { return null; }
 }
@@ -218,14 +258,27 @@ async function controllerState(env: WebUpdateEnv, repo: string | null): Promise<
 /** Setup readiness for Settings > Updates. Never fails: a missing or broken credential is reported, not thrown. */
 export async function updateSetup(env: WebUpdateEnv): Promise<UpdateSetup> {
   const repo = configuredRepository(env);
-  const controller = await controllerState(env, repo);
-  // Read after the controller check, so a rejection GitHub just reported is reflected.
+  const usable = Boolean(repo) && credentialUsable("dispatch", env.WEB_UPDATE_TOKEN, env.WEB_UPDATE_TOKEN_EXPIRES_AT);
+  const [controller, repositoryFiles, refreshRun] = await Promise.all([
+    controllerState(env, repo),
+    usable ? repositoryFilesState(env, repo!) : unknownRepositoryFiles(env.RELEASE_VERSION),
+    usable ? refreshRunState(env, repo!) : unknownRefreshRun,
+  ]);
+  // Read after the GitHub checks, so a rejection GitHub just reported is reflected.
   return {
     repository: repo,
     dispatchCredential: credentialStatus("dispatch", env.WEB_UPDATE_TOKEN, env.WEB_UPDATE_TOKEN_EXPIRES_AT),
     selectionCredential: credentialStatus("selection", env.MODULE_SELECTION_TOKEN, env.MODULE_SELECTION_TOKEN_EXPIRES_AT),
-    controller,
+    controller, repositoryFiles, refreshRun,
   };
+}
+/**
+ * Settings > Updates > Setup status > Check again: reads the controller, repository files and latest refresh run from
+ * GitHub instead of the cache. Within the 30-second recheck interval it answers from the cache, which the last recheck refreshed.
+ */
+export async function recheckUpdateSetup(env: WebUpdateEnv): Promise<UpdateSetup> {
+  if (Date.now() - lastRecheck >= recheckIntervalMs) { lastRecheck = Date.now(); controllerCache = undefined; filesCache = undefined; refreshRunCache = undefined; }
+  return updateSetup(env);
 }
 export async function webUpdateStatus(env: WebUpdateEnv) {
   const view = await trackWebUpdate(env);

@@ -21,6 +21,7 @@ export function AttendanceSettingsSections({ role = "admin" }: { role?: "admin" 
   return <div className="settings-section-toolbar">
     <SettingsSectionNavigation label="Attendance settings sections" currentHref={path} navigate={navigate} sections={[
       ["/settings/attendance", "Attendance rules"],
+      ["/settings/labels", "Labels"],
       ...(role === "admin" ? [["/settings/configuration", "Meeting configuration"], ["/settings/fingerprint-sharing", "Fingerprint sharing"], ["/settings/fingerprint-recovery", "Fingerprint recovery"], ["/settings/guided-setup", "Attendance setup"]] as [string, string][] : []),
     ]} />
   </div>;

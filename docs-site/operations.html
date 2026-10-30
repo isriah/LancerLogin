@@ -23,7 +23,7 @@
     <thead><tr><th scope="col">Settings page</th><th scope="col">What it controls</th></tr></thead>
     <tbody>
       <tr><td>Organization</td><td>Name, subtitle, logo, and colors.</td></tr>
-      <tr><td>Modules</td><td><strong>Manage modules</strong> turns modules on or off and manages plugins. <strong>Attendance</strong> has the tabs Attendance rules, Meeting configuration, Fingerprint sharing, Fingerprint recovery, and Attendance setup. Each plugin has its own page.</td></tr>
+      <tr><td>Modules</td><td><strong>Manage modules</strong> turns modules on or off and manages plugins. <strong>Attendance</strong> has the tabs Attendance rules, Labels, Meeting configuration, Fingerprint sharing, Fingerprint recovery, and Attendance setup. Each plugin has its own page.</td></tr>
       <tr><td>Access</td><td>Admin and Operator accounts and their roster links.</td></tr>
       <tr><td>Integrations</td><td>Google sign-in, Google Calendar, Resend email, and Discord.</td></tr>
       <tr><td>Data</td><td>Backups, restores, and deletion.</td></tr>
@@ -43,13 +43,13 @@
   <p>Timing rules that apply to every meeting are in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Meeting configuration</span>.</p>
 
   <h2 id="roster">Manage the roster</h2>
-  <p>On <strong>Roster</strong>, Admins can add one member at a time or import many. To import, upload a CSV or paste spreadsheet rows. A CSV needs the columns <code>memberId</code>, <code>firstName</code>, and <code>lastName</code>; <code>email</code>, <code>discordUserId</code>, and <code>attendanceRequiredFrom</code> are optional.</p>
+  <p>On <strong>Roster</strong>, Admins can add one member at a time or import many. To import, upload a CSV or paste spreadsheet rows. A CSV needs the columns <strong>Member ID</strong>, <strong>First name</strong> and <strong>Last name</strong>; <strong>Email</strong> and <strong>Discord user ID</strong> are optional. Choose <strong>Download template</strong> for a starter file. Header names are matched loosely, so <code>First Name</code>, <code>first_name</code> and <code>firstName</code> all work, and other columns are ignored with a warning. Spreadsheet rows pasted without a header must use the template column order.</p>
   <ol class="steps">
     <li>Choose the import behavior: <strong>Add to or update the current roster</strong> keeps people who are not in the file, and <strong>Replace the active roster</strong> makes everyone not in the file inactive.</li>
     <li>Choose <strong>Preview roster</strong> and check every change. Nothing is saved until you confirm.</li>
   </ol>
   <p>Making a member inactive keeps their attendance history and any dashboard account. Meetings held while a member is inactive do not count against them.</p>
-  <p>Admins can add member labels, such as a class or team, and give a label an attendance requirement in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Attendance rules</span>. A meeting can be for all members or only for selected labels.</p>
+  <p>Admins add, rename, and retire member labels, such as a class or team, in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Labels</span>, and link a label to a Discord role there. They give a label an attendance requirement in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Attendance rules</span>. A meeting can be for all members or only for selected labels.</p>
 
   <h2 id="reports">Report on attendance</h2>
   <p><strong>Reports</strong> opens on the <strong>Leaderboard</strong>, with period, roster, label, and sorting controls, plus attendance alerts and contests waiting for review. Saved reports appear as tabs. Choose <strong>+</strong> to build a report: pick the period, members, meetings, and columns, then save it for yourself or share it with other staff.</p>

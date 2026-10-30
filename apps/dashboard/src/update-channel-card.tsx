@@ -33,14 +33,14 @@ export function UpdateChannelCard() {
       currentSetting.current = value; setSetting(value); setChoice(value.channel); setConfirmed(false); announceUpdateChannelChange(); setNotice("Update track saved. No update was started.");
     } catch (error) {
       setNotice((error as Error).message);
-      const value = await readUpdateChannelSetting().catch(() => undefined); if (value) acceptSetting(value);
+      readUpdateChannelSetting.invalidate(); const value = await readUpdateChannelSetting().catch(() => undefined); if (value) acceptSetting(value);
     } finally { setBusy(false); }
   }
-  return <article className="ui-card update-channel-card" aria-labelledby="update-channel-title"><div className="panel-heading"><h2 id="update-channel-title">Update track</h2><span className="ui-status">{setting ? setting.channel === "beta" ? "Beta" : "Stable" : "Unavailable"}</span></div><details className="settings-disclosure"><summary>Change update track</summary>
+  return <article className="ui-card update-channel-card" aria-labelledby="update-channel-title"><div className="panel-heading"><h2 id="update-channel-title">Update track</h2><span className="ui-status">{setting ? setting.channel === "beta" ? "Beta" : "Stable" : "Unavailable"}</span></div>
     <p id="update-channel-help">Stable is recommended. Beta includes newer beta and stable releases. Changing tracks does not install an update. Returning to Stable never downgrades: wait for a newer stable release.</p>
-    <label htmlFor="update-channel-choice">Installation update track</label><select id="update-channel-choice" aria-describedby="update-channel-help" disabled={!setting || busy} value={choice} onChange={(event) => { setChoice(event.target.value as UpdateChannel); setConfirmed(false); }}><option value="stable">Stable</option><option value="beta">Beta</option></select>
+    <div className="update-channel-form"><div className="update-channel-field"><label htmlFor="update-channel-choice">Installation update track</label><select id="update-channel-choice" aria-describedby="update-channel-help" disabled={!setting || busy} value={choice} onChange={(event) => { setChoice(event.target.value as UpdateChannel); setConfirmed(false); }}><option value="stable">Stable</option><option value="beta">Beta</option></select></div>
     {choice === "beta" && setting?.channel !== "beta" && <label className="checkbox-field"><input type="checkbox" checked={confirmed} disabled={busy} onChange={(event) => setConfirmed(event.target.checked)} />I understand beta releases may be unstable and automatic downgrades are not supported.</label>}
-    <div><button type="button" className="ui-button ui-button--primary" disabled={busy || !setting || choice === setting.channel || choice === "beta" && !confirmed} onClick={() => void save()}>{busy ? "Saving…" : "Save update track"}</button></div>
-    </details>{notice && <p className="ui-status" role="status">{notice}</p>}
+    <div><button type="button" className="ui-button ui-button--primary" disabled={busy || !setting || choice === setting.channel || choice === "beta" && !confirmed} onClick={() => void save()}>{busy ? "Saving…" : "Save update track"}</button></div></div>
+    {notice && <p className="ui-status" role="status">{notice}</p>}
   </article>;
 }

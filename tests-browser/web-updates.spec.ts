@@ -238,7 +238,10 @@ test("without the optional dashboard update credential, Updates shows how to upd
   const card = page.locator(".web-update-card");
   const notice = card.getByRole("group", { name: "Dashboard updates are not set up yet" });
   await expect(notice).toContainText('run the "Install or upgrade LancerLogin" workflow with operation "upgrade"');
-  await expect(notice).toContainText("Actions: Read and write, store it as the production environment secret LANCERLOGIN_WEB_UPDATE_TOKEN, then run the \"Refresh web update credential\" workflow.");
+  const steps = notice.getByRole("list", { name: "Set up dashboard updates" }).getByRole("listitem");
+  await expect(steps).toHaveCount(6);
+  await expect(steps.nth(2)).toHaveText("Under Repository permissions, set Actions to Read and write.");
+  await expect(steps.nth(4)).toContainText("environment secret named LANCERLOGIN_WEB_UPDATE_TOKEN");
   await expect(notice.getByRole("link", { name: "Run Install or upgrade LancerLogin" })).toHaveAttribute("href", `https://github.com/${repository}/actions/workflows/provision-template.yml`);
   await expect(notice.getByRole("link", { name: "Create a GitHub fine-grained token" })).toHaveAttribute("href", "https://github.com/settings/personal-access-tokens/new");
   await expect(notice.getByRole("link", { name: "Open the deployment repository's environments" })).toHaveAttribute("href", `https://github.com/${repository}/settings/environments`);
@@ -297,4 +300,163 @@ test("a rejected credential names the secret and workflow to fix, with links", a
   await expect(fixes.getByRole("link", { name: "Run Refresh web update credential" })).toHaveAttribute("href", `https://github.com/${repository}/actions/workflows/refresh-web-update-credential.yml`);
   await page.getByRole("button", { name: "Refresh update status", exact: true }).click();
   await expect(fixes).toHaveCount(0);
+});
+
+const filesFixture = (overrides: Partial<NonNullable<UpdateSetup["repositoryFiles"]>> = {}): NonNullable<UpdateSetup["repositoryFiles"]> => ({ state: "outdated", release: `v${bundledVersion}`, outdated: [".github/workflows/refresh-web-update-credential.yml", "scripts/refresh-web-update-credential.mjs"], pullRequest: null, ...overrides });
+const runFixture = (overrides: Partial<NonNullable<UpdateSetup["refreshRun"]>> = {}): NonNullable<UpdateSetup["refreshRun"]> => ({ state: "succeeded", runUrl: `https://github.com/${repository}/actions/runs/41`, finishedAt: "2026-10-28T10:00:00.000Z", code: null, reason: null, failedStep: null, ...overrides });
+const pullRequest = { number: 12, url: `https://github.com/${repository}/pull/12` };
+
+test("the update track is a permanent card right below the dashboard update card, with space before Save", async ({ page }) => {
+  const state = await setup(page); state.readiness = readiness();
+  await page.route("**/admin/update-channel", (route) => route.fulfill({ json: { channel: "stable", revision: 1 } }));
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 }); await page.goto("/settings/updates");
+    const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Update track", exact: true }) });
+    await expect(card).toBeVisible(); await expect(card.locator("details, summary")).toHaveCount(0);
+    const select = card.getByLabel("Installation update track"); const save = card.getByRole("button", { name: "Save update track" });
+    await expect(select).toBeVisible(); await expect(save).toBeVisible();
+    // The track card follows the dashboard update card directly, before Setup status.
+    const order = await page.evaluate(() => [...document.querySelector(".settings-updates")!.children].map((element) => element.matches(".release-comparisons") ? "dashboard" : element.matches(".update-channel-card") ? "track" : element.matches(".update-setup-card") ? "setup" : "").filter(Boolean));
+    expect(order).toEqual(["dashboard", "track", "setup"]);
+    const selectBox = await select.boundingBox(); const saveBox = await save.boundingBox();
+    expect(saveBox!.y - (selectBox!.y + selectBox!.height)).toBeGreaterThanOrEqual(12);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }
+});
+
+test("the plugin management credential is set up with numbered steps linking each page", async ({ page }) => {
+  const state = await setup(page); state.readiness = readiness({ selectionCredential: { state: "missing", expiresAt: null } });
+  await page.goto("/settings/updates");
+  const row = setupRow(page, "Plugin management credential");
+  await expect(row).toContainText("Optional. Without it, edit lancerlogin.modules.json in the deployment repository to change plugins.");
+  const steps = row.getByRole("list", { name: "Steps for plugin management credential" }).getByRole("listitem");
+  await expect(steps).toHaveCount(6);
+  await expect(steps.nth(0).getByRole("link", { name: "Create a GitHub fine-grained token" })).toHaveAttribute("href", "https://github.com/settings/personal-access-tokens/new");
+  await expect(steps.nth(1)).toHaveText("Set Resource owner to example. Under Repository access, choose Only select repositories and pick private-install.");
+  await expect(steps.nth(2)).toContainText("set Contents to Read and write. Use a different token from the dashboard update token (LANCERLOGIN_WEB_UPDATE_TOKEN).");
+  await expect(steps.nth(3)).toHaveText("Generate the token and copy it.");
+  await expect(steps.nth(4)).toContainText("production environment, add it as an environment secret named LANCERLOGIN_MODULE_SELECTION_TOKEN.");
+  await expect(steps.nth(4).getByRole("link", { name: "Open the deployment repository's environments" })).toHaveAttribute("href", `https://github.com/${repository}/settings/environments`);
+  await expect(steps.nth(5).getByRole("link", { name: "Run Refresh web update credential" })).toHaveAttribute("href", `https://github.com/${repository}/actions/workflows/refresh-web-update-credential.yml`);
+  for (const link of await row.locator(".update-setup-steps a").all()) expect(await link.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+  // A ready credential needs no steps.
+  state.readiness = readiness(); await page.reload();
+  await expect(setupRow(page, "Plugin management credential").locator(".update-setup-steps")).toHaveCount(0);
+});
+
+test("outdated repository workflow files open a pull request to review and merge on GitHub", async ({ page }) => {
+  const state = await setup(page); state.readiness = readiness({ repositoryFiles: filesFixture() });
+  const created = { status: 201, json: { pullRequest, created: true, release: `v${bundledVersion}`, files: filesFixture().outdated } };
+  const posts: unknown[] = []; let reply: { status: number; json: object } = created;
+  await page.route("**/admin/web-updates/repository-files", (route) => { posts.push({ method: route.request().method(), body: route.request().postDataJSON() }); return route.fulfill(reply); });
+  await page.goto("/settings/updates");
+  const row = setupRow(page, "Repository workflow files");
+  await expect(row.locator(".update-setup-badge")).toHaveText("Update available");
+  await expect(row).toContainText(`Your repository's workflow files are older than v${bundledVersion}.`);
+  await row.getByText("Files to update").click();
+  await expect(row.getByRole("listitem").filter({ hasText: "scripts/refresh-web-update-credential.mjs" })).toBeVisible();
+  // Missing permission: the refusal names it and lists the steps to add it.
+  reply = { status: 403, json: { code: "repository_files_workflows_permission", error: "The dashboard update credential needs Workflows: Read and write." } };
+  await row.getByRole("button", { name: "Update repository files" }).click();
+  await expect(row.getByRole("alert")).toHaveText("The dashboard update credential needs Workflows: Read and write, because the updated files include workflows.");
+  const steps = row.getByRole("list", { name: "Add the missing permission" }).getByRole("listitem");
+  await expect(steps.nth(0).getByRole("link", { name: "Open your fine-grained tokens" })).toHaveAttribute("href", "https://github.com/settings/personal-access-tokens");
+  await expect(steps.nth(1)).toContainText("set Workflows to Read and write, then save. The token itself does not change");
+  reply = created;
+  await row.getByRole("button", { name: "Update repository files" }).focus(); await page.keyboard.press("Enter");
+  await expect(row.getByRole("link", { name: "Review and merge it on GitHub" })).toHaveAttribute("href", pullRequest.url);
+  await expect(row.getByRole("button", { name: "Update repository files" })).toHaveCount(0);
+  expect(posts).toEqual([{ method: "POST", body: {} }, { method: "POST", body: {} }]);
+  // An open pull request reported by status is linked directly, after a reload too.
+  state.readiness = readiness({ repositoryFiles: filesFixture({ pullRequest }) }); await page.reload();
+  await expect(setupRow(page, "Repository workflow files").getByRole("link", { name: "Review and merge it on GitHub" })).toBeVisible();
+  // Without permission to read the files, the row lists every permission to add.
+  state.readiness = readiness({ repositoryFiles: filesFixture({ state: "permission_required", outdated: [] }) }); await page.reload();
+  await expect(setupRow(page, "Repository workflow files").locator(".update-setup-badge")).toHaveText("Needs permission");
+  await expect(setupRow(page, "Repository workflow files")).toContainText("set Contents, Pull requests and Workflows to Read and write");
+  state.readiness = readiness({ repositoryFiles: filesFixture({ state: "current", outdated: [] }) }); await page.reload();
+  await expect(setupRow(page, "Repository workflow files").locator(".update-setup-badge")).toHaveText("Up to date");
+  await expect(setupRow(page, "Repository workflow files").getByRole("button", { name: "Update repository files" })).toHaveCount(0);
+  await expect(setupRow(page, "Repository workflow files").getByRole("button")).toHaveText(["Check again"]);
+});
+
+test("Check again rereads the repository files and refresh run rows, and returning to the tab checks unsettled rows again", async ({ page }) => {
+  const state = await setup(page);
+  const unsettled = readiness({ refreshRun: runFixture({ state: "running", finishedAt: null }), repositoryFiles: filesFixture() });
+  const settled = readiness({ refreshRun: runFixture(), repositoryFiles: filesFixture({ state: "current", outdated: [] }) });
+  state.readiness = unsettled;
+  const posts: unknown[] = []; let reply: { status: number; json: object } = { status: 200, json: { setup: settled } };
+  // Like the API, a successful recheck refreshes what later status reads report.
+  await page.route("**/admin/web-updates/setup/recheck", (route) => { posts.push({ method: route.request().method(), body: route.request().postDataJSON() }); if (reply.status === 200) state.readiness = (reply.json as { setup: UpdateSetup }).setup; return route.fulfill(reply); });
+  const tabVisibility = (hidden: boolean) => page.evaluate((value) => { Object.defineProperty(document, "hidden", { configurable: true, get: () => value }); document.dispatchEvent(new Event("visibilitychange")); }, hidden);
+  await page.goto("/settings/updates");
+  const run = setupRow(page, "Latest credential refresh"); const files = setupRow(page, "Repository workflow files");
+  await expect(run.locator(".update-setup-badge")).toHaveText("Running");
+  expect(posts).toEqual([]);
+  const check = run.getByRole("button", { name: "Check again" });
+  await expect(check).toHaveAttribute("aria-describedby", "update-setup-refresh-run");
+  expect((await check.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await check.focus(); await page.keyboard.press("Enter");
+  await expect(run.locator(".update-setup-badge")).toHaveText("Succeeded");
+  await expect(files.locator(".update-setup-badge")).toHaveText("Up to date");
+  expect(posts).toEqual([{ method: "POST", body: {} }]);
+
+  // Coming back to the tab while a row is unsettled checks again once, then waits a minute before the next automatic check.
+  state.readiness = unsettled; reply = { status: 200, json: { setup: settled } }; await page.reload();
+  await expect(run.locator(".update-setup-badge")).toHaveText("Running");
+  await tabVisibility(true); await tabVisibility(false);
+  await expect(run.locator(".update-setup-badge")).toHaveText("Succeeded");
+  expect(posts).toHaveLength(2);
+  state.readiness = unsettled; reply = { status: 200, json: { setup: unsettled } };
+  await files.getByRole("button", { name: "Check again" }).click();
+  await expect(run.locator(".update-setup-badge")).toHaveText("Running");
+  expect(posts).toHaveLength(3);
+  await tabVisibility(true); await tabVisibility(false);
+  await page.waitForTimeout(300);
+  expect(posts).toHaveLength(3);
+  // Settled rows are not checked again on return.
+  state.readiness = settled; await page.reload();
+  await expect(run.locator(".update-setup-badge")).toHaveText("Succeeded");
+  await tabVisibility(true); await tabVisibility(false);
+  await page.waitForTimeout(300);
+  expect(posts).toHaveLength(3);
+
+  // A failed Check again says so in its row; the row keeps its last known state.
+  reply = { status: 503, json: { code: "provider_unavailable" } };
+  await files.getByRole("button", { name: "Check again" }).click();
+  await expect(files.getByRole("alert")).toBeVisible();
+  await expect(run.getByRole("alert")).toHaveCount(0);
+  await expect(files.locator(".update-setup-badge")).toHaveText("Up to date");
+  // Without a usable dashboard update credential nothing can be checked, so neither row offers Check again.
+  state.readiness = readiness({ dispatchCredential: { state: "missing", expiresAt: null }, refreshRun: runFixture({ state: "unknown", runUrl: null }), repositoryFiles: filesFixture({ state: "unknown", outdated: [] }) }); await page.reload();
+  await expect(setupPanel(page).getByRole("button", { name: "Check again" })).toHaveCount(0);
+});
+
+test("the latest credential refresh failure is explained in plain words with a link to the run", async ({ page }, testInfo) => {
+  const state = await setup(page);
+  state.readiness = readiness({ refreshRun: runFixture({ state: "failed", code: "dispatch_credential_access_denied", reason: "coded" }), repositoryFiles: filesFixture() });
+  await page.goto("/settings/updates");
+  const row = setupRow(page, "Latest credential refresh");
+  await expect(row.locator(".update-setup-badge")).toHaveText("Failed");
+  await expect(row.locator(".update-setup-badge")).toHaveAttribute("data-tone", "error");
+  await expect(row).toContainText("LANCERLOGIN_WEB_UPDATE_TOKEN cannot read the deployment repository. Give the token access to this repository with Actions: Read and write, then run the workflow again.");
+  await expect(row.getByRole("link", { name: "Open the run on GitHub" })).toHaveAttribute("href", `https://github.com/${repository}/actions/runs/41`);
+  await expect(row.getByRole("link", { name: "Run Refresh web update credential" })).toHaveAttribute("href", `https://github.com/${repository}/actions/workflows/refresh-web-update-credential.yml`);
+  // An earlier script's generic failure points to Update repository files, which sits right below.
+  state.readiness = readiness({ refreshRun: runFixture({ state: "failed", reason: "unexplained" }), repositoryFiles: filesFixture() }); await page.reload();
+  await expect(row).toContainText("The run stopped without saying why. This usually means the repository runs an older copy of the refresh workflow. Use Update repository files below");
+  const order = await setupPanel(page).locator(".update-setup-row").evaluateAll((rows) => rows.map((element) => element.getAttribute("data-setup")));
+  expect(order.indexOf("refresh-run")).toBeLessThan(order.indexOf("repository-files"));
+  state.readiness = readiness({ refreshRun: runFixture({ state: "failed", reason: "unreadable", failedStep: "Install the script's dependencies" }) }); await page.reload();
+  await expect(row).toContainText("The run failed at the step \"Install the script's dependencies\". To see the reason here, add Checks: Read-only to the dashboard update token");
+  state.readiness = readiness({ refreshRun: runFixture() }); await page.reload();
+  await expect(row.locator(".update-setup-badge")).toHaveText("Succeeded");
+  for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
+    state.readiness = readiness({ refreshRun: runFixture({ state: "failed", reason: "unexplained" }), repositoryFiles: filesFixture(), selectionCredential: { state: "missing", expiresAt: null } });
+    await page.setViewportSize({ width, height: 900 }); await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), theme);
+    await page.goto("/settings/updates"); await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
+    await expect(setupRow(page, "Repository workflow files").getByRole("button", { name: "Update repository files" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`repository-files-${width}-${theme}.png`), fullPage: true });
+  }
 });

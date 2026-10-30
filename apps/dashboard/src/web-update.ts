@@ -15,7 +15,18 @@ export type CredentialStatus = { state: "missing" | "ready" | "expiring" | "expi
 export type UpdateSetup = {
   repository: string | null; dispatchCredential: CredentialStatus; selectionCredential: CredentialStatus;
   controller: "current" | "upgrade_required" | "missing" | "unknown";
+  /** Whether the deployment repository's own workflow files match the installed release; absent from older Workers. */
+  repositoryFiles?: RepositoryFiles;
+  /** The latest "Refresh web update credential" run; absent from older Workers. */
+  refreshRun?: RefreshRun;
 };
+export type PullRequestLink = { number: number; url: string };
+export type RepositoryFiles = { state: "current" | "outdated" | "permission_required" | "unknown"; release: string | null; outdated: string[]; pullRequest: PullRequestLink | null };
+export type RefreshRun = {
+  state: "none" | "running" | "succeeded" | "failed" | "unknown"; runUrl: string | null; finishedAt: string | null;
+  code: string | null; reason: "coded" | "unexplained" | "unreadable" | null; failedStep: string | null;
+};
+export type RepositoryFilesProposal = { pullRequest: PullRequestLink; created: boolean; release: string; files: string[] };
 export type WebUpdateResponse = { releaseVersion: string; workflowUrl: string; request: WebUpdateRequest | null; activeRequest?: WebUpdateRequest | null; latestCompletedRequest?: WebUpdateRequest | null; setup?: UpdateSetup };
 
 export const isTerminalWebUpdate = (request: WebUpdateRequest) => ["succeeded", "failed", "expired"].includes(request.state);
@@ -34,6 +45,45 @@ export function deploymentLinks(repository?: string | null) {
   };
 }
 export type FixLink = { label: string; href: string };
+/** One numbered setup step; link, when present, opens the page the step happens on. */
+export type SetupStep = { text: string; link?: FixLink };
+const repositoryName = (repository?: string | null) => repository && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ? repository : undefined;
+/**
+ * Numbered steps to create a credential and install it. The plugin management token needs Contents: Read and write and
+ * must be a separate token; the dashboard update token needs Actions: Read and write.
+ */
+export function credentialSteps(kind: "dispatch" | "selection", repository?: string | null): SetupStep[] {
+  const repo = repositoryName(repository); const links = deploymentLinks(repo);
+  const [owner, name] = repo ? repo.split("/") : [];
+  const secret = kind === "dispatch" ? dispatchSecretName : selectionSecretName;
+  return [
+    { text: "Create a new fine-grained personal access token on GitHub.", link: { label: "Create a GitHub fine-grained token", href: tokenCreationUrl } },
+    { text: repo ? `Set Resource owner to ${owner}. Under Repository access, choose Only select repositories and pick ${name}.` : "Set Resource owner to the account that owns the deployment repository. Under Repository access, choose Only select repositories and pick the deployment repository." },
+    kind === "dispatch"
+      ? { text: "Under Repository permissions, set Actions to Read and write." }
+      : { text: `Under Repository permissions, set Contents to Read and write. Use a different token from the dashboard update token (${dispatchSecretName}).` },
+    { text: "Generate the token and copy it." },
+    { text: `In the deployment repository's production environment, add it as an environment secret named ${secret}.`, ...(links.environments ? { link: { label: "Open the deployment repository's environments", href: links.environments } } : {}) },
+    { text: "Run the \"Refresh web update credential\" workflow.", ...(links.refresh ? { link: { label: "Run Refresh web update credential", href: links.refresh } } : {}) },
+  ];
+}
+export const tokenSettingsUrl = "https://github.com/settings/personal-access-tokens";
+const permissionLabels = { contents: "Contents", pull_requests: "Pull requests", workflows: "Workflows" } as const;
+export type RepositoryPermission = keyof typeof permissionLabels;
+/** Steps to add repository permissions to the existing dashboard update token. Its value does not change. */
+export function permissionSteps(permissions: readonly RepositoryPermission[], last = "Come back to this page and choose Update repository files again."): SetupStep[] {
+  const names = permissions.map((permission) => permissionLabels[permission]);
+  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0] ?? "";
+  return [
+    { text: `Open your fine-grained tokens on GitHub and choose the token stored as ${dispatchSecretName}.`, link: { label: "Open your fine-grained tokens", href: tokenSettingsUrl } },
+    { text: `Under Repository permissions, set ${list} to Read and write, then save. The token itself does not change, so you do not need to replace the secret or run any workflow.` },
+    { text: last },
+  ];
+}
+export const repositoryPermissions: readonly RepositoryPermission[] = ["contents", "pull_requests", "workflows"];
+const permissionErrors: Record<string, RepositoryPermission> = { repository_files_contents_permission: "contents", repository_files_pull_requests_permission: "pull_requests", repository_files_workflows_permission: "workflows" };
+/** The permission a repository file update was refused for, if that is why it failed. */
+export const missingRepositoryPermission = (code?: string | null): RepositoryPermission | undefined => code ? permissionErrors[code] : undefined;
 type LinkKind = "token" | "environments" | "refresh" | "install" | "controller";
 const linkLabels: Record<LinkKind, string> = {
   token: "Create a GitHub fine-grained token",
@@ -95,7 +145,43 @@ const errors: Record<string, string> = {
   api_deployment_failed: `The update failed while deploying the API Worker. ${recoveryNeeded}`,
   pages_deployment_failed: `The update failed while deploying the dashboard to Pages. ${recoveryNeeded}`,
   health_failed: `The update deployed but the installation health check failed. ${recoveryNeeded}`,
+  repository_files_contents_permission: "The dashboard update credential needs Contents: Read and write to update the repository's workflow files.",
+  repository_files_pull_requests_permission: "The dashboard update credential needs Pull requests: Read and write to open a pull request with the updated files.",
+  repository_files_workflows_permission: "The dashboard update credential needs Workflows: Read and write, because the updated files include workflows.",
+  repository_files_current: "The repository's workflow files already match the installed release.",
 };
+
+const refreshScriptOld = "This usually means the repository runs an older copy of the refresh workflow. Use Update repository files below, merge the pull request on GitHub, then run the workflow again.";
+/** Plain explanations for the codes "Refresh web update credential" reports (scripts/refresh-web-update-credential.mjs). */
+const refreshFailures: Record<string, string> = {
+  private_installation_required: "The workflow ran outside the private deployment repository. Run it from the private deployment repository, which must stay private.",
+  installation_slug_required: "The production environment variable LANCERLOGIN_INSTALLATION_SLUG is missing. Copy it from the run summary of Install or upgrade LancerLogin.",
+  private_repository_required: "The tokens must belong to the private deployment repository. Keep it private and run the workflow from it.",
+  dispatch_credential_required: `The secret ${dispatchSecretName} is missing. Add the dashboard update token as a production environment secret, then run the workflow again.`,
+  dispatch_credential_rejected: `GitHub rejected ${dispatchSecretName}: it expired or was revoked. Create a new token, replace the secret, then run the workflow again.`,
+  dispatch_credential_access_denied: `${dispatchSecretName} cannot read the deployment repository. Give the token access to this repository with Actions: Read and write, then run the workflow again.`,
+  reviewed_workflow_required: "The update controller workflow (.github/workflows/upgrade-web.yml) is missing or disabled. Restore and enable it on main, then run the workflow again.",
+  selection_credential_must_be_distinct: `${selectionSecretName} is the same token as ${dispatchSecretName}. Create a second token with Contents: Read and write on only this repository.`,
+  selection_credential_rejected: `GitHub rejected ${selectionSecretName}: it expired or was revoked. Create a new token, replace the secret, then run the workflow again.`,
+  selection_credential_access_denied: `${selectionSecretName} cannot read the deployment repository. Give the token access to this repository with Contents: Read and write, then run the workflow again.`,
+  token_expiration_unreadable: "GitHub reported a token expiry in an unexpected format. Run the workflow again later.",
+  fixed_account_resources_required: "Some production environment values are missing or wrong: LANCERLOGIN_INSTALLATION_SLUG, LANCERLOGIN_DATABASE_ID, LANCERLOGIN_API_URL, CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN. Copy them from the run summary of Install or upgrade LancerLogin.",
+  credential_target_unavailable: "Cloudflare did not find this installation's database or Worker. Check CLOUDFLARE_ACCOUNT_ID, LANCERLOGIN_DATABASE_ID, LANCERLOGIN_INSTALLATION_SLUG and the permissions of CLOUDFLARE_API_TOKEN.",
+  account_token_invalid: "CLOUDFLARE_API_TOKEN is not active. Create a new Cloudflare Account API token and replace the secret.",
+  database_identity_mismatch: "LANCERLOGIN_DATABASE_ID does not match this installation's database. Copy it from the run summary of Install or upgrade LancerLogin.",
+  worker_database_mismatch: "The installation's Worker is not bound to LANCERLOGIN_DATABASE_ID. Check the variable against the run summary of Install or upgrade LancerLogin.",
+  credential_upload_failed: "Cloudflare did not accept the Worker secrets. Check that CLOUDFLARE_API_TOKEN has Workers Scripts: Edit, then run the workflow again.",
+  run_cancelled: "The run was cancelled before it finished. Run the workflow again.",
+  run_timed_out: "The run took too long and was stopped. Run the workflow again.",
+  run_skipped: "The run was skipped. Run it from the main branch of the private deployment repository.",
+};
+/** What the latest "Refresh web update credential" failure means, in plain words. */
+export function refreshFailureText(run: RefreshRun, filesCurrent = false): string {
+  if (run.reason === "unreadable") return `The run failed${run.failedStep ? ` at the step "${run.failedStep}"` : ""}. To see the reason here, add Checks: Read-only to the dashboard update token, or open the run on GitHub.`;
+  if (run.reason === "coded" && run.code) return refreshFailures[run.code] ?? `The run failed with the code ${run.code}. Open the run on GitHub to see how to fix it.`;
+  return `The run stopped without saying why. ${filesCurrent ? "Open the run on GitHub to see the error." : refreshScriptOld}`;
+}
+export const refreshFailureCodes = Object.keys(refreshFailures);
 const errorLinks: Record<string, readonly LinkKind[]> = {
   not_configured: ["install"],
   credential_required: [...credentialLinkKinds, "install"],

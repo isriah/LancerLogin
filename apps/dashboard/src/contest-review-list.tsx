@@ -21,6 +21,7 @@ export const contestsChangedEvent = "lancerlogin:contests-changed";
 
 const contestKey = (contest: Contest) => `${contest.meetingId}:${contest.memberId}`;
 const occurrenceDate = (contest: Contest) => new Date(contest.meetingStartsAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+const memberPageHref = (contest: Contest) => `/roster/${encodeURIComponent(contest.externalId)}`;
 const rawScanLabel = (status: Contest["rawScanStatus"]) => status === "partial" ? "Partial — checked in, no check-out" : status === "complete" ? "Complete — checked in and out" : "No scans";
 
 export function ContestReviewList({ contests, onResolved, onBulkResolved }: { contests: Contest[]; onResolved?: (resolution: Contest["status"], contest: Contest) => void; onBulkResolved?: (contests: Contest[], resolution: "approved" | "rejected") => void }) {
@@ -111,7 +112,7 @@ export function ContestReviewList({ contests, onResolved, onBulkResolved }: { co
       const key = contestKey(contest); const error = errors[key]; const itemBusy = Boolean(busy);
       return <article key={key}>
         <div className="contest-summary">
-          <label className="ui-checkbox"><input className="ui-checkbox" type="checkbox" disabled={itemBusy} checked={selected.includes(key)} aria-label={`Select contest for ${contest.firstName} ${contest.lastName} at ${contest.meetingTitle}`} onChange={(event) => setSelected((current) => event.target.checked ? [...new Set([...current, key])] : current.filter((selectedKey) => selectedKey !== key))} /><strong>{contest.firstName} {contest.lastName}<small>{contest.externalId}</small></strong></label>
+          <div className="contest-member"><label className="ui-checkbox"><input className="ui-checkbox" type="checkbox" disabled={itemBusy} checked={selected.includes(key)} aria-label={`Select contest for ${contest.firstName} ${contest.lastName} at ${contest.meetingTitle}`} onChange={(event) => setSelected((current) => event.target.checked ? [...new Set([...current, key])] : current.filter((selectedKey) => selectedKey !== key))} /></label><a className="contest-member-link" href={memberPageHref(contest)} target="_blank" rel="noopener noreferrer" aria-label={`Open ${contest.firstName} ${contest.lastName}'s member page in a new tab`}><strong>{contest.firstName} {contest.lastName}<small>{contest.externalId}</small><span className="contest-member-link-cue" aria-hidden="true">↗</span></strong></a></div>
           <span>{contest.meetingTitle} · {occurrenceDate(contest)}</span>
           <dl className="contest-context"><div><dt>Submitted contests</dt><dd>{contest.lifetimeContestCount}</dd></div><div><dt>Meeting scans</dt><dd>{rawScanLabel(contest.rawScanStatus)}</dd></div></dl>
         </div>

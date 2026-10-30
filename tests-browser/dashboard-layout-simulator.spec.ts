@@ -45,7 +45,10 @@ for (const viewport of references.viewports) for (const theme of references.them
     await expect(header.locator(".primary-navigation a")).toHaveText(["Meetings", "Roster", "Reports", "Kiosks", "Settings"]);
     await row.getByRole("button", { name: /^Edit / }).click();
     const editor = page.getByRole("dialog", { name: "Edit roster member" });
-    await expect(editor.getByLabel("Attendance required from")).toHaveValue("2026-09-01");
+    await expect(editor.getByRole("group", { name: "Attendance required from" })).toContainText("Attendance required from: Sep 1, 2026");
+    await expect(editor.getByLabel("New start date")).toHaveCount(0);
+    await editor.getByLabel("Custom date").check();
+    await expect(editor.getByLabel("New start date")).toHaveValue("2026-09-01");
     await page.keyboard.press("Escape");
     await expect(editor).not.toBeVisible();
     await expect(row.getByRole("button", { name: /^Edit / })).toBeFocused();
@@ -104,6 +107,46 @@ for (const viewport of references.viewports) for (const theme of references.them
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 }
+
+test("Roster attendance start date stays automatic unless Custom date is checked", async ({ page }) => {
+  await context(page);
+  const members = [{ id: "member-1", memberId: "TEST-A", firstName: "Test Student", lastName: "A", email: "student.a@example.test", active: 1, rosterAddedAt: "2026-09-01T15:00:00Z" }];
+  const patches: { url: string; body: unknown }[] = [];
+  await page.route("**/admin/members", route => route.fulfill({ json: route.request().method() === "POST" ? { ok: true } : { members } }));
+  await page.route("**/admin/members/member-1", route => route.fulfill({ json: { ok: true } }));
+  await page.route("**/admin/attendance/members", route => route.fulfill({ json: { members: [{ memberId: "TEST-A", attendanceRequiredFrom: null }] } }));
+  await page.route("**/admin/attendance/members/*", route => { patches.push({ url: route.request().url(), body: route.request().postDataJSON() }); return route.fulfill({ json: { ok: true } }); });
+  await page.goto("/roster");
+  await page.getByRole("button", { name: "Add member", exact: true }).first().click();
+  const adder = page.getByRole("dialog", { name: "Add roster member" });
+  await expect(adder.getByRole("group", { name: "Attendance required from" })).toContainText("(today, when they're added)");
+  await expect(adder.getByRole("group", { name: "Attendance required from" })).not.toContainText("(optional)");
+  await expect(adder.getByLabel("New start date")).toHaveCount(0);
+  await adder.getByLabel("Member ID").fill("TEST-B");
+  await adder.getByLabel("First name").fill("Test Student");
+  await adder.getByLabel("Last name").fill("B");
+  await adder.getByRole("button", { name: "Add member", exact: true }).click();
+  await expect(adder).not.toBeVisible();
+  expect(patches).toEqual([]);
+
+  await page.getByRole("button", { name: "Edit Test Student A" }).click();
+  const editor = page.getByRole("dialog", { name: "Edit roster member" });
+  await expect(editor.getByRole("group", { name: "Attendance required from" })).toContainText("Sep 1, 2026 (when they were added to the roster)");
+  const custom = editor.getByLabel("Custom date");
+  await expect(custom).not.toBeChecked();
+  await custom.check();
+  await expect(editor.getByLabel("New start date")).toHaveValue("2026-09-01");
+  await expect(editor.getByText("Meetings before this date won't count against them.")).toBeVisible();
+  await editor.getByLabel("New start date").fill("2026-09-15");
+  await custom.uncheck();
+  await expect(editor.getByLabel("New start date")).toHaveCount(0);
+  await custom.check();
+  await expect(editor.getByLabel("New start date")).toHaveValue("2026-09-01");
+  await editor.getByLabel("New start date").fill("2026-09-15");
+  await editor.getByRole("button", { name: "Save member" }).click();
+  await expect(editor).not.toBeVisible();
+  expect(patches).toEqual([{ url: expect.stringMatching(/\/admin\/attendance\/members\/TEST-A$/), body: { attendanceRequiredFrom: "2026-09-15", expected: null } }]);
+});
 
 test("Access renders mixed-case email addresses in lowercase", async ({ page }) => {
   await context(page);

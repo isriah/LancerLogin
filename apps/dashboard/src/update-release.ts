@@ -60,6 +60,22 @@ export function createSingleFlight<T>(load: () => Promise<T>) {
   };
 }
 
+/** Single-flight read that also reuses its last success for `ttlMs`, so readers mounting together share one request. `invalidate` makes the next read go to the server, even while an older read is still in flight. */
+export function createCachedRead<T>(load: () => Promise<T>, ttlMs: number, now: () => number = () => Date.now()) {
+  let inFlight: Promise<T> | undefined;
+  let cached: { value: T; at: number } | undefined;
+  const read = (): Promise<T> => {
+    if (inFlight) return inFlight;
+    const age = cached ? now() - cached.at : -1;
+    if (cached && age >= 0 && age < ttlMs) return Promise.resolve(cached.value);
+    const tracked: Promise<T> = Promise.resolve().then(load).then((value) => { if (inFlight === tracked) cached = { value, at: now() }; return value; })
+      .finally(() => { if (inFlight === tracked) inFlight = undefined; });
+    inFlight = tracked;
+    return tracked;
+  };
+  return Object.assign(read, { invalidate() { inFlight = undefined; cached = undefined; } });
+}
+
 // The old direct-browser cache cannot confirm same-origin discovery or block it.
 export const releaseCacheKey = "lancerlogin-release-cache-v3:stable";
 export const releaseCacheKeyForChannel = (channel: UpdateChannel) => releaseCacheKey.replace(/stable$/, channel);

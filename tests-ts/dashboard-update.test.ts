@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createSingleFlight, createReleaseCache, releaseCacheKey, releaseCacheTtlMs, ReleaseCheckError, fetchLatestRelease, latestReleaseUrl } from "../apps/dashboard/src/update-release.ts";
+import { createCachedRead, createSingleFlight, createReleaseCache, releaseCacheKey, releaseCacheTtlMs, ReleaseCheckError, fetchLatestRelease, latestReleaseUrl } from "../apps/dashboard/src/update-release.ts";
 import { kioskUpdateState, type KioskUpdateCommand } from "../apps/dashboard/src/kiosk-update-status.ts";
 import { canReloadWebUpdate, isCompletedWebUpdateHistory, deploymentLinks, diagnosticUrl, tokenCreationUrl, webUpdateError, webUpdateErrorLinks, webUpdateStatus, type WebUpdateRequest } from "../apps/dashboard/src/web-update.ts";
 import { readFileSync } from "node:fs";
@@ -88,6 +88,26 @@ test("single-flight refreshes do not overlap and allow a later retry", async () 
   assert.equal(calls, 2);
   finish();
   await retry;
+});
+
+test("cached reads share one request, reuse success briefly, never cache failures and restart after invalidation", async () => {
+  let time = 1_000; let calls = 0;
+  const pending: Array<{ resolve: (value: number) => void; reject: (error: Error) => void }> = [];
+  const read = createCachedRead(() => { calls += 1; return new Promise<number>((resolve, reject) => { pending.push({ resolve, reject }); }); }, 3_000, () => time);
+  const first = read(); const overlapping = read();
+  assert.equal(first, overlapping);
+  await Promise.resolve(); assert.equal(calls, 1);
+  pending.shift()!.resolve(1); assert.equal(await first, 1);
+  time += 2_999; assert.equal(await read(), 1); assert.equal(calls, 1);
+  time += 1; const expired = read(); await Promise.resolve(); assert.equal(calls, 2);
+  pending.shift()!.resolve(2); assert.equal(await expired, 2);
+  read.invalidate(); const fresh = read(); await Promise.resolve(); assert.equal(calls, 3);
+  pending.shift()!.reject(new Error("unavailable")); await assert.rejects(fresh, /unavailable/);
+  const retry = read(); await Promise.resolve(); assert.equal(calls, 4, "a failure is not reused");
+  // A read started before invalidation cannot answer, or fill the cache for, reads made after it.
+  read.invalidate(); const newer = read(); await Promise.resolve(); assert.equal(calls, 5); assert.notEqual(newer, retry);
+  pending.shift()!.resolve(4); pending.shift()!.resolve(5);
+  assert.equal(await retry, 4); assert.equal(await newer, 5); assert.equal(await read(), 5); assert.equal(calls, 5);
 });
 
 test("kiosk update reporting keeps terminal outcomes stable and distinguishes bounded failures", () => {
@@ -277,4 +297,36 @@ test("release notes stay attached to their discovered version across cache reloa
   assert.equal((await cache.check()).body, body.slice(0, 32_000));
   const restored = createReleaseCache({ load, now: () => 100_000, storage: () => storage });
   assert.deepEqual(await restored.check(), { tag_name: "v1.2.3", body: body.slice(0, 32_000) });
+});
+
+test("credential setup is numbered steps naming the repository, permission, secret and workflow, each with its page", async () => {
+  const { credentialSteps, permissionSteps, missingRepositoryPermission, repositoryPermissions } = await import("../apps/dashboard/src/web-update.ts");
+  const selection = credentialSteps("selection", "example/private-install");
+  assert.equal(selection.length, 6);
+  assert.deepEqual(selection.map((step) => step.link?.href), [tokenCreationUrl, undefined, undefined, undefined, "https://github.com/example/private-install/settings/environments", "https://github.com/example/private-install/actions/workflows/refresh-web-update-credential.yml"]);
+  assert.match(selection[1]!.text, /Resource owner to example\. .*Only select repositories and pick private-install\./);
+  assert.match(selection[2]!.text, /set Contents to Read and write\. Use a different token from the dashboard update token \(LANCERLOGIN_WEB_UPDATE_TOKEN\)/);
+  assert.match(selection[4]!.text, /production environment.*environment secret named LANCERLOGIN_MODULE_SELECTION_TOKEN/);
+  assert.match(selection[5]!.text, /Refresh web update credential/);
+  const dispatch = credentialSteps("dispatch", "example/private-install");
+  assert.match(dispatch[2]!.text, /set Actions to Read and write\.$/); assert.match(dispatch[4]!.text, /LANCERLOGIN_WEB_UPDATE_TOKEN/);
+  // Without a valid repository the steps still read, without links into it.
+  assert.deepEqual(credentialSteps("selection", "not a repository").map((step) => Boolean(step.link)), [true, false, false, false, false, false]);
+  assert.match(permissionSteps(repositoryPermissions)[1]!.text, /set Contents, Pull requests and Workflows to Read and write/);
+  assert.match(permissionSteps(["workflows"])[1]!.text, /set Workflows to Read and write/);
+  assert.equal(missingRepositoryPermission("repository_files_pull_requests_permission"), "pull_requests");
+  assert.equal(missingRepositoryPermission("provider_unavailable"), undefined);
+});
+
+test("every refresh failure code has a plain explanation; an unexplained failure suggests updating repository files", async () => {
+  const { refreshFailureCodes, refreshFailureText } = await import("../apps/dashboard/src/web-update.ts");
+  const { credentialHelp } = await import("../scripts/refresh-web-update-credential.mjs");
+  for (const code of Object.keys(credentialHelp())) assert.ok(refreshFailureCodes.includes(code), code);
+  const run = { state: "failed", runUrl: null, finishedAt: null, failedStep: null } as const;
+  assert.match(refreshFailureText({ ...run, code: "dispatch_credential_access_denied", reason: "coded" }), /cannot read the deployment repository/);
+  assert.match(refreshFailureText({ ...run, code: "future_code", reason: "coded" }), /failed with the code future_code/);
+  assert.match(refreshFailureText({ ...run, code: null, reason: "unexplained" }), /older copy of the refresh workflow\. Use Update repository files/);
+  assert.doesNotMatch(refreshFailureText({ ...run, code: null, reason: "unexplained" }, true), /Update repository files/);
+  assert.match(refreshFailureText({ ...run, code: null, reason: "unreadable", failedStep: "npm ci" }), /at the step "npm ci"\. To see the reason here, add Checks: Read-only/);
+  for (const code of refreshFailureCodes) assert.doesNotMatch(refreshFailureText({ ...run, code, reason: "coded" }), /—/);
 });

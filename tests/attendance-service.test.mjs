@@ -41,3 +41,16 @@ test("participation start dates omit earlier meetings without deleting their his
   assert.equal(service.attendanceFor("meeting-1")[0].disposition, "not_required");
   assert.doesNotMatch(service.exportCsv(operator), /Archived practice/);
 });
+
+test("a blank participation start falls back to the roster-added date and an explicit date still wins", () => {
+  const service = createAttendanceService({ now: fixedNow });
+  service.addMember(admin, { id: "m-a", externalId: "A-1", firstName: "Test Student", lastName: "A", email: "student-a@example.test", rosterAddedAt: "2026-09-01T08:00:00.000Z" });
+  service.addMember(admin, { id: "m-b", externalId: "B-1", firstName: "Test Student", lastName: "B", email: "student-b@example.test", rosterAddedAt: "2026-09-01T08:00:00.000Z", attendanceRequiredFrom: "2026-08-15" });
+  service.addMember(admin, { id: "m-c", externalId: "C-1", firstName: "Test Student", lastName: "C", email: "student-c@example.test" });
+  service.createMeeting(operator, { id: "before", title: "Test meeting before roster", startsAt: "2026-08-30T10:00:00.000Z", endsAt: "2026-08-30T13:00:00.000Z" });
+  service.createMeeting(operator, { id: "after", title: "Test meeting after roster", startsAt: "2026-09-02T10:00:00.000Z", endsAt: "2026-09-02T13:00:00.000Z" });
+  const disposition = (meetingId) => Object.fromEntries(service.attendanceFor(meetingId).map((row) => [row.member.id, row.disposition]));
+  assert.deepEqual(disposition("before"), { "m-a": "not_required", "m-b": "absent", "m-c": "absent" }, "added the day of the meeting counts from that day");
+  assert.deepEqual(disposition("after"), { "m-a": "absent", "m-b": "absent", "m-c": "absent" });
+  assert.doesNotMatch(service.exportCsv(operator).split("\n").filter((line) => line.includes('"A-1"')).join("\n"), /before roster/);
+});

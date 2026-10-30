@@ -79,3 +79,74 @@ test("Pages proxy forbids framing of dashboard responses but not API responses",
   const api = await proxyRequest("https://dash.example.test/api/auth/session");
   assert.equal(api.response.headers.get("x-frame-options"), null);
 });
+
+const IMMUTABLE = "public, max-age=31536000, immutable";
+const REVALIDATE = "public, max-age=0, must-revalidate";
+const SHELL = ["<!doctype html><div id=root></div>", "text/html; charset=utf-8"];
+const BUILT = { "/index.html": SHELL, "/assets/index-C5_UpTOL.js": ["export {};", "application/javascript"], "/assets/index-DdW3n5Qk.css": ["body{}", "text/css; charset=utf-8"], "/assets/inter-latin-400-normal-BOOGhInR.woff2": ["wOF2", "font/woff2"], "/favicon.svg": ["<svg/>", "image/svg+xml"] };
+const served = ([body, type]) => new Response(body, { headers: { "content-type": type, "cache-control": REVALIDATE } });
+/** Pages asset server over a Vite build: 404 for unknown paths, or (spaFallback) Pages' own 200 index.html fallback. */
+function builtAssets({ spaFallback = false } = {}) {
+  return (pathname) => { const file = BUILT[pathname === "/" ? "/index.html" : pathname]; return file ? served(file) : spaFallback ? served(SHELL) : new Response("Not found", { status: 404, headers: { "cache-control": REVALIDATE } }); };
+}
+async function serve(url, init, assets = builtAssets(), upstream = () => new Response("upstream", { headers: { "content-type": "application/json" } })) {
+  const module = await import(`data:text/javascript,${encodeURIComponent(buildPagesProxy("https://api.example.test"))}`);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (request) => upstream(request);
+  try { return await module.default.fetch(new Request(url, init), { ASSETS: { fetch: (request) => Promise.resolve(assets(new URL(request.url).pathname)) } }); }
+  finally { globalThis.fetch = originalFetch; }
+}
+
+test("Pages proxy caches content-hashed build assets as immutable and keeps framing denial", async () => {
+  for (const path of ["/assets/index-C5_UpTOL.js", "/assets/index-DdW3n5Qk.css", "/assets/inter-latin-400-normal-BOOGhInR.woff2"]) {
+    for (const method of ["GET", "HEAD"]) {
+      const response = await serve(`https://dash.example.test${path}?v=1`, { method });
+      assert.equal(response.status, 200, `${method} ${path}`);
+      assert.equal(response.headers.get("cache-control"), IMMUTABLE, `${method} ${path}`);
+      assert.equal(response.headers.get("x-frame-options"), "DENY", `${method} ${path}`);
+      assert.equal(response.headers.get("content-security-policy"), "frame-ancestors 'none'", `${method} ${path}`);
+    }
+  }
+  const script = await serve("https://dash.example.test/assets/index-C5_UpTOL.js", { headers: { accept: "*/*" } });
+  assert.equal(await script.text(), "export {};");
+});
+
+test("Pages proxy keeps the app shell and non-asset paths revalidating", async () => {
+  for (const path of ["/", "/index.html", "/favicon.svg"]) {
+    const response = await serve(`https://dash.example.test${path}`, { headers: { accept: "text/html" } });
+    assert.equal(response.status, 200, path);
+    assert.equal(response.headers.get("cache-control"), REVALIDATE, path);
+    assert.equal(response.headers.get("x-frame-options"), "DENY", path);
+  }
+  const deepLink = await serve("https://dash.example.test/settings/data", { headers: { accept: "text/html" } });
+  assert.equal(await deepLink.text(), SHELL[0]);
+  assert.equal(deepLink.headers.get("cache-control"), REVALIDATE);
+  const pagesFallback = await serve("https://dash.example.test/settings/data", { headers: { accept: "text/html" } }, builtAssets({ spaFallback: true }));
+  assert.equal(pagesFallback.headers.get("cache-control"), REVALIDATE);
+});
+
+test("Pages proxy never caches a missing build asset or its HTML fallback as immutable", async () => {
+  const missing = await serve("https://dash.example.test/assets/index-Missing0.js", { headers: { accept: "*/*" } });
+  assert.equal(missing.status, 404);
+  assert.equal(missing.headers.get("cache-control"), REVALIDATE);
+  const navigated = await serve("https://dash.example.test/assets/index-Missing0.js", { headers: { accept: "text/html" } });
+  assert.equal(await navigated.text(), SHELL[0]);
+  assert.equal(navigated.headers.get("cache-control"), REVALIDATE);
+  const pagesFallback = await serve("https://dash.example.test/assets/index-Missing0.js", { headers: { accept: "*/*" } }, builtAssets({ spaFallback: true }));
+  assert.equal(pagesFallback.status, 200);
+  assert.equal(pagesFallback.headers.get("content-type"), SHELL[1]);
+  assert.equal(pagesFallback.headers.get("cache-control"), REVALIDATE);
+  const posted = await serve("https://dash.example.test/assets/index-C5_UpTOL.js", { method: "POST", body: "x" });
+  assert.equal(posted.headers.get("cache-control"), REVALIDATE);
+});
+
+test("Pages proxy leaves API and release responses' caching to their origin", async () => {
+  for (const path of ["/api/auth/session", "/api/assets/index-C5_UpTOL.js"]) {
+    const response = await serve(`https://dash.example.test${path}`, undefined, builtAssets(), () => new Response("{}", { headers: { "content-type": "application/javascript", "cache-control": "no-store" } }));
+    assert.equal(response.headers.get("cache-control"), "no-store", path);
+  }
+  const uncached = await serve("https://dash.example.test/api/assets/index-C5_UpTOL.js");
+  assert.equal(uncached.headers.get("cache-control"), null);
+  const release = await serve("https://dash.example.test/__lancerlogin-release");
+  assert.equal(release.headers.get("cache-control"), "no-store");
+});

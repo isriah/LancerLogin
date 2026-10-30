@@ -5,6 +5,18 @@ import { pairedViews } from "./paired-views";
 
 type Role="admin"|"operator";
 
+/** Opens the roster member CSV import from the Roster header's Import menu. */
+async function openRosterImport(page: Page) {
+  await page.getByRole("button",{ name: "Import",exact: true }).click();
+  await page.getByRole("menuitem",{ name: "Members from CSV" }).click();
+}
+
+/** Opens the label CSV import from the Roster header's Import menu. */
+async function openLabelImport(page: Page) {
+  await page.getByRole("button",{ name: "Import",exact: true }).click();
+  await page.getByRole("menuitem",{ name: "Labels from CSV" }).click();
+}
+
 const referenceSettings={
   organizationName: "Reference Arts Collective",
   subtitle: "Shared operations",
@@ -185,8 +197,11 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       const bulk=page.getByRole("button",{ name: "Bulk edit",exact: true });
       const addBox=await add.boundingBox(); const bulkBox=await bulk.boundingBox();
       expect(addBox).not.toBeNull(); expect(bulkBox).not.toBeNull();
-      expect(addBox!.x+addBox!.width).toBeLessThanOrEqual(bulkBox!.x);
-      expect(Math.abs(addBox!.y+addBox!.height/2-bulkBox!.y-bulkBox!.height/2)).toBeLessThan(2);
+      const importBox=await page.getByRole("button",{ name: "Import",exact: true }).boundingBox();
+      expect(addBox!.x+addBox!.width).toBeLessThanOrEqual(importBox!.x);
+      expect(Math.abs(addBox!.y-importBox!.y)).toBeLessThan(2);
+      if(viewport.width>760) { expect(importBox!.x+importBox!.width).toBeLessThanOrEqual(bulkBox!.x); expect(Math.abs(addBox!.y+addBox!.height/2-bulkBox!.y-bulkBox!.height/2)).toBeLessThan(2); }
+      else { expect(bulkBox!.y).toBeGreaterThan(addBox!.y+addBox!.height); expect(bulkBox!.width).toBeGreaterThan(addBox!.width+importBox!.width); }
       await expect(page.getByText("Attendance rates could not be loaded.")).toBeVisible();
       const retry=page.getByRole("button",{ name: "Retry attendance rates" });
       const style=await retry.evaluate((element) => {
@@ -332,17 +347,16 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await page.goto("/settings/attendance");
       await page.getByText("Add attendance rule", { exact: true }).click();
       await expect(page.getByLabel("Excused meetings")).toHaveValue("exclude");
-      for(const name of ["Create label","Preview new rule","Preview window change"]) await expectLabelButtonTheme(page,name,"primary");
-      for(const name of ["Remove","Preview removal"]) await expectLabelButtonTheme(page,name,"danger");
-      await expect(page.getByRole("button",{ name: "Restore" })).toHaveCount(0);
+      for(const name of ["Preview new rule","Preview window change"]) await expectLabelButtonTheme(page,name,"primary");
+      await expectLabelButtonTheme(page,"Preview removal","danger");
+      await expect(page.locator(".settings-callout").getByRole("link",{ name: "Labels",exact: true })).toHaveAttribute("href","/settings/labels");
       await page.getByRole("button",{ name: "Preview removal" }).click();
       await expectLabelButtonTheme(page,"Apply attendance policy","primary");
       await expectLabelButtonTheme(page,"Back","secondary");
       await expectResponsiveFit(page);
       if(viewport.width===390&&theme==="dark") await page.screenshot({ path: testInfo.outputPath("attendance-settings-dark-mobile.png"),fullPage: true });
       await page.goto("/roster");
-      await page.getByRole("button",{ name: "Bulk edit" }).click();
-      await page.getByText("Import labels from CSV",{ exact: true }).click();
+      await openLabelImport(page);
       await expectLabelButtonTheme(page,"Preview CSV import","primary");
       const chooser=page.getByLabel("Label changes CSV file");
       const fileStyle=await chooser.evaluate((element) => {
@@ -615,19 +629,22 @@ test("Admin member and import dialogs contain focus, report errors, and return f
 
   const addMember=page.getByRole("button",{ name: "Add member" });
   await addMember.click();
-  const addDialog=page.getByRole("dialog",{ name: "Add roster member" });
+  const addDialog=page.getByRole("dialog",{ name: /^(Add roster member|Import roster)$/ });
   await expect(addDialog.getByRole("button",{ name: "Close add member dialog" })).toBeFocused();
-  await addDialog.getByRole("button",{ name: "Import CSV instead" }).click();
+  await expect(addDialog.getByRole("button",{ name: "Import CSV instead" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(addMember).toBeFocused();
+  await openRosterImport(page);
   await addDialog.getByLabel("Roster CSV").fill("firstName,lastName\nAvery,Stone");
   await addDialog.getByRole("button",{ name: "Preview roster" }).click();
-  await expect(addDialog.getByRole("alert")).toContainText("Header row requires memberId");
+  await expect(addDialog.getByRole("alert")).toContainText("Missing column: Member ID");
   await expect(addDialog.getByRole("alert")).toBeFocused();
   await addDialog.getByLabel("Roster CSV").fill("memberId,firstName,lastName,email,discordUserId\nA-103,Jordan,Lee,jordan@example.org,not-a-discord-id");
   await addDialog.getByRole("button",{ name: "Preview roster" }).click();
   await expect(addDialog.getByRole("table",{ name: "Processed roster import" })).toContainText("A-103");
   await page.keyboard.press("Escape");
   await expect(addDialog).toHaveCount(0);
-  await expect(addMember).toBeFocused();
+  await expect(page.getByRole("button",{ name: "Import",exact: true })).toBeFocused();
   await expectResponsiveFit(page);
 
   await page.getByRole("button",{ name: "Edit Avery Stone",exact: true }).first().click();
@@ -648,7 +665,7 @@ test("an empty roster offers Add member and Import CSV, while filtered results k
   await expect(empty.getByRole("heading",{ name: "No members yet" })).toBeVisible();
   await expect(page.getByText("No roster members match these filters.")).toHaveCount(0);
   await empty.getByRole("button",{ name: "Import CSV",exact: true }).click();
-  const dialog=page.getByRole("dialog",{ name: "Add roster member" });
+  const dialog=page.getByRole("dialog",{ name: /^(Add roster member|Import roster)$/ });
   await expect(dialog.getByRole("heading",{ name: "Import roster" })).toBeVisible();
   await page.keyboard.press("Escape");
   await empty.getByRole("button",{ name: "Add member",exact: true }).click();
@@ -674,9 +691,8 @@ test("roster import loads CSV files and previews tab-separated spreadsheet rows"
     await route.fulfill({ status: 201,contentType: "application/json",body: JSON.stringify({ warnings: [] }) });
   });
   await page.goto("/roster");
-  await page.getByRole("button",{ name: "Add member" }).click();
-  const dialog=page.getByRole("dialog",{ name: "Add roster member" });
-  await dialog.getByRole("button",{ name: "Import CSV instead" }).click();
+  await openRosterImport(page);
+  const dialog=page.getByRole("dialog",{ name: /^(Add roster member|Import roster)$/ });
   const rosterText=dialog.getByLabel("Roster CSV or spreadsheet rows");
   const fileInput=dialog.locator(".roster-import-file input[type='file']");
   const chooseFile=dialog.getByRole("button",{ name: "Choose CSV file" });
@@ -717,26 +733,15 @@ test("roster import loads CSV files and previews tab-separated spreadsheet rows"
   await expect(dialog.getByRole("status")).toHaveCount(0);
   await dialog.getByRole("button",{ name: "Preview roster" }).click();
   await expect(dialog.getByRole("table",{ name: "Processed roster import" })).toContainText('Grace, "Amazing" Hopper');
-  const backToMember=dialog.getByRole("button",{ name: "Back to one member" });
-  await expect(backToMember.locator("..")).toHaveClass(/dialog-actions/);
-  const secondary=await backToMember.evaluate((element) => {
-    const style=getComputedStyle(element);
-    const edit=getComputedStyle(document.querySelector<HTMLElement>(".roster-action-cell .member-pencil-button")!);
-    return { color: style.color,background: style.backgroundColor,radius: style.borderRadius,height: element.getBoundingClientRect().height,editColor: edit.color,editBackground: edit.backgroundColor,editRadius: edit.borderRadius };
-  });
-  expect(secondary.color).toBe(secondary.editColor);
-  expect(secondary.background).toBe(secondary.editBackground);
-  expect(secondary.radius).toBe(secondary.editRadius);
-  expect(secondary.height).toBeGreaterThanOrEqual(44);
+  await expect(dialog.getByRole("button",{ name: "Back to one member" })).toHaveCount(0);
   await expectResponsiveFit(page);
-  await backToMember.click();
-  await expect(dialog.getByLabel("Member ID")).toBeFocused();
-  await dialog.getByRole("button",{ name: "Import CSV instead" }).click();
+  await dialog.getByRole("button",{ name: "Close roster import" }).click();
+  await openRosterImport(page);
   const paste=dialog.getByLabel("Roster CSV or spreadsheet rows");
   await expect(paste).toBeEmpty();
   await paste.fill('firstName\tlastName\nCase\tPerson');
   await dialog.getByRole("button",{ name: "Preview roster" }).click();
-  await expect(dialog.getByRole("alert")).toContainText("Header row requires memberId");
+  await expect(dialog.getByRole("alert")).toContainText("Missing column: Member ID");
   await paste.fill('30001\tAvery\tTest\tavery@example.test\n30002\tBlair\tSample\tblair@example.test');
   await dialog.getByRole("button",{ name: "Preview roster" }).click();
   await expect(dialog.getByRole("table",{ name: "Processed roster import" })).toContainText("Blair Sample");
@@ -746,6 +751,49 @@ test("roster import loads CSV files and previews tab-separated spreadsheet rows"
     { memberId: "30001",firstName: "Avery",lastName: "Test",email: "avery@example.test" },
     { memberId: "30002",firstName: "Blair",lastName: "Sample",email: "blair@example.test" },
   ] });
+});
+
+test("roster import explains the CSV format, downloads a template, and maps friendly headers",async ({ page }) => {
+  await page.setViewportSize({ width: 1280,height: 900 });
+  await useReferenceContext(page);
+  await page.goto("/roster");
+  await page.getByRole("button",{ name: "Add member" }).click();
+  const dialog=page.getByRole("dialog",{ name: /^(Add roster member|Import roster)$/ });
+  await expect(dialog.getByRole("heading",{ level: 2 })).toHaveText(["Add roster member"]);
+  await expect(dialog.getByRole("button",{ name: "Import CSV instead" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await openRosterImport(page);
+  await expect(page.getByRole("dialog",{ name: "Import roster" })).toBeVisible();
+  await expect(dialog.getByRole("heading",{ level: 2 })).toHaveText(["Import roster"]);
+  await expect(dialog.getByText("Upload a CSV file or paste spreadsheet rows, preview every change, then confirm.")).toHaveCount(1);
+  await expect(dialog.getByText("Upload a CSV file or paste spreadsheet rows, then preview every change.")).toHaveCount(0);
+  const format=dialog.getByRole("group",{ name: "CSV format" });
+  await expect(format).toBeVisible();
+  const columns=format.getByRole("table",{ name: "Roster CSV columns" });
+  for (const [column,required,example] of [["Member ID","Required","9001"],["First name","Required","Test"],["Last name","Required","Student"],["Email","Optional","test.student@example.test"],["Discord user ID","Optional","17 to 20 digit Discord ID"]]) await expect(columns.getByRole("row",{ name: new RegExp(`^${column} ${required} ${example}`) })).toBeVisible();
+  await expect(format).toContainText("Spreadsheet rows pasted without a header must use this column order.");
+
+  const download=page.waitForEvent("download");
+  await format.getByRole("button",{ name: "Download template" }).click();
+  const template=await download;
+  expect(template.suggestedFilename()).toBe("roster-template.csv");
+  const chunks: Buffer[]=[]; for await (const chunk of await template.createReadStream()) chunks.push(chunk as Buffer);
+  expect(Buffer.concat(chunks).toString("utf8")).toBe("Member ID,First name,Last name,Email,Discord user ID\n9001,Test,Student,test.student@example.test,\n");
+
+  const rosterText=dialog.getByLabel("Roster CSV or spreadsheet rows");
+  await rosterText.fill("Member ID,First Name\nA-201,Test");
+  await dialog.getByRole("button",{ name: "Preview roster" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Missing column: Last name");
+  await expect(dialog.getByRole("alert")).not.toContainText("Row 2");
+
+  await rosterText.fill("Member ID,First Name,Surname,Grade\nA-201,Test,Student A,11\nA-202,Test,Student B,12");
+  await dialog.getByRole("button",{ name: "Preview roster" }).click();
+  const preview=dialog.getByRole("table",{ name: "Processed roster import" });
+  await expect(preview).toContainText("Test Student A");
+  await expect(preview).toContainText("Test Student B");
+  await expect(dialog.getByText("Recognised columns: Member ID, First name, Last name",{ exact: true })).toBeVisible();
+  await expect(dialog.getByRole("status")).toContainText("Ignored columns: Grade");
+  await expectResponsiveFit(page);
 });
 
 test("roster import back action follows the secondary theme at desktop and mobile sizes",async ({ page },testInfo) => {
@@ -759,23 +807,13 @@ test("roster import back action follows the secondary theme at desktop and mobil
     await page.evaluate((value) => localStorage.setItem("lancerlogin-theme",value),theme);
     await page.reload();
     await expect(page.locator(".app")).toHaveAttribute("data-theme",theme);
-    await page.getByRole("button",{ name: "Add member" }).click();
-    const dialog=page.getByRole("dialog",{ name: "Add roster member" });
-    await dialog.getByRole("button",{ name: "Import CSV instead" }).click();
+    await openRosterImport(page);
+    const dialog=page.getByRole("dialog",{ name: /^(Add roster member|Import roster)$/ });
     const chooseFile=dialog.getByRole("button",{ name: "Choose CSV file" });
     expect((await chooseFile.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await page.screenshot({ path: testInfo.outputPath(`roster-import-${width}-${theme}.png`),fullPage: true });
-    const back=dialog.getByRole("button",{ name: "Back to one member" });
-    await expect(back.locator("..")).toHaveClass(/dialog-actions/);
-    const colors=await back.evaluate((element) => {
-      const style=getComputedStyle(element);
-      const edit=getComputedStyle(document.querySelector<HTMLElement>(".roster-action-cell .member-pencil-button")!);
-      return { back: [style.color,style.backgroundColor,style.borderColor,style.borderRadius],edit: [edit.color,edit.backgroundColor,edit.borderColor,edit.borderRadius] };
-    });
-    expect(colors.back).toEqual(colors.edit);
     await expectResponsiveFit(page);
-    await back.click();
-    await expect(dialog.getByLabel("Member ID")).toBeFocused();
+    await dialog.getByRole("button",{ name: "Close roster import" }).click();
   }
 });
 
@@ -843,8 +881,7 @@ test("Admin previews and applies a separate dated label CSV; Operator sees label
   });
   await page.route("**/labels/membership/apply",async (route) => { expect(route.request().postDataJSON()).toMatchObject({ previewToken: "preview" }); applied=true; await route.fulfill({ json: { applied: 1 } }); });
   await page.goto("/roster");
-  await page.getByRole("button",{ name: "Bulk edit" }).click();
-  await page.getByText("Import labels from CSV",{ exact: true }).click();
+  await openLabelImport(page);
   await page.getByLabel("CSV contents").fill("memberId,label,action,effectiveDate\nA-101,Mentor,add,2026-09-01");
   await page.getByRole("button",{ name: "Preview CSV import" }).click();
   await expect(page.getByRole("heading",{ name: "Review dated label changes" })).toBeVisible();
@@ -855,6 +892,27 @@ test("Admin previews and applies a separate dated label CSV; Operator sees label
   await page.reload();
   await expect(page.getByRole("heading",{ name: "Bulk label changes" })).toHaveCount(0);
   await expect(page.getByRole("button",{ name: "Preview CSV import" })).toHaveCount(0);
+});
+
+test("Roster bulk edit opens as a right-hand sidebar that stays in view on desktop",async ({ page }) => {
+  await page.setViewportSize({ width: 1280,height: 600 });
+  await useReferenceContext(page);
+  await page.goto("/roster");
+  await page.getByRole("button",{ name: "Bulk edit",exact: true }).click();
+  const sidebar=page.getByRole("complementary",{ name: "Bulk edit" });
+  await expect(sidebar).toContainText("Tick members in the list to edit them together.");
+  const [tableBounds,sidebarBounds]=await Promise.all([page.locator(".roster-table-scroll").boundingBox(),sidebar.boundingBox()]);
+  expect(sidebarBounds!.x).toBeGreaterThanOrEqual(tableBounds!.x+tableBounds!.width);
+  expect(Math.abs(sidebarBounds!.y-tableBounds!.y)).toBeLessThan(2);
+  await expect(sidebar).toHaveCSS("position","sticky");
+  await page.getByRole("checkbox",{ name: "Select all shown members" }).check();
+  await expect(sidebar.getByRole("button",{ name: "Edit",exact: true })).toBeHidden();
+  await expect(sidebar.getByLabel("Action")).toBeVisible();
+  await expect(sidebar.getByText("Starts today")).toBeVisible();
+  await expect(sidebar.getByLabel("Effective date",{ exact: true })).toHaveCount(0);
+  await sidebar.getByRole("button",{ name: "Change effective date" }).click();
+  await expect(sidebar.getByLabel("Effective date",{ exact: true })).toBeVisible();
+  await expectResponsiveFit(page);
 });
 
 test("Roster quick labels, CSV defaults, and bulk selection preview changes before applying",async ({ page }) => {
@@ -894,41 +952,31 @@ test("Roster quick labels, CSV defaults, and bulk selection preview changes befo
   await dialog.getByRole("button",{ name: "Apply label changes" }).click();
   await dialog.getByRole("button",{ name: "Close member editor" }).click();
   await page.getByRole("button",{ name: "Bulk edit" }).click();
-  const bulkCard=page.locator(".bulk-roster-actions");
-  const labelCard=page.locator(".roster-label-csv");
-  await expect(labelCard).not.toHaveAttribute("open", "");
+  const bulkBar=page.getByRole("complementary",{ name: "Bulk edit" });
   const rosterTable=page.locator(".roster-table-scroll");
-  const compactGaps=await bulkCard.evaluate((element) => {
-    const children=Array.from(element.children).filter((child) => (child as HTMLElement).getClientRects().length > 0);
-    const gaps=children.slice(1).map((child,index) => child.getBoundingClientRect().top-children[index].getBoundingClientRect().bottom);
-    return { display: getComputedStyle(element).display,gaps };
-  });
-  expect(compactGaps.display).toBe("grid");
-  expect(Math.max(...compactGaps.gaps)).toBeLessThanOrEqual(20);
-  const [bulkBounds,labelBounds,tableBounds]=await Promise.all([bulkCard.boundingBox(),labelCard.boundingBox(),rosterTable.boundingBox()]);
-  expect(labelBounds!.y-(bulkBounds!.y+bulkBounds!.height)).toBeGreaterThanOrEqual(12);
-  expect(tableBounds!.y-(labelBounds!.y+labelBounds!.height)).toBeGreaterThanOrEqual(12);
+  await expect(bulkBar).toContainText("Tick members in the list to edit them together.");
+  await expect(page.getByRole("button",{ name: "Preview",exact: true })).toHaveCount(0);
+  const barBounds=await bulkBar.boundingBox();
+  expect(barBounds!.x).toBe(0);
+  expect(Math.round(barBounds!.y+barBounds!.height)).toBe(844);
+  await expect(rosterTable).toBeVisible();
   const selectAll=page.getByRole("checkbox",{ name: "Select all shown members" });
   const selectAllLabel=selectAll.locator("xpath=ancestor::label[1]");
   const uncheckedTheme=await selectAll.evaluate((element) => {
     const style=getComputedStyle(element);
-    const probe=document.createElement("span");
-    probe.style.cssText="position:absolute;background:var(--ui-surface);border:2px solid var(--ui-border)";
-    document.querySelector<HTMLElement>(".app")!.append(probe);
-    const reference=getComputedStyle(probe);
-    const result={ appearance: style.appearance,background: style.backgroundColor,border: style.borderTopColor,radius: style.borderRadius,expectedBackground: reference.backgroundColor,expectedBorder: reference.borderTopColor };
-    probe.remove();
-    return result;
+    const reference=getComputedStyle(document.querySelector<HTMLElement>('input[aria-label^="Select Avery Stone"]')!);
+    return { appearance: style.appearance,background: style.backgroundColor,border: style.borderTopColor,radius: style.borderRadius,expectedBackground: reference.backgroundColor,expectedBorder: reference.borderTopColor };
   });
   expect(uncheckedTheme).toMatchObject({ appearance: "none",background: uncheckedTheme.expectedBackground,border: uncheckedTheme.expectedBorder });
   expect(uncheckedTheme.radius).not.toBe("0px");
   expect((await selectAllLabel.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-  await page.getByText("Import labels from CSV",{ exact: true }).click();
+  await openLabelImport(page);
   await page.getByLabel("CSV contents").fill("memberId,label\nA-101,Mentor");
   await page.getByRole("button",{ name: "Preview CSV import" }).click();
   await expect(page.getByRole("heading",{ name: "Review dated label changes" })).toBeVisible();
   expect(labelRequests).toContainEqual([{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "" }]);
   await page.getByRole("button",{ name: "Back" }).click();
+  await page.getByRole("button",{ name: "Close label import" }).click();
   await page.locator(".roster-filters label").filter({ hasText: /^Show/ }).locator("select").selectOption("all");
   await selectAll.check();
   const checkedTheme=await selectAll.evaluate((element) => {
@@ -940,19 +988,30 @@ test("Roster quick labels, CSV defaults, and bulk selection preview changes befo
     return { background: getComputedStyle(element).backgroundColor,expected };
   });
   expect(checkedTheme.background).toBe(checkedTheme.expected);
-  await expect(page.getByText("2 members selected.",{ exact: false })).toBeVisible();
+  await expect(bulkBar).toContainText("2 selected");
+  await expect(bulkBar.getByLabel("Action")).toBeHidden();
+  await bulkBar.getByRole("button",{ name: "Edit",exact: true }).click();
   await page.getByLabel("Action").selectOption("deactivate");
-  await page.getByRole("button",{ name: "Preview bulk change" }).click();
-  await expect(page.getByText("1 members will change roster status",{ exact: false })).toBeVisible();
-  await page.getByRole("button",{ name: "Apply bulk change" }).click();
+  await bulkBar.getByRole("button",{ name: "Preview",exact: true }).click();
+  const review=page.getByRole("dialog",{ name: "Review bulk change" });
+  await expect(review.getByRole("button",{ name: "Close bulk change review" })).toBeFocused();
+  const statusPreview=review.getByRole("region",{ name: "Bulk change preview" });
+  await expect(statusPreview).toContainText("Deactivate 1 member.");
+  await expect(statusPreview).toContainText("Morgan Diaz");
+  await expect(statusPreview).toContainText("No change, already inactive");
+  await page.getByRole("button",{ name: "Apply to 1 member" }).click();
   expect(statusApplied).toBe(true);
-  await expect(page.getByRole("region",{ name: "Bulk edit" })).toContainText("0 members selected");
+  await expect(page.getByRole("status").filter({ hasText: "1 member deactivated." })).toBeVisible();
+  await expect(bulkBar).toContainText("Tick members in the list to edit them together.");
   await page.getByRole("checkbox",{ name: "Select all shown members" }).check();
+  await bulkBar.getByRole("button",{ name: "Edit",exact: true }).click();
   await page.getByLabel("Action").selectOption("add");
-  await page.getByRole("region",{ name: "Bulk edit" }).getByRole("combobox",{ name: "Label" }).selectOption("mentor");
-  await page.getByRole("button",{ name: "Preview bulk change" }).click();
+  await expect(bulkBar).toContainText("Choose a label to preview.");
+  await expect(bulkBar.getByRole("button",{ name: "Preview",exact: true })).toBeDisabled();
+  await bulkBar.getByRole("combobox",{ name: "Label" }).selectOption("mentor");
+  await bulkBar.getByRole("button",{ name: "Preview",exact: true }).click();
   expect(labelRequests).toContainEqual([{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "" },{ memberId: "A-102",label: "Mentor",action: "add",effectiveDate: "" }]);
-  await expect(page.getByRole("region",{ name: "Bulk change preview" })).toContainText("2 dated label changes");
+  await expect(page.getByRole("region",{ name: "Bulk change preview" })).toContainText("Add Mentor to 2 members, effective");
   await expectResponsiveFit(page);
 });
 
@@ -1018,29 +1077,68 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     await page.setViewportSize({ width: view.width,height: view.height });
     await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme",theme),view.theme);
     await useReferenceContext(page);
-    await page.route("**/attendance/policy",(route) => route.fulfill({ json: { labels: [{ id: "frc-321",name: "FRC 321",active: 1 }],rules: [],recentDays: 30 } }));
-    await page.route("**/admin/integrations/discord/label-roles",(route) => route.fulfill({ json: { integrationAvailable: true,mappings: [{ labelId: "frc-321",labelName: "FRC 321",roleId: "423456789012345678",roleName: "FRC 321",health: "ready",createdAt: "2026-09-23T00:00:00Z" }] } }));
-    await page.route("**/admin/integrations/discord/label-roles/preview",(route) => route.fulfill({ json: { previewId: "preview-1",expiresAt: new Date(Date.now()+60000).toISOString(),labelId: "frc-321",roleName: "FRC 321",memberCount: 4,additions: [{ discordUserId: "111111111111111111",displayName: "Avery",memberId: "A-101" }],removals: [{ discordUserId: "222222222222222222",displayName: "Unpaired" }],unpaired: [{ memberId: "A-102",name: "Morgan Diaz" }],absent: [],inactive: [] } }));
-    await page.route("**/admin/integrations/discord/label-roles/apply",(route) => route.fulfill({ json: { jobId: "job-1",status: "pending",additions: 1,removals: 1 } }));
+    // The reference "**/labels" API route would also catch the page itself.
+    const labelsPayload={ labels: [{ id: "frc-321",name: "FRC 321",active: 1,formulaEnabled: 0 },{ id: "drive",name: "Drive Team",active: 1,formulaEnabled: 0 },{ id: "old",name: "Old Club",active: 0,formulaEnabled: 0 }],history: [{ id: "h1",memberId: "member-1",externalMemberId: "A-101",labelId: "frc-321",action: "add",effectiveDate: "2026-09-01",createdAt: "2026-09-01T00:00:00Z" }],periods: [],rules: [],meetingCounts: { "frc-321": 2 },today: "2026-09-22" };
+    const routeLabels=async () => { await page.route("**/settings/labels",(route) => route.continue()); await page.route((url) => url.pathname==="/labels",(route) => route.fulfill({ json: labelsPayload })); };
+    await routeLabels();
+    await page.route("**/admin/integrations/discord/label-roles",(route) => route.request().method()==="POST" ? route.fulfill({ status: 201,json: { mapping: { labelId: "drive",labelName: "Drive Team",roleId: "523456789012345678",roleName: "Drive Team" },roleAssignmentsUnchanged: true } }) : route.fulfill({ json: { integrationAvailable: true,mappings: [{ labelId: "frc-321",labelName: "FRC 321",roleId: "423456789012345678",roleName: "FRC 321",health: "ready",syncState: "label_changes",createdAt: "2026-09-23T00:00:00Z",latestJob: { id: "job-1",status: "completed",updatedAt: "2026-09-24T00:00:00Z" } }] } }));
+    await page.route("**/admin/integrations/discord/roles",(route) => route.fulfill({ json: { canManageRoles: true,roles: [{ id: "623456789012345678",name: "Bot",manageable: false,problem: "Has Administrator or Manage Roles permission" },{ id: "523456789012345678",name: "Drive Team",manageable: true },{ id: "423456789012345678",name: "FRC 321",manageable: true,labelId: "frc-321",labelName: "FRC 321" }] } }));
+    await page.route("**/admin/integrations/discord/label-roles/preview",(route) => route.fulfill({ json: { previewId: "preview-1",expiresAt: new Date(Date.now()+60000).toISOString(),labelId: "frc-321",labelName: "FRC 321",roleName: "FRC 321",memberCount: 4,additions: [{ discordUserId: "111111111111111111",displayName: "Avery",memberId: "A-101" }],removals: [{ discordUserId: "222222222222222222",displayName: "Unpaired" }],unpaired: [{ memberId: "A-102",name: "Morgan Diaz" }],absent: [],inactive: [] } }));
+    let applied: unknown;
+    await page.route("**/admin/integrations/discord/label-roles/apply-all",(route) => { applied=route.request().postDataJSON(); return route.fulfill({ status: 202,json: { jobs: [{ jobId: "job-1",labelId: "frc-321",status: "pending",additions: 1,removals: 1 }],failed: [] } }); });
     await page.route("**/admin/integrations/discord/label-role-jobs/job-1",(route) => route.fulfill({ json: { id: "job-1",status: "completed",updatedAt: new Date().toISOString(),items: [{ discordUserId: "111111111111111111",action: "add",status: "completed",attempts: 1 },{ discordUserId: "222222222222222222",action: "remove",status: "completed",attempts: 1 }] } }));
-    await page.goto("/settings/attendance");
-    const discordRoles=page.locator(".settings-disclosure").filter({ has: page.locator("summary").filter({ hasText: /^Discord roles$/ }) });
-    await expect(discordRoles).not.toHaveAttribute("open", "");
-    await discordRoles.locator("summary").click();
-    await expect(discordRoles.getByRole("heading",{ name: "Discord roles" })).toBeVisible();
-    await expectLabelButtonTheme(page,"Sync to Discord","primary");
+    await page.goto("/settings/labels");
+    await expect(page.getByRole("heading",{ name: "Labels",level: 1 })).toBeVisible();
+    const table=page.locator(".labels-table");
+    await expect(table.getByRole("link",{ name: "1 member" })).toHaveAttribute("href","/roster?label=frc-321&scope=all");
+    const statusIcon=page.getByRole("button",{ name: "Sync status for FRC 321: Label changes since last sync" });
+    await expect(statusIcon).toBeVisible();
+    // Every label row is the same height, whatever its Discord state.
+    if(view.width>=800) { const heights=await table.locator("tbody tr").evaluateAll((rows) => rows.map((row) => Math.round(row.getBoundingClientRect().height))); expect(heights).toEqual(heights.map(() => heights[0])); }
+    else await expect(table.locator(".label-sync-text").first()).toHaveText("Label changes since last sync");
+    await expect(page.getByRole("button",{ name: "Restore" })).toBeHidden();
+    // Roles the bot cannot manage are listed but disabled, with the reason; linked roles are left out.
+    const picker=page.getByRole("combobox",{ name: "Discord role for Drive Team" });
+    await expect(picker.locator("option",{ hasText: "Bot (Has Administrator or Manage Roles permission)" })).toHaveJSProperty("disabled",true);
+    await expect(picker.locator("option",{ hasText: "FRC 321" })).toHaveCount(0);
+    await expectLabelButtonTheme(page,"Create label","primary");
+    await expectLabelButtonTheme(page,"Sync all linked roles","primary");
+    const linkRequest=page.waitForRequest((request) => request.url().endsWith("/admin/integrations/discord/label-roles") && request.method()==="POST");
+    await picker.selectOption("523456789012345678");
+    expect((await linkRequest).postDataJSON()).toEqual({ labelId: "drive",roleId: "523456789012345678" });
+    await expect(page.getByText("Linked Drive Team to Drive Team. Nobody's roles change until you sync.")).toBeVisible();
     await page.getByRole("button",{ name: "Sync to Discord" }).click();
-    await expect(page.getByRole("heading",{ name: "Review role changes for FRC 321" })).toBeVisible();
+    await expect(page.getByRole("heading",{ name: "Review Discord role changes" })).toBeVisible();
     await expect(page.getByText("Unpaired · 222222222222222222")).toBeVisible();
     await expectLabelButtonTheme(page,"Confirm full-server sync","primary");
     await expectResponsiveFit(page);
     await page.getByRole("button",{ name: "Confirm full-server sync" }).click();
-    await expect(page.getByRole("heading",{ name: "Role sync status" })).toBeVisible();
-    await expect(page.getByText("2 completed, 0 pending, 0 failed.")).toBeVisible();
-    await useReferenceContext(page,"operator"); await page.reload();
+    expect(applied).toEqual({ previewIds: ["preview-1"] });
+    if(view.width<800) expect(await table.evaluate((element) => getComputedStyle(element.querySelector("thead")!).position)).toBe("absolute");
+    // Rename, the last sync, Unlink and Retire live in the row's More menu.
+    const syncedRow=table.getByRole("row").filter({ has: page.getByRole("rowheader",{ name: "FRC 321" }) });
+    await syncedRow.getByRole("button",{ name: "More actions for FRC 321" }).click();
+    const menu=page.getByRole("menu",{ name: "Actions for FRC 321" });
+    await expect(menu.getByRole("menuitem")).toHaveText(["Rename","View last sync","Unlink role","Retire label"]);
+    await expect(menu.getByRole("menuitem",{ name: "Rename" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(syncedRow.getByRole("button",{ name: "More actions for FRC 321" })).toBeFocused();
+    await syncedRow.getByRole("button",{ name: "More actions for FRC 321" }).click();
+    await menu.getByRole("menuitem",{ name: "View last sync" }).click();
+    const lastSync=page.getByRole("dialog",{ name: "Last sync: FRC 321" });
+    await expect(lastSync).toContainText("Sync completed · 2 completed, 0 pending, 0 failed");
+    await lastSync.getByRole("button",{ name: "Close",exact: true }).click();
+    await expect(lastSync).toHaveCount(0);
+    await useReferenceContext(page,"operator"); await routeLabels(); await page.reload();
     const operatorRoles=page.getByRole("region",{ name: "Discord roles",exact: true });
     await expect(operatorRoles.getByRole("heading",{ name: "Discord roles",exact: true })).toBeVisible();
-    await expect(operatorRoles).toContainText("FRC 321");
+    await expect(operatorRoles).toContainText("1 label is linked to Discord roles.");
+    await expect(page.getByRole("button",{ name: "Sync status for FRC 321: Label changes since last sync" })).toBeVisible();
+    await expect(page.getByRole("button",{ name: "Create label" })).toHaveCount(0);
+    await page.getByRole("button",{ name: "More actions for FRC 321" }).click();
+    await expect(page.getByRole("menu",{ name: "Actions for FRC 321" }).getByRole("menuitem")).toHaveText(["View last sync"]);
+    await page.keyboard.press("Escape");
     await expect(page.getByRole("button",{ name: "Sync to Discord" })).toHaveCount(0);
     await expect(page.getByRole("button",{ name: "Unlink" })).toHaveCount(0);
     await expectResponsiveFit(page);

@@ -158,6 +158,35 @@ test("cleanup counts domain rows rather than revision trigger writes", async () 
   } finally { database.sqlite.close(); }
 });
 
+test("a request reads its session user once, and reads started beside it keep the 401 and 403 precedence", async () => {
+  const database = new Database();
+  try {
+    database.sqlite.exec("INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('operator','primary','operator','operator','2026-01-01')");
+    const env: Env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: secret, DB: database };
+    const signedIn = async (userId: string, role: "admin" | "operator") => {
+      const cookie = `lancerlogin_session=${await createSessionCodec(secret).issue({ userId, role })}`;
+      return (path: string) => worker.fetch(new Request(`https://example.test${path}`, { headers: { cookie } }), env);
+    };
+    const admin = await signedIn("admin", "admin"); const operator = await signedIn("operator", "operator");
+    const sessionReads = () => database.calls.filter((call) => call.sql.includes("FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1 AND session_epoch = ?")).length;
+    // Module routes check the session in the pre-check and again in the handler; an internal call reuses it too.
+    const paths = ["/meetings", "/admin/members/one/history", "/auth/session", "/integrations/capabilities", "/admin/members", "/labels", "/admin/preferences", "/platform/modules"];
+    for (const path of paths) {
+      const before = sessionReads();
+      assert.equal((await admin(path)).status, 200, path);
+      assert.equal(sessionReads() - before, 1, `${path} reads the session user once`);
+    }
+    // The role check decides before a read that would fail on its own (no update channel row exists here).
+    for (const path of ["/admin/preferences", "/admin/update-channel"]) assert.equal((await operator(path)).status, 403, path);
+    assert.equal((await operator("/meetings")).status, 403, "an operator without the module assignment");
+    database.sqlite.exec("UPDATE users SET active=0 WHERE id='admin'");
+    for (const path of [...paths, "/admin/update-channel", "/discord/contests"]) {
+      const result = await admin(path);
+      assert.equal(result.status, 401, path); assert.deepEqual(await result.json(), { error: "Session user is unavailable" }, path);
+    }
+  } finally { database.sqlite.close(); }
+});
+
 test("correction and contest lookup plans use bounded indexes", () => {
   const database = new Database();
   try {

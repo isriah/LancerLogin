@@ -12,6 +12,7 @@ import { vaultHelp } from "../scripts/ensure-fingerprint-vault-key.mjs";
 import { syntheticUpgradeIO, rehearseSyntheticWebUpgrade } from "../scripts/rehearse-web-upgrade.mjs";
 import { buildPagesProxy } from "../scripts/prepare-pages-proxy.mjs";
 import { recoverWebUpdate } from "../scripts/recover-web-update.mjs";
+import { findGnuDateBash, findShell, requireTool, toolSkip } from "./fixtures/host-tools.mjs";
 
 const env = { REPOSITORY_PRIVATE: "true", UPDATE_REPOSITORY: "example/private-install", REQUEST_ID: "11111111-1111-1111-1111-111111111111", RELEASE_TAG: "v1.0.0", RELEASE_SHA: "b".repeat(40), EXECUTOR_RUN_ID: "123", INSTALLATION_SLUG: "example", DATABASE_ID: "22222222-2222-2222-2222-222222222222", API_URL: "https://example-api.account.workers.dev", CLOUDFLARE_ACCOUNT_ID: "a".repeat(32), CLOUDFLARE_API_TOKEN: "cfat_synthetic", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + 86_400_000).toISOString() };
 test("live adapter keeps Worker configuration out of the actual Pages CLI invocation", async () => {
@@ -107,6 +108,35 @@ test("fixed upgrade parameters reject public, malformed and resource substitutio
   assert.throws(() => validateUpgradeEnvironment(withoutApi), { message: "api_url_required" });
   assert.throws(() => validateUpgradeEnvironment(withoutApi, { credentials: false }), { message: "api_url_required" });
   assert.throws(() => validateUpgradeEnvironment({ ...env, API_URL: "not a url" }), { message: "fixed_api_origin_required" });
+});
+
+test("web updates redeploy the Worker with Smart Placement or the validated placement hint", async () => {
+  const source = await mkdtemp(join(tmpdir(), "lancerlogin-upgrade-placement-"));
+  const prior = process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION;
+  // The live adapter writes the Worker configuration it deploys as soon as it is created; nothing else runs here.
+  const deployed = async () => {
+    await createLiveUpgradeIO(validateUpgradeEnvironment({ ...env, LANCERLOGIN_WORKER_PLACEMENT_REGION: process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION }), {}, source);
+    return JSON.parse(await readFile(join(source, ".provision/wrangler.json"), "utf8")).placement;
+  };
+  try {
+    delete process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION;
+    assert.deepEqual(await deployed(), { mode: "smart" });
+    process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION = "aws:us-east-1";
+    assert.deepEqual(await deployed(), { region: "aws:us-east-1" });
+  } finally {
+    if (prior === undefined) delete process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION;
+    else process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION = prior;
+    await rm(source, { recursive: true, force: true });
+  }
+  // A bad hint is refused with a coded annotation before checkout, claim or any Cloudflare call, including in --validate.
+  for (const credentials of [true, false]) {
+    assert.equal(validateUpgradeEnvironment({ ...env, LANCERLOGIN_WORKER_PLACEMENT_REGION: "gcp:us-east4" }, { credentials }).tag, "v1.0.0");
+    assert.equal(validateUpgradeEnvironment({ ...env, LANCERLOGIN_WORKER_PLACEMENT_REGION: "" }, { credentials }).tag, "v1.0.0");
+    for (const region of ["us-east-1", "aws:US-EAST-1", "oracle:us-east-1", "smart"]) assert.throws(() => validateUpgradeEnvironment({ ...env, LANCERLOGIN_WORKER_PLACEMENT_REGION: region }, { credentials }), { message: "worker_placement_region_invalid" }, region);
+  }
+  assert.match(upgradeHelp.worker_placement_region_invalid, /LANCERLOGIN_WORKER_PLACEMENT_REGION[\s\S]*aws:us-east-1/);
+  // Installation and web updates read the same optional production variable, so a hint survives every redeploy.
+  for (const name of ["provision-template", "upgrade-web"]) assert.match(await readFile(`.github/workflows/${name}.yml`, "utf8"), /^ {6}LANCERLOGIN_WORKER_PLACEMENT_REGION: \$\{\{ vars\.LANCERLOGIN_WORKER_PLACEMENT_REGION \}\}\s/m, name);
 });
 
 // Authored text uses " - " instead of an em dash (U+2014).
@@ -460,8 +490,10 @@ const runBlock = (step) => {
   const lines = step.split("\n"); const start = lines.findIndex((line) => /^ {8}run: \|$/.test(line));
   return lines.slice(start + 1).map((line) => line.slice(10)).join("\n");
 };
-const bash = spawnSync("bash", ["-c", "true"]).status === 0;
-test("the collision check runs the shell it ships and names each existing or missing resource", { skip: !bash && "bash is not available" }, async (t) => {
+// The shipped run blocks call node, so they need a bash that can start it (on Windows, Git for Windows' bash, not WSL).
+const bash = findShell("bash");
+test("the collision check runs the shell it ships and names each existing or missing resource", { skip: toolSkip(bash) }, async (t) => {
+  requireTool(bash);
   const collisions = runBlock((await installationSteps()).find((step) => /name: Check for resource collisions/.test(step)));
   const root = await mkdtemp(join(tmpdir(), "lancerlogin-collisions-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -474,8 +506,8 @@ test("the collision check runs the shell it ships and names each existing or mis
   ].join("\n");
   await writeFile(join(root, "collisions.sh"), `set -eo pipefail\n${stubs}\n${collisions}\n`);
   const run = (operation, { d1 = "missing", pages = false, worker = "missing" } = {}) => {
-    const result = spawnSync("bash", ["collisions.sh"], { cwd: root, encoding: "utf8", env: { ...process.env, INPUT_OPERATION: operation, INSTALLATION_SLUG: "example", DATABASE_NAME: "", D1_STATE: d1, WORKER: worker,
-      GITHUB_OUTPUT: join(root, "output.txt"), PAGES_LIST: JSON.stringify({ success: true, result: pages ? [{ name: "example-dashboard" }] : [] }) } });
+    const result = spawnSync(bash.path, ["collisions.sh"], { cwd: root, encoding: "utf8", env: bash.env({ INPUT_OPERATION: operation, INSTALLATION_SLUG: "example", DATABASE_NAME: "", D1_STATE: d1, WORKER: worker,
+      GITHUB_OUTPUT: join(root, "output.txt"), PAGES_LIST: JSON.stringify({ success: true, result: pages ? [{ name: "example-dashboard" }] : [] }) }) });
     return { status: result.status, stdout: result.stdout };
   };
   assert.equal(run("create").status, 0);
@@ -492,8 +524,9 @@ test("the collision check runs the shell it ships and names each existing or mis
   assert.match(run("upgrade", { d1: "exists", worker: "exists" }).stdout, /^::error title=installation_incomplete::Upgrade stopped before any change because these were not found in this Cloudflare account: the Pages project example-dashboard\./m);
 });
 
-const gnuDate = bash && spawnSync("bash", ["-c", "date -u -d '2026-11-05 00:00:00 UTC' +%Y"], { encoding: "utf8" }).stdout.trim() === "2026";
-test("the installation credential check skips a missing token, rejects a revoked one and passes on GitHub's expiry", { skip: !gnuDate && "bash with GNU date is not available" }, async (t) => {
+const gnuDate = findGnuDateBash();
+test("the installation credential check skips a missing token, rejects a revoked one and passes on GitHub's expiry", { skip: toolSkip(gnuDate) }, async (t) => {
+  requireTool(gnuDate);
   const check = runBlock((await installationSteps()).find((step) => /name: Check the optional dashboard update credential/.test(step)));
   const root = await mkdtemp(join(tmpdir(), "lancerlogin-update-credential-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -507,8 +540,8 @@ test("the installation credential check skips a missing token, rejects a revoked
   const run = async ({ token = "synthetic-dispatch", selection = "", status = "200", expiry = "", legacy = false } = {}) => {
     await writeFile(join(root, "scripts/refresh-web-update-credential.mjs"), legacy ? "// earlier release\n" : "// github-authentication-token-expiration\n");
     await rm(join(root, "node-calls.txt"), { force: true }); await writeFile(join(root, "output.txt"), "");
-    const result = spawnSync("bash", ["check.sh"], { cwd: root, encoding: "utf8", env: { ...process.env, LANCERLOGIN_WEB_UPDATE_TOKEN: token, LANCERLOGIN_MODULE_SELECTION_TOKEN: selection,
-      LANCERLOGIN_UPDATE_REPOSITORY: "example/private-install", RELEASE_TAG: "v1.2.6", RUNNER_TEMP: root, GITHUB_OUTPUT: join(root, "output.txt"), STATUS: status, EXPIRY: expiry } });
+    const result = spawnSync(gnuDate.path, ["check.sh"], { cwd: root, encoding: "utf8", env: gnuDate.env({ LANCERLOGIN_WEB_UPDATE_TOKEN: token, LANCERLOGIN_MODULE_SELECTION_TOKEN: selection,
+      LANCERLOGIN_UPDATE_REPOSITORY: "example/private-install", RELEASE_TAG: "v1.2.6", RUNNER_TEMP: root, GITHUB_OUTPUT: join(root, "output.txt"), STATUS: status, EXPIRY: expiry }) });
     const calls = await readFile(join(root, "node-calls.txt"), "utf8").catch(() => "");
     return { status: result.status, stdout: result.stdout, output: await readFile(join(root, "output.txt"), "utf8"), calls };
   };
@@ -583,4 +616,48 @@ test("resume re-applies the current setup code while no first Admin exists, and 
   // The same hash as the first upload.
   const hash = /BOOTSTRAP_CODE_HASH=\$\(printf '%s' "\$LANCERLOGIN_SETUP_CODE" \| openssl dgst -sha256 -binary \| openssl base64 -A \| tr '\+\/' '-_' \| tr -d '='\)/;
   assert.match(rotation, hash); assert.match(steps[stepNamed(steps, /name: Generate installation secrets/)], hash);
+});
+
+// The repository's own copy of the refresh script never changes after the repository is created, so the workflow runs the
+// installed release's copy and falls back to its own only when that release cannot be resolved.
+const refreshSteps = async () => stepsOf(await readFile(".github/workflows/refresh-web-update-credential.yml", "utf8")).slice(1);
+test("Refresh web update credential runs the installed release's script, checked out from isriah/LancerLogin at its tag", async () => {
+  const steps = await refreshSteps();
+  const resolveIndex = stepNamed(steps, /name: Find the installed LancerLogin release/);
+  const checkoutIndex = stepNamed(steps, /name: Check out the installed release's scripts/);
+  const installIndex = stepNamed(steps, /npm ci --no-audit/);
+  const runIndex = stepNamed(steps, /node scripts\/refresh-web-update-credential\.mjs\s*$/m);
+  assert.ok(resolveIndex < checkoutIndex && checkoutIndex < installIndex && installIndex < runIndex);
+  const resolveStep = steps[resolveIndex];
+  assert.doesNotMatch(resolveStep, /secrets\./, "the installed release is found without any secret");
+  // The release comes from the Worker's public /health at the fixed API origin, and must be a canonical release.
+  assert.match(resolveStep, /new URL\(process\.env\.API_URL \?\? ""\)/);
+  assert.match(resolveStep, /!url\.hostname\.startsWith\(`\$\{slug\}-api\.`\) \|\| !url\.hostname\.endsWith\("\.workers\.dev"\)/);
+  assert.match(resolveStep, /fetch\(new URL\("\/health", url\), \{ redirect: "error"/);
+  assert.ok(resolveStep.includes(String.raw`/^\d+\.\d+\.\d+(?:-beta\.\d+)?$/.test(health.releaseVersion)`), "canonical release versions only");
+  // The tag must exist in the official repository; the checkout is pinned to its commit.
+  assert.match(resolveStep, /git ls-remote --tags https:\/\/github\.com\/isriah\/LancerLogin "refs\/tags\/v\$version" "refs\/tags\/v\$version\^\{\}"/);
+  assert.match(resolveStep, /grep -Eq '\^\[0-9a-f\]\{40\}\$'/);
+  assert.match(resolveStep, /::warning title=installed_release_unresolved::[^\n]*this repository's own copy of the refresh script/);
+  const checkout = steps[checkoutIndex];
+  assert.match(checkout, /if: steps\.release\.outputs\.tag != ''/);
+  assert.match(checkout, /repository: isriah\/LancerLogin\n\s+ref: \$\{\{ steps\.release\.outputs\.sha \}\}\n\s+path: lancerlogin-release\n\s+persist-credentials: false/);
+  for (const index of [installIndex, runIndex]) assert.match(steps[index], /working-directory: \$\{\{ steps\.release\.outputs\.dir \}\}/);
+  assert.doesNotMatch(steps[installIndex], /secrets\./);
+  assert.deepEqual([...steps[runIndex].matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1]), ["LANCERLOGIN_WEB_UPDATE_TOKEN", "LANCERLOGIN_MODULE_SELECTION_TOKEN", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]);
+});
+
+test("without a readable installed release the refresh workflow falls back to the repository copy with a warning", { skip: toolSkip(bash) }, async (t) => {
+  const shell = requireTool(bash);
+  const script = runBlock((await refreshSteps()).find((step) => /name: Find the installed LancerLogin release/.test(step)));
+  const root = await mkdtemp(join(tmpdir(), "lancerlogin-refresh-release-")); t.after(() => rm(root, { recursive: true, force: true }));
+  const output = join(root, "output.txt"); await writeFile(output, "");
+  // An API URL outside the installation's workers.dev origin is never fetched.
+  for (const API_URL of ["", "https://other-api.example.workers.dev/", "http://example-club-api.example.workers.dev/"]) {
+    await writeFile(output, "");
+    const result = spawnSync(shell, ["-c", script], { env: bash.env({ API_URL, INSTALLATION_SLUG: "example-club", GITHUB_OUTPUT: output }), encoding: "utf8", windowsHide: true, timeout: 30_000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /::warning title=installed_release_unresolved::/);
+    assert.equal((await readFile(output, "utf8")).replace(/\r/g, ""), "dir=.\ntag=\nsha=\n");
+  }
 });

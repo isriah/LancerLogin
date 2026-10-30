@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { hooksPath, installHooks, uninstallHooks } from "../scripts/git-hooks.mjs";
 import { dropGitRepositoryVariables } from "../scripts/git-env.mjs";
+import { findShell, requireTool, toolSkip } from "./fixtures/host-tools.mjs";
 
 // These tests create throwaway repositories. Repository variables that Git exports to hooks would point them at the
 // real repository instead, so drop them.
@@ -13,17 +14,8 @@ dropGitRepositoryVariables();
 
 const hook = resolve(".githooks/pre-push");
 
-// Git for Windows ships sh beside git; Linux and macOS have it on PATH.
-function findShell() {
-  if (spawnSync("sh", ["-c", "exit 0"]).status === 0) return "sh";
-  try {
-    const execPath = execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim();
-    const candidate = resolve(execPath, "..", "..", "..", "usr", "bin", "sh.exe");
-    if (existsSync(candidate)) return candidate;
-  } catch {}
-  return undefined;
-}
-const shell = findShell();
+// The hook runs node from sh: Git for Windows ships sh beside git (never the WSL launcher); Linux and macOS have it on PATH.
+const shell = findShell("sh");
 
 function repository() {
   const root = mkdtempSync(join(tmpdir(), "git-hooks-"));
@@ -62,15 +54,16 @@ test("install points core.hooksPath at .githooks, uninstall removes only that se
   }
 });
 
-test("pre-push skips in CI and without node_modules, blocks only on a failed check", { skip: !shell && "no POSIX shell available" }, () => {
+test("pre-push skips in CI and without node_modules, blocks only on a failed check", { skip: toolSkip(shell) }, () => {
+  requireTool(shell);
   const root = repository();
   try {
     mkdirSync(join(root, "scripts"));
     copyFileSync(hook, join(root, "pre-push"));
     // A stand-in quick check whose exit status the test controls.
     writeFileSync(join(root, "scripts", "check-quick.mjs"), "process.exitCode = Number(process.env.FAKE_STATUS);\n");
-    const { CI: _ci, ...environment } = process.env;
-    const run = (env) => spawnSync(shell, ["pre-push"], { cwd: root, encoding: "utf8", env: { ...environment, ...env } });
+    const { CI: _ci, ...environment } = shell.env();
+    const run = (env) => spawnSync(shell.path, ["pre-push"], { cwd: root, encoding: "utf8", env: { ...environment, ...env } });
 
     let result = run({ CI: "true", FAKE_STATUS: "1" });
     assert.equal(result.status, 0);

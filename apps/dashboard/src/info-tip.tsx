@@ -4,7 +4,8 @@ const VIEWPORT_MARGIN = 16;
 const TOOLTIP_GAP = 8;
 const TOOLTIP_MAX_WIDTH = 320;
 
-export function InfoTip({ children, label = "More information" }: { children: React.ReactNode; label?: string }) {
+/** `glyph` replaces the "i" mark with another icon, such as a status icon; `tone` names its colour state for styling. */
+export function InfoTip({ children, label = "More information", glyph, tone }: { children: React.ReactNode; label?: string; glyph?: React.ReactNode; tone?: string }) {
   const [active, setActive] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [position, setPosition] = useState({ left: VIEWPORT_MARGIN, top: VIEWPORT_MARGIN });
@@ -103,7 +104,7 @@ export function InfoTip({ children, label = "More information" }: { children: Re
         setPinned(false);
         setActive(!pointerType && event.detail === 0 && button.current === document.activeElement);
       }}
-    ><span className="info-tip-glyph" aria-hidden="true" onMouseEnter={() => { updatePosition(); setActive(true); }} onMouseLeave={() => setActive(false)}>i</span></button>
+    ><span className="info-tip-glyph" data-glyph={glyph ? "icon" : undefined} data-tone={tone} aria-hidden="true" onMouseEnter={() => { updatePosition(); setActive(true); }} onMouseLeave={() => setActive(false)}>{glyph ?? "i"}</span></button>
     <span ref={content} id={id} className="info-tip-content" role="tooltip">{children}</span>
   </span>;
 }

@@ -100,12 +100,18 @@ test("actual workerd normal dispatch and status preserve the pinned request", as
     assert.equal(started.request.state, "queued"); assert.equal(started.request.targetCommit, sha);
     const status = await (await instance.fetch("/status")).json();
     assert.equal(status.request.state, "awaiting_approval"); assert.equal(status.request.requestId, requestId);
-    // The third request is the read-only, cached controller check that status reports as setup readiness.
-    assert.deepEqual(instance.calls.map((call) => call.method), ["POST", "GET", "GET"]);
+    // After the dispatch and its run lookup, status reads setup readiness: the cached controller check, the installation's and
+    // the release's workflow and script folders, and the latest credential refresh run. Every one of those is a read.
+    assert.deepEqual(instance.calls.slice(0, 3).map((call) => call.method), ["POST", "GET", "GET"]);
     assert.equal(instance.calls[2].path, "/repos/example/private-install/actions/workflows/upgrade-web.yml");
+    assert.equal(instance.calls.slice(1).every((call) => call.method === "GET"), true);
+    assert.ok(instance.calls.some((call) => call.path === "/repos/example/private-install/contents/.github/workflows"));
+    assert.ok(instance.calls.some((call) => call.path === "/repos/example/private-install/actions/workflows/refresh-web-update-credential.yml/runs"));
     assert.equal(instance.calls.every((call) => call.authorization === "Bearer synthetic-runtime-token"), true);
     assert.equal(status.setup.dispatchCredential.state, "expiring"); // The synthetic token expires in two days. assert.equal(status.setup.repository, "example/private-install");
-    await (await instance.fetch("/status")).json(); assert.equal(instance.calls.filter((call) => call.path.endsWith("/workflows/upgrade-web.yml")).length, 1);
+    // A second status inside the cache windows makes no GitHub calls at all.
+    const before = instance.calls.length;
+    await (await instance.fetch("/status")).json(); assert.equal(instance.calls.length, before);
   } finally { await instance.worker.dispose(); }
 });
 

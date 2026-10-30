@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { chmod, chown, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -8,6 +9,10 @@ import { gunzipSync, gzipSync } from "node:zlib";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const kioskArchitectures = ["arm64", "armv7"];
+// On Windows, Git Bash puts GNU tar first on PATH, and it reads "C:\..." as a remote host. Windows' own bsdtar handles
+// drive-letter paths, so packaging uses it when it exists. Every other platform uses tar from PATH.
+const systemTar = process.platform === "win32" && process.env.SystemRoot ? join(process.env.SystemRoot, "System32", "tar.exe") : "";
+export const tarCommand = systemTar && existsSync(systemTar) ? systemTar : "tar";
 
 async function checksum(path) {
   return createHash("sha256").update(await readFile(path)).digest("hex");
@@ -76,7 +81,7 @@ function* archiveEntries(tar) {
 // Windows chmod cannot assign POSIX directory/execute bits. Set and verify
 // the actual tar headers instead of relying on host filesystem metadata.
 export async function writeKioskArchive(directory, path) {
-  const tar = execFileSync("tar", ["--format=ustar", "-cf", "-", "-C", directory, "."], { stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+  const tar = execFileSync(tarCommand, ["--format=ustar", "-cf", "-", "-C", directory, "."], { stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
   for (const { header, expectedMode } of archiveEntries(tar)) {
     header.write(`${expectedMode.toString(8).padStart(7, "0")}\0`, 100, 8, "ascii");
     header.fill(32, 148, 156);
@@ -149,7 +154,7 @@ export async function verifyKioskArtifacts({ artifacts, version, requireUnprivil
     checkKioskArchiveModes(await readFile(join(artifacts, name)));
     const extracted = await mkdtemp(join(tmpdir(), "lancerlogin-kiosk-extracted-"));
     try {
-      execFileSync("tar", ["-xzf", join(artifacts, name), "-C", extracted], { stdio: "pipe" });
+      execFileSync(tarCommand, ["-xzf", join(artifacts, name), "-C", extracted], { stdio: "pipe" });
       await checkPackageModes(extracted);
       for (const path of ["src/release-policy.mjs", "src/resolve-kiosk-release.mjs", "src/desktop-control.mjs", "src/desktop-launcher.mjs", "scripts/lancerlogin-open-kiosk.sh", "scripts/lancerlogin-install-release.sh", "systemd/lancerlogin-kiosk.service", "systemd/lancerlogin-update.service", "polkit/49-lancerlogin-network.rules", "polkit/49-lancerlogin-recovery.rules", "polkit/49-lancerlogin-update.rules"]) await readFile(join(extracted, path));
       await smokeKioskDirectory(extracted, { requireUnprivileged });

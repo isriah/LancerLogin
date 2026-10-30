@@ -349,8 +349,8 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   assert.match(ciWorkflow, /HEAD_COMMIT_MESSAGE.*Release\\ v\*/);
   assert.match(ciWorkflow, /outputs\.full == 'true'[\s\S]*kiosk-artifacts\.test\.mjs/);
   assert.match(ciWorkflow, /outputs\.full != 'true' && steps\.verification-scope\.outputs\.kiosk == 'true'/);
-  // verify and the core, plugin and integration browser shard jobs install; a private repository adds its private browser shards.
-  assert.equal((ciWorkflow.match(/npm ci --no-audit/g) ?? []).length, ciWorkflow.includes("  private-browser-shard:") ? 5 : 4);
+  // verify and the core, plugin and integration browser shard jobs install.
+  assert.equal((ciWorkflow.match(/npm ci --no-audit/g) ?? []).length, 4);
   assert.match(ciWorkflow, /schedule:[\s\S]*cron:/);
   assert.match(ciWorkflow, /workflow_dispatch:/);
   assert.match(ciWorkflow, /dependency-audit:[\s\S]*npm run audit:release/);

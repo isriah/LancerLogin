@@ -54,7 +54,8 @@ export function HomePage({ navigate, discordEnabled, onWalkthroughChange, debugM
     const result = await api<{ meetings: Meeting[] }>("/meetings");
     setMeetings(result.meetings); setNotice(""); setNoticeTone("neutral");
   }
-  useEffect(() => { return visiblePoll(load, 60_000, (error) => { setNotice(error.message); setNoticeTone("error"); }, true); }, [discordEnabled]);
+  // The meeting list does not depend on integrations, so capabilities arriving after mount do not read it again.
+  useEffect(() => { return visiblePoll(load, 60_000, (error) => { setNotice(error.message); setNoticeTone("error"); }, true); }, []);
   function chooseView(view: MeetingView) { if (!active) writeStorage("local", dashboardMeetingViewKey, view); setMeetingView(view); }
   function addMeeting() { if (active) return; setCreationNotice(""); setCreating(true); }
   async function created(count: number, calendarSync?: CalendarSync, calendarDelivery?: CalendarDelivery) { const success = `${count} ${count === 1 ? "meeting" : "meetings"} created.${calendarDeliveryMessage(calendarDelivery, calendarSync)}`; try { await load(); setCreationNotice(success); setNoticeTone(calendarDelivery?.google_calendar.failed || calendarDelivery?.discord.failed || calendarSync?.failed ? "error" : "success"); } catch { setCreationNotice(`${success} Refresh Dashboard to see the latest meeting list.`); setNoticeTone("error"); } }

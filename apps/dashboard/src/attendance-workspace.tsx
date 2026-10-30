@@ -33,7 +33,10 @@ const lifecycleFor = (meeting: Meeting, now = Date.now()): Lifecycle => now < Da
 const lifecycleLabel = (lifecycle: Lifecycle) => lifecycle === "in_progress" ? "In progress" : lifecycle === "late_scan_window" ? "Late scan window" : lifecycle[0].toUpperCase() + lifecycle.slice(1);
 const formatScanTime = (value?: string) => value ? new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Not recorded";
 
-export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; role: "admin" | "operator" }) {
+type Capabilities = { discord: { configured: boolean }; google_calendar?: { configured: boolean } };
+
+/** `readIntegrations` returns the app shell's shared capabilities read, which never rejects (unavailable means every integration is off), so this page does not request its own copy. */
+export function AttendanceWorkspace({ meetingId, role, readIntegrations }: { meetingId: string; role: "admin" | "operator"; readIntegrations: () => Promise<Capabilities> }) {
   const { path, navigate } = usePath();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [loadedMeeting, setMeeting] = useState<Meeting>();
@@ -65,27 +68,25 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
 
   async function load(): Promise<boolean> {
     const sequence = ++loadSequence.current;
-    const [result, capabilities] = await Promise.all([
-      api<{ meetings: Meeting[] }>("/meetings"),
-      api<{ integrations: { discord: { configured: boolean }; google_calendar: { configured: boolean } } }>("/integrations/capabilities").catch(() => ({ integrations: { discord: { configured: false }, google_calendar: { configured: false } } })),
-    ]);
+    // A load superseded in the same task (a route change, or Strict Mode's remount in development) sends nothing.
+    await Promise.resolve(); if (sequence !== loadSequence.current) return false;
+    // Every request starts at once from the route's meeting id. The meeting's own answer decides which error the page shows, so the others wait as handled promises until then.
+    const meetingRequest = api<{ meeting: Meeting }>(`/meetings/${encodeURIComponent(meetingId)}`);
+    const attendanceRequest = attendanceFor(meetingId);
+    const capabilitiesRequest = readIntegrations();
+    const contestRequest = capabilitiesRequest.then((capabilities) => capabilities.discord.configured ? api<{ contests: Contest[] }>(`/discord/contests?meetingId=${encodeURIComponent(meetingId)}`) : { contests: [] });
+    attendanceRequest.catch(() => undefined); contestRequest.catch(() => undefined);
+    const requested = (await meetingRequest).meeting;
+    const [attendance, contestResult, capabilities] = await Promise.all([attendanceRequest, contestRequest, capabilitiesRequest]);
     if (sequence !== loadSequence.current) return false;
-    const discordAvailable = capabilities.integrations.discord.configured;
-    const ordered = [...result.meetings].sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt));
-    setMeetings(ordered);
+    const discordAvailable = capabilities.discord.configured;
     setMemberNotices({});
-    const requested = (await api<{ meeting: Meeting }>(`/meetings/${encodeURIComponent(meetingId)}`)).meeting;
-    const [attendance, contestResult] = await Promise.all([
-      attendanceFor(requested.id),
-      discordAvailable ? api<{ contests: Contest[] }>(`/discord/contests?meetingId=${encodeURIComponent(requested.id)}`) : Promise.resolve({ contests: [] }),
-    ]);
-    if (sequence !== loadSequence.current) return false;
     setMeeting(requested);
     setRows(attendance.attendance);
     setAudience(attendance.audience ?? "All");
     setContests(contestResult.contests.filter((contest) => contest.status === "open"));
     setDiscordConfigured(discordAvailable);
-    setCalendarProviders([...(capabilities.integrations.google_calendar?.configured ? ["google_calendar" as const] : []), ...(discordAvailable ? ["discord" as const] : [])]);
+    setCalendarProviders([...(capabilities.google_calendar?.configured ? ["google_calendar" as const] : []), ...(discordAvailable ? ["discord" as const] : [])]);
     setCalendarNotice("");
     setDiscordNotice("");
     setClock(Date.now());
@@ -122,6 +123,14 @@ export function AttendanceWorkspace({ meetingId, role }: { meetingId: string; ro
       return () => window.clearTimeout(opensTimer);
     }
   }, [meeting?.id, meeting?.startsAt, meeting?.attendanceClosesAt, lifecycle, clock]);
+  // Only the delete dialog's series preview uses the full meeting list, so it loads when that dialog opens instead of before the page renders.
+  const deletingSeries = managementAction === "delete" && Boolean(meeting?.seriesId);
+  useEffect(() => {
+    if (!deletingSeries) return;
+    let active = true;
+    void api<{ meetings: Meeting[] }>("/meetings").then((result) => { if (active) setMeetings([...result.meetings].sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt))); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [deletingSeries]);
 
   function memberNotice(memberId: string, message: string) {
     setMemberNotices((current) => ({ ...current, [memberId]: message }));

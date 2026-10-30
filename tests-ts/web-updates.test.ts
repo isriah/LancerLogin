@@ -273,7 +273,8 @@ test("setup readiness reports a missing credential without failing status or cal
   const env = environment(); delete env.WEB_UPDATE_TOKEN; delete env.WEB_UPDATE_TOKEN_EXPIRES_AT;
   await withGitHub(async (calls) => {
     const status = await webUpdateStatus(env);
-    assert.deepEqual(status.setup, { repository: "example/private-install", dispatchCredential: { state: "missing", expiresAt: null }, selectionCredential: { state: "missing", expiresAt: null }, controller: "unknown" });
+    assert.deepEqual(status.setup, { repository: "example/private-install", dispatchCredential: { state: "missing", expiresAt: null }, selectionCredential: { state: "missing", expiresAt: null }, controller: "unknown",
+      repositoryFiles: { state: "unknown", release: "v0.24.0", outdated: [], pullRequest: null }, refreshRun: { state: "unknown", runUrl: null, finishedAt: null, code: null, reason: null, failedStep: null } });
     assert.equal(status.request, null); assert.equal(calls.length, 0);
     await assert.rejects(prepareWebUpdate(env), { code: "credential_required" });
   });
@@ -284,7 +285,8 @@ test("setup readiness warns within 14 days and reports the controller version fr
   const env = environment(); env.WEB_UPDATE_TOKEN_EXPIRES_AT = new Date(Date.now() + 3 * 86_400_000).toISOString();
   env.MODULE_SELECTION_TOKEN = "synthetic-selection-token";
   const previous = globalThis.fetch; let probes = 0; let name = updateChannelControllerName; let status = 200;
-  globalThis.fetch = async (url) => { probes++; assert.match(String(url), /\/actions\/workflows\/upgrade-web\.yml$/); return status === 200 ? Response.json({ state: "active", path: ".github/workflows/upgrade-web.yml", name }) : new Response(null, { status }); };
+  // Only the controller probe is counted; the repository file and refresh run checks have their own tests.
+  globalThis.fetch = async (url) => { if (!/\/actions\/workflows\/upgrade-web\.yml$/.test(String(url))) return new Response(null, { status: 404 }); probes++; return status === 200 ? Response.json({ state: "active", path: ".github/workflows/upgrade-web.yml", name }) : new Response(null, { status }); };
   try {
     resetControllerCache();
     const setup = (await webUpdateStatus(env)).setup;
@@ -442,4 +444,100 @@ test("operational locks survive category backup/delete and kiosk scans retry503 
     database.sqlite.exec("DELETE FROM installations WHERE id = 'primary'");
     assert.equal((await latestUpdate(env))?.state, "recovery_required");
   } finally { await rm(temp, { recursive: true, force: true }); }
+});
+
+test("Check again rereads the setup checks from GitHub for an Admin on the dashboard origin, at most once every 30 seconds", async (t) => {
+  const database = new D1(); const env = environment(database);
+  const codec = createSessionCodec(secret);
+  const adminCookie = `lancerlogin_session=${await codec.issue({ userId: "admin", role: "admin" })}`;
+  const recheck = (body: object = {}, origin = env.ALLOWED_ORIGIN, cookie = adminCookie) => worker.fetch(new Request("https://api.test/admin/web-updates/setup/recheck", { method: "POST", headers: { "content-type": "application/json", origin, cookie }, body: JSON.stringify(body) }), env);
+  const previous = globalThis.fetch; let runs: object[] = []; let probes = 0;
+  globalThis.fetch = async (url) => {
+    const path = String(url).replace("https://api.github.com", ""); probes++;
+    if (path.includes("/refresh-web-update-credential.yml/runs")) return Response.json({ workflow_runs: runs });
+    if (path.includes("/actions/workflows/upgrade-web.yml")) return Response.json({ state: "active", path: ".github/workflows/upgrade-web.yml", name: updateChannelControllerName });
+    return new Response(null, { status: 404 });
+  };
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  try {
+    resetControllerCache();
+    assert.equal((await webUpdateStatus(env)).setup.refreshRun.state, "none");
+    // A run finishes on GitHub; status keeps answering from the two-minute cache.
+    runs = [{ id: 7, status: "completed", conclusion: "success", updated_at: "2026-10-29T15:00:00Z" }]; probes = 0;
+    assert.equal((await webUpdateStatus(env)).setup.refreshRun.state, "none"); assert.equal(probes, 0);
+    assert.equal((await recheck({}, env.ALLOWED_ORIGIN, "")).status, 401);
+    assert.equal((await recheck({}, env.ALLOWED_ORIGIN, `lancerlogin_session=${await codec.issue({ userId: "operator", role: "operator" })}`)).status, 403);
+    assert.equal((await recheck({}, "https://hostile.test")).status, 403);
+    assert.equal((await recheck({ refresh: true })).status, 400);
+    assert.equal(probes, 0, "refused checks never reach GitHub");
+    const first = await recheck();
+    assert.equal(first.status, 200);
+    const { setup } = await first.json() as { setup: { refreshRun: { state: string; runUrl: string } } };
+    assert.equal(setup.refreshRun.state, "succeeded"); assert.equal(setup.refreshRun.runUrl, "https://github.com/example/private-install/actions/runs/7");
+    assert.ok(probes > 0); const afterFirst = probes;
+    // The recheck refreshed the cache, so ordinary status reads see the new state too.
+    assert.equal((await webUpdateStatus(env)).setup.refreshRun.state, "succeeded"); assert.equal(probes, afterFirst);
+    // Within 30 seconds another Check again answers from the cache without calling GitHub.
+    runs = [{ id: 8, status: "completed", conclusion: "cancelled", updated_at: "2026-10-29T15:05:00Z" }];
+    t.mock.timers.tick(29_000);
+    assert.equal((await (await recheck()).json()).setup.refreshRun.state, "succeeded"); assert.equal(probes, afterFirst);
+    // After it, Check again skips the still-valid two-minute cache.
+    t.mock.timers.tick(1_000);
+    const later = (await (await recheck()).json()).setup.refreshRun;
+    assert.equal(later.state, "failed"); assert.equal(later.code, "run_cancelled"); assert.ok(probes > afterFirst);
+  } finally { globalThis.fetch = previous; resetControllerCache(); }
+});
+
+test("Update repository files: an Admin on the dashboard origin opens the pull request, it is audited and status reports it", async () => {
+  const database = new D1(); const env = environment(database); env.RELEASE_VERSION = "2.0.1";
+  const codec = createSessionCodec(secret);
+  const adminCookie = `lancerlogin_session=${await codec.issue({ userId: "admin", role: "admin" })}`;
+  const request = (body: object | string = {}, origin = env.ALLOWED_ORIGIN, cookie = adminCookie) => new Request("https://api.test/admin/web-updates/repository-files", { method: "POST", headers: { "content-type": "application/json", origin, cookie }, body: typeof body === "string" ? body : JSON.stringify(body) });
+  const text = "name: Upgrade LancerLogin web (update channels v2)\n";
+  const sha1 = (value: string) => { const bytes = new TextEncoder().encode(value); return import("node:crypto").then(({ createHash }) => createHash("sha1").update(Buffer.concat([Buffer.from(`blob ${bytes.byteLength}\0`), bytes])).digest("hex")); };
+  const releaseSha = await sha1(text);
+  const previous = globalThis.fetch; const calls: Array<{ url: string; method?: string }> = []; let pullOpen = false;
+  globalThis.fetch = async (url, init) => {
+    const path = String(url).replace("https://api.github.com", ""); calls.push({ url: path, method: init?.method });
+    if (path.startsWith("/repos/isriah/LancerLogin/contents/.github/workflows?ref=v2.0.1")) return Response.json([{ type: "file", path: ".github/workflows/upgrade-web.yml", sha: releaseSha }]);
+    if (path.startsWith("/repos/example/private-install/contents/.github/workflows?ref=main")) return Response.json([{ type: "file", path: ".github/workflows/upgrade-web.yml", sha: "e".repeat(40) }]);
+    if (path.includes("/contents/")) return Response.json([]);
+    if (path === `/repos/isriah/LancerLogin/git/blobs/${releaseSha}`) return Response.json({ encoding: "base64", content: Buffer.from(text).toString("base64") });
+    if (path.startsWith("/repos/example/private-install/pulls")) return init?.method === "POST" ? (pullOpen = true, Response.json({ number: 3 }, { status: 201 })) : Response.json(pullOpen ? [{ number: 3 }] : []);
+    if (path === "/repos/example/private-install/git/ref/heads/main") return Response.json({ object: { sha: "a".repeat(40) } });
+    if (path === `/repos/example/private-install/git/commits/${"a".repeat(40)}`) return Response.json({ tree: { sha: "b".repeat(40) } });
+    if (path === "/repos/example/private-install/git/trees") return Response.json({ sha: "c".repeat(40) }, { status: 201 });
+    if (path === "/repos/example/private-install/git/commits") return Response.json({ sha: "d".repeat(40) }, { status: 201 });
+    if (path === "/repos/example/private-install/git/refs") return Response.json({}, { status: 201 });
+    if (path.includes("/refresh-web-update-credential.yml/runs")) return Response.json({ workflow_runs: [] });
+    if (path.includes("/actions/workflows/upgrade-web.yml")) return Response.json({ state: "active", path: ".github/workflows/upgrade-web.yml", name: updateChannelControllerName });
+    return new Response(null, { status: 404 });
+  };
+  try {
+    resetControllerCache();
+    const before = (await webUpdateStatus(env)).setup;
+    assert.deepEqual(before.repositoryFiles, { state: "outdated", release: "v2.0.1", outdated: [".github/workflows/upgrade-web.yml"], pullRequest: null });
+    assert.equal(before.refreshRun.state, "none");
+    calls.length = 0;
+    assert.equal((await worker.fetch(request({}, env.ALLOWED_ORIGIN, ""), env)).status, 401);
+    assert.equal((await worker.fetch(request({}, env.ALLOWED_ORIGIN, `lancerlogin_session=${await codec.issue({ userId: "operator", role: "operator" })}`), env)).status, 403);
+    assert.equal((await worker.fetch(request({}, "https://hostile.test"), env)).status, 403);
+    assert.equal((await worker.fetch(request({ files: ["lancerlogin.modules.json"] }), env)).status, 400);
+    assert.equal(calls.length, 0, "refused requests never reach GitHub");
+    const created = await worker.fetch(request(), env);
+    assert.equal(created.status, 201);
+    assert.deepEqual(await created.json(), { pullRequest: { number: 3, url: "https://github.com/example/private-install/pull/3" }, created: true, release: "v2.0.1", files: [".github/workflows/upgrade-web.yml"] });
+    const audit = database.sqlite.prepare("SELECT actor_user_id AS actor, target_id AS target, metadata_json AS metadata FROM audit_log WHERE action = 'web_update.repository_files_proposed'").all() as Array<{ actor: string; target: string; metadata: string }>;
+    assert.deepEqual(audit.map((row) => ({ ...row, metadata: JSON.parse(row.metadata) })), [{ actor: "admin", target: "example/private-install", metadata: { release: "v2.0.1", files: [".github/workflows/upgrade-web.yml"], pullRequest: 3 } }]);
+    // The proposal clears the cached comparison, so status shows the open pull request at once.
+    assert.deepEqual((await webUpdateStatus(env)).setup.repositoryFiles.pullRequest, { number: 3, url: "https://github.com/example/private-install/pull/3" });
+    const again = await worker.fetch(request(), env);
+    assert.equal(again.status, 200); assert.equal((await again.json()).created, false);
+    // A refusal names the permission to add.
+    pullOpen = false;
+    const fetchWith = globalThis.fetch;
+    globalThis.fetch = async (url, init) => String(url).endsWith("/git/trees") ? new Response(JSON.stringify({ message: "Resource not accessible by personal access token" }), { status: 403 }) : fetchWith(url, init);
+    const denied = await worker.fetch(request(), env);
+    assert.equal(denied.status, 403); assert.equal((await denied.json()).code, "repository_files_contents_permission");
+  } finally { globalThis.fetch = previous; resetControllerCache(); }
 });

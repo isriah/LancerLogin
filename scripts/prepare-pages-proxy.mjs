@@ -23,11 +23,16 @@ export default {
       return fetch(new Request(target, request));
     }
     const asset = await env.ASSETS.fetch(request);
-    if (asset.status !== 404 || request.method !== "GET" || !request.headers.get("accept")?.includes("text/html")) return denyFraming(asset);
+    if (asset.status !== 404 || request.method !== "GET" || !request.headers.get("accept")?.includes("text/html")) return cacheHashedAsset(incoming.pathname, request.method, denyFraming(asset));
     const shell = new URL("/index.html", incoming.origin);
     return denyFraming(await env.ASSETS.fetch(new Request(shell, request)));
   },
 };
+// Vite writes only content-hashed files under /assets/. HTML there is Pages' SPA fallback for a missing file, never a real asset.
+function cacheHashedAsset(pathname, method, response) {
+  if (response.status === 200 && (method === "GET" || method === "HEAD") && pathname.startsWith("/assets/") && !response.headers.get("content-type")?.includes("text/html")) response.headers.set("cache-control", "public, max-age=31536000, immutable");
+  return response;
+}
 function badRequest() {
   return new Response("Bad request", { status: 400, headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" } });
 }

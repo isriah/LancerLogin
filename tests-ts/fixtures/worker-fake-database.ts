@@ -3,6 +3,9 @@
 import { createHash } from "node:crypto";
 import { createSessionCodec } from "../../apps/api/src/runtime-security.ts";
 
+/** The SQL fragment of the Worker's per-request session user lookup (id, role and the /auth/session profile columns). */
+export const sessionUserLookup = "SELECT id, role, email, local_username AS localUsername, debug_mode AS debugMode FROM users";
+
 export class FakeStatement {
   values: unknown[] = [];
   readonly sql: string;
@@ -51,7 +54,7 @@ export class FakeDatabase {
       const insert = this.batches.flat().find((call) => call.sql.includes("INSERT INTO kiosk_commands") && call.values[0] === values[0]);
       return insert ? { id: values[0] } : undefined;
     }
-    if (sql.includes("SELECT id, role FROM users") && sql.includes("active = 1")) {
+    if (sql.includes(sessionUserLookup) && sql.includes("active = 1")) {
       const id = String(values[0]);
       return { id, role: id.startsWith("operator") ? "operator" : "admin" };
     }

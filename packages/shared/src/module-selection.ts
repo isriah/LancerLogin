@@ -138,8 +138,10 @@ export function satisfiesCoreRange(version: string, range: unknown): boolean {
       if (!match || !parseReleaseVersion(match[2])) fail(`Core range ${JSON.stringify(text)} is not supported; use comparators such as >=2.0.0-beta.0 <3.0.0`);
       return { operator: match![1] ?? "=", version: match![2]! };
     });
-    // As in npm semver, a beta Core satisfies a range only when a comparator names a beta of the same release.
-    if (prerelease && !comparators.some((comparator) => comparator.version.includes("-beta.") && comparator.version.replace(/-beta\.\d+$/, "") === base)) return false;
+    // A beta Core sorts just below its release, so 2.1.0-beta.1 satisfies >=2.0.0-beta.15 <3.0.0: an installation on the
+    // Beta track has opted into betas. An upper bound on a stable release still excludes that release's betas, so <3.0.0
+    // never admits a 3.0.0 beta.
+    if (prerelease && comparators.some(({ operator, version: bound }) => operator === "<" && bound === base)) return false;
     return comparators.every(({ operator, version: bound }) => {
       const order = compareReleaseVersions(version, bound)!;
       return operator === ">=" ? order >= 0 : operator === "<=" ? order <= 0 : operator === ">" ? order > 0 : operator === "<" ? order < 0 : order === 0;

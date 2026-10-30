@@ -8,6 +8,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { checkKioskArchiveModes, kioskArchitectures, packageKioskArtifacts, smokeKioskDirectory, verifyKioskArtifacts, writeKioskArchive } from "../scripts/package-kiosk.mjs";
+import { findTar, requireTool, toolSkip } from "./fixtures/host-tools.mjs";
+
+// The test's own tar calls use a tar that handles absolute host paths; scripts/package-kiosk.mjs picks its own (tarCommand).
+const tar = findTar();
 
 function archiveWithMode(archive, path, mode) {
   const tar = gunzipSync(archive);
@@ -75,7 +79,7 @@ test("Linux installer replaces an older root helper with verified packaged bytes
     await mkdir(runtime, { recursive: true });
     await mkdir(join(scratch, "usr/local/sbin"), { recursive: true });
     await symlink(extracted, join(runtime, "current"));
-    execFileSync("tar", ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-arm64.tar.gz`), "-C", extracted]);
+    execFileSync(tar.path, ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-arm64.tar.gz`), "-C", extracted]);
     await writeFile(installed, "#!/bin/bash\n# older v0-only installed helper\n", { mode: 0o700 });
     const installer = await readFile(join(artifacts, "install-lancerlogin.sh"), "utf8");
     const start = installer.indexOf('install_atomic 0755 "$RUNTIME_ROOT/current/scripts/lancerlogin-install-release.sh" "$HELPER_PATH"');
@@ -150,7 +154,7 @@ test("Linux installer migrates an in-place install, switches releases atomically
     const archive = join(artifacts, "lancerlogin-kiosk-9.9.9-linux-arm64.tar.gz");
     // A release whose service never becomes healthy and whose helper differs from the healthy one.
     const brokenTree = join(scratch, "broken-tree"); await mkdir(brokenTree);
-    execFileSync("tar", ["-xzf", archive, "-C", brokenTree]);
+    execFileSync(tar.path, ["-xzf", archive, "-C", brokenTree]);
     await writeFile(join(brokenTree, "src/service.mjs"), `${await readFile(join(brokenTree, "src/service.mjs"), "utf8")}\n// BROKEN test release\n`);
     await writeFile(join(brokenTree, "scripts/lancerlogin-install-release.sh"), `${await readFile(join(brokenTree, "scripts/lancerlogin-install-release.sh"), "utf8")}# broken helper\n`);
     const brokenArchive = join(scratch, "broken.tar.gz");
@@ -169,7 +173,7 @@ test("Linux installer migrates an in-place install, switches releases atomically
     await mkdir(state, { recursive: true, mode: 0o700 });
     await writeNodeWrapper(root);
     // Pre-versioned layout: code directly in /opt/lancerlogin, legacy unit, helper and launcher paths.
-    execFileSync("tar", ["-xzf", archive, "-C", runtime]);
+    execFileSync(tar.path, ["-xzf", archive, "-C", runtime]);
     await writeFile(join(units, "lancerlogin-kiosk.service.d/10-version.conf"), "[Service]\nEnvironment=LANCERLOGIN_VERSION=9.9.8\n");
     const legacyUnit = "[Service]\nExecStart=/usr/bin/node /opt/lancerlogin/src/service.mjs\n";
     await writeFile(join(units, "lancerlogin-kiosk.service"), legacyUnit);
@@ -248,7 +252,7 @@ ${main}`;
 
     // 5. A release that fails the import check on this kiosk never stops the running service.
     const unloadable = join(scratch, "unloadable-tree"); await mkdir(unloadable);
-    execFileSync("tar", ["-xzf", archive, "-C", unloadable]);
+    execFileSync(tar.path, ["-xzf", archive, "-C", unloadable]);
     await writeFile(join(unloadable, "src/service.mjs"), `import "./missing-module.mjs";\n${await readFile(join(unloadable, "src/service.mjs"), "utf8")}`);
     await writeKioskArchive(unloadable, join(scratch, "unloadable.tar.gz"));
     assert.throws(() => run("9.9.13", join(scratch, "unloadable.tar.gz")), error => { assert.match(String(error.stderr), /failed its import check/); return true; });
@@ -285,7 +289,8 @@ ${main}`], { stdio: "pipe" });
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
-test("both shipped archives load and serve their isolated runtime; missing imports fail closed", async () => {
+test("both shipped archives load and serve their isolated runtime; missing imports fail closed", { skip: toolSkip(tar) }, async () => {
+  requireTool(tar);
   const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-artifact-test-"));
   const version = JSON.parse(await readFile("package.json", "utf8")).version;
   try {
@@ -293,14 +298,14 @@ test("both shipped archives load and serve their isolated runtime; missing impor
     for (const arch of kioskArchitectures) {
       const extracted = join(scratch, arch);
       await mkdir(extracted);
-      execFileSync("tar", ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`), "-C", extracted]);
+      execFileSync(tar.path, ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`), "-C", extracted]);
       checkKioskArchiveModes(await readFile(join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`)));
       const expected = [...(await readdir("apps/kiosk/src")).filter(name => name.endsWith(".mjs")), "release-policy.mjs"].sort();
       assert.deepEqual((await readdir(join(extracted, "src"))).sort(), expected);
       assert.equal(await readFile(join(extracted, "src/release-policy.mjs"), "utf8"), await readFile("packages/shared/src/release-policy.mjs", "utf8"));
       for (const missing of ["update-command.mjs", "kiosk-presentation.mjs", "release-policy.mjs", "resolve-kiosk-release.mjs"]) {
         // Re-extract between failures so each missing direct/transitive import is tested alone.
-        execFileSync("tar", ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`), "-C", extracted]);
+        execFileSync(tar.path, ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`), "-C", extracted]);
         await rm(join(extracted, "src", missing));
         await assert.rejects(smokeKioskDirectory(extracted), error => {
           assert.match(String(error.stderr), /ERR_MODULE_NOT_FOUND/);
@@ -313,7 +318,7 @@ test("both shipped archives load and serve their isolated runtime; missing impor
     // the missing import, not merely a corrupted download.
     const broken = join(scratch, "arm64");
     const name = `lancerlogin-kiosk-${version}-linux-arm64.tar.gz`;
-    execFileSync("tar", ["-xzf", join(artifacts, name), "-C", broken]);
+    execFileSync(tar.path, ["-xzf", join(artifacts, name), "-C", broken]);
     await rm(join(broken, "src/update-command.mjs"));
     await writeKioskArchive(broken, join(artifacts, name));
     const digest = createHash("sha256").update(await readFile(join(artifacts, name))).digest("hex");
@@ -353,7 +358,8 @@ test("release publication requires shared artifact validation after exact-commit
 });
 
 
-test("valid-checksum archives with inaccessible or writable code fail permission validation on every host", async () => {
+test("valid-checksum archives with inaccessible or writable code fail permission validation on every host", { skip: toolSkip(tar) }, async () => {
+  requireTool(tar);
   const scratch = await mkdtemp(join(tmpdir(), "lancerlogin-mode-test-"));
   const version = JSON.parse(await readFile("package.json", "utf8")).version;
   try {
@@ -375,7 +381,7 @@ test("Linux root-owned artifacts start as another account, and mode 700 actually
   const version = JSON.parse(await readFile("package.json", "utf8")).version;
   try {
     const artifacts = await packageKioskArtifacts({ output: join(scratch, "artifacts"), version, requireUnprivileged: true });
-    execFileSync("tar", ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-arm64.tar.gz`), "-C", extracted]);
+    execFileSync(tar.path, ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-arm64.tar.gz`), "-C", extracted]);
     await chmod(extracted, 0o700);
     await assert.rejects(smokeKioskDirectory(extracted, { requireUnprivileged: true }), error => {
       assert.match(String(error.stderr), /EACCES/);

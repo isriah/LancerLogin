@@ -4,9 +4,13 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assetNames, assertCompleteVerify, browserShardCounts, createBundle, requiredJobs, publishRelease, resolveRelease, validateBundle } from "../scripts/release-publication.mjs";
+import { assetNames, assertCompleteVerify, browserShardCounts, createBundle, docsUnchangedReason, previousRelease, publishOptions, requiredJobs, publishRelease, resolveRelease, validateBundle } from "../scripts/release-publication.mjs";
 
-const sha = "a".repeat(40), producerSha = "b".repeat(40);
+const sha = "a".repeat(40), producerSha = "b".repeat(40), previousSha = "c".repeat(40);
+// Synthetic published history and documentation trees. By default a docs-site page changed since the previous release.
+const publishedHistory = [{ tag_name: "v1.2.7", draft: false, prerelease: false }, { tag_name: "v1.2.5", draft: false, prerelease: false },
+  { tag_name: "v1.2.4", draft: false, prerelease: false }, { tag_name: "v1.2.6-draft-lookalike", draft: true }];
+const previousDocs = { "docs-site/index.md": "1".repeat(40), "docs/DEVELOPMENT.md": "2".repeat(40), "docs/releases/v1.2.5.md": "3".repeat(40) };
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const notes = Buffer.from("# Synthetic release\n\nBugs fixed\n\nNone.\n");
 const jobs = ["actionlint", "verify", "dependency-audit", "browser-smoke", ...[1, 2, 3, 4].map((n) => `Core browser shard ${n}/4`),
@@ -30,6 +34,9 @@ async function fixture(tag = "v1.2.6", changes = {}) {
   const artifact = { id: 13, name: `lancerlogin-release-${tag}`, expired: false, workflow_run: { id: 11, head_sha: producerSha }, size_in_bytes: zip.length, digest: `sha256:${digest(zip)}`, ...changes.artifact };
   const calls = []; let release = changes.draft ? { tag_name: tag, draft: true, assets: [] } : undefined;
   let latest = "v1.2.5", immutableReads = 0, tagReads = 0;
+  const history = changes.history ?? publishedHistory;
+  const docsAt = { [previousSha]: previousDocs, [changes.sha ?? sha]: changes.docs ?? { ...previousDocs, "docs-site/index.md": "4".repeat(40) } };
+  const docsTree = (commitSha, folder) => Object.entries(docsAt[commitSha]).filter(([path]) => path.startsWith(`${folder}/`)).map(([path, blob]) => ({ path: path.slice(folder.length + 1), type: "blob", sha: blob }));
   function gh(args, binary) {
     calls.push(args);
     if (args[0] === "api") {
@@ -43,7 +50,10 @@ async function fixture(tag = "v1.2.6", changes = {}) {
       else if (endpoint === "releases/latest") result = { tag_name: changes.latest ?? latest };
       else if (endpoint === "immutable-releases") { immutableReads++; result = { enabled: changes.immutable === undefined ? true : changes.immutable && immutableReads < 3 }; }
       else if (endpoint === `releases/tags/${tag}`) { if (changes.published) result = { draft: false }; else if (!release || release.draft) { const missing = new Error("not_found"); missing.status = 404; throw missing; } else result = release; }
-      else if (endpoint === "releases?per_page=100&page=1") result = changes.duplicateRelease ? [{ tag_name: tag, draft: true }, { tag_name: tag, draft: true }] : release ? [release] : [];
+      else if (endpoint === "releases?per_page=100&page=1") result = [...history, ...changes.duplicateRelease ? [{ tag_name: tag, draft: true }, { tag_name: tag, draft: true }] : release ? [release] : []];
+      else if (["commits/v1.2.4", "commits/v1.2.5", "commits/v1.2.7"].includes(endpoint)) result = { sha: previousSha };
+      else if (/^git\/trees\/[0-9a-f]{40}$/.test(endpoint)) result = { tree: ["docs", "docs-site"].map((folder) => ({ path: folder, type: "tree", sha: `${endpoint.slice(10)}:${folder}` })), truncated: false };
+      else if (/^git\/trees\/[0-9a-f]{40}:docs(?:-site)?\?recursive=1$/.test(endpoint)) { const [commitSha, folder] = endpoint.slice(10, -12).split(":"); result = { tree: docsTree(commitSha, folder), truncated: false }; }
       else if (endpoint === "actions/runs/11/artifacts?per_page=100") result = { total_count: 1, artifacts: [artifact], ...changes.artifactList };
       else if (endpoint === "actions/artifacts/13/zip") { assert.equal(binary, true); assert.ok(args.includes("--allow-escape-sequences")); return changes.zip ?? zip; }
       else if (endpoint === "actions/artifacts/13") result = { ...artifact, ...changes.retained };
@@ -122,7 +132,9 @@ test("preview is read-only; explicit publication assembles a draft and advances 
 });
 test("Beta stays a prerelease and cannot become Latest", async () => {
   const f = await fixture("v2.0.0-beta.1");
-  try { assert.equal((await publishRelease("v2.0.0-beta.1", 11, { gh: f.gh, publish: true })).published, true);
+  try { const result = await publishRelease("v2.0.0-beta.1", 11, { gh: f.gh, publish: true }); assert.equal(result.published, true);
+    // No earlier beta is published, so the documentation review compares with the newest older stable release.
+    assert.equal(result.docs.previous, "v1.2.7");
     const edit = f.calls.find((args) => args[1] === "edit"); assert.ok(edit.includes("--prerelease=true")); assert.ok(edit.includes("--latest=false"));
   } finally { await f.cleanup(); }
 });
@@ -166,6 +178,59 @@ test("incorrect packaged checksums prevent any release mutation", async () => {
     assert.equal(f.calls.filter((args) => args[0] === "release").length, 0);
   } finally { await f.cleanup(); }
 });
+test("every release reviews its documentation against the previous published release", async () => {
+  const unchanged = { ...previousDocs };
+  // Changed docs pass in the dry run and the publication, and the decision is reported.
+  let f = await fixture();
+  try { const result = await publishRelease("v1.2.6", "11", { gh: f.gh });
+    assert.deepEqual(result.docs, { previous: "v1.2.5", changed: true, files: 1 });
+    assert.ok(f.calls.some((args) => args.at(-1).endsWith("commits/v1.2.5")), "the newest older published stable release is compared");
+    assert.deepEqual((await publishRelease("v1.2.6", "11", { gh: f.gh, publish: true })).docs, { previous: "v1.2.5", changed: true, files: 1 });
+  } finally { await f.cleanup(); }
+  // Unchanged docs, or only release notes changed, refuse before any release mutation, in the dry run too.
+  for (const docs of [unchanged, { ...previousDocs, "docs/releases/v1.2.5.md": "5".repeat(40), "docs/releases/v1.2.6.md": "6".repeat(40) }]) {
+    f = await fixture("v1.2.6", { docs });
+    try { for (const publish of [false, true]) await assert.rejects(publishRelease("v1.2.6", "11", { gh: f.gh, publish }), /documentation_review_required: .*since v1\.2\.5.*--docs-unchanged/);
+      assert.equal(f.calls.filter((args) => args[0] === "release").length, 0);
+      assert.ok(!f.calls.some((args) => args.at(-1).endsWith("/zip")), "the bundle is not downloaded");
+    } finally { await f.cleanup(); }
+  }
+  // An added or removed reviewed file counts as a change.
+  const { "docs/DEVELOPMENT.md": _removed, ...withoutDevelopment } = previousDocs;
+  for (const docs of [withoutDevelopment, { ...previousDocs, "docs/NEW.md": "7".repeat(40) }]) {
+    f = await fixture("v1.2.6", { docs });
+    try { assert.deepEqual((await publishRelease("v1.2.6", "11", { gh: f.gh })).docs, { previous: "v1.2.5", changed: true, files: 1 }); } finally { await f.cleanup(); }
+  }
+  // A recorded reason allows a release with unchanged docs and appears in the output.
+  f = await fixture("v1.2.6", { docs: unchanged });
+  try { const result = await publishRelease("v1.2.6", "11", { gh: f.gh, publish: true, docsUnchanged: "  Internal packaging fix only; no user-visible change.  " });
+    assert.equal(result.published, true);
+    assert.deepEqual(result.docs, { previous: "v1.2.5", changed: false, reason: "Internal packaging fix only; no user-visible change." });
+  } finally { await f.cleanup(); }
+  // An empty, blank, overlong or non-text reason is refused before any GitHub call.
+  for (const docsUnchanged of ["", "   ", "x".repeat(301), 5]) {
+    f = await fixture("v1.2.6", { docs: unchanged });
+    try { await assert.rejects(publishRelease("v1.2.6", "11", { gh: f.gh, docsUnchanged }), /docs_unchanged_reason_required/); assert.equal(f.calls.length, 0); } finally { await f.cleanup(); }
+  }
+  assert.equal(docsUnchangedReason(undefined), undefined); assert.equal(docsUnchangedReason("x".repeat(300)).length, 300);
+  // Command-line flags.
+  assert.deepEqual(publishOptions([]), {});
+  assert.deepEqual(publishOptions(["--publish", "--docs-unchanged", "No docs affected"]), { publish: true, docsUnchanged: "No docs affected" });
+  assert.deepEqual(publishOptions(["--docs-unchanged", "No docs affected", "--publish"]), { publish: true, docsUnchanged: "No docs affected" });
+  for (const bad of [["--docs-unchanged"], ["--publish", "--publish"], ["--other"], ["--docs-unchanged", "a", "--docs-unchanged", "b"]]) assert.throws(() => publishOptions(bad), /Use resolve TAG/);
+});
+test("the previous release is the newest older published release in the same line", () => {
+  const history = [{ tag_name: "v2.0.0-beta.17", draft: false }, { tag_name: "v2.0.0-beta.16", draft: false }, { tag_name: "v2.0.0-beta.18", draft: true },
+    { tag_name: "v2.0.0-beta.19", draft: false }, { tag_name: "v1.2.6", draft: false }, { tag_name: "v1.2.5", draft: false }, { tag_name: "v2.0.0", draft: false }, { tag_name: "not-a-tag", draft: false }];
+  assert.equal(previousRelease("v2.0.0-beta.18", history), "v2.0.0-beta.17");
+  assert.equal(previousRelease("v1.2.7", history), "v1.2.6");
+  assert.equal(previousRelease("v2.0.1", history), "v2.0.0");
+  // A stable release is compared with the previous stable, not a beta of the same version.
+  assert.equal(previousRelease("v2.0.0", history.filter((item) => item.tag_name !== "v2.0.0")), "v1.2.6");
+  // The first beta of a line falls back to the newest older release of either line.
+  assert.equal(previousRelease("v3.0.0-beta.1", [{ tag_name: "v2.0.0", draft: false }, { tag_name: "v2.1.0-beta.2", draft: true }]), "v2.0.0");
+  assert.throws(() => previousRelease("v1.0.0", history), /previous_published_release_required/);
+});
 test("bundle source and notes are independently verified", async () => {
   const f = await fixture();
   try {
@@ -179,8 +244,8 @@ test("bundle source and notes are independently verified", async () => {
 });
 
 // The release gate counts every job GitHub lists for a Verify run, including skipped ones, so the exported public ci.yml
-// must define exactly the required jobs. Private-only jobs (named private-*) are removed by the public export; any other
-// job, or a required job that a renamed matrix no longer produces, fails here before a release is blocked.
+// must define exactly the required jobs. Any other job, or a required job that a renamed matrix no longer produces, fails
+// here before a release is blocked.
 function workflowJobs(text) {
   const body = text.replace(/\r\n/g, "\n").split(/^jobs:\n/m)[1] ?? "";
   return body.split(/^(?=  [a-z0-9-]+:\n)/m).filter((chunk) => /^  [a-z0-9-]+:\n/.test(chunk)).map((chunk) => {
@@ -196,15 +261,12 @@ function workflowJobs(text) {
 test("the exported Verify workflow reports exactly the jobs the release gate requires", async () => {
   const jobs = workflowJobs(await readFile(".github/workflows/ci.yml", "utf8"));
   assert.ok(jobs.length >= 5, "ci.yml jobs could not be read");
-  const privateIds = new Set(jobs.filter((job) => job.id.startsWith("private-")).map((job) => job.id));
-  const exported = jobs.filter((job) => !privateIds.has(job.id));
-  assert.deepEqual(exported.flatMap((job) => job.names).sort(), [...requiredJobs].sort());
-  for (const job of exported) assert.deepEqual(job.needs.filter((need) => privateIds.has(need)), [], `${job.id} must not need a private-only job`);
-  // Private-only jobs exist only in private repositories; the export removes them before a public Verify run.
-  for (const id of privateIds) assert.match(id, /^private-(browser-shard|acceptance)$/);
-  // Skipped private jobs left in a public run are not ignored: an extra job, even skipped, fails the gate.
+  assert.deepEqual(jobs.flatMap((job) => job.names).sort(), [...requiredJobs].sort());
+  const ids = new Set(jobs.map((job) => job.id));
+  for (const job of jobs) assert.deepEqual(job.needs.filter((need) => !ids.has(need)), [], `${job.id} needs an undefined job`);
+  // An extra job in a run is not ignored, even skipped: it fails the gate.
   const run = { head_sha: sha, head_branch: "main", event: "push", status: "completed", conclusion: "success" };
-  const passed = exported.flatMap((job) => job.names).map((name) => ({ name, conclusion: "success" }));
+  const passed = jobs.flatMap((job) => job.names).map((name) => ({ name, conclusion: "success" }));
   assertCompleteVerify(run, passed, sha, "main");
-  assert.throws(() => assertCompleteVerify(run, [...passed, { name: "private-acceptance", conclusion: "skipped" }], sha, "main"), /complete_trusted_branch_verify_required/);
+  assert.throws(() => assertCompleteVerify(run, [...passed, { name: "extra-job", conclusion: "skipped" }], sha, "main"), /complete_trusted_branch_verify_required/);
 });

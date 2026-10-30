@@ -1,5 +1,5 @@
 import { api } from "./dashboard-api";
-import { isNewerRelease } from "./update-release";
+import { createCachedRead, isNewerRelease } from "./update-release";
 import { compareReleaseVersions } from "../../../packages/shared/src/release-policy.mjs";
 
 export type DashboardReleaseState = {
@@ -13,10 +13,12 @@ export type DashboardReleaseState = {
 
 const normalize = (value: string | undefined) => value?.replace(/^v/, "") ?? "";
 export const sameStableVersion = (left: string, right: string) => compareReleaseVersions(left, right) === 0;
+// The header check re-reads whenever the release check settles; one request serves those reads. Updates polls every 5 seconds, so each of its polls still reaches the server.
+const readInstallation = createCachedRead(() => api<{ releaseVersion: string; workflowUrl?: string }>("/admin/update-info"), 3_000);
 
 export async function readDashboardReleaseState(fetcher: typeof fetch = fetch): Promise<DashboardReleaseState> {
   const [installation, servedResponse] = await Promise.all([
-    api<{ releaseVersion: string; workflowUrl?: string }>("/admin/update-info"),
+    readInstallation(),
     fetcher("/__lancerlogin-release", { cache: "no-store", redirect: "error" }),
   ]);
   if (!servedResponse.ok) throw new Error("The dashboard deployment version is unavailable.");

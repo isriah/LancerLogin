@@ -27,6 +27,7 @@ export type {
 export type { CleanupStep } from "../../../apps/api/src/module-cleanup.ts";
 export type { ModuleCredentials } from "../../../apps/api/src/integration-crypto.ts";
 export type { ModuleEmailMessage } from "../../../apps/api/src/module-email.ts";
+export type { FirstDataService, FirstLegacyCredential, FirstLookup, FirstProgram, FirstProgramStatus, FirstSearchResult, FirstTeam, FirstUnavailableReason } from "../../../apps/api/src/first-data.ts";
 export type { DiscordModuleInteraction, DiscordModuleInteractionHandler } from "../../../apps/api/src/module-discord.ts";
 export type { ReportProjectionContext, ReportProjectionHandler, ReportRosterMember } from "../../../apps/api/src/module-reporting.ts";
 

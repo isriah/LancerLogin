@@ -45,6 +45,13 @@ const api: ApiModuleContribution<unknown> = {
       return context.respond({ id: input.id }, 201);
     },
     "/public/example": async (context: any) => {
+      // Lets tests confirm Core's FIRST service counts a public visitor's lookups, and that its legacy import is Guest Visits' alone.
+      if (context.url.pathname === "/public/example/first" && context.request.method === "POST") {
+        const input = await context.json(256);
+        const lookup = await context.services.first.lookupTeam({ program: "FRC", number: input?.number });
+        const importStatus = await context.services.first.importLegacyCredential({ program: "FTC", username: "u", ciphertext: "c", iv: "i", checkedAt: "2026-01-01T00:00:00.000Z" }).then(() => 200, (error: any) => error?.status);
+        return context.respond({ lookup, importStatus });
+      }
       if (context.url.pathname !== "/public/example/requests" || context.request.method !== "POST") return undefined;
       const input = await context.json(2048);
       if (!validId(input?.id) || !validId(input?.itemId) || typeof (input.note ?? "") !== "string" || (input.note ?? "").length > 500) return context.respond({ error: "A request ID and open item are required" }, 400);

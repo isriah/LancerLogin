@@ -14,13 +14,8 @@ export const attendanceSetupPredicates: Readonly<Record<string, (installationId:
     AND typeof(anomaly_early_threshold_minutes)='integer' AND anomaly_early_threshold_minutes BETWEEN 0 AND 180)`, bindings: [id] }),
   meeting: (id) => ({ sql: `EXISTS(SELECT 1 FROM meetings WHERE installation_id=? AND deleted_at IS NULL AND is_test=0
     AND length(trim(title))>0 AND julianday(starts_at) IS NOT NULL AND julianday(ends_at)>julianday(starts_at))`, bindings: [id] }),
-  input: (id) => ({ sql: `EXISTS(SELECT 1 FROM attendance_events e
-    JOIN meetings m ON m.installation_id=e.installation_id AND m.id=e.meeting_id
-    JOIN members r ON r.installation_id=e.installation_id AND r.id=e.member_id
-    JOIN organization_settings s ON s.installation_id=e.installation_id
-    WHERE e.installation_id=? AND e.source IN ('kiosk','simulator') AND e.action='check_in' AND length(trim(e.kiosk_event_id))>0
-    AND m.deleted_at IS NULL AND m.is_test=0 AND r.active=1 AND julianday(e.occurred_at)>=julianday(m.starts_at)
-    AND unixepoch(e.occurred_at,'subsec')<=unixepoch(m.ends_at,'subsec')+s.late_scan_minutes*60)`, bindings: [id] }),
+  // Verified attendance input: an active paired kiosk, Pi or web, that has checked in at least once.
+  input: (id) => ({ sql: "EXISTS(SELECT 1 FROM kiosks WHERE installation_id=? AND active=1 AND last_seen_at IS NOT NULL)", bindings: [id] }),
   calendar: (id) => ({ sql: "EXISTS(SELECT 1 FROM google_calendar_authorizations WHERE installation_id=? AND verified_at IS NOT NULL)", bindings: [id] }),
   discord: (id) => ({ sql: "EXISTS(SELECT 1 FROM encrypted_integrations WHERE installation_id=? AND provider='discord' AND verified_at IS NOT NULL)", bindings: [id] }),
 });
@@ -119,54 +114,18 @@ async function meeting(request: Request, db: D1Database, userId: string) {
   return json({ id }, 201);
 }
 
-async function input(request: Request, db: D1Database, userId: string) {
-  if (request.method === "GET") {
-    const [simulator, members, meetings] = await Promise.all([
-      db.prepare("SELECT name,active,online FROM simulated_kiosk_sessions WHERE installation_id=?").bind(installationId).first(),
-      db.prepare("SELECT external_id AS id,trim(first_name||' '||last_name) AS label FROM members WHERE installation_id=? AND active=1 ORDER BY last_name,first_name LIMIT 100").bind(installationId).all(),
-      db.prepare("SELECT id,title,starts_at AS startsAt,ends_at AS endsAt FROM meetings WHERE installation_id=? AND deleted_at IS NULL AND is_test=0 ORDER BY starts_at DESC,id LIMIT 100").bind(installationId).all(),
-    ]);
-    return json({ mode: "browser", fingerprintReaderVerified: false, simulator, members: members.results ?? [], meetings: meetings.results ?? [] });
-  }
-  if (request.method !== "POST") throw new HttpError(405, "Use GET or POST for browser Attendance setup");
-  const body = await readJson(request, 4096);
-  if (body.action === "start") {
-    const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : "Browser simulator";
-    if (name.length > 80 || Object.keys(body).some((key) => !["action", "name"].includes(key))) throw new HttpError(400, "Provide a valid browser simulator name");
-    const pairingId = crypto.randomUUID(); const now = new Date().toISOString();
-    await db.batch([
-      db.prepare("UPDATE pairing_codes SET expires_at=? WHERE installation_id=? AND id IN (SELECT pairing_code_id FROM simulated_kiosk_sessions WHERE installation_id=?)").bind(now, installationId, installationId),
-      db.prepare("INSERT INTO pairing_codes(id,installation_id,code_hash,expires_at,redeemed_at,created_by,created_at,purpose) VALUES(?,?,lower(hex(randomblob(32))),?,?,?,?,'simulator')").bind(pairingId, installationId, now, now, userId, now),
-      db.prepare(`INSERT INTO simulated_kiosk_sessions(installation_id,pairing_code_id,name,active,online,last_seen_at,created_by,created_at)
-        VALUES(?,?,?,1,1,?,?,?) ON CONFLICT(installation_id) DO UPDATE SET pairing_code_id=excluded.pairing_code_id,name=excluded.name,
-        active=1,online=1,last_seen_at=excluded.last_seen_at,created_by=excluded.created_by,created_at=excluded.created_at`).bind(installationId, pairingId, name, now, userId, now),
-      db.prepare("INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,created_at) VALUES(?,?,?,'simulator.paired','simulated_kiosk','browser',?)").bind(crypto.randomUUID(), installationId, userId, now),
-    ]);
-    return json({ mode: "browser", active: true, online: true, fingerprintReaderVerified: false });
-  }
-  if (body.action !== "scan" || Object.keys(body).some((key) => !["action", "memberId", "meetingId", "eventId"].includes(key)) || typeof body.memberId !== "string" || typeof body.meetingId !== "string") throw new HttpError(400, "Provide a member and meeting for a server-timed browser scan");
-  const now = new Date().toISOString(); const eventId = typeof body.eventId === "string" && body.eventId.trim() ? body.eventId.trim() : `simulator-${crypto.randomUUID()}`;
-  if (eventId.length > 100) throw new HttpError(400, "Attendance event identity is too long");
-  const [member, selectedMeeting, settings, simulator] = await Promise.all([
-    db.prepare("SELECT id,external_id AS externalId,first_name AS firstName,attendance_required_from AS attendanceRequiredFrom,created_at AS rosterAddedAt FROM members WHERE installation_id=? AND external_id=? AND active=1").bind(installationId, body.memberId).first<{ id: string; externalId: string; firstName: string; attendanceRequiredFrom: string | null; rosterAddedAt: string | null }>(),
-    db.prepare("SELECT id,title,starts_at AS startsAt,ends_at AS endsAt FROM meetings WHERE installation_id=? AND id=? AND deleted_at IS NULL AND is_test=0").bind(installationId, body.meetingId).first<{ id: string; title: string; startsAt: string; endsAt: string }>(),
-    db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id=?").bind(installationId).first<{ lateScanMinutes: number }>(),
-    db.prepare("SELECT 1 AS ready FROM simulated_kiosk_sessions WHERE installation_id=? AND active=1 AND online=1").bind(installationId).first(),
-  ]);
-  if (!member || !selectedMeeting || !settings || !simulator) throw new HttpError(409, "Start the simulator and choose an active member and meeting");
-  const participationStartsOn = member.attendanceRequiredFrom ?? member.rosterAddedAt?.slice(0, 10) ?? "";
-  if (participationStartsOn && selectedMeeting.startsAt.slice(0, 10) < participationStartsOn) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${participationStartsOn}`);
-  if (Date.parse(now) < Date.parse(selectedMeeting.startsAt) || Date.parse(now) > Date.parse(selectedMeeting.endsAt) + settings.lateScanMinutes * 60_000) throw new HttpError(409, "Choose a meeting whose attendance window is open now");
-  const result = await db.prepare(`INSERT OR IGNORE INTO attendance_events(id,installation_id,member_id,meeting_id,source,occurred_at,kiosk_event_id,created_by,action)
-    SELECT ?,?,?,?,?,?,?,?,'check_in' WHERE EXISTS(SELECT 1 FROM simulated_kiosk_sessions WHERE installation_id=? AND active=1 AND online=1)`)
-    .bind(crypto.randomUUID(), installationId, member.id, selectedMeeting.id, "simulator", now, eventId, userId, installationId).run();
-  return json({ accepted: result.meta?.changes === 1, duplicate: result.meta?.changes !== 1, eventId, action: "check_in", meeting: { id: selectedMeeting.id, title: selectedMeeting.title }, member: { id: member.id, externalId: member.externalId } }, result.meta?.changes === 1 ? 202 : 200);
+// The Verified attendance input card lists the active paired kiosks and whether each has checked in. Kiosks pair from
+// Add kiosk (POST /admin/pairing-codes), which Attendance setup allows before setup is finished.
+async function input(request: Request, db: D1Database) {
+  if (request.method !== "GET") throw new HttpError(405, "Use GET for Attendance input setup");
+  const kiosks = await db.prepare("SELECT id,name,kind,last_seen_at AS lastSeenAt FROM kiosks WHERE installation_id=? AND active=1 ORDER BY created_at,id LIMIT 100").bind(installationId).all<{ id: string; name: string; kind: string; lastSeenAt: string | null }>();
+  return json({ kiosks: (kiosks.results ?? []).map((kiosk) => ({ ...kiosk, kind: kiosk.kind === "web" ? "web" : "pi" })) });
 }
 
 export async function attendanceSetupRoute(request: Request, db: D1Database, userId: string) {
   const path = new URL(request.url).pathname;
   if (path === "/module-setup/attendance/rules") return rules(request, db, userId);
   if (path === "/module-setup/attendance/meeting") return meeting(request, db, userId);
-  if (path === "/module-setup/attendance/input") return input(request, db, userId);
+  if (path === "/module-setup/attendance/input") return input(request, db);
   throw new HttpError(404, "Attendance setup route not found");
 }

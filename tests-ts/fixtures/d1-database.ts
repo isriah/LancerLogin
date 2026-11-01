@@ -5,13 +5,49 @@ import { readFileSync, readdirSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { D1Database, D1Result, D1Statement } from "../../apps/api/src/d1-usage.ts";
-import { applyModuleMigrations, d1ModuleMigrationExecutor, loadModuleMigrationPackage, type MigrationDirectoryReader, type MigrationFile } from "../../apps/api/src/module-migrations.ts";
+import { adoptedBaselineName, applyModuleMigrations, d1ModuleMigrationExecutor, loadModuleMigrationPackage, moduleMigrationLedgerTable, planModuleMigrations, type MigrationDirectoryReader, type MigrationFile, type ModuleMigrationLedgerEntry, type ModuleMigrationPackage } from "../../apps/api/src/module-migrations.ts";
 
 export const coreMigrationDirectory = fileURLToPath(new URL("../../apps/api/migrations/", import.meta.url));
 export const nodeMigrationDirectoryReader: MigrationDirectoryReader = { list: (directory) => readdir(directory), read: (path) => readFile(path, "utf8") };
 
 export function readCoreMigrations(): MigrationFile[] {
   return readdirSync(coreMigrationDirectory).filter((name) => /^\d+_.+\.sql$/.test(name)).sort().map((name) => ({ name, content: readFileSync(`${coreMigrationDirectory}/${name}`, "utf8") }));
+}
+
+/** Record Core migrations in d1_migrations, as D1 does once it has applied them, so adopted baselines can be checked. */
+export function recordCoreMigrations(sqlite: DatabaseSync, names: readonly string[] = readCoreMigrations().map((file) => file.name)) {
+  sqlite.exec("CREATE TABLE IF NOT EXISTS d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+  const insert = sqlite.prepare("INSERT OR IGNORE INTO d1_migrations(name) VALUES (?)");
+  for (const name of names) insert.run(name);
+}
+
+/**
+ * Apply composed modules' migration packages to a synchronous fixture database right after Core migrations, as the Worker's
+ * module reconciliation does on an installation's first request: the runner's plan against the ledger, then each pending
+ * migration's statements and its ledger row in one transaction (an adopted baseline records its row without SQL). Pass the
+ * composed build's packages (`externalModuleMigrations`); an empty list, as in a Core build without plugins, changes nothing.
+ * Returns the ledger the packages expect, for assertions that follow the composed plugin rather than a hard-coded list.
+ */
+export function applyComposedModuleMigrations(sqlite: DatabaseSync, packages: readonly ModuleMigrationPackage[], options: { readonly coreAppliedMigrations?: readonly string[]; readonly now?: string } = {}) {
+  const coreApplied = options.coreAppliedMigrations ?? readCoreMigrations().map((file) => file.name);
+  const now = options.now ?? new Date().toISOString();
+  for (const pkg of packages) {
+    const ledger = sqlite.prepare(`SELECT sequence, name, sha256 FROM ${moduleMigrationLedgerTable} WHERE module_id = ? ORDER BY sequence`).all(pkg.moduleId) as ModuleMigrationLedgerEntry[];
+    for (const migration of planModuleMigrations(pkg, ledger, coreApplied).pending) {
+      sqlite.exec("BEGIN IMMEDIATE");
+      try {
+        for (const statement of migration.statements) sqlite.exec(statement);
+        sqlite.prepare(`INSERT INTO ${moduleMigrationLedgerTable} (module_id, sequence, name, sha256, applied_at) VALUES (?, ?, ?, ?, ?)`).run(pkg.moduleId, migration.sequence, migration.name, migration.sha256, now);
+        sqlite.exec("COMMIT");
+      } catch (error) { sqlite.exec("ROLLBACK"); throw error; }
+    }
+  }
+}
+
+/** The ledger rows (sequence and name, in order) a module's migration package records once fully applied. */
+export function expectedModuleLedger(pkg: ModuleMigrationPackage | undefined): { sequence: number; name: string }[] {
+  if (!pkg) return [];
+  return [...pkg.baseline ? [{ sequence: 0, name: adoptedBaselineName }] : [], ...pkg.migrations.map(({ sequence, name }) => ({ sequence, name }))];
 }
 
 /** A module whose migrations the runner applies after Core migrations. */

@@ -285,20 +285,52 @@ jobs:
           # Optional read access for private plugin repositories pinned by scripts/official-modules.json and tests/fixtures.
           LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}
         run: npm run test:browser -- --group integration --compose-selection tests/fixtures/carpool.modules.json --part ${{ matrix.shard }}/1
+  virtual-kiosk-browser:
+    # The real kiosk service with a virtual fingerprint reader, network and system, paired to a local Worker
+    # (scripts/virtual-kiosk.mjs), driven by the scenarios in tests-virtual-kiosk. Core only, no plugins.
+    name: Virtual kiosk browser
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'isriah/LancerLogin'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: 24.22.1, cache: npm }
+      - run: npm ci --no-audit
+      - name: Read the locked Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Restore the Playwright browser for this Playwright version
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+      - name: Install the Playwright browser and system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Playwright system dependencies for the cached browser
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      - name: Run the virtual kiosk scenarios
+        timeout-minutes: 25
+        run: npm run test:kiosk-virtual
   browser-smoke:
     if: >-
       !cancelled() &&
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'isriah/LancerLogin'
-    needs: [core-browser-shard, plugin-browser-shard, integration-browser-shard]
+    needs: [core-browser-shard, plugin-browser-shard, integration-browser-shard, virtual-kiosk-browser]
     runs-on: ubuntu-latest
     steps:
-      - name: Require every core, plugin and integration browser shard to pass
+      - name: Require every core, plugin and integration browser shard and the virtual kiosk scenarios to pass
         env:
           CORE_SHARD_RESULT: ${{ needs.core-browser-shard.result }}
           PLUGIN_SHARD_RESULT: ${{ needs.plugin-browser-shard.result }}
           INTEGRATION_SHARD_RESULT: ${{ needs.integration-browser-shard.result }}
+          VIRTUAL_KIOSK_RESULT: ${{ needs.virtual-kiosk-browser.result }}
         run: |
           test "$CORE_SHARD_RESULT" = success
           test "$PLUGIN_SHARD_RESULT" = success
           test "$INTEGRATION_SHARD_RESULT" = success
+          test "$VIRTUAL_KIOSK_RESULT" = success

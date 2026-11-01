@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Synthetic meetings: one alone on September 9, two sharing September 16 and nothing on September 23.
 const meeting = (id: string, title: string, startsAt: string, endsAt: string) => ({ id, title, startsAt, endsAt, attendanceClosesAt: endsAt, required: true, notes: "", audienceMode: "all", audienceLabelIds: [] });
@@ -12,18 +12,70 @@ test.use({ timezoneId: "UTC" });
 async function prepare(page: Page, width: number) {
   await page.setViewportSize({ width, height: 900 });
   await page.clock.install({ time: new Date("2026-09-02T16:00:00Z") });
-  await page.route("**/auth/walkthroughs/*", route => route.fulfill({ json: { progress: { pageId: "dashboard", version: 1, status: "completed", stepId: null } } }));
-  await page.route("**/meetings", route => route.fulfill({ json: { meetings } }));
-  await page.route(/\/meetings\/synthetic-[a-z]+$/, route => route.request().resourceType() === "document" ? route.continue() : route.fulfill({ json: { meeting: meetings.find(item => route.request().url().endsWith(item.id)) } }));
+  // Context routes, so a meeting opened in a new tab gets the same synthetic data.
+  const context = page.context();
+  await context.route("**/auth/walkthroughs/*", route => route.fulfill({ json: { progress: { pageId: "dashboard", version: 1, status: "completed", stepId: null } } }));
+  await context.route("**/meetings", route => route.fulfill({ json: { meetings } }));
+  await context.route(/\/meetings\/synthetic-[a-z]+$/, route => route.request().resourceType() === "document" ? route.continue() : route.fulfill({ json: { meeting: meetings.find(item => route.request().url().endsWith(item.id)) } }));
   await page.goto("/dashboard");
   await expect(page.getByRole("region", { name: "Meeting calendar" })).toBeVisible();
 }
 const day = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+// A desktop day with exactly one meeting is a real link to that meeting, like the selected day's Open meeting link.
+const dayLink = (page: Page, name: string) => page.getByRole("link", { name, exact: true });
+const openLink = (page: Page, title: string) => page.getByRole("link", { name: `Open meeting ${title}`, exact: true });
 const panel = (page: Page) => page.locator(".calendar-selected-day");
+const soloName = "September 9, 2026, 1 meeting, opens meeting Test solo planning";
+
+// A modified or middle click opens the meeting in a new tab or window and leaves the Dashboard where it was.
+async function opensElsewhere(page: Page, target: Locator, path: RegExp, options: Parameters<Locator["click"]>[0]) {
+  const opened = page.context().waitForEvent("page");
+  await target.click(options);
+  const tab = await opened;
+  await tab.waitForURL(path);
+  await tab.close();
+  await expect(page).toHaveURL(/\/dashboard$/);
+}
+const modifiedClicks: Parameters<Locator["click"]>[0][] = [{ modifiers: ["ControlOrMeta"] }, { modifiers: ["Shift"] }, { button: "middle" }];
+
+test("desktop one-meeting days and Open meeting are links that open a new tab on modified or middle click", async ({ page }) => {
+  await prepare(page, 1280);
+  const solo = dayLink(page, soloName);
+  await expect(solo).toHaveAttribute("href", "/meetings/synthetic-solo");
+  for (const options of modifiedClicks) await opensElsewhere(page, solo, /\/meetings\/synthetic-solo$/, options);
+  // The day was not chosen by those clicks: today stays the selected day.
+  await expect(day(page, "September 2, 2026, 0 meetings")).toHaveAttribute("aria-pressed", "true");
+  await expect(solo).not.toHaveAttribute("data-selected", "true");
+  await day(page, "September 16, 2026, 2 meetings").click();
+  const second = openLink(page, "Test second workshop");
+  await expect(second).toHaveAttribute("href", "/meetings/synthetic-second");
+  for (const options of modifiedClicks) await opensElsewhere(page, second, /\/meetings\/synthetic-second$/, options);
+  await expect(panel(page)).toContainText("Test second workshop");
+  // A plain click still navigates in place, without a page load.
+  await page.evaluate(() => { (window as Window & { inPlace?: boolean }).inPlace = true; });
+  await second.click();
+  await expect(page).toHaveURL(/\/meetings\/synthetic-second$/);
+  expect(await page.evaluate(() => (window as Window & { inPlace?: boolean }).inPlace)).toBe(true);
+});
+
+test("meeting table rows open a new tab on Ctrl/Cmd or middle click and in place on a plain click", async ({ page }) => {
+  await prepare(page, 1280);
+  await page.getByRole("radio", { name: "Table", exact: true }).check();
+  const row = page.getByRole("row", { name: "Open Test solo planning", exact: true });
+  await expect(row.getByRole("link", { name: "Test solo planning", exact: true })).toHaveAttribute("href", "/meetings/synthetic-solo");
+  const dateCell = row.getByRole("cell").nth(2);
+  for (const options of [{ modifiers: ["ControlOrMeta"] }, { button: "middle" }] as Parameters<Locator["click"]>[0][]) await opensElsewhere(page, dateCell, /\/meetings\/synthetic-solo$/, options);
+  for (const options of modifiedClicks) await opensElsewhere(page, row.getByRole("link", { name: "Test solo planning", exact: true }), /\/meetings\/synthetic-solo$/, options);
+  // The selection checkbox still only selects.
+  await row.getByRole("checkbox", { name: "Select Test solo planning" }).click({ modifiers: ["ControlOrMeta"] });
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await dateCell.click();
+  await expect(page).toHaveURL(/\/meetings\/synthetic-solo$/);
+});
 
 test("desktop one-meeting days open their meeting by click, Enter or Space", async ({ page }) => {
   await prepare(page, 1280);
-  const solo = day(page, "September 9, 2026, 1 meeting, opens meeting Test solo planning");
+  const solo = dayLink(page, soloName);
   await expect(solo).toBeVisible();
   // Anywhere in the cell opens it, including the date number and the entry summary.
   for (const target of [solo.locator("span").first(), solo.locator(".calendar-day-summary")]) {
@@ -45,7 +97,7 @@ test("desktop days with several meetings or none still select the day", async ({
   await expect(shared).toHaveAttribute("aria-pressed", "true");
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(panel(page)).toContainText("Test first workshop"); await expect(panel(page)).toContainText("Test second workshop");
-  await page.getByRole("button", { name: "Open meeting Test second workshop", exact: true }).click();
+  await openLink(page, "Test second workshop").click();
   await expect(page).toHaveURL(/\/meetings\/synthetic-second$/);
   await page.goBack();
   const empty = day(page, "September 23, 2026, 0 meetings");
@@ -62,12 +114,12 @@ test("phone one-meeting days keep selecting the day and listing it below", async
   await expect(solo).toHaveAttribute("aria-pressed", "true");
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(panel(page)).toContainText("Test solo planning");
-  await page.getByRole("button", { name: "Open meeting Test solo planning", exact: true }).click();
+  await openLink(page, "Test solo planning").click();
   await expect(page).toHaveURL(/\/meetings\/synthetic-solo$/);
   await page.goBack();
   // Widening to desktop switches the same cell to opening its meeting; narrowing switches it back.
   await page.setViewportSize({ width: 1280, height: 900 });
-  await expect(day(page, "September 9, 2026, 1 meeting, opens meeting Test solo planning")).toBeVisible();
+  await expect(dayLink(page, soloName)).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(solo).toBeVisible();
   await solo.focus(); await page.keyboard.press("Enter");
@@ -77,11 +129,11 @@ test("phone one-meeting days keep selecting the day and listing it below", async
 
 test("desktop one-meeting days also become the selected day when their meeting opens", async ({ page }) => {
   await prepare(page, 1280);
-  const solo = day(page, "September 9, 2026, 1 meeting, opens meeting Test solo planning");
+  const solo = dayLink(page, soloName);
   await solo.click();
   await expect(page).toHaveURL(/\/meetings\/synthetic-solo$/);
   await page.goBack();
-  await expect(solo).toHaveAttribute("aria-pressed", "true");
+  await expect(solo).toHaveAttribute("data-selected", "true");
   await expect(panel(page)).toContainText("Test solo planning");
   await page.getByRole("button", { name: "Add meeting", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Create meeting" }).getByLabel("Date", { exact: true })).toHaveValue("2026-09-09");

@@ -19,6 +19,7 @@ import { WalkthroughSessionProvider } from "./page-walkthrough";
 import { AppErrorFallback, ErrorBoundary } from "./error-boundary";
 import { clearWalkthroughSession } from "./walkthrough-session";
 import { readStorage, writeStorage } from "./browser-storage";
+import { isWebKioskPath } from "./web-kiosk/route";
 import { product, type ThemeColors } from "../../../packages/shared/src/product.ts";
 // Loaded last so desktop consistency rules follow every page and mobile stylesheet.
 import "./desktop-layout.css";
@@ -208,4 +209,6 @@ function LocalLogin({ status, onSignedIn }: { status: SetupStatus; onSignedIn: (
   return <main id="dashboard-content" className="login-card ui-card" aria-labelledby="sign-in-title"><div className="form-intro"><p className="kicker">{status.settings?.organizationName ?? "LancerLogin"}</p><h1 id="sign-in-title">{status.justCreated ? "Sign in to finish setup" : "Sign in"}</h1><p>{status.justCreated ? mode === "google" ? "Your installation is ready. Continue with Google using the first Admin email to finish setup." : "Your installation is ready. Sign in with the Admin account you just created to finish setup." : "Sign in to manage attendance."}</p></div>{mode !== "google" && <form className="ui-form" onSubmit={submit} aria-describedby={messageId}><label htmlFor="sign-in-username">Username<input id="sign-in-username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><label htmlFor="sign-in-password">Password<input id="sign-in-password" required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><button className="primary-button" disabled={busy} type="submit">{busy ? "Signing in…" : "Sign in"}</button></form>}{mode === "both" && <div className="auth-divider" aria-hidden="true"><span>or</span></div>}{mode !== "local" && <a className="google-button action-link" href={`${apiBaseUrl}/auth/google/start`}>Continue with Google</a>}{message && <p id="sign-in-message" className="ui-status auth-message" data-tone="error" role="alert" tabIndex={-1}>{message}</p>}</main>;
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><ErrorBoundary fallback={() => <AppErrorFallback />}><App /></ErrorBoundary></StrictMode>);
+// /kiosk is the standalone web kiosk: no dashboard shell, sign-in or startup requests, loaded as its own chunk.
+if (isWebKioskPath(window.location.pathname)) void import("./web-kiosk/web-kiosk-page.tsx").then(({ mountWebKiosk }) => mountWebKiosk(document.getElementById("root")!));
+else createRoot(document.getElementById("root")!).render(<StrictMode><ErrorBoundary fallback={() => <AppErrorFallback />}><App /></ErrorBoundary></StrictMode>);

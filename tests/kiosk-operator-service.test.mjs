@@ -307,8 +307,11 @@ test("an identity still resolving cannot cross an operator transition into resum
   const f = await fixture(t, { method: "member_id" }), runtime = await f.start();
   await until(() => f.heartbeats() > 0);
   let presence = await runtime.presence("attendance");
+  // Member ID entry first shows "Is this you?": the unconfirmed ID answers with the member and records nothing.
+  const asked = await runtime.request("/identity", { method: "member_id", memberId: "SYNTHETIC-MEMBER" });
+  assert.equal(asked.status, 200); assert.deepEqual((await asked.json()).confirm, { memberId: "synthetic-member", firstName: "", lastName: "" });
   await runtime.reader({ holdIdentity: true });
-  const pending = runtime.request("/identity", { method: "member_id", memberId: "synthetic-member" });
+  const pending = runtime.request("/identity", { method: "member_id", memberId: "synthetic-member", confirmed: true });
   await until(async () => (await runtime.reader()).identityCalls === 1);
   presence = await runtime.presence("maintenance", presence);
   await runtime.presence("attendance", presence);
@@ -316,7 +319,7 @@ test("an identity still resolving cannot cross an operator transition into resum
   const discarded = await pending;
   assert.equal(discarded.status, 400); assert.match((await discarded.json()).error, /mode changed/);
   await wait(300); assert.equal(f.attendance.length, 0);
-  assert.equal((await runtime.request("/identity", { method: "member_id", memberId: "synthetic-member" })).status, 202);
+  assert.equal((await runtime.request("/identity", { method: "member_id", memberId: "synthetic-member", confirmed: true })).status, 202);
   await until(() => f.attendance.length === 1);
 });
 

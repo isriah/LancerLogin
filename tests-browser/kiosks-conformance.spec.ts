@@ -65,7 +65,6 @@ async function useKioskContext(page: Page, { role = "admin", state = "healthy", 
   await page.route("**/admin/setup/progress", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }) }));
   await page.route("**/integrations/capabilities", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: false, configured: false }, discord: { enabled: discordConfigured, configured: discordConfigured } } }) }));
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [...kioskFor(state, reportedAuthenticationMethod).map(kiosk => ({ ...kiosk, configuredAuthenticationMethod })), retiredKiosk], authenticationMethod: configuredAuthenticationMethod }) }));
-  await page.route("**/admin/simulator", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ simulator: { name: "Browser test", active: 1, online: 1, lastSeenAt: iso(0), readerOnline: false, releaseVersion: "browser simulator" } }) }));
   await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: "v0.19.0", html_url: "https://example.test/release" }) }));
 }
 
@@ -125,41 +124,25 @@ for (const { name, options, kiosk, reason } of [
   await expect(begin).toHaveAttribute("aria-describedby", "kiosk-enrollment-reason");
 });
 
-test("Unconfigured simulator links to guided setup and operators cannot start enrollment", async ({ page }) => {
+test("Kiosks has no browser simulator and operators cannot start enrollment", async ({ page }) => {
   await useKioskContext(page);
-  await page.route("**/admin/simulator", route => route.fulfill({ json: { simulator: null } }));
   await page.goto("/kiosks");
-  await expect(page.getByRole("link", { name: "Set up browser simulator" })).toHaveAttribute("href", "/settings/guided-setup");
+  await expect(page.getByRole("heading", { level: 1, name: "Kiosks" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Browser simulator" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /simulator/i })).toHaveCount(0);
   await useKioskContext(page, { role: "operator" });
   await page.reload();
   await expect(page.getByRole("button", { name: /^Begin enrollment/ })).toHaveCount(0);
 });
 
-test("a stopped simulator can be started again from Kiosks", async ({ page }) => {
-  await useKioskContext(page);
-  let simulator = { name: "Browser test", active: 0, online: 0, readerOnline: false, releaseVersion: "browser simulator" };
-  let started: unknown;
-  await page.route("**/admin/simulator", (route) => route.fulfill({ json: { simulator } }));
-  await page.route("**/module-setup/attendance/input", async (route) => { started = route.request().postDataJSON(); simulator = { ...simulator, active: 1, online: 1 }; await route.fulfill({ json: { mode: "browser", active: true, online: true, fingerprintReaderVerified: false } }); });
-  await page.goto("/kiosks");
-  const card = page.locator(".kiosk-simulator-card");
-  await expect(card.getByText("Stopped", { exact: true })).toBeVisible();
-  await expect(card.getByRole("link", { name: "Open simulator" })).toHaveCount(0);
-  await card.getByRole("button", { name: "Start simulator" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Browser simulator started." })).toBeVisible();
-  expect(started).toEqual({ action: "start", name: "Browser test" });
-  await expect(card.getByRole("link", { name: "Open simulator" })).toHaveAttribute("href", "/simulator");
-  await expect(card.getByRole("button", { name: "Stop simulator" })).toBeVisible();
-});
-
-test("Add physical kiosk walks through Pi preparation, a pinned installer, the pairing key, and local pairing", async ({ page }) => {
+test("Add kiosk walks a Raspberry Pi through Pi preparation, a pinned installer, the pairing key, and local pairing", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await useKioskContext(page);
   await page.addInitScript(() => { Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { (window as unknown as { copied: string[] }).copied = [...((window as unknown as { copied?: string[] }).copied ?? []), text]; } } }); });
   await page.route("**/admin/pairing-codes", (route) => route.fulfill({ status: 201, json: { code: "ABCD-1234", expiresAt: new Date(Date.now() + 600_000).toISOString(), workerApiUrl: "https://worker.example.test", kioskName: "Front desk" } }));
   await page.goto("/kiosks");
   await page.getByRole("button", { name: "Add kiosk" }).click();
-  const dialog = page.getByRole("dialog", { name: "Add physical kiosk" });
+  const dialog = page.getByRole("dialog", { name: "Add kiosk" });
   for (const name of ["Prepare the Pi", "Install the kiosk software", "Create the one-time pairing key", "Pair from a phone or laptop"]) await expect(dialog.getByRole("heading", { level: 3, name })).toBeVisible();
   await expect(dialog.getByRole("link", { name: /installer/i })).toHaveCount(0);
   await expect(dialog).toContainText("/dev/serial0");
@@ -324,11 +307,10 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       // Every diagnostics label stays on one line beside its value.
       for (const label of await page.locator(".kiosk-summary dt").evaluateAll(items => items.map(item => { const range = document.createRange(); range.selectNodeContents(item); return { text: item.textContent, lines: new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size }; }))) expect(label, label.text ?? "").toEqual({ text: label.text, lines: 1 });
       await expect(page.getByRole("heading", { name: "Device history" })).toHaveCount(0);
-      await expect(page.getByRole("link", { name: "Open simulator" })).toHaveAttribute("href", "/simulator");
-      const controls = page.locator(".kiosk-device-card button, .kiosk-simulator-card a, .kiosk-simulator-card button");
+      const controls = page.locator(".kiosk-device-card button");
       for (const height of await controls.evaluateAll((items) => items.map((item) => item.getBoundingClientRect().height))) expect(height).toBeGreaterThanOrEqual(44);
       await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
-      await page.getByText("Authentication settings", { exact: true }).click();
+      await page.getByText("Identification", { exact: true }).click();
       await page.keyboard.press("Tab");
       await page.getByRole("button", { name: "Authentication maintenance" }).focus();
       expect(await page.getByRole("button", { name: "Authentication maintenance" }).evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
@@ -398,7 +380,7 @@ test("Debug tools hold rejected scans, fingerprint matching and weak-match diagn
     await expect(page.getByRole("region", { name: "Rejected scans", exact: true })).toHaveCount(debugMode ? 1 : 0);
     await expect(page.getByRole("region", { name: "Fingerprint matching" })).toHaveCount(debugMode ? 1 : 0);
     for (const name of ["Possible wrong matches", "Re-enroll suggested", "Discord users not on the roster"]) await expect(page.getByRole("region", { name, exact: true })).toHaveCount(debugMode ? 1 : 0);
-    if (debugMode) await expect(tools.getByRole("heading", { level: 3 })).toHaveText(["Rejected scans", "Fingerprint matching", "Possible wrong matches", "Re-enroll suggested", "Discord users not on the roster"]);
+    if (debugMode) await expect(tools.getByRole("heading", { level: 3 })).toHaveText(["Open web kiosk on this device", "Rejected scans", "Fingerprint matching", "Possible wrong matches", "Re-enroll suggested", "Discord users not on the roster"]);
     if (debugMode) { await expect(tools.getByRole("region", { name: "Rejected scans", exact: true })).toBeVisible(); await expect(tools.getByRole("region", { name: "Fingerprint matching" })).toBeVisible(); await expectResponsiveFit(page); }
     await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
     await page.getByText("Diagnostics", { exact: true }).click();
@@ -434,7 +416,7 @@ test("multiple active kiosks remain independently selectable and manageable", as
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [frontDesk, workshop, retiredKiosk], authenticationMethod: "fingerprint" }) }));
   await page.goto("/kiosks");
 
-  const switcher = page.getByRole("group", { name: "Active physical kiosks" });
+  const switcher = page.getByRole("group", { name: "Active kiosks" });
   await expect(switcher.locator(".kiosk-device-select")).toHaveCount(2);
   await expect(page.getByText("2 active devices", { exact: true })).toBeVisible();
   await switcher.getByRole("button", { name: /^Workshop entrance/ }).click();
@@ -443,7 +425,7 @@ test("multiple active kiosks remain independently selectable and manageable", as
   await expect(page.locator(".kiosk-summary")).toContainText("0.17.0");
 
   await page.getByRole("button", { name: "Add kiosk" }).click();
-  const dialog = page.getByRole("dialog", { name: "Add physical kiosk" });
+  const dialog = page.getByRole("dialog", { name: "Add kiosk" });
   await expect(dialog.getByText("without interrupting any existing kiosk", { exact: false })).toBeVisible();
   await expect(dialog.getByRole("checkbox")).toHaveCount(0);
 });
@@ -460,7 +442,7 @@ test("Admin pairing, maintenance, action feedback, and long errors remain focuse
 
   const add = page.getByRole("button", { name: "Add kiosk" });
   await add.click();
-  const dialog = page.getByRole("dialog", { name: "Add physical kiosk" });
+  const dialog = page.getByRole("dialog", { name: "Add kiosk" });
   await expect(dialog).toHaveAttribute("aria-describedby", "pair-kiosk-description");
   await expect(dialog.getByRole("button", { name: "Close pairing dialog" })).toBeFocused();
   await dialog.getByRole("button", { name: "Create one-time pairing key" }).click();
@@ -471,9 +453,9 @@ test("Admin pairing, maintenance, action feedback, and long errors remain focuse
   await expect(add).toBeFocused();
 
   await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
-  await page.getByText("Authentication settings", { exact: true }).click();
+  await page.getByText("Identification", { exact: true }).click();
   await page.getByRole("button", { name: "Authentication maintenance" }).click();
-  await expect(page.getByText("Open maintenance on the physical kiosk", { exact: true })).toBeVisible();
+  await expect(page.getByText("Open maintenance on the kiosk", { exact: true })).toBeVisible();
   await page.getByText("Device maintenance", { exact: true }).click();
   await page.getByRole("button", { name: "Reload display" }).click();
   const actionStatus = page.getByRole("status").filter({ hasText: "Display reload queued." });
@@ -489,7 +471,7 @@ test("configured authentication stays visibly pending until the physical kiosk r
   await expect(authentication).toContainText("Fingerprint");
   await expect(authentication).toContainText("QR code configured - waiting for kiosk sync");
   await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
-  await page.getByText("Authentication settings", { exact: true }).click();
+  await page.getByText("Identification", { exact: true }).click();
   const selector = page.getByLabel("Authentication method");
   await expect(selector).toHaveValue("qr");
   await expect(selector).toHaveClass(/ui-native-select/);
@@ -515,7 +497,7 @@ test("selected-device authentication and inline rename leave other kiosks unchan
   await expect(selector).toHaveCount(0);
   await page.getByRole("button", { name: /^Workshop entrance/ }).click();
   await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
-  await page.getByText("Authentication settings", { exact: true }).click();
+  await page.getByText("Identification", { exact: true }).click();
   await expect(selector).toHaveValue("nfc");
   await expect(page.locator(".kiosk-summary")).toContainText("NFC badge configured - waiting for kiosk sync");
   await selector.selectOption("qr"); await page.getByRole("button", { name: "Save method", exact: true }).click();
@@ -559,7 +541,7 @@ test("Cloud storage fills the sharing row without an empty peer column", async (
   await expectResponsiveFit(page);
 });
 
-test("Operator sees health without Admin management, simulator, or unconfigured Discord controls", async ({ page }) => {
+test("Operator sees health without Admin management or unconfigured Discord controls", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await useKioskContext(page, { role: "operator", state: "degraded", discordConfigured: false });
   await page.goto("/kiosks");
@@ -568,7 +550,6 @@ test("Operator sees health without Admin management, simulator, or unconfigured 
   await expect(page.getByRole("table", { name: "Retired kiosk history" })).toHaveCount(0);
   await expect(page.getByText("Unavailable until the Discord integration is enabled, saved, and verified.")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Add kiosk|Rename|Reload display|Restart software|Reboot Pi|Reset network PIN|Retire kiosk|Sync Discord status/ })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Browser simulator" })).toHaveCount(0);
   await expectResponsiveFit(page);
 });
 
@@ -663,7 +644,7 @@ test("management route uses the selected kiosk and never falls back for a missin
   await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
   await expect(page).toHaveURL(/\/kiosks\/kiosk-2\/manage$/);
   await expect(page.locator(".page-intro")).toContainText("Studio kiosk");
-  for (const title of ["Diagnostics", "Authentication settings", "Device maintenance", "Retire kiosk"]) {
+  for (const title of ["Diagnostics", "Identification", "Device maintenance", "Retire kiosk"]) {
     const summary = page.locator(".kiosk-management-section > summary").filter({ hasText: title });
     await expect(summary).toBeVisible();
     const bounds = await summary.boundingBox();

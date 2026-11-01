@@ -58,7 +58,7 @@ Web updates require current Administrator authorization, an exact dashboard orig
 
 Tracks never install or downgrade software. Started web updates and recent pending kiosk updates lock the track. Beta preparation requires the reviewed private controller; a kiosk needs its installed channel-aware root helper. Execution independently checks release flags, complete assets, exact tag/commit and immutable beta metadata. See [UPDATE-TRACKS.md](UPDATE-TRACKS.md).
 
-Physical kiosk updates are separate from web updates. A kiosk installs only a server-pinned, immutable official release whose installer and archives match GitHub's recorded asset digests, and rolls back automatically when the new release fails its health check. A simulator or dashboard state is not proof of a physical update; confirm the release the kiosk reports. See [KIOSK.md](KIOSK.md#update-a-physical-kiosk) and [WEB-UPDATES.md](WEB-UPDATES.md).
+Physical kiosk updates are separate from web updates. A kiosk installs only a server-pinned, immutable official release whose installer and archives match GitHub's recorded asset digests, and rolls back automatically when the new release fails its health check. Dashboard state is not proof of a physical update; confirm the release the kiosk reports. See [KIOSK.md](KIOSK.md#update-a-physical-kiosk) and [WEB-UPDATES.md](WEB-UPDATES.md).
 
 ## Report a concern
 

@@ -147,7 +147,8 @@ VALUES('primary','meeting-1','member-1','synthetic-discord-user','synthetic-mess
     await writeFile(configPath, `${JSON.stringify(config(databaseName, "../apps/api/migrations"), null, 2)}\n`, { mode: 0o600 });
     await wrangler(workspace, temporary, configPath, stateDirectory, ["d1", "migrations", "apply", databaseName, "--local"]);
     // Initializing inactivity history invalidates cached reports once per inactive member.
-    const expected = structuredClone(before);
+    // 0092 drops the browser simulator's sessions; this seed has none, and the rest of the state must be unchanged.
+    const expected = structuredClone(before).filter((table) => !(table.name === "simulated_kiosk_sessions" && candidateMigrations.includes("0092_remove_simulator.sql")));
     if (candidateMigrations.includes("0062_member_inactive_periods.sql")) {
       for (const row of expected.find((table) => table.name === "report_data_revision")?.rows ?? []) {
         row.revision += before.find((table) => table.name === "members")?.rows.filter((member) => member.installation_id === row.installation_id && member.active === 0).length ?? 0;

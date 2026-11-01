@@ -176,7 +176,6 @@ test("Settings uses one direct link per enabled module", async ({ page }) => {
   await attendance.focus(); await page.keyboard.press("Enter"); await expect(page).toHaveURL(/\/settings\/attendance$/);
   await expect(page.getByRole("navigation", { name: "Attendance settings sections" }).getByRole("link", { name: "Attendance rules" })).toHaveAttribute("aria-current", "page");
   await openSettingsNavigation(page); await modules.click();
-  await expect(menu.getByRole("link", { name: "Kiosk Simulator" })).toHaveCount(0);
   await expect(menu.getByRole("link")).toHaveCount(carpoolComposed ? 4 : 3); await expect(outreach).toBeVisible(); if (carpoolComposed) await expect(carpool).toBeVisible();
   await page.keyboard.press("Escape"); await expect(modules).toBeFocused();
 });
@@ -1028,7 +1027,7 @@ test("integration setup uses status URLs and guidance when the API provides them
   const discord = page.locator(".integration-card").filter({ hasText: "Discord bot" });
   await expect(discord.locator(".copy-value code")).toHaveText("https://dev.example.test/api/discord/interactions");
   await discord.getByRole("button", { name: "Replace credentials", exact: true }).click();
-  await expect(discord.getByText(/Create Public Threads, Create Events, Manage Events, and Manage Roles/)).toBeVisible();
+  await expect(discord.getByText(/Create Public Threads, Manage Threads, Create Events, Manage Events, and Manage Roles/)).toBeVisible();
   await expect(discord.getByText("Server Members Intent", { exact: true })).toBeVisible();
   await expect(discord.getByText(/Guild Members/)).toHaveCount(0);
   await expect(discord.getByText(/plus the private anomaly report channel if you use one/)).toBeVisible();
@@ -1043,7 +1042,8 @@ test("integration credential fields opt out of sign-in autofill and password man
   await cards.filter({ hasText: "Resend email" }).getByRole("button", { name: "Replace credentials", exact: true }).click();
   await expect(cards.getByLabel("Calendar OAuth client ID", { exact: true })).toBeVisible();
   const passwords = cards.locator('input[type="password"]');
-  await expect(passwords).toHaveCount(4);
+  // Four provider secrets, and the FIRST card's FRC and FTC tokens.
+  await expect(passwords).toHaveCount(6);
   for (const input of await passwords.all()) {
     await expect(input).toHaveAttribute("autocomplete", "new-password");
     await expect(input).toHaveAttribute("data-1p-ignore", "");
@@ -1117,6 +1117,24 @@ test("Edit roster member renders the Active roster member checkbox as a checkbox
   expect(box.appearance).toBe(reference.appearance);
   expect(await active.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(reference.radius);
   await active.focus(); await page.keyboard.press("Space"); await expect(active).not.toBeChecked();
+});
+
+for (const width of [1280, 390]) test(`Edit roster member centers the Active roster member checkbox on its label text at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+  await useSettingsContext(page);
+  await page.route("**/labels", (route) => route.fulfill({ json: { labels: [{ id: "label-test", name: "Test label", active: 1, formulaEnabled: 0 }], history: [], periods: [], today: "2026-10-29" } }));
+  await page.goto("/roster");
+  await page.getByRole("button", { name: "Edit Avery Stone", exact: true }).first().click();
+  const active = page.getByRole("dialog", { name: "Edit roster member" }).getByRole("checkbox", { name: "Active roster member" });
+  await expect(active).toBeVisible();
+  const centers = await active.evaluate((input) => {
+    const label = input.closest("label")!; const range = document.createRange();
+    const text = [...label.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE && node.textContent!.trim());
+    range.setStartBefore(text[0]!); range.setEndAfter(text[text.length - 1]!);
+    const textBox = range.getBoundingClientRect(); const box = input.getBoundingClientRect();
+    return { box: box.top + box.height / 2, text: textBox.top + textBox.height / 2 };
+  });
+  expect(Math.abs(centers.box - centers.text)).toBeLessThanOrEqual(2);
 });
 
 test("saved integration credentials show a saved date and open the form only to replace them", async ({ page }) => {

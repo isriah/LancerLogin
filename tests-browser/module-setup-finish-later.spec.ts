@@ -11,7 +11,7 @@ async function attendanceSetupWithoutInput(page: Page) {
   await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot({ setupReady: false }) }));
   await page.route("**/admin/modules/attendance/setup", (route) => route.fulfill({ json: state }));
   await page.route("**/module-setup/attendance/meeting", (route) => route.fulfill({ json: { meetings: [], timeZone: "UTC" } }));
-  await page.route("**/module-setup/attendance/input", (route) => route.fulfill({ json: { simulator: null, members: [], meetings: [] } }));
+  await page.route("**/module-setup/attendance/input", (route) => route.fulfill({ json: { kiosks: [] } }));
   await page.route("**/admin/members", (route) => route.fulfill({ json: { members: [] } }));
 }
 
@@ -78,9 +78,54 @@ test("the Roster card adds the first member inline and unlocks Verified attendan
   await expect(card.getByText("Complete", { exact: true })).toBeVisible();
   await card.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();
-  await expect(page.getByText("Pair it from Kiosks once setup is finished.", { exact: false })).toBeVisible();
+  await expect(page.getByText("Pair a kiosk: a Raspberry Pi with a fingerprint reader, or a touchscreen laptop or tablet as a web kiosk.", { exact: false })).toBeVisible();
+  await expect(page.getByText("No kiosk is paired yet.")).toBeVisible();
   await page.getByRole("button", { name: "Back" }).click();
   await expect(page.getByRole("heading", { level: 2, name: "Roster" })).toBeVisible();
+});
+
+test("Verified attendance input pairs a kiosk with Add kiosk and turns Ready once the kiosk checks in", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  let kiosks: { id: string; name: string; kind: "pi" | "web"; lastSeenAt: string | null }[] = [];
+  let pairing: unknown;
+  const valid = ["rules", "meeting"];
+  await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot({ setupReady: false }) }));
+  await page.route("**/admin/modules/attendance/setup", (route) => route.fulfill({ json: attendanceSetupState({ rules: "completed", meeting: "completed" }, kiosks.some((kiosk) => kiosk.lastSeenAt) ? [...valid, "input"] : valid) }));
+  await page.route("**/module-setup/attendance/input", (route) => route.fulfill({ json: { kiosks } }));
+  await page.route("**/admin/members", (route) => route.fulfill({ json: { members: [{ id: "member-1", memberId: "T-001", firstName: "Test Student", lastName: "A", active: true }] } }));
+  await page.route("**/admin/pairing-codes", (route) => {
+    pairing = route.request().postDataJSON();
+    kiosks = [{ id: "kiosk-1", name: "Test web kiosk A", kind: "web", lastSeenAt: null }];
+    return route.fulfill({ status: 201, json: { code: "ABCD2345", displayCode: "ABCD-2345", expiresAt: "2026-09-28T12:10:00.000Z", kioskName: "Test web kiosk A", kind: "web" } });
+  });
+  await page.goto("/dashboard");
+  const card = page.getByRole("article", { name: "Verified attendance input" });
+  await expect(card.getByText("Action needed", { exact: true })).toBeVisible();
+  await expect(card.getByText("No kiosk is paired yet.")).toBeVisible();
+  // Kiosks opens only once setup is finished, so the card offers Add kiosk itself.
+  await expect(card.getByRole("button", { name: "Open Kiosks" })).toHaveCount(0);
+  await card.getByRole("button", { name: "Save and continue" }).click();
+  await expect(page.getByRole("alert")).toHaveText("Pair a kiosk with Add kiosk, then continue once it checks in.");
+
+  await card.getByRole("button", { name: "Add kiosk" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add kiosk" });
+  await dialog.getByRole("radio", { name: "Web kiosk", exact: true }).check();
+  await dialog.getByRole("textbox", { name: "Kiosk name" }).fill("Test web kiosk A");
+  await dialog.getByRole("button", { name: "Create pairing code" }).click();
+  await expect(dialog.getByRole("group", { name: "Web kiosk pairing code" })).toContainText("ABCD-2345");
+  expect(pairing).toEqual({ kioskName: "Test web kiosk A", kind: "web" });
+  await dialog.getByRole("button", { name: "Refresh kiosk status" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(card.getByRole("list", { name: "Paired kiosks" })).toHaveText("Test web kiosk A (web kiosk) - waiting for its first check-in");
+  await expect(card.getByText("Waiting for Test web kiosk A to check in. This card updates on its own.")).toBeVisible();
+  await card.getByRole("button", { name: "Save and continue" }).click();
+  await expect(page.getByRole("alert")).toHaveText("Wait for the paired kiosk to check in, then continue. A kiosk checks in within a minute of pairing.");
+
+  // The kiosk checks in; the card notices on its next look, without a reload.
+  kiosks = [{ ...kiosks[0]!, lastSeenAt: "2026-09-28T12:05:00.000Z" }];
+  await expect(card.getByText("Ready", { exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(card.getByText("A paired kiosk has checked in. Continue to the optional integrations.")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Check again" })).toHaveCount(0);
 });
 
 test("the Roster card imports a CSV through the shared roster import dialog", async ({ page }) => {
@@ -101,7 +146,6 @@ test("first-run Attendance setup stays open through optional steps after a modul
   let snapshotReady = false;
   const outcomes: Record<string, "completed" | "skipped"> = { rules: "completed", meeting: "completed" };
   const valid = ["rules", "meeting"];
-  const meetings = [{ id: "meeting-1", title: "Test meeting A", startsAt: "2026-09-28T12:00:00.000Z", endsAt: "2026-09-28T13:00:00.000Z" }];
   await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot({ setupReady: snapshotReady }) }));
   await page.route("**/admin/modules/attendance/setup", async (route) => {
     if (route.request().method() === "PUT") {
@@ -112,14 +156,13 @@ test("first-run Attendance setup stays open through optional steps after a modul
     await route.fulfill({ json: attendanceSetupState(outcomes, valid) });
   });
   await page.route("**/admin/members", (route) => route.fulfill({ json: { members: [{ id: "member-1", memberId: "T-001", firstName: "Test Student", lastName: "A", active: true }] } }));
-  await page.route("**/module-setup/attendance/input", (route) => route.request().method() === "GET"
-    ? route.fulfill({ json: { simulator: null, members: [{ id: "member-1", label: "Test Student A" }], meetings } })
-    : route.fulfill({ status: route.request().postDataJSON().action === "scan" ? 202 : 200, json: { accepted: true, action: "check_in" } }));
+  // A web kiosk paired earlier has checked in, so Save and continue completes the step.
+  await page.route("**/module-setup/attendance/input", (route) => route.fulfill({ json: { kiosks: [{ id: "kiosk-1", name: "Test web kiosk A", kind: "web", lastSeenAt: "2026-09-28T12:05:00.000Z" }] } }));
   await page.goto("/dashboard");
 
   // The roster already has an active member, so setup opens on Verified attendance input.
   await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();
-  await expect(page.getByLabel("Meeting happening now").locator("option")).toHaveText([/^Test meeting A - [^:]*\d{1,2}:\d{2}(?!:\d{2})/]);
+  await expect(page.getByRole("list", { name: "Paired kiosks" })).toHaveText(/^Test web kiosk A \(web kiosk\) - checked in [^:]*\d{1,2}:\d{2}(?!:\d{2})/);
   await expect(page.locator("#module-setup-later-help")).toContainText("becomes available once every required step is complete");
   await page.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.getByRole("heading", { level: 2, name: "Calendar integration" })).toBeVisible();
@@ -167,7 +210,7 @@ test("finishing Attendance setup shows next steps and keeps page tours closed fo
 
   await expect(page.getByRole("heading", { level: 1, name: "Attendance is ready" })).toBeFocused();
   const steps = page.getByRole("list", { name: "Next steps" });
-  for (const [name, href] of [["Pair a kiosk", "/kiosks"], ["Add or import members", "/roster"], ["Invite other Admins", "/settings/access"], ["Connect Google Calendar or Discord", "/settings/integrations"], ["Set up dashboard updates", "/settings/updates"]]) await expect(steps.getByRole("link", { name })).toHaveAttribute("href", href);
+  for (const [name, href] of [["Add more kiosks", "/kiosks"], ["Add or import members", "/roster"], ["Invite other Admins", "/settings/access"], ["Connect Google Calendar or Discord", "/settings/integrations"], ["Set up dashboard updates", "/settings/updates"]]) await expect(steps.getByRole("link", { name })).toHaveAttribute("href", href);
   await expect(page.getByRole("button", { name: "Finish setup later" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Close setup" })).toHaveCount(0);
   await expect(page.locator(".walkthrough-panel")).toHaveCount(0);

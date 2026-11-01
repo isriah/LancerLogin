@@ -300,10 +300,13 @@ test("both shipped archives load and serve their isolated runtime; missing impor
       await mkdir(extracted);
       execFileSync(tar.path, ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`), "-C", extracted]);
       checkKioskArchiveModes(await readFile(join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`)));
-      const expected = [...(await readdir("apps/kiosk/src")).filter(name => name.endsWith(".mjs")), "release-policy.mjs"].sort();
+      const expected = [...(await readdir("apps/kiosk/src")).filter(name => name.endsWith(".mjs")), "release-policy.mjs", "member-lookup.mjs"].sort();
       assert.deepEqual((await readdir(join(extracted, "src"))).sort(), expected);
       assert.equal(await readFile(join(extracted, "src/release-policy.mjs"), "utf8"), await readFile("packages/shared/src/release-policy.mjs", "utf8"));
-      for (const missing of ["update-command.mjs", "kiosk-presentation.mjs", "release-policy.mjs", "resolve-kiosk-release.mjs"]) {
+      assert.equal(await readFile(join(extracted, "src/member-lookup.mjs"), "utf8"), await readFile("packages/shared/src/member-lookup.mjs", "utf8"));
+      // No packaged file imports from the checkout.
+      for (const name of await readdir(join(extracted, "src"))) assert.doesNotMatch(await readFile(join(extracted, "src", name), "utf8"), /\.\.\/packages\//, name);
+      for (const missing of ["update-command.mjs", "kiosk-presentation.mjs", "release-policy.mjs", "member-lookup.mjs", "member-pins.mjs", "resolve-kiosk-release.mjs"]) {
         // Re-extract between failures so each missing direct/transitive import is tested alone.
         execFileSync(tar.path, ["-xzf", join(artifacts, `lancerlogin-kiosk-${version}-linux-${arch}.tar.gz`), "-C", extracted]);
         await rm(join(extracted, "src", missing));

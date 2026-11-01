@@ -23,6 +23,11 @@ export function createIdentityScanner({ captureIdentity, captureAllowed = () => 
     if (!valid()) return;
     if (!observation || observation.status === "idle") { await delay(100); return; }
     const timestamp = now();
+    if (observation.status === "rescan") {
+      // The reader answered, but the finger needs placing again: a faint, smudged or unusable image.
+      await show("rescan", observation.detail ? { detail: observation.detail } : undefined);
+      await delay(1_000); return;
+    }
     if (observation.status === "unknown") {
       if (timestamp - lastUnknownAt >= debounceMs) {
         lastUnknownAt = timestamp;

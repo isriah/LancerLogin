@@ -13,7 +13,6 @@ import { IntegrationSettings } from "./integration-settings";
 import { DataSettings } from "./data-settings";
 import { UpdatesPage } from "./updates-page";
 import { UserSettings } from "./user-settings";
-import { SimulatorPage } from "./simulator-page";
 import { FingerprintSharingPage } from "./fingerprint-sharing-page";
 import { KiosksPage } from "./kiosks-page";
 import { api } from "./dashboard-api";
@@ -137,7 +136,6 @@ export function AppShell({ initialModules, role, branding, onBrandingChanged, on
   else if (path.startsWith("/roster/")) page = attendanceReady ? <MemberDetailPage role={role} memberId={decodeURIComponent(path.slice("/roster/".length))} discordEnabled={integrations.discord.enabled} debugMode={debugMode} /> : <CoreMemberPage memberId={decodeURIComponent(path.slice("/roster/".length))} />;
   else if (attendanceReady && /^\/kiosks\/[^/]+\/manage$/.test(path)) page = <KiosksPage role={role} discordConfigured={integrations.discord.configured} walkthroughOpen={walkthrough.open} kioskId={decodeURIComponent(path.split("/")[2]!)} debugMode={debugMode} />;
   else if (attendanceReady && path === "/kiosks") page = <KiosksPage role={role} discordConfigured={integrations.discord.configured} walkthroughOpen={walkthrough.open} debugMode={debugMode} />;
-  else if (attendanceReady && role === "admin" && ["/simulator", "/settings/kiosk-simulator"].includes(path)) page = <SimulatorPage branding={branding} />;
   else if (path === "/settings/session") page = <section className="settings-page" aria-labelledby="session-title"><div className="page-intro"><h1 id="session-title">Settings</h1><p>Choose your display theme or sign out of this browser.</p></div></section>;
   else if (role === "admin" && path === "/settings/organization") page = <OrganizationSettings initialBranding={branding} onChanged={onBrandingChanged} />;
   else if (role === "admin" && path === "/settings/modules") page = <ModuleSettings snapshot={moduleAccess.snapshot} onChanged={moduleAccess.reload} />;

@@ -3,7 +3,8 @@
 .app button.member-pencil-button:hover,.member-history-correction > summary:hover { border-color: var(--primary); }
 .member-history-correction > summary::-webkit-details-marker { display: none; }
 .member-history-correction > summary { list-style: none; }
-.member-history-correction > summary:focus-visible,.member-roster-link:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+.app .member-history-meeting > strong > a.member-history-meeting-link { color: var(--ui-text); font-weight: 600; text-decoration: underline; overflow-wrap: anywhere; }
+.member-history-correction > summary:focus-visible,.member-roster-link:focus-visible,.member-history-meeting-link:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
 .app .roster-page .roster-row { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) var(--control-min-block-size); }
 .app .roster-page .roster-row.with-discord { grid-template-columns: minmax(10rem,1fr) minmax(7rem,.45fr) minmax(8rem,.55fr) minmax(8rem,.5fr) var(--control-min-block-size); }
 .app .roster-page .roster-row.bulk-selecting { grid-template-columns: var(--control-min-block-size) minmax(10rem,1fr) minmax(7rem,.5fr) minmax(8rem,.5fr) var(--control-min-block-size); }
@@ -12,7 +13,7 @@
 .roster-member-dialog { position: relative; z-index: 1; }
 .roster-member-dialog form > label:has(> span) { display: block; }
 .roster-member-dialog form > label > span { color: var(--ui-text-muted); font-size: var(--text-small); }
-.roster-member-dialog form > label > input { display: block; margin-top: var(--space-2); }
+.roster-member-dialog form > label > input:where(:not([type="checkbox"],[type="radio"])) { display: block; margin-top: var(--space-2); }
 .roster-member-dialog .member-lifecycle-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); padding-top: var(--space-4); border-top: 1px solid var(--ui-border); }
 .member-detail-page .member-roster-link { display: inline-flex; align-items: center; justify-self: start; min-height: var(--control-min-block-size); padding: 0; border: 0; background: transparent; border-radius: 0; font-size: var(--text-body); }
 .member-profile-card .panel-heading { flex-direction: row; align-items: center; }

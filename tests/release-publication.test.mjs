@@ -14,7 +14,7 @@ const previousDocs = { "docs-site/index.md": "1".repeat(40), "docs/DEVELOPMENT.m
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const notes = Buffer.from("# Synthetic release\n\nBugs fixed\n\nNone.\n");
 const jobs = ["actionlint", "verify", "dependency-audit", "browser-smoke", ...[1, 2, 3, 4].map((n) => `Core browser shard ${n}/4`),
-  "Plugin browser shard 1/1", "Integration browser shard 1/1"].map((name) => ({ name, conclusion: "success" }));
+  "Plugin browser shard 1/1", "Integration browser shard 1/1", "Virtual kiosk browser"].map((name) => ({ name, conclusion: "success" }));
 async function fixture(tag = "v1.2.6", changes = {}) {
   const root = await mkdtemp(join(tmpdir(), "release-publisher-test-"));
   const source = join(root, "source"), bundle = join(root, "bundle");
@@ -91,7 +91,7 @@ test("trusted release requires every exact source-branch job", () => {
   // Every browser group is part of the complete gate: a run without the plugin or integration shards, with one skipped,
   // with a different shard count, or still listing the old ungrouped browser shards is not complete evidence.
   const coreOnly = jobs.filter((item) => !/^(?:Plugin|Integration) browser shard/.test(item.name));
-  assert.equal(coreOnly.length, 8);
+  assert.equal(coreOnly.length, 9);
   for (const bad of [coreOnly, jobs.filter((item) => !item.name.startsWith("Integration browser shard")),
     jobs.map((item) => item.name === "Plugin browser shard 1/1" ? { ...item, conclusion: "skipped" } : item),
     jobs.map((item) => item.name === "Integration browser shard 1/1" ? { ...item, conclusion: "failure" } : item),
@@ -101,7 +101,7 @@ test("trusted release requires every exact source-branch job", () => {
     [...jobs, { name: "Private browser shard 1/6", conclusion: "skipped" }]])
     assert.throws(() => assertCompleteVerify(run, bad, sha, "main"), /complete_trusted_branch_verify_required/);
   assert.deepEqual({ ...browserShardCounts }, { core: 4, plugin: 1, integration: 1 });
-  assert.equal(requiredJobs.length, 10);
+  assert.equal(requiredJobs.length, 11);
   assert.deepEqual(requiredJobs, jobs.map((item) => item.name));
   assert.ok(Object.isFrozen(requiredJobs));
 });

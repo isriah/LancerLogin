@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Set up and run LancerLogin kiosks</title><meta name="description" content="Build, install, pair, and operate Raspberry Pi attendance kiosks for LancerLogin."><link rel="stylesheet" href="styles.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Set up and run LancerLogin kiosks</title><meta name="description" content="Build, install, pair, and operate Raspberry Pi and web attendance kiosks for LancerLogin."><link rel="stylesheet" href="styles.css"></head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <header class="site-header"><nav class="nav" aria-label="Documentation"><a href="index.html">LancerLogin Docs</a><a href="setup.html">Install</a><a href="first-run.html">First sign-in</a><a href="kiosk.html" aria-current="page">Kiosk</a><a href="operations.html">Operate</a><a href="updates.html">Update</a><a href="troubleshooting.html">Troubleshoot</a><a href="technical.html">Reference</a></nav></header>
-<header class="page-header"><div><p class="eyebrow">Physical kiosks</p><h1>Set up and run kiosks</h1><p>Build a Raspberry Pi kiosk, install the software, pair it with your dashboard, and keep it running. An installation can pair as many kiosks as you need.</p></div></header>
+<header class="page-header"><div><p class="eyebrow">Kiosks</p><h1>Set up and run kiosks</h1><p>Build a Raspberry Pi kiosk, install the software, pair it with your dashboard, and keep it running, or pair a touchscreen laptop or tablet as a <a href="#without-hardware">web kiosk</a>. An installation can pair as many kiosks as you need.</p></div></header>
 <main id="main" class="page">
   <h2 id="hardware">What you need</h2>
   <ul>
@@ -36,12 +36,12 @@
 
   <h2 id="install">Install the kiosk software</h2>
   <ol class="steps">
-    <li>In the dashboard, open <strong>Kiosks</strong> and choose <strong>Add kiosk</strong>. The <strong>Add physical kiosk</strong> dialog opens. <strong>Prepare the Pi</strong> repeats the requirements above.</li>
+    <li>In the dashboard, open <strong>Kiosks</strong> and choose <strong>Add kiosk</strong>. The <strong>Add kiosk</strong> dialog opens. Keep <strong>Raspberry Pi kiosk</strong> selected. <strong>Prepare the Pi</strong> repeats the requirements above.</li>
     <li>Under <strong>Fingerprint reader</strong>, choose <strong>This kiosk has an R503 fingerprint reader</strong> or <strong>No fingerprint reader (badge, QR code, or member ID entry)</strong>.</li>
     <li>Under <strong>Install the kiosk software</strong>, choose <strong>Copy install commands</strong>. The commands match the release your dashboard runs.</li>
     <li>On the Pi, open Terminal and run the commands. They have this form:</li>
   </ol>
-  <figure class="annotated compact-shot"><img src="assets/kiosk-add-kiosk-dialog.png" alt="LancerLogin Add physical kiosk dialog with the sections Prepare the Pi, a Fingerprint reader choice set to This kiosk has an R503 fingerprint reader, Install the kiosk software with three commands for release 2.0.0 and a Copy install commands button, Create the one-time pairing key with a Kiosk name field, and Pair from a phone or laptop instructions."><figcaption>The Add physical kiosk dialog walks through installing and pairing.</figcaption></figure>
+  <figure class="annotated compact-shot"><img src="assets/kiosk-add-kiosk-dialog.png" alt="LancerLogin Add physical kiosk dialog with the sections Prepare the Pi, a Fingerprint reader choice set to This kiosk has an R503 fingerprint reader, Install the kiosk software with three commands for release 2.0.0 and a Copy install commands button, Create the one-time pairing key with a Kiosk name field, and Pair from a phone or laptop instructions."><figcaption>The Add kiosk dialog walks through installing and pairing a Pi.</figcaption></figure>
   <pre><code>curl -fLO https://github.com/isriah/LancerLogin/releases/download/v&lt;version&gt;/install-lancerlogin.sh
 sudo bash install-lancerlogin.sh --dry-run
 sudo bash install-lancerlogin.sh --install</code></pre>
@@ -60,7 +60,7 @@ sudo bash install-lancerlogin.sh --install</code></pre>
   <div class="callouts"><div class="callout"><span>1</span><h3>Pairing key</h3><p>Combines your installation's address, the kiosk name, and a single-use code. Paste it as one item. The Pi does not store it.</p></div><div class="callout"><span>2</span><h3>Kiosk credential</h3><p>Pairing gives the Pi its own credential. The Pi keeps it locally and the database stores only a hash.</p></div><div class="callout"><span>3</span><h3>More kiosks</h3><p>Pair each kiosk with its own key and a unique name. Adding a kiosk does not affect the others.</p></div></div>
 
   <h2 id="authentication">Choose how members identify themselves</h2>
-  <p>New kiosks start with fingerprint. To change a kiosk's method, select it on <strong>Kiosks</strong>, open <span class="ui-path">Manage kiosk <span>›</span> Authentication settings</span>, choose <strong>Fingerprint</strong>, <strong>RFID badge</strong>, <strong>NFC badge</strong>, <strong>Member ID entry</strong>, or <strong>QR code</strong>, and save. Each kiosk has its own method. The page shows a pending message until the kiosk applies the change.</p>
+  <p>New kiosks start with fingerprint. To change a kiosk's method, select it on <strong>Kiosks</strong>, open <span class="ui-path">Manage kiosk <span>›</span> Identification</span>, choose <strong>Fingerprint</strong>, <strong>RFID badge</strong>, <strong>NFC badge</strong>, <strong>Member ID entry</strong>, or <strong>QR code</strong>, and save. With <strong>Member ID entry</strong>, <strong>Member search</strong> lets members find themselves by name, ID or email instead; it shows only names and IDs. Members confirm their name before anything is recorded. Turn on <strong>Require PIN</strong> to have them also enter a 4 to 6 digit PIN. A member without one taps <strong>Ask for approval</strong> on the kiosk, and an Operator approves it from <strong>PIN requests</strong> on <strong>Manage kiosk</strong>. Each kiosk has its own method. The page shows a pending message until the kiosk applies the change.</p>
   <p>Fingerprints, badges, and QR codes are linked to members on the kiosk itself, in <a href="#local-tools">Authentication maintenance</a>. Member ID entry needs no setup. Badge and QR values are stored on the kiosk only as keyed digests and never sent to the dashboard.</p>
 
   <h2 id="scanning">Scan without choosing a meeting</h2>
@@ -78,8 +78,8 @@ sudo bash install-lancerlogin.sh --install</code></pre>
   <p>To enroll a fingerprint, choose an active roster member, enter a free reader slot, and have the member place the same finger twice. The template is created and kept inside the R503. Enrollment needs the kiosk to be online. An Admin can also start enrollment from the kiosk's <strong>Manage kiosk</strong> page in the dashboard; the member then confirms their name on the kiosk before scanning.</p>
 
   <h2 id="manage">Manage kiosks from the dashboard</h2>
-  <p>On <strong>Kiosks</strong>, select a device and open <span class="ui-path">Manage kiosk <span>›</span> Diagnostics</span> to see its heartbeat, reader and network state, scans waiting, last successful sync, installed release, and pairing time. Operators can view this page. Admins can rename a kiosk with the pencil next to its name and use <strong>Authentication settings</strong>, <strong>Device maintenance</strong>, and <strong>Retire kiosk</strong>.</p>
-  <p><strong>Device maintenance</strong> sends one of six fixed commands to the selected kiosk:</p>
+  <p>On <strong>Kiosks</strong>, select a device and open <span class="ui-path">Manage kiosk <span>›</span> Diagnostics</span> to see its heartbeat, reader and network state, scans waiting, last successful sync, installed release, and pairing time. Operators can view this page. Admins can rename a kiosk with the pencil next to its name and use <strong>Identification</strong>, <strong>Device maintenance</strong>, and <strong>Retire kiosk</strong>.</p>
+  <p><strong>Device maintenance</strong> sends one of six fixed commands to the selected Pi kiosk. A web kiosk takes only <strong>Reload display</strong> and <strong>Reset settings PIN</strong>.</p>
   <table class="credential-table">
     <thead><tr><th scope="col">Command</th><th scope="col">What it does</th></tr></thead>
     <tbody>
@@ -92,13 +92,13 @@ sudo bash install-lancerlogin.sh --install</code></pre>
     </tbody>
   </table>
   <p>Recovery accepts only those fixed commands. The dashboard never opens a remote shell on the Pi. Retiring a kiosk stops its credential from working; it does not erase the Pi.</p>
-  <p><strong>Rejected scans</strong> on the Kiosks page lists scans the dashboard could not accept, such as a scan outside any meeting window. Review each one and correct attendance in the meeting if needed. Marking a scan reviewed does not change attendance.</p>
+  <p><strong>Rejected scans</strong>, under <strong>Debug tools</strong> on the Kiosks page when Debug mode is on, lists scans the dashboard could not accept, such as a scan outside any meeting window. Review each one and correct attendance in the meeting if needed. Marking a scan reviewed does not change attendance.</p>
 
   <h2 id="fingerprint-sharing">Share fingerprints between kiosks</h2>
   <p>By default, each fingerprint stays inside the reader where it was enrolled, so a member enrolls separately at each fingerprint kiosk. An Admin can instead turn on <strong>Fingerprint cloud storage</strong> in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Fingerprint sharing</span>. New enrollments then upload in encrypted form and other paired fingerprint kiosks download them automatically, even while the original kiosk is offline. Read the <a href="privacy.html#fingerprint-cloud-storage">privacy notice</a> and get your organization's permission before turning it on.</p>
 
-  <h2 id="simulator">Test without hardware</h2>
-  <p>The <strong>Browser simulator</strong> lets an Admin check in a roster member from a browser during an open meeting window. Its card on the Kiosks page has <strong>Open simulator</strong>, and <strong>Start simulator</strong> or <strong>Stop simulator</strong> to bring it online or take it offline. Its check-ins are marked as simulated. It is useful for trying LancerLogin and for Attendance setup, but it does not test a reader, the Pi, or the offline queue.</p>
+  <h2 id="without-hardware">Try LancerLogin without a Pi</h2>
+  <p>Pair a web kiosk on any touchscreen laptop or tablet from <span class="ui-path">Kiosks <span>›</span> Add kiosk</span>, then <strong>Web kiosk</strong>. With Debug mode on, an Admin can instead choose <strong>Open web kiosk on this device</strong> under <strong>Debug tools</strong> on the Kiosks page: it pairs a web kiosk named after this browser and opens it in a new tab. Check-ins from a web kiosk are real attendance, so try it with test members. A web kiosk does not test a fingerprint reader, a badge reader, or a Raspberry Pi.</p>
 
   <h2 id="unpair">Move a kiosk to another installation</h2>
   <p>On the kiosk, open <strong>Authentication maintenance</strong>, choose <strong>Unpair kiosk</strong>, and confirm. Let any waiting scans sync first; unpairing refuses to continue while scans are pending. The kiosk archives its old pairing, roster cache, and links for 30 days, keeps its Wi-Fi settings and PIN, and returns to the pairing screen. Pair it with a key from the new dashboard, then retire the old entry in the original dashboard.</p>

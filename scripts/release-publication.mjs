@@ -14,10 +14,11 @@ const validRun = (value) => /^[1-9][0-9]{0,15}$/.test(String(value)) && Number.i
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 // The release-gate browser suite runs in three groups (tests-browser/groups.json): Core plugin-free, and the plugin and
 // integration groups with the official plugins composed. Each count must match its matrix in .github/workflows/ci.yml.
+// The virtual kiosk scenarios (tests-virtual-kiosk) run as one more job.
 export const browserShardCounts = Object.freeze({ core: 4, plugin: 1, integration: 1 });
 const shardNames = (label, count) => Array.from({ length: count }, (_, index) => `${label} ${index + 1}/${count}`);
 export const requiredJobs = Object.freeze(["actionlint", "verify", "dependency-audit", "browser-smoke", ...shardNames("Core browser shard", browserShardCounts.core),
-  ...shardNames("Plugin browser shard", browserShardCounts.plugin), ...shardNames("Integration browser shard", browserShardCounts.integration)]);
+  ...shardNames("Plugin browser shard", browserShardCounts.plugin), ...shardNames("Integration browser shard", browserShardCounts.integration), "Virtual kiosk browser"]);
 export function assetNames(tag) {
   releasePublicationPolicy(tag);
   return ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap((arch) => {

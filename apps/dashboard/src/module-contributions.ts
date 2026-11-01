@@ -77,7 +77,7 @@ export type DashboardPublicPage = {
  * Paths Core serves itself: its signed-in pages, the same-origin API proxy (`/api`) and built assets (`/assets`). Public
  * pages may not use them or any path below them.
  */
-export const coreDashboardPaths = Object.freeze(["/", "/admin", "/api", "/assets", "/attendance", "/dashboard", "/integrations", "/kiosks", "/meetings", "/reports", "/roster", "/settings", "/simulator", "/login", "/setup"]);
+export const coreDashboardPaths = Object.freeze(["/", "/admin", "/api", "/assets", "/attendance", "/dashboard", "/integrations", "/kiosks", "/meetings", "/reports", "/roster", "/settings", "/login", "/setup"]);
 
 /** A meeting reference handed to slot contributions. Contributions load their own permission-scoped data. */
 export type DashboardMeetingReference = { readonly id: string };

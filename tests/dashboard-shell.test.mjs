@@ -47,14 +47,13 @@ test("the legacy guided setup wizard and its pre-deploy preview are gone", async
   assert.match(pairing, /releases\/latest\/download\/install-lancerlogin\.sh/);
 });
 
-test("browser emulator uses the shared kiosk display contract and labels its input boundary", async () => {
-  const simulator = await readFile("apps/dashboard/src/simulator-page.tsx", "utf8");
-  const contract = await readFile("apps/kiosk/src/kiosk-presentation.mjs", "utf8");
-  assert.match(simulator, /kioskDisplayForAttendance/);
-  assert.match(simulator, /BrowserMemberInput/);
-  assert.match(simulator, /SIMULATED · BROWSER INPUT/);
-  assert.match(await readFile("apps/dashboard/src/kiosk-preview.tsx", "utf8"), /Not a physical kiosk/);
-  assert.match(contract, /kioskDisplayForAttendance/);
+test("the browser simulator page is gone; web kiosks and the virtual Pi replace it", async () => {
+  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
+  const kiosks = await readFile("apps/dashboard/src/kiosks-page.tsx", "utf8");
+  for (const removed of ["apps/dashboard/src/simulator-page.tsx", "apps/dashboard/src/kiosk-preview.tsx"]) await assert.rejects(readFile(removed, "utf8"), { code: "ENOENT" });
+  assert.doesNotMatch(shell, /SimulatorPage|"\/simulator"/);
+  assert.doesNotMatch(kiosks, /Browser simulator|\/admin\/simulator/);
+  assert.match(kiosks, /<OpenWebKioskOnThisDevice /);
 });
 
 test("first-Admin Google setup collects encrypted OAuth bootstrap credentials", async () => {
@@ -141,12 +140,15 @@ test("meeting detail keeps meeting-specific attendance, Discord, and contest ope
   assert.match(management, /Attendance required/);
   assert.doesNotMatch(meetings, /Optional meeting/);
   assert.match(meetings, /Search Meetings/);
-  assert.match(styles, /\.meeting-create-form input\[type="checkbox"\]/);
-  assert.match(styles, /\.meeting-directory input\[type="checkbox"\]:checked/);
+  // Meeting checkboxes and radios use the shared control style; broad form rules leave them alone.
+  assert.doesNotMatch(styles, /\.meeting-create-form input\[type="checkbox"\]/);
+  assert.match(styles, /\.app :where\(input\[type="checkbox"\],input\[type="radio"\]\) \{ appearance: none;/);
+  assert.match(styles, /\.ui-form input:where\(:not\(\[type="checkbox"\],\[type="radio"\]\)\),/);
   assert.match(meetings, /Create recurring series/);
   assert.match(meetings, /Duplicate an existing meeting/);
   assert.doesNotMatch(meetings, />Edit<|>Delete this meeting<|meeting-actions-cell/);
-  assert.match(meetings, /closest\("\.meeting-selection"\)/);
+  // Row clicks go through followRowInApp, which leaves the selection label and checkbox to select.
+  assert.match(meetings, /onClick=\{\(event\) => followRowInApp\(event, href, open\)\}/);
   assert.match(home, /readMeetingDeletion/);
   assert.doesNotMatch(home, /sessionStorage|pendingMeetingDeletionLifetimeMs/);
   assert.doesNotMatch(meetings, /template/i);
@@ -317,6 +319,31 @@ test("settings subpages preserve the parent navigation bubble without duplicatin
   for (const source of [organization, configuration, integrations]) assert.doesNotMatch(source, /Changes apply after you save them|Changes apply to every meeting after you save them|Saved secret values are encrypted and never displayed/);
 });
 
+test("in-app record links are real anchors so modified and middle clicks open a new tab", async () => {
+  const router = await readFile("apps/dashboard/src/router.tsx", "utf8");
+  const calendar = await readFile("apps/dashboard/src/mobile-calendar.tsx", "utf8");
+  const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
+  const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
+  const sdk = await readFile("packages/module-sdk/src/dashboard.ts", "utf8");
+  // One shared modifier check: only a plain left click is taken over by in-app navigation.
+  assert.match(router, /export function isModifiedClick\(event: ClickLike\) \{ return Boolean\(event\.button \|\| event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey\); \}/);
+  assert.match(router, /export function followInApp\(event: MouseEvent<HTMLAnchorElement>, go: \(\) => void\) \{ if \(isModifiedClick\(event\)\) return; event\.preventDefault\(\); go\(\); \}/);
+  assert.match(router, /export function RouteLink[\s\S]*onClick=\{\(event\) => followInApp\(event, \(\) => navigate\(href\)\)\}/);
+  assert.match(router, /export function AppLink[\s\S]*href=\{href\} onClick=\{\(event\) => \{ onClick\?\.\(event\); followInApp\(event, \(\) => navigate\(href\)\); \}\}/);
+  assert.match(router, /window\.open\(href, "_blank", "noopener"\)/);
+  assert.match(router, /closest\("a, button, input, select, textarea, label, summary"\)\) return;/);
+  assert.doesNotMatch([router, calendar, home, meetings].join("\n"), /event\.button \|\| event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey\) return; event\.preventDefault\(\)/);
+  // The desktop day that opens its one meeting, and the selected day's Open meeting, are links with the meeting's href.
+  assert.match(calendar, /if \(dayOpen\?\.href\) return <a className=\{className\} key=\{key\} href=\{dayOpen\.href\}[^>]*data-selected=\{selected === key \? "true" : undefined\} onClick=\{\(event\) => followInApp\(event, choose\)\}/);
+  assert.match(home, /desktopDayOpen=\{active \? undefined : meeting => \(\{ label: `opens meeting \$\{meeting\.title\}`, href: meetingPath\(meeting\.id\), open: \(\) => openMeeting\(meetingPath\(meeting\.id\)\) \}\)\}/);
+  assert.match(home, /<AppLink className="ui-button" data-walkthrough="calendar-entry" href=\{meetingPath\(meeting\.id\)\} navigate=\{openMeeting\}>Open meeting/);
+  assert.doesNotMatch(home, /<button[^>]*onClick=\{\(\) => openMeeting\(/);
+  // Table rows contain the title link and follow modified and middle clicks like it.
+  assert.match(meetings, /onClick=\{\(event\) => followRowInApp\(event, href, open\)\} onAuxClick=\{\(event\) => followRowInApp\(event, href, open\)\}/);
+  assert.match(meetings, /<a href=\{href\} onClick=\{event => \{ event\.stopPropagation\(\); followInApp\(event, open\); \}\}>/);
+  assert.match(sdk, /export \{ AppLink, followInApp, followRowInApp, isModifiedClick, RouteLink, routeWillChangeEvent, usePath \}/);
+});
+
 test("Dashboard provides remembered calendar and table meeting browsers", async () => {
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
   const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
@@ -350,7 +377,7 @@ test("Dashboard provides remembered calendar and table meeting browsers", async 
   assert.match(attendance, /className="attendance-table"/);
   assert.match(attendance, /Active · not checked out/);
   assert.match(attendance, /ContestReviewList contests=\{contests\}/);
-  assert.match(home, /openMeeting\(`\/meetings\/\$\{encodeURIComponent\(meeting\.id\)\}`\)/);
+  assert.match(home, /const meetingPath = \(id: string\) => `\/meetings\/\$\{encodeURIComponent\(id\)\}`/);
   assert.match(meetings, /className="meeting-browser-row"/);
   assert.match(attendance, /api<\{ meeting: Meeting \}>\(`\/meetings\/\$\{encodeURIComponent\(meetingId\)\}`\)/);
   assert.match(shell, /path\.startsWith\("\/meetings\/"\)/);
@@ -603,9 +630,9 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.doesNotMatch(pairing, /releases\/latest/);
   assert.match(source, /Add kiosk/);
   assert.match(source, /<h1 id="kiosks-title">\{managing \? "Manage kiosk" : "Kiosks"\}<\/h1>/);
-  assert.match(source, /<div className="kiosk-card-heading"[^>]*><div><h2>Physical kiosks<\/h2>/);
+  assert.match(source, /<div className="kiosk-card-heading"[^>]*><div><h2>Kiosks<\/h2>/);
   assert.match(source, /const activeKiosks = kiosks\.filter\(\(kiosk\) => kiosk\.active === 1\)/);
-  assert.match(source, /aria-label="Active physical kiosks"/);
+  assert.match(source, /aria-label="Active kiosks"/);
   assert.match(source, /Retire kiosk/);
   assert.match(source, /Update kiosk/);
   assert.doesNotMatch(source, /Device history/);
@@ -644,7 +671,7 @@ test("Kiosks refresh hides redundant success while preserving actionable feedbac
   assert.match(source, /load\(\{ preserveNotice: true \}\)/);
   assert.match(source, /visiblePoll\(\(\) => load\(\), 30_000, \(error\) => setNotice\(\{ message: error\.message, tone: "error" \}\), true\)/);
   assert.match(source, /notice\.message && <p className="setup-status ui-status kiosk-notice"/);
-  for (const result of ["Kiosk renamed.", "Kiosk retired.", "queued. The kiosk normally receives it within five seconds.", "Browser simulator stopped."]) {
+  for (const result of ["Kiosk renamed.", "Kiosk retired.", "queued. The kiosk normally receives it within five seconds."]) {
     assert.match(source, new RegExp(result.replaceAll(".", "\\.")));
   }
 });

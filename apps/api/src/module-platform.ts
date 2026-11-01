@@ -196,9 +196,6 @@ export async function configureModulePlatform(db: ModuleDatabase, actorUserId: s
       db.prepare(`UPDATE pairing_codes SET expires_at=? WHERE installation_id=?
         AND EXISTS(SELECT 1 FROM platform_modules m JOIN platform_module_epochs e ON e.installation_id=m.installation_id AND e.module_id=m.module_id AND e.generation=m.generation
           WHERE m.installation_id=pairing_codes.installation_id AND m.module_id='attendance' AND m.generation=? AND m.phase='retained')`).bind(now, installationId, attendance.generation),
-      db.prepare(`UPDATE simulated_kiosk_sessions SET active=0,online=0 WHERE installation_id=?
-        AND EXISTS(SELECT 1 FROM platform_modules m JOIN platform_module_epochs e ON e.installation_id=m.installation_id AND e.module_id=m.module_id AND e.generation=m.generation
-          WHERE m.installation_id=simulated_kiosk_sessions.installation_id AND m.module_id='attendance' AND m.generation=? AND m.phase='retained')`).bind(installationId, attendance.generation),
       db.prepare(`DELETE FROM kiosk_commands WHERE installation_id=? AND completed_at IS NULL
         AND EXISTS(SELECT 1 FROM platform_modules m JOIN platform_module_epochs e ON e.installation_id=m.installation_id AND e.module_id=m.module_id AND e.generation=m.generation
           WHERE m.installation_id=kiosk_commands.installation_id AND m.module_id='attendance' AND m.generation=? AND m.phase='retained')`).bind(installationId, attendance.generation),
@@ -302,6 +299,20 @@ export async function requireModuleService(db: ModuleDatabase, moduleId: string)
     JOIN platform_module_administration a ON a.installation_id=m.installation_id AND a.selection_completed=1
     JOIN platform_module_administration_epochs ae ON ae.installation_id=a.installation_id AND ae.revision=a.revision
     WHERE m.installation_id=? AND m.module_id=? AND m.phase='enabled' AND m.setup_complete=1`)
+    .bind(installationId, moduleId).first<{ generation: number }>();
+  if (!row) throw new HttpError(409, `${module.label} is disabled`);
+  return row.generation;
+}
+
+/** Service access while the module is enabled, before or after its setup is finished. */
+export async function requireModuleEnabled(db: ModuleDatabase, moduleId: string) {
+  const module = bundledModuleRegistry.get(moduleId);
+  if (!module?.available) throw new HttpError(409, "Module is unavailable in this release");
+  const row = await db.prepare(`SELECT m.generation FROM platform_modules m
+    JOIN platform_module_epochs me ON me.installation_id=m.installation_id AND me.module_id=m.module_id AND me.generation=m.generation
+    JOIN platform_module_administration a ON a.installation_id=m.installation_id AND a.selection_completed=1
+    JOIN platform_module_administration_epochs ae ON ae.installation_id=a.installation_id AND ae.revision=a.revision
+    WHERE m.installation_id=? AND m.module_id=? AND m.phase='enabled'`)
     .bind(installationId, moduleId).first<{ generation: number }>();
   if (!row) throw new HttpError(409, `${module.label} is disabled`);
   return row.generation;

@@ -1,8 +1,11 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-// On desktop a day with exactly one meeting opens that meeting, and its accessible name says so.
-export const calendarDay = (page: Page, dateLabel: string, count?: number) => page.getByRole("button", { name: new RegExp(`^${escapeRegExp(dateLabel)}, ${count ?? "\\d+"} meetings?(, opens meeting .+)?$`) });
+// On desktop a day with exactly one meeting is a link that opens that meeting, and its accessible name says so; other days are buttons.
+export const calendarDay = (page: Page, dateLabel: string, count?: number) => { const name = new RegExp(`^${escapeRegExp(dateLabel)}, ${count ?? "\\d+"} meetings?(, opens meeting .+)?$`); return page.getByRole("button", { name }).or(page.getByRole("link", { name })); };
+// A selected button day is pressed; a selected link day (which has no pressed state) carries data-selected.
+export const selectedCalendarDays = (page: Page) => page.locator(`.compact-calendar-day:is([aria-pressed="true"], [data-selected="true"])`);
+export const expectCalendarDaySelected = (day: Locator) => expect(day.and(selectedCalendarDays(day.page()))).toHaveCount(1);
 
 // Clicking a desktop one-meeting day opens the meeting, so select it the way a
 // returning visitor sees it: restore the saved calendar day and reload.
@@ -11,7 +14,7 @@ export async function selectCalendarDay(page: Page, day: Locator, dateKey: strin
     await page.evaluate(selectedDate => sessionStorage.setItem("lancerlogin-dashboard-calendar", JSON.stringify({ month: `${selectedDate.slice(0, 7)}-01`, selectedDate })), dateKey);
     await page.reload();
   } else await day.click();
-  await expect(day).toHaveAttribute("aria-pressed", "true");
+  await expectCalendarDaySelected(day);
 }
 
 // The server's active meeting starts 30 minutes before startup and can be on

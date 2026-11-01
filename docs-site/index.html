@@ -41,14 +41,14 @@
       <ul>
         <li>Your <strong>private GitHub repository</strong> holds the deployment workflows and secrets. The public repository provides reviewed releases.</li>
         <li>Your <strong>Cloudflare account</strong> runs the dashboard on Pages, the API on a Worker, and the data in a D1 database.</li>
-        <li>Each <strong>Raspberry Pi kiosk</strong> pairs with the dashboard and keeps an offline queue, so check-ins are saved while the network is down.</li>
+        <li>Each <strong>Raspberry Pi kiosk</strong> or <strong>web kiosk</strong> on a touchscreen laptop or tablet pairs with the dashboard and keeps an offline queue, so check-ins are saved while the network is down.</li>
       </ul>
 
       <section class="notice"><strong>Community support is best-effort.</strong>Questions and responsible security or privacy reports can be sent to <a href="mailto:robolancers@gmail.com">robolancers@gmail.com</a>. There is no response-time or uptime commitment.</section>
 
       <h2>Release boundaries</h2>
       <ul>
-        <li>An installation can pair several physical kiosks. The browser simulator is a software check, not a physical kiosk.</li>
+        <li>An installation can pair several kiosks: Raspberry Pi kiosks and web kiosks on touchscreen laptops or tablets.</li>
         <li>Dashboard updates and kiosk updates are separate steps.</li>
         <li>Reports export as CSV. Backups are JSON files from Settings, or D1 exports for large installations.</li>
         <li>This documentation never contains credentials, private repository details, attendance records, or backup contents.</li>

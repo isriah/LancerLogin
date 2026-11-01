@@ -12,9 +12,10 @@ export function normalizeIdentityMethod(value) {
   return identityMethods.includes(value) ? value : "fingerprint";
 }
 
-export function identityReadyState(method) {
+export function identityReadyState(method, { memberLookup = "entry" } = {}) {
   const normalized = normalizeIdentityMethod(method);
   if (normalized === "fingerprint") return { message: "Place finger on reader", detail: "Attendance kiosk ready" };
+  if (normalized === "member_id" && memberLookup === "search") return { message: "Find your name", detail: "Search by name, member ID or email" };
   if (normalized === "member_id") return { message: "Enter member ID", detail: "Use the touch keyboard below" };
   if (normalized === "qr") return { message: "Scan QR code", detail: "Present a registered code to the scanner" };
   return { message: `Present ${normalized.toUpperCase()} badge`, detail: "Hold a registered badge near the reader" };

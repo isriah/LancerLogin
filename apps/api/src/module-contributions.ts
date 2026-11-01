@@ -4,6 +4,7 @@ import type { D1Database, D1Statement } from "./d1-usage.ts";
 import type { ModuleCredentials } from "./integration-crypto.ts";
 import type { CleanupStep } from "./module-cleanup.ts";
 import type { DiscordModuleInteractionHandler } from "./module-discord.ts";
+import type { FirstDataService } from "./first-data.ts";
 import type { ModuleEmailMessage } from "./module-email.ts";
 import type { ReportProjectionHandler } from "./module-reporting.ts";
 
@@ -36,6 +37,12 @@ export type CoreModuleServices = {
     /** HTTP status of a Resend rejection, or undefined for any other error. */
     providerStatus(error: unknown): number | undefined;
   };
+  /**
+   * FIRST team data through Core's one FIRST connection (SDK 1.2.0): FRC and FTC from the Events API with the Admin's
+   * credentials, FLL from FIRST's public team search. Tokens never reach module code. Cached, time-limited and rate-limited
+   * by Core; lookups from public routes also count per visitor. Needs no manifest declaration.
+   */
+  readonly first: FirstDataService;
   /** Encrypt module-owned credentials with Core's integration key. */
   readonly credentials: ModuleCredentials;
   /** Other modules' interfaces this module declares in `uses` (SDK 1.1.0). */

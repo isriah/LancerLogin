@@ -91,6 +91,38 @@ test("member history applies meeting status actions and refreshes outcomes and p
   expect(state.reads).toBe(initialReads + 4);
 });
 
+test("meeting titles on the member page link to their meeting pages", async ({ page, context }) => {
+  const state = await memberFixture(page, "operator");
+  state.history.push({ meetingId: "", title: "Meeting without an id", startsAt: "2026-09-03T18:00:00Z", endsAt: "2026-09-03T20:00:00Z", checkedInAt: undefined, checkedOutAt: undefined, disposition: "absent", reason: "", audience: "All", eligibility: "required", policy: "standard" });
+  const meetingReads: string[] = [];
+  await page.route("**/meetings/meeting-one", route => {
+    if (route.request().resourceType() === "document") return route.fallback();
+    meetingReads.push(new URL(route.request().url()).pathname);
+    return route.fulfill({ json: { meeting: { id: "meeting-one", title: "Completed build session", startsAt: "2026-09-01T18:00:00Z", endsAt: "2026-09-01T20:00:00Z", required: true } } });
+  });
+  await page.goto("/roster/A-101");
+  const link = historyRow(page).getByRole("link", { name: "Completed build session", exact: true });
+  await expect(link).toHaveAttribute("href", "/meetings/meeting-one");
+  await expect(historyRow(page, "Another completed meeting").getByRole("link", { name: "Another completed meeting", exact: true })).toHaveAttribute("href", "/meetings/meeting-two");
+  const plain = historyRow(page, "Meeting without an id");
+  await expect(plain.locator(".member-history-meeting strong")).toHaveText("Meeting without an id");
+  await expect(plain.getByRole("link")).toHaveCount(0);
+  const styles = await link.evaluate(element => { const style = getComputedStyle(element); const probe = document.createElement("span"); element.parentElement!.appendChild(probe); probe.style.color = "var(--ui-text)"; const color = getComputedStyle(probe).color; probe.remove(); return { color: style.color, expected: color, decoration: style.textDecorationLine }; });
+  expect(styles.color).toBe(styles.expected);
+  expect(styles.decoration).toBe("underline");
+
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const [opened] = await Promise.all([context.waitForEvent("page"), link.click({ modifiers: [modifier] })]);
+  await expect.poll(() => new URL(opened.url()).pathname).toBe("/meetings/meeting-one");
+  await opened.close();
+  await expect(page).toHaveURL(/\/roster\/A-101$/);
+
+  await link.click();
+  await expect(page).toHaveURL(/\/meetings\/meeting-one$/);
+  await expect(page.getByRole("table", { name: "Complete attendance history" })).toHaveCount(0);
+  await expect.poll(() => meetingReads.length).toBeGreaterThan(0);
+});
+
 test("Operators can correct member history but cannot clear attendance or edit the member", async ({ page }) => {
   const state = await memberFixture(page, "operator");
   await page.goto("/roster/A-101");

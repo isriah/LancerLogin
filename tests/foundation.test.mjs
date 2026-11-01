@@ -81,12 +81,16 @@ test("kiosk authentication migration is additive and keeps fingerprint as the up
   assert.doesNotMatch(migration, /credential|token|secret|digest|template/i);
 });
 
-test("guided setup schema keeps simulator credentials isolated from hardware kiosks", async () => {
+test("guided setup schema kept simulator credentials isolated from hardware kiosks until 0092 removed the simulator", async () => {
   const migration = await readFile("apps/api/migrations/0003_guided_setup_simulator.sql", "utf8");
   assert.match(migration, /is_test INTEGER NOT NULL DEFAULT 0/);
   assert.match(migration, /purpose IN \('hardware', 'simulator'\)/);
   assert.match(migration, /simulated_kiosk_sessions/);
   assert.doesNotMatch(migration, /token_hash|fingerprint|template/i);
+  const removal = await readFile("apps/api/migrations/0092_remove_simulator.sql", "utf8");
+  assert.match(removal, /DROP TABLE IF EXISTS simulated_kiosk_sessions;/);
+  assert.match(removal, /DELETE FROM pairing_codes WHERE purpose = 'simulator' AND id NOT IN \(SELECT pairing_code_id FROM kiosks\);/);
+  assert.doesNotMatch(removal, /DROP TABLE (?!IF EXISTS simulated_kiosk_sessions)|ALTER TABLE/);
 });
 
 test("roster account schema links optional credentials without biometric or password fields", async () => {
@@ -108,9 +112,12 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /const backupSchemaVersion = 45;/);
-  assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -13\)/);
-  for (const [version, omitted] of [[8, 11], [9, 9], [10, 7], [15, 4], [31, 2], [41, 1]]) assert.match(source, new RegExp(`schemaVersion < ${version} && table === "organization_settings" \\? tableColumns\\.organization_settings\\.slice\\(0, -${omitted}\\)`));
+  assert.match(source, /const backupSchemaVersion = 49;/);
+  assert.match(source, /backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49 }/);
+  assert.match(source, /simulated_kiosk_sessions: { schema: 48, owner: "attendance" }/);
+  assert.match(source, /tables\.simulated_kiosk_sessions = \[\];/);
+  assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -16\)/);
+  for (const [version, omitted] of [[8, 14], [9, 12], [10, 10], [15, 7], [31, 5], [41, 4], [47, 3]]) assert.match(source, new RegExp(`schemaVersion < ${version} && table === "organization_settings" \\? tableColumns\\.organization_settings\\.slice\\(0, -${omitted}\\)`));
   assert.match(source, /table === "discord_attendance_contests" && schemaVersion < 41 \? tableColumns\.discord_attendance_contests\.slice\(0, schemaVersion === 1 \? -3 : -1\)/);
   assert.match(source, /discord_block_recontests_after_rejection: 0/);
   assert.match(source, /prior_reviews_json: "\[\]"/);
@@ -349,8 +356,8 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   assert.match(ciWorkflow, /HEAD_COMMIT_MESSAGE.*Release\\ v\*/);
   assert.match(ciWorkflow, /outputs\.full == 'true'[\s\S]*kiosk-artifacts\.test\.mjs/);
   assert.match(ciWorkflow, /outputs\.full != 'true' && steps\.verification-scope\.outputs\.kiosk == 'true'/);
-  // verify and the core, plugin and integration browser shard jobs install.
-  assert.equal((ciWorkflow.match(/npm ci --no-audit/g) ?? []).length, 4);
+  // verify, the core, plugin and integration browser shard jobs, and the virtual kiosk job install.
+  assert.equal((ciWorkflow.match(/npm ci --no-audit/g) ?? []).length, 5);
   assert.match(ciWorkflow, /schedule:[\s\S]*cron:/);
   assert.match(ciWorkflow, /workflow_dispatch:/);
   assert.match(ciWorkflow, /dependency-audit:[\s\S]*npm run audit:release/);
@@ -390,7 +397,7 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   assert.match(browserShardJob, /cache-hit == 'true'\s+run: npx playwright install-deps chromium/);
   assert.match(browserShardJob, /name: Run this core browser shard\s+timeout-minutes: 15\s+run: npm run test:browser/);
   // The plugin and integration groups run only in the complete gate and composed, so their plugin specs cannot skip there.
-  for (const [group, name, next] of [["plugin", "plugin-browser-shard", "integration-browser-shard"], ["integration", "integration-browser-shard", "browser-smoke"]]) {
+  for (const [group, name, next] of [["plugin", "plugin-browser-shard", "integration-browser-shard"], ["integration", "integration-browser-shard", "virtual-kiosk-browser"]]) {
     const job = browserJob(name, next);
     const count = browserShardCounts[group];
     assert.ok(job, name);
@@ -406,12 +413,19 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
     assert.doesNotMatch(job, /--grep|--project|--shard=|continue-on-error/);
     assert.match(job, /cache-hit != 'true'\s+run: npx playwright install --with-deps chromium/);
   }
+  // The virtual kiosk scenarios run once per complete gate, Core only.
+  const virtualKioskJob = browserJob("virtual-kiosk-browser", "browser-smoke");
+  assert.ok(virtualKioskJob);
+  assert.match(virtualKioskJob, /name: Virtual kiosk browser\r?\n/);
+  assert.match(virtualKioskJob, new RegExp(`if: github\\.event_name == 'workflow_dispatch' && ${maintainerGuard}\\s+runs-on`));
+  assert.match(virtualKioskJob, /run: npm run test:kiosk-virtual\r?\n/);
+  assert.doesNotMatch(virtualKioskJob, /pull_request|schedule|continue-on-error|LANCERLOGIN_PLUGIN_TOKEN/);
   assert.doesNotMatch(ciWorkflow, /^  browser-shard:/m);
   const browserGate = ciWorkflow.match(/  browser-smoke:([\s\S]*)$/)?.[1];
   assert.ok(browserGate);
-  assert.match(browserGate, /needs: \[core-browser-shard, plugin-browser-shard, integration-browser-shard\]/);
+  assert.match(browserGate, /needs: \[core-browser-shard, plugin-browser-shard, integration-browser-shard, virtual-kiosk-browser\]/);
   assert.match(browserGate, new RegExp(`if: >-\\s+!cancelled\\(\\) &&\\s+github\\.event_name == 'workflow_dispatch' &&\\s+${maintainerGuard}\\s+needs:`));
-  for (const [variable, job] of [["CORE_SHARD_RESULT", "core-browser-shard"], ["PLUGIN_SHARD_RESULT", "plugin-browser-shard"], ["INTEGRATION_SHARD_RESULT", "integration-browser-shard"]]) {
+  for (const [variable, job] of [["CORE_SHARD_RESULT", "core-browser-shard"], ["PLUGIN_SHARD_RESULT", "plugin-browser-shard"], ["INTEGRATION_SHARD_RESULT", "integration-browser-shard"], ["VIRTUAL_KIOSK_RESULT", "virtual-kiosk-browser"]]) {
     assert.ok(browserGate.includes(`test "$${variable}" = success`), variable);
     assert.ok(browserGate.includes(`${variable}: \${{ needs.${job}.result }}`), variable);
   }

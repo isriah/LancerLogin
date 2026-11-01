@@ -1,0 +1,14 @@
+/* Settings > Integrations > FIRST: the shared FIRST connection card, its program rows and the Test a team control. */
+.first-integration { display: grid; align-content: start; }
+.first-integration-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-3); padding: 1rem; }
+.first-integration-heading h2 { margin: 0; color: var(--ink); font-size: 1.1rem; }
+.first-integration-body { display: grid; gap: var(--space-4); padding: 0 1rem 1rem; min-width: 0; }
+.first-integration-intro,.first-program-note { margin: 0; color: var(--ui-text-muted); font-size: var(--text-small); overflow-wrap: anywhere; }
+.first-program,.first-test { display: grid; gap: var(--space-3); min-width: 0; padding-top: var(--space-4); border-top: 1px solid var(--ui-border); }
+.first-program-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
+.first-program h3,.first-test h3 { margin: 0; color: var(--ui-text); font-size: 1rem; }
+.first-program > p,.first-test > p { margin: 0; }
+.first-program-fields,.first-test-fields { display: grid; grid-template-columns: repeat(auto-fit,minmax(10rem,1fr)); gap: var(--space-3); min-width: 0; }
+.first-program-fields label,.first-test-fields label { display: grid; gap: var(--space-1); min-width: 0; margin: 0; }
+.first-program-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.first-test-result { overflow-wrap: anywhere; }

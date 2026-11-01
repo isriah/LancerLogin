@@ -75,37 +75,21 @@ const definitions = {
     readySelector: '[data-walkthrough-page="kiosks"][data-walkthrough-ready="true"]',
     returnFocusSelector: '[data-walkthrough-page="kiosks"]',
     welcomeTitle: "Understand kiosk health",
-    welcomeDescription: "Learn to read physical kiosk status, diagnostics, management actions, and the browser simulator. This tour will not send device commands.",
+    welcomeDescription: "Learn to read kiosk status, diagnostics, and management actions. This tour will not send device commands.",
     finishTitle: "You're ready to monitor kiosks",
     finishDescription: "Use health and diagnostics to decide whether the kiosk needs attention, then choose the smallest appropriate Admin action.",
     steps: [
       { id: "status", title: "Start with physical status", description: "Choose an active device when more than one is paired. Healthy, degraded, offline, and not paired summarize whether the selected kiosk can scan and synchronize attendance normally.", targets: '[data-walkthrough="kiosk-status"]' },
       { id: "diagnostics", title: "Find the cause", description: "Authentication input, network, pending scans, last sync, release, heartbeat, and reported issue fields show where a degraded or offline state begins. A pending method is configured but not yet reported by the kiosk.", targets: '[data-walkthrough="kiosk-diagnostics"], [data-walkthrough="kiosk-status"]' },
-      { id: "pairing", title: "Pair another kiosk", description: "Admins create a short-lived one-time key for a Pi. Adding a kiosk preserves every existing kiosk and its credential. Retire an old device separately only when it should stop working.", targets: '[data-walkthrough="kiosk-pairing"]' },
-      { id: "device-actions", title: "Choose device actions carefully", description: "Open Manage kiosk for diagnostics, authentication settings, device maintenance, and retirement. The controls manage only the selected physical kiosk. When Discord is configured, Sync Discord status refreshes the combined health message for all active kiosks. Operators can monitor health without Admin controls. An example device is shown if no kiosk is paired.", targets: '[data-walkthrough="kiosk-actions"], [data-walkthrough="kiosk-status"]' },
+      { id: "pairing", title: "Pair another kiosk", description: "Admins create a short-lived one-time key for a Pi, or a one-time code for a web kiosk on a touchscreen laptop or tablet. Adding a kiosk preserves every existing kiosk and its credential. Retire an old device separately only when it should stop working.", targets: '[data-walkthrough="kiosk-pairing"]' },
+      { id: "device-actions", title: "Choose device actions carefully", description: "Open Manage kiosk for diagnostics, authentication settings, device maintenance, and retirement. The controls manage only the selected kiosk. When Discord is configured, Sync Discord status refreshes the combined health message for all active kiosks. Operators can monitor health without Admin controls. An example device is shown if no kiosk is paired.", targets: '[data-walkthrough="kiosk-actions"], [data-walkthrough="kiosk-status"]' },
       { id: "rename", title: "Give the kiosk a clear name", description: "Use the pencil beside a device name to change its label. Use a location or purpose that helps staff identify the right Pi.", targets: '[data-walkthrough="kiosk-rename"], [data-walkthrough="kiosk-status"]' },
       { id: "fingerprints", title: "Choose and maintain authentication", description: "Hold the kiosk's organization name or logo for three seconds and enter the settings PIN to manage its selected authentication method locally. Fingerprints remain in the reader unless optional encrypted cloud storage is enabled. Manage cloud storage in Settings, Attendance, Fingerprint sharing. Cloud storage allows a new paired kiosk to download saved enrollments even when the other kiosks are offline.", targets: '[data-walkthrough="kiosk-fingerprints"], [data-walkthrough="kiosk-status"]' },
       { id: "restart", title: "Recover the display or software", description: "Reload display refreshes the kiosk screen. Restart software restarts the attendance service. Reboot Pi restarts the device and pauses scanning while it comes back online.", targets: '[data-walkthrough="kiosk-reload"], [data-walkthrough="kiosk-restart"], [data-walkthrough="kiosk-reboot"], [data-walkthrough="kiosk-status"]' },
       { id: "network-pin", title: "Recover access to local settings", description: "Reset network PIN clears the local settings PIN after confirmation. Someone at the kiosk can then set a new PIN. Use this only when authorized staff need to regain access.", targets: '[data-walkthrough="kiosk-network-pin"], [data-walkthrough="kiosk-status"]' },
-      { id: "updates", title: "Update the physical kiosk", description: "Compare the installed version with the latest version from the selected update track. Update kiosk becomes available when the kiosk is online and a newer release is confirmed. This updates the Pi separately from the dashboard.", targets: '[data-walkthrough="kiosk-update"], [data-walkthrough="kiosk-diagnostics"]' },
+      { id: "updates", title: "Update the kiosk", description: "Compare the installed version with the latest version from the selected update track. Update kiosk becomes available when the kiosk is online and a newer release is confirmed. This updates the Pi separately from the dashboard.", targets: '[data-walkthrough="kiosk-update"], [data-walkthrough="kiosk-diagnostics"]' },
       { id: "retirement", title: "Retire a device deliberately", description: "Retire kiosk invalidates only the selected device's credential after confirmation and preserves its history. Pair a new kiosk first when the current device should remain available during a hardware transition.", targets: '[data-walkthrough="kiosk-retire"], [data-walkthrough="kiosk-status"]' },
-      { id: "simulator", title: "Use the browser simulator", description: "Admins can use the simulator for audited browser-selected reads. It does not claim physical input, heartbeat, or authentication-device activity, and Operators do not receive simulator controls.", targets: '[data-walkthrough="kiosk-simulator"]' },
       { id: "history", title: "Preserve device history", description: "Retiring a kiosk preserves its historical records and revokes its credential. The active device list shows currently paired kiosks.", targets: '[data-walkthrough="kiosk-retire"], [data-walkthrough="kiosk-status"]' },
-    ],
-  },
-  simulator: {
-    pageId: "simulator",
-    readySelector: '[data-walkthrough-page="simulator"][data-walkthrough-ready="true"]',
-    returnFocusSelector: '[data-walkthrough-page="simulator"]',
-    welcomeTitle: "Practice the kiosk scan flow",
-    welcomeDescription: "Learn what the browser simulator represents and how to choose a test member and meeting. The tour itself will not submit a simulated scan.",
-    finishTitle: "You're ready to use the simulator",
-    finishDescription: "Choose a synthetic test member and meeting when you want to verify the scan experience without claiming physical kiosk activity.",
-    steps: [
-      { id: "boundary", title: "Know the simulator boundary", description: "This page uses browser input and the shared kiosk display contract. It cannot pair hardware, report a physical heartbeat, or read fingerprint templates.", targets: '[data-walkthrough="simulator-boundary"]' },
-      { id: "preview", title: "Watch the kiosk display", description: "The preview shows the same ready, processing, welcome, goodbye, and rejected states used by the physical kiosk presentation.", targets: '[data-walkthrough="simulator-preview"]' },
-      { id: "inputs", title: "Choose a member and meeting", description: "Roster member identifies who is scanning. Meeting chooses the attendance window that will receive the simulated read.", targets: '[data-walkthrough="simulator-inputs"]' },
-      { id: "simulate", title: "Submit an audited simulated read", description: "Simulate member read sends an explicitly simulated attendance event. It can affect test attendance data, but never counts as physical kiosk activity.", targets: '[data-walkthrough="simulator-submit"], [data-walkthrough="simulator-inputs"]' },
     ],
   },
 } satisfies Record<string, WalkthroughExperienceDefinition>;
@@ -116,6 +100,5 @@ export function pageWalkthroughForPath(path: string, role: "admin" | "operator",
   if (path === "/reports" || path === "/reports/new" || path.startsWith("/reports/view/")) return definitions.reports;
   if (path.startsWith("/meetings/") && path.slice("/meetings/".length)) return definitions.meeting;
   if (path === "/kiosks") return definitions.kiosks;
-  if (role === "admin" && path === "/simulator") return definitions.simulator;
   return moduleWalkthroughs.find((walkthrough) => matchDashboardPath(walkthrough.path, path))?.definition;
 }

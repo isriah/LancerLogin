@@ -3,7 +3,9 @@ import type { CleanupStep } from "./module-cleanup.ts";
 /** Attendance retained-data cleanup. Step order is persisted as a cursor, so only append. */
 export const attendanceCleanupSteps: readonly CleanupStep[] = [
   { kind: "delete", table: "kiosk_commands" },
-  { kind: "delete", table: "simulated_kiosk_sessions" },
+  // Was simulated_kiosk_sessions, dropped in migration 0092. A repeat of kiosk_commands, already empty here, keeps a
+  // persisted cursor's meaning.
+  { kind: "delete", table: "kiosk_commands" },
   { kind: "delete", table: "kiosks" },
   { kind: "delete", table: "pairing_codes" },
   { kind: "delete", table: "discord_attendance_recipients" },
@@ -57,6 +59,10 @@ export const attendanceCleanupSteps: readonly CleanupStep[] = [
   { kind: "delete", table: "kiosk_accepted_scans" },
   { kind: "delete", table: "kiosk_possible_wrong_matches" },
   { kind: "delete", table: "kiosk_fingerprint_reenrollment" },
+  // Member PINs exist only for kiosks that require one (migration 0091).
+  { kind: "delete", table: "pin_setup_requests" },
+  { kind: "delete", table: "member_pins" },
+  { kind: "reset", table: "organization_settings", pending: "pin_lockout_enabled<>0 OR pin_lockout_attempts<>5 OR pin_lockout_minutes<>15", set: "pin_lockout_enabled=0,pin_lockout_attempts=5,pin_lockout_minutes=15", bindings: [] },
 ];
 
 /** In-flight Attendance delivery work that must drain before deletion. Binds the installation three times. */

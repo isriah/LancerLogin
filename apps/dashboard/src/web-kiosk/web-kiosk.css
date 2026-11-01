@@ -1,0 +1,137 @@
+/* The web kiosk's own look: a dark surface with the installation's branding colors, following the approved mockup
+   (private/plans/web-kiosk-mockup.html, sections 1 and 2). Every rule sits under .wk-root or the kiosk document. */
+html.wk-document, html.wk-document body { height: 100%; margin: 0; overflow: hidden; background: #191c1f; overscroll-behavior: none; }
+html.wk-document #root { height: 100%; }
+
+.wk-root {
+  --bg: #111315; --surface: #191c1f; --surface-soft: #24282d; --ink: #f1f3f4; --muted: #a9b0b7; --line: #343a40;
+  --primary: #146c5b; --secondary: #dba72d; --on-primary: #fff; --on-secondary: #111714;
+  --ui-success: #b7f7d1; --ui-success-surface: #123b29; --ui-warning: #ffddb3; --ui-warning-surface: #512b12; --ui-error: #ffd5d2; --ui-error-surface: #531b17;
+  --wk-key: clamp(2.9rem, 9.5vh, 4.6rem); --wk-gap: clamp(.4rem, 1.4vmin, .85rem); --wk-radius: clamp(.55rem, 1.4vmin, .9rem);
+  color-scheme: dark; height: 100%; min-height: 100dvh; color: var(--ink); font-family: var(--font-body, "Roboto", ui-sans-serif, system-ui, sans-serif);
+  font-size: clamp(16px, calc(1.1vmin + 11px), 24px);
+  background: radial-gradient(circle at 15% 5%, color-mix(in srgb, var(--primary) 14%, transparent), transparent 34%), var(--surface);
+}
+.wk-root * { box-sizing: border-box; }
+.wk-root button, .wk-root .wk-brand-hold { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+:where(.wk-root) button { font: inherit; color: inherit; cursor: pointer; }
+.wk-root button:disabled { cursor: default; opacity: .5; }
+.wk-root button:focus-visible { outline: 3px solid var(--secondary); outline-offset: 2px; }
+.wk-root input:focus-visible { outline: none; }
+.wk-root p { margin: 0; color: var(--muted); line-height: 1.45; }
+
+.wk-screen { height: 100%; min-height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: var(--wk-gap); padding: clamp(.6rem, 2.4vmin, 1.6rem) clamp(1rem, 3.4vmin, 2.4rem) clamp(.5rem, 1.6vmin, 1rem); }
+
+/* Brand row: hold the organization name for 3 seconds to open maintenance. */
+.wk-brand { display: flex; justify-content: center; }
+.wk-brand-hold { display: inline-flex; align-items: center; gap: .7em; min-height: 3rem; padding: .3em .8em; border-radius: var(--wk-radius); color: var(--ink); font-size: 1.05em; }
+.wk-brand-hold strong { font-weight: 800; }
+.wk-brand-hold.wk-holding { outline: 4px solid color-mix(in srgb, var(--secondary) 70%, transparent); background: color-mix(in srgb, var(--secondary) 10%, transparent); }
+.wk-mark { width: 2.3em; height: 2.3em; display: grid; place-items: center; font-family: var(--font-display, "Bebas Neue", sans-serif); font-size: 1.15em; color: var(--on-secondary); background: var(--secondary); border-radius: .4em .4em .4em .1em; }
+.wk-logo { max-height: 2.6em; max-width: 9em; object-fit: contain; pointer-events: none; }
+
+.wk-body { min-height: 0; display: grid; align-content: center; justify-items: center; text-align: center; overflow: auto; }
+.wk-foot { display: flex; justify-content: space-between; align-items: center; gap: 1rem; color: var(--muted); font-size: .8em; }
+.wk-dot { display: inline-block; width: .65em; height: .65em; border-radius: 50%; background: #55bea7; margin-right: .5em; vertical-align: middle; }
+.wk-dot.wk-dot-off { background: var(--ui-warning); }
+
+.wk-root .wk-title { max-width: none; margin: 0; font-family: var(--font-body, "Roboto", sans-serif); font-weight: 800; letter-spacing: 0; font-size: clamp(1.7rem, 5.4vmin, 3rem); line-height: 1.08; color: var(--ink); }
+.wk-root .wk-sub { font-size: 1em; }
+.wk-centered, .wk-stack { display: grid; justify-items: center; gap: clamp(.6rem, 2vmin, 1.2rem); width: 100%; }
+.wk-stack { max-width: 46rem; }
+.wk-split { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: clamp(1rem, 5vmin, 3.5rem); align-items: center; justify-content: center; width: 100%; max-width: 48rem; }
+.wk-split-left { display: grid; gap: clamp(.5rem, 2vmin, 1rem); justify-items: start; text-align: left; }
+
+/* Fields: inputMode="none" so no system keyboard pops up; the on-screen keys type into them. */
+.wk-entry { width: min(100%, 22rem); min-height: var(--wk-key); padding: 0 .8em; border: 2px solid var(--line); border-radius: var(--wk-radius); color: var(--ink); background: var(--surface-soft); font: inherit; font-size: 1.6em; font-weight: 800; letter-spacing: .2em; text-align: center; caret-color: var(--secondary); }
+.wk-entry::placeholder { color: var(--muted); font-weight: 500; letter-spacing: normal; font-size: .6em; }
+.wk-entry:focus { border-color: var(--primary); outline: none; }
+.wk-entry[aria-invalid="true"] { border-color: var(--ui-error); }
+.wk-entry-code { width: min(100%, 20rem); text-transform: uppercase; }
+.wk-field-label { font-weight: 700; color: var(--muted); font-size: .9em; }
+
+/* Keypad and keyboard. */
+.wk-key { display: grid; place-items: center; min-height: var(--wk-key); padding: 0 .3em; border: 1px solid var(--line); border-radius: var(--wk-radius); background: var(--surface-soft); font-size: 1.4em; font-weight: 800; }
+.wk-key:active:not(:disabled) { background: color-mix(in srgb, var(--primary) 30%, var(--surface-soft)); border-color: var(--primary); }
+.wk-key-wide { font-size: .95em; }
+.wk-key-go { color: var(--on-primary); background: var(--primary); border-color: var(--primary); }
+.wk-key-go:active:not(:disabled) { background: color-mix(in srgb, var(--primary) 80%, #000); }
+.wk-keypad { display: grid; grid-template-columns: repeat(3, clamp(4.2rem, 13vmin, 7rem)); gap: var(--wk-gap); }
+.wk-keyboard { display: grid; gap: calc(var(--wk-gap) * .8); width: min(100%, 46rem); }
+.wk-keyboard-row { display: flex; justify-content: center; gap: calc(var(--wk-gap) * .8); }
+.wk-keyboard .wk-key { flex: 1 1 0; min-width: 0; max-width: 4.2rem; min-height: calc(var(--wk-key) * .78); font-size: 1em; font-weight: 700; }
+.wk-keyboard .wk-key-wide { flex-grow: 1.6; max-width: 7.5rem; font-size: .85em; }
+.wk-keyboard .wk-key-space { flex-grow: 4; max-width: 18rem; font-size: .85em; }
+
+/* Confirm. */
+.wk-person { display: grid; gap: .25em; padding: .9em 1.8em; border: 1px solid var(--line); border-radius: calc(var(--wk-radius) * 1.4); background: var(--surface-soft); }
+.wk-person b { font-size: clamp(1.6rem, 5vmin, 2.6rem); }
+.wk-person small { color: var(--muted); font-size: 1em; }
+.wk-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--wk-gap); width: 100%; }
+.wk-actions-stack { flex-direction: column; width: min(100%, 22rem); }
+.wk-button { min-width: 11rem; max-width: 100%; min-height: var(--wk-key); padding: 0 1.4em; border: 1px solid var(--line); border-radius: var(--wk-radius); background: var(--surface-soft); font-size: 1.05em; font-weight: 800; }
+.wk-button-primary { color: var(--on-primary); background: var(--primary); border-color: var(--primary); }
+.wk-button-danger { color: var(--ui-error); border-color: color-mix(in srgb, var(--ui-error) 40%, var(--line)); }
+.wk-split-left .wk-button { min-height: calc(var(--wk-key) * .8); }
+
+/* Search. */
+.wk-search { max-width: 48rem; }
+.wk-search-field:focus-within { border-color: var(--secondary); }
+.wk-search-field { display: flex; align-items: center; gap: .7em; width: 100%; min-height: var(--wk-key); padding: 0 1em; border: 2px solid var(--primary); border-radius: var(--wk-radius); background: var(--surface-soft); font-size: 1.15em; }
+.wk-search-field span { color: var(--muted); }
+.wk-search-field input { flex: 1; min-width: 0; border: 0; outline: none; color: var(--ink); background: transparent; font: inherit; }
+.wk-results { display: grid; width: 100%; border: 1px solid var(--line); border-radius: var(--wk-radius); overflow: hidden; }
+.wk-result-row { display: flex; justify-content: space-between; align-items: center; gap: 1em; min-height: calc(var(--wk-key) * .82); padding: 0 1em; border: 0; border-bottom: 1px solid var(--line); background: transparent; font-size: 1.05em; text-align: left; }
+.wk-result-row:last-child { border-bottom: 0; }
+.wk-result-row:active { background: color-mix(in srgb, var(--primary) 26%, var(--surface)); outline: 2px solid var(--primary); outline-offset: -2px; }
+.wk-result-row small { color: var(--muted); font-size: .9em; }
+.wk-results-empty { padding: .8em 1em; }
+
+/* Settings PIN dots. */
+.wk-pins { display: flex; flex-wrap: wrap; gap: .7em; }
+.wk-pins span { width: 1.3em; height: 1.3em; border-radius: 50%; border: 3px solid var(--muted); }
+.wk-pins span.wk-pin-on { background: var(--ink); border-color: var(--ink); }
+
+/* Notes. */
+.wk-note { padding: .6em 1em; border-radius: var(--wk-radius); font-size: .95em; }
+.wk-root .wk-note-error { color: var(--ui-error); background: var(--ui-error-surface); }
+.wk-root .wk-note-warning { color: var(--ui-warning); background: var(--ui-warning-surface); font-weight: 700; }
+
+/* Maintenance: the offline queue counts. */
+.wk-facts { display: grid; gap: .4em; width: min(100%, 30em); margin: 0; }
+.wk-facts > div { display: flex; justify-content: space-between; align-items: baseline; gap: 1em; padding: .55em .9em; border: 1px solid var(--line); border-radius: var(--wk-radius); background: var(--surface-soft); text-align: left; }
+.wk-facts dt { color: var(--muted); }
+.wk-facts dd { margin: 0; font-weight: 800; text-align: right; }
+.wk-facts dd small { display: block; font-weight: 400; color: var(--muted); font-size: .8em; }
+
+/* Results: the same states as the Pi kiosk (kiosk-presentation.mjs). */
+.wk-result { display: grid; justify-items: center; gap: clamp(.5rem, 2vmin, 1rem); }
+.wk-ring { width: clamp(4.5rem, 18vmin, 8rem); height: clamp(4.5rem, 18vmin, 8rem); border-radius: 50%; border: clamp(.5rem, 2vmin, .9rem) solid var(--primary); box-shadow: inset 0 0 0 clamp(.6rem, 2.4vmin, 1.1rem) color-mix(in srgb, var(--primary) 25%, var(--surface)); }
+.wk-ring-success { border-color: var(--ui-success); box-shadow: inset 0 0 0 clamp(.6rem, 2.4vmin, 1.1rem) var(--ui-success-surface); }
+.wk-ring-notice, .wk-ring-offline { border-color: var(--ui-warning); box-shadow: inset 0 0 0 clamp(.6rem, 2.4vmin, 1.1rem) var(--ui-warning-surface); }
+.wk-ring-error { border-color: var(--ui-error); box-shadow: inset 0 0 0 clamp(.6rem, 2.4vmin, 1.1rem) var(--ui-error-surface); }
+.wk-ring-processing { border-color: color-mix(in srgb, var(--primary) 30%, var(--surface-soft)); border-top-color: var(--secondary); box-shadow: none; animation: wk-spin 900ms linear infinite; }
+@keyframes wk-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .wk-ring-processing { animation: none; } }
+.wk-root .wk-result-name { color: var(--ink); font-weight: 800; font-size: clamp(1.3rem, 4.2vmin, 2.2rem); }
+.wk-root .wk-meeting { color: var(--secondary); font-weight: 800; font-size: 1.05em; }
+
+/* Pairing: the code and its keyboard. */
+.wk-pairing { display: grid; justify-items: center; gap: clamp(.5rem, 1.8vmin, 1rem); width: 100%; max-width: 46rem; }
+
+/* Wide, short landscape screens (1024x600 laptops): put the search results or pairing field beside the keyboard. */
+@media (orientation: landscape) and (min-width: 900px) and (max-height: 760px) {
+  .wk-search, .wk-pairing { max-width: 64rem; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); align-items: start; column-gap: 2rem; }
+  .wk-search > .wk-keyboard, .wk-pairing > .wk-keyboard { grid-column: 2; grid-row: 1 / span 6; align-self: start; }
+  .wk-search > :not(.wk-keyboard), .wk-pairing > :not(.wk-keyboard) { grid-column: 1; }
+  .wk-pairing > .wk-centered { text-align: center; }
+}
+
+/* Narrow portrait screens (phones): stack the keypad under the text. */
+@media (max-width: 640px) {
+  .wk-split { grid-template-columns: 1fr; justify-items: center; }
+  .wk-split-left { justify-items: center; text-align: center; }
+  .wk-keypad { grid-template-columns: repeat(3, minmax(4rem, 1fr)); width: min(100%, 22rem); }
+  .wk-foot { font-size: .75em; }
+  .wk-root { --wk-key: clamp(2.8rem, 7.5vh, 4rem); }
+}

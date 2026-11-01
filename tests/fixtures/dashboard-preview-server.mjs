@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { defaultModuleSnapshot } from "./default-module-snapshot.mjs";
 
@@ -40,12 +41,144 @@ const defaultReportDefinition = { version: 2, dataset: "attendance.members", gro
 const leaderboardReport = { ...report, pagination: { page: 1, pageSize: 25, totalRows: report.members.length, totalPages: 1, rangeStart: 1, rangeEnd: report.members.length }, insights: { policyAlerts: [], trend: completedMeetings.filter((meeting) => meeting.required).map((meeting) => ({ meetingId: meeting.id, title: meeting.title, startsAt: meeting.startsAt, rate: 50 })) } };
 const customReport = { definition: defaultReportDefinition, warnings: [], resolvedPeriod: { to: new Date().toISOString().slice(0, 10) }, columns: [{ id: "core.member.name", key: "core.member.name", label: "Member" }, { id: "attendance.member.regular-rate", key: "attendance.member.regular-rate", label: "Regular attendance" }, { id: "attendance.member.assigned-policies", key: "attendance.member.assigned-policies", label: "Assigned policies" }], rows: report.members.map((item) => ({ id: item.member.id, label: `${item.member.firstName} ${item.member.lastName}`, href: `/roster/${item.member.memberId}`, cells: { "core.member.name": { text: `${item.member.firstName} ${item.member.lastName}`, sortValue: item.member.lastName }, "attendance.member.regular-rate": { text: `${item.regularAttendance.rate}%`, sortValue: item.regularAttendance.rate }, "attendance.member.assigned-policies": { text: "No assigned policy", sortValue: null } } })), pagination: { page: 1, pageSize: 25, totalRows: report.members.length, totalPages: 1, rangeStart: 1, rangeEnd: report.members.length } };
 const memberDetail = (member) => ({ member, labels, labelHistory: [], attendancePolicy: report.members.find((item) => item.member.id === member.id), history: [{ meetingId: "past-regular", title: "Completed build session", startsAt: meetings[0].startsAt, endsAt: meetings[0].endsAt, checkedInAt: iso(-4 * 24 * 60 + 5), checkedOutAt: iso(-4 * 24 * 60 + 115), disposition: "present", eligibility: "required", audience: "All", policy: "standard" }] });
-const walkthroughLastSteps = { dashboard: "recurrence", roster: "bulk-tools", member: "member-actions", outreach: "reports-handoff", reports: "report-actions", meeting: "corrections", kiosks: "history", simulator: "simulate" };
-const server = createServer((request, response) => {
+// Kiosk management state for the web kiosk contract. Each browser test sends its own x-preview-scenario header so parallel
+// tests never share kiosks; requests without one use a "default" scenario holding only the Pi kiosk below.
+const pairingAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const kioskScenarios = new Map();
+const seedKiosks = (scenario) => scenario === "default"
+  ? [{ id: "kiosk-1", name: "Front desk", kind: "pi", memberLookup: "entry", requirePin: false, active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.8.0", pairedAt: iso(-1440) }]
+  : [
+    { id: "kiosk-1", name: "Front desk", kind: "pi", active: 1, seenMinutesAgo: 0, readerOnline: 1, configuredAuthenticationMethod: "fingerprint", authenticationMethod: "fingerprint", memberLookup: "entry", requirePin: false, releaseVersion: "0.8.0", pairedAt: iso(-1440) },
+    { id: "web-kiosk-a", name: "Test web kiosk A", kind: "web", active: 1, seenMinutesAgo: 0, readerOnline: 1, configuredAuthenticationMethod: "member_id", authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, releaseVersion: "0.8.0", pendingEvents: 0, pairedAt: iso(-720) },
+    { id: "web-kiosk-b", name: "Test web kiosk B", kind: "web", active: 1, seenMinutesAgo: 45, readerOnline: 1, configuredAuthenticationMethod: "member_id", authenticationMethod: "member_id", memberLookup: "search", requirePin: false, releaseVersion: "0.8.0", pendingEvents: 0, pairedAt: iso(-2880) },
+    // A Debug kiosk from browser OLD1 that stopped checking in, for Debug tools > Open web kiosk on this device.
+    ...(scenario.startsWith("kiosk-debug-") ? [{ id: "debug-kiosk-old1", name: "Debug kiosk OLD1", kind: "web", active: 1, seenMinutesAgo: 60, readerOnline: 1, configuredAuthenticationMethod: "member_id", authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, releaseVersion: "0.8.0", pendingEvents: 0, pairedAt: iso(-1440) }] : []),
+  ];
+function kioskScenario(request) {
+  const id = String(request.headers["x-preview-scenario"] ?? "default");
+  if (!kioskScenarios.has(id)) kioskScenarios.set(id, { kiosks: seedKiosks(id), pairingCodes: [], commands: [], ...seedPins() });
+  return kioskScenarios.get(id);
+}
+// seenMinutesAgo keeps a seeded kiosk online (or stale) however long the server has run; the default kiosk keeps its fixed time.
+const listedKiosk = ({ seenMinutesAgo, ...kiosk }) => seenMinutesAgo === undefined ? kiosk : { ...kiosk, lastSeenAt: new Date(Date.now() - seenMinutesAgo * 60_000).toISOString() };
+const staleKiosk = (kiosk) => { const lastSeenAt = listedKiosk(kiosk).lastSeenAt; return !lastSeenAt || Date.now() - Date.parse(lastSeenAt) >= 10 * 60_000; };
+const randomCode = (length) => Array.from(randomBytes(length), (byte) => pairingAlphabet[byte % pairingAlphabet.length]).join("");
+const readBody = (request) => new Promise((resolve) => { let text = ""; request.on("data", (chunk) => { text += chunk; }); request.on("end", () => { try { resolve(text ? JSON.parse(text) : {}); } catch { resolve({}); } }); });
+/** The kiosk routes the dashboard writes to, answered from the scenario's state; undefined for every other request. */
+async function kioskRoute(request, path) {
+  const kioskPath = /^\/admin\/kiosks\/([^/]+)(?:\/(authentication-method|commands))?$/.exec(path);
+  const isPairing = path === "/admin/pairing-codes" && request.method === "POST";
+  if (!(path === "/admin/kiosks" && request.method === "GET") && !isPairing && !(kioskPath && ["PATCH", "POST", "DELETE"].includes(request.method))) return undefined;
+  if (kioskPath && ["fingerprint-sync", "fingerprint-vault", "fingerprint-reset", "fingerprint-match", "scan-reviews"].includes(kioskPath[1])) return undefined;
+  const state = kioskScenario(request);
+  if (path === "/admin/kiosks") return [200, { kiosks: state.kiosks.map(listedKiosk) }];
+  const body = await readBody(request);
+  if (isPairing) {
+    const kioskName = String(body.kioskName ?? "").trim(); const kind = body.kind ?? "pi";
+    if (!kioskName || kioskName.length > 80) return [400, { error: "Kiosk name is required and must be at most 80 characters" }];
+    if (!["pi", "web"].includes(kind)) return [400, { error: "Kiosk kind must be pi or web" }];
+    const holder = state.kiosks.find((kiosk) => kiosk.active === 1 && kiosk.name.toLowerCase() === kioskName.toLowerCase());
+    if (body.replaceKioskId !== undefined) {
+      const replaced = state.kiosks.find((kiosk) => kiosk.id === body.replaceKioskId && kiosk.active === 1);
+      if (!replaced || replaced !== holder || !staleKiosk(replaced)) return [409, { error: "That kiosk is still checking in or no longer uses this name, so it can't be replaced.", code: "kiosk_not_replaceable" }];
+      replaced.active = 0;
+    } else if (holder) return [409, { error: "An active kiosk already uses that name. Choose a distinct device name.", code: "kiosk_name_in_use", ...(staleKiosk(holder) ? { replaceableKioskId: holder.id } : {}) }];
+    const code = kind === "web" ? randomCode(8) : randomCode(12); const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    state.pairingCodes = [...state.pairingCodes.filter((entry) => entry.kind !== kind), { code, kind, kioskName, expiresAt }];
+    return [201, kind === "web" ? { code, displayCode: `${code.slice(0, 4)}-${code.slice(4)}`, expiresAt, kioskName, kind } : { code, expiresAt, kioskName, workerApiUrl: `http://127.0.0.1:${port}`, kind }];
+  }
+  const kiosk = state.kiosks.find((entry) => entry.id === decodeURIComponent(kioskPath[1]));
+  if (!kiosk || kiosk.active !== 1) return [404, { error: "Kiosk not found" }];
+  if (kioskPath[2] === "authentication-method" && request.method === "PATCH") {
+    const method = body.authenticationMethod;
+    if (!["fingerprint", "rfid", "nfc", "member_id", "qr"].includes(method)) return [400, { error: "Unsupported authentication method" }];
+    if (kiosk.kind === "web" && method !== "member_id") return [400, { error: "Web kiosks identify members by member ID or member search." }];
+    if (body.memberLookup !== undefined && (method !== "member_id" || !["entry", "search"].includes(body.memberLookup))) return [400, { error: "Member lookup is entry or search, and only with member ID." }];
+    if (body.requirePin !== undefined && (typeof body.requirePin !== "boolean" || body.requirePin && method !== "member_id")) return [400, { error: "Require PIN is a true or false choice, and only with member ID." }];
+    kiosk.configuredAuthenticationMethod = method; kiosk.memberLookup = method === "member_id" ? body.memberLookup ?? "entry" : "entry";
+    kiosk.requirePin = method === "member_id" ? body.requirePin ?? kiosk.requirePin ?? false : false;
+    return [200, { kioskId: kiosk.id, authenticationMethod: method, memberLookup: kiosk.memberLookup, requirePin: kiosk.requirePin }];
+  }
+  if (kioskPath[2] === "commands" && request.method === "POST") {
+    if (kiosk.kind === "web" && !["reload_display", "reset_network_pin"].includes(body.command)) return [409, { error: "Web kiosks can only reload their display or reset their settings PIN." }];
+    const command = { id: `command-${state.commands.length + 1}`, kioskId: kiosk.id, command: body.command };
+    state.commands.push(command); return [201, command];
+  }
+  if (!kioskPath[2] && request.method === "DELETE") { kiosk.active = 0; return [200, { retired: true }]; }
+  if (!kioskPath[2] && request.method === "PATCH") { kiosk.name = String(body.name ?? kiosk.name).trim(); return [200, { kiosk: listedKiosk(kiosk) }]; }
+  return undefined;
+}
+// Member PIN state for the phase 3 contract, kept per x-preview-scenario like the kiosks. member-1 (A-101) has a PIN;
+// member-2 (A-102) has one locked after five wrong tries. Nothing here is a real PIN or person.
+function seedPins() {
+  return {
+    pinRequests: [],
+    memberPins: new Map([
+      ["member-1", { setAt: iso(-2 * 24 * 60), setKioskName: "Test web kiosk A", failedAttempts: 0, lockedUntil: null }],
+      ["member-2", { setAt: iso(-5 * 24 * 60), setKioskName: "Front desk", failedAttempts: 5, lockedUntil: iso(30) }],
+    ]),
+    pinLockout: { enabled: false, attempts: 5, minutes: 15 },
+  };
+}
+const pinView = (pin) => pin ? { set: true, setAt: pin.setAt, setKioskName: pin.setKioskName, failedAttempts: pin.failedAttempts, lockedUntil: pin.lockedUntil && Date.parse(pin.lockedUntil) > Date.now() ? pin.lockedUntil : null } : { set: false, setAt: null, setKioskName: null, failedAttempts: 0, lockedUntil: null };
+const requestView = ({ id, status, expiresAt }) => ({ id, status, expiresAt });
+/** The member PIN routes, answered from the scenario's state; undefined for every other request. */
+async function pinRoute(request, path) {
+  const kioskRequests = /^\/admin\/kiosks\/([^/]+)\/pin-requests$/.exec(path);
+  const answer = /^\/admin\/pin-requests\/([^/]+)\/(approve|decline)$/.exec(path);
+  const memberPin = /^\/admin\/members\/([^/]+)\/pin(\/unlock)?$/.exec(path);
+  const lockout = path === "/admin/settings/pin-lockout";
+  // Stands in for a kiosk asking for approval, so browser tests can add a request while the page polls.
+  const simulated = path === "/preview/pin-requests" && request.method === "POST";
+  if (!kioskRequests && !answer && !memberPin && !lockout && !simulated) return undefined;
+  const state = kioskScenario(request);
+  if (kioskRequests && request.method === "GET") {
+    const kioskId = decodeURIComponent(kioskRequests[1]);
+    for (const item of state.pinRequests) if (item.status === "pending" && Date.parse(item.expiresAt) <= Date.now()) item.status = "expired";
+    return [200, { requests: state.pinRequests.filter((item) => item.kioskId === kioskId && item.status === "pending").map(({ id, member, createdAt, expiresAt }) => ({ id, member, createdAt, expiresAt })) }];
+  }
+  const body = request.method === "GET" || request.method === "DELETE" ? {} : await readBody(request);
+  if (simulated) {
+    const member = members.find((item) => item.id === body.memberId);
+    if (!member) return [404, { error: "Member not found" }];
+    const createdAt = new Date(Date.now() - Number(body.minutesAgo ?? 0) * 60_000).toISOString();
+    const item = { id: `pin-request-${state.pinRequests.length + 1}`, kioskId: String(body.kioskId), status: "pending", member: { rosterId: member.id, memberId: member.memberId, firstName: body.firstName ?? member.firstName, lastName: body.lastName ?? member.lastName }, createdAt, expiresAt: new Date(Date.parse(createdAt) + 10 * 60_000).toISOString() };
+    state.pinRequests.push(item); return [201, { request: requestView(item) }];
+  }
+  if (answer && request.method === "POST") {
+    const item = state.pinRequests.find((entry) => entry.id === decodeURIComponent(answer[1]));
+    if (!item) return [404, { error: "PIN request not found" }];
+    if (item.status !== "pending") return [409, { error: "That PIN request was already answered or has expired.", code: "pin_request_not_pending" }];
+    item.status = answer[2] === "approve" ? "approved" : "declined"; item.decidedAt = new Date().toISOString();
+    return [200, { request: requestView(item) }];
+  }
+  if (memberPin) {
+    const rosterId = decodeURIComponent(memberPin[1]);
+    if (!members.some((item) => item.id === rosterId)) return [404, { error: "Member not found" }];
+    if (!memberPin[2] && request.method === "GET") return [200, { pin: pinView(state.memberPins.get(rosterId)) }];
+    if (!memberPin[2] && request.method === "DELETE") { state.memberPins.delete(rosterId); return [200, { pin: pinView(undefined) }]; }
+    if (memberPin[2] && request.method === "POST") { const pin = state.memberPins.get(rosterId); if (pin) { pin.failedAttempts = 0; pin.lockedUntil = null; } return [200, { pin: pinView(pin) }]; }
+    return undefined;
+  }
+  if (lockout && request.method === "GET") return [200, state.pinLockout];
+  if (lockout && request.method === "PUT") {
+    const { enabled, attempts, minutes } = body;
+    if (typeof enabled !== "boolean") return [400, { error: "Lockout is on or off." }];
+    if (!Number.isInteger(attempts) || attempts < 3 || attempts > 20) return [400, { error: "Wrong tries must be a whole number from 3 to 20." }];
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) return [400, { error: "Lock for must be a whole number of minutes from 1 to 1440." }];
+    state.pinLockout = { enabled, attempts, minutes }; return [200, state.pinLockout];
+  }
+  return undefined;
+}
+const walkthroughLastSteps ={ dashboard: "recurrence", roster: "bulk-tools", member: "member-actions", outreach: "reports-handoff", reports: "report-actions", meeting: "corrections", kiosks: "history" };
+const server = createServer(async (request, response) => {
   const origin = request.headers.origin ?? "http://127.0.0.1:5173";
   response.setHeader("access-control-allow-origin", origin); response.setHeader("access-control-allow-credentials", "true"); response.setHeader("content-type", "application/json");
-  if (request.method === "OPTIONS") { response.statusCode = 204; response.end(); return; }
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`); const path = url.pathname;
+  // Only the kiosk write routes answer preflights, so other unmocked writes still fail as before.
+  if (request.method === "OPTIONS") { if (path === "/admin/pairing-codes" || path.startsWith("/admin/kiosks/") || path.startsWith("/admin/pin-requests/") || /^\/admin\/members\/[^/]+\/pin(\/unlock)?$/.test(path) || path === "/admin/settings/pin-lockout" || path === "/preview/pin-requests") { response.setHeader("access-control-allow-methods", "GET, POST, PATCH, PUT, DELETE"); response.setHeader("access-control-allow-headers", "content-type, x-preview-scenario"); } response.statusCode = 204; response.end(); return; }
+  const kioskResult = await pinRoute(request, path) ?? await kioskRoute(request, path);
+  if (kioskResult) { response.statusCode = kioskResult[0]; response.end(JSON.stringify(kioskResult[1])); return; }
   const requestedMeeting = path.startsWith("/meetings/") ? meetings.find((meeting) => meeting.id === decodeURIComponent(path.slice("/meetings/".length))) : undefined;
   const walkthroughPage = path.startsWith("/auth/walkthroughs/") ? path.slice("/auth/walkthroughs/".length) : "";
   const payload = path === "/setup/status" ? { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Nova Arts Collective", subtitle: "Make things together", logoData: logo, primaryColor: "#8b2f72", secondaryColor: "#e9b949", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } }
@@ -77,12 +210,12 @@ const server = createServer((request, response) => {
     : path === "/admin/kiosks/fingerprint-sync" && request.method === "GET" ? { enabled: false }
     : path === "/admin/kiosks/fingerprint-vault" && request.method === "GET" ? { enabled: false, keyStatus: "ready", storedFingerprints: 0, serverManagedKeys: true }
     : path === "/admin/kiosks/fingerprint-reset" && request.method === "GET" ? { resetCommands: [] }
-    : path === "/admin/kiosks" ? { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.8.0", pairedAt: iso(-1440) }] }
+    : path === "/admin/kiosks" ? { kiosks: seedKiosks("default") }
     : path === "/admin/web-updates/status" ? { releaseVersion: "0.23.2", workflowUrl: "https://github.example.test/private/actions/workflows/upgrade-web.yml", request: null }
     : path === "/admin/releases/latest" ? { channel: "stable", fresh: true, checkedAt: Date.now(), attemptedAt: Date.now(), release: { tag_name: "v0.8.0" } }
     : path === "/admin/update-channel" ? { channel: "stable", revision: 0 }
-    : path === "/admin/simulator" ? { simulator: { name: "Browser test", active: 1, online: 1, lastSeenAt: iso(0), readerOnline: false, releaseVersion: "browser simulator" } }
     : path === "/admin/integrations" ? { integrations: [{ provider: "google", enabled: true, saved: true, configured: true, state: "configured", verifiedAt: iso(-60) }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled", pendingOperations: 0, failedOperations: 0 }, { provider: "resend", enabled: true, saved: true, configured: false, state: "verification_required" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] }
+    : path === "/admin/integrations/first" ? { programs: { FRC: { saved: false, username: "", checkedAt: null, readable: false }, FTC: { saved: false, username: "", checkedAt: null, readable: false } }, fll: { available: false }, encryption: true }
     : { error: "Preview route not implemented" };
   response.statusCode = payload.error ? 404 : 200; response.end(JSON.stringify(payload));
 });

@@ -9,6 +9,8 @@ import { gunzipSync, gzipSync } from "node:zlib";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const kioskArchitectures = ["arm64", "armv7"];
+// Browser-safe shared modules the kiosk service imports from packages/shared/src.
+export const sharedKioskModules = ["release-policy.mjs", "member-lookup.mjs"];
 // On Windows, Git Bash puts GNU tar first on PATH, and it reads "C:\..." as a remote host. Windows' own bsdtar handles
 // drive-letter paths, so packaging uses it when it exists. Every other platform uses tar from PATH.
 const systemTar = process.platform === "win32" && process.env.SystemRoot ? join(process.env.SystemRoot, "System32", "tar.exe") : "";
@@ -156,7 +158,7 @@ export async function verifyKioskArtifacts({ artifacts, version, requireUnprivil
     try {
       execFileSync(tarCommand, ["-xzf", join(artifacts, name), "-C", extracted], { stdio: "pipe" });
       await checkPackageModes(extracted);
-      for (const path of ["src/release-policy.mjs", "src/resolve-kiosk-release.mjs", "src/desktop-control.mjs", "src/desktop-launcher.mjs", "scripts/lancerlogin-open-kiosk.sh", "scripts/lancerlogin-install-release.sh", "systemd/lancerlogin-kiosk.service", "systemd/lancerlogin-update.service", "polkit/49-lancerlogin-network.rules", "polkit/49-lancerlogin-recovery.rules", "polkit/49-lancerlogin-update.rules"]) await readFile(join(extracted, path));
+      for (const path of ["src/release-policy.mjs", "src/member-lookup.mjs", "src/resolve-kiosk-release.mjs", "src/desktop-control.mjs", "src/desktop-launcher.mjs", "scripts/lancerlogin-open-kiosk.sh", "scripts/lancerlogin-install-release.sh", "systemd/lancerlogin-kiosk.service", "systemd/lancerlogin-update.service", "polkit/49-lancerlogin-network.rules", "polkit/49-lancerlogin-recovery.rules", "polkit/49-lancerlogin-update.rules"]) await readFile(join(extracted, path));
       await smokeKioskDirectory(extracted, { requireUnprivileged });
     } finally {
       await rm(extracted, { recursive: true, force: true });
@@ -179,12 +181,15 @@ export async function packageKioskArtifacts({ output, version, sourceRoot = repo
     const kiosk = join(sourceRoot, "apps/kiosk");
     for (const entry of await readdir(join(kiosk, "src"), { withFileTypes: true })) {
       if (entry.isFile() && entry.name.endsWith(".mjs")) {
-        if (entry.name === "resolve-kiosk-release.mjs") await writeFile(join(staging, "src", entry.name), (await readFile(join(kiosk, "src", entry.name), "utf8")).replace("../../../packages/shared/src/release-policy.mjs", "./release-policy.mjs"));
+        // Shared modules ship beside the kiosk's own, so their checkout paths become local ones.
+        const source = await readFile(join(kiosk, "src", entry.name), "utf8");
+        const packaged = sharedKioskModules.reduce((text, name) => text.replaceAll(`../../../packages/shared/src/${name}`, `./${name}`), source);
+        if (packaged !== source) await writeFile(join(staging, "src", entry.name), packaged);
         else await copyFile(join(kiosk, "src", entry.name), join(staging, "src", entry.name));
       }
       if (entry.isDirectory()) throw new Error("Kiosk runtime subdirectories require explicit packaging support");
     }
-    await copyFile(join(sourceRoot, "packages/shared/src/release-policy.mjs"), join(staging, "src/release-policy.mjs"));
+    for (const name of sharedKioskModules) await copyFile(join(sourceRoot, "packages/shared/src", name), join(staging, "src", name));
     await copyFile(join(kiosk, "scripts/lancerlogin-install-release.sh"), join(staging, "scripts/lancerlogin-install-release.sh"));
     await writeFile(join(staging, "scripts/lancerlogin-open-kiosk.sh"), (await readFile(join(kiosk, "scripts/lancerlogin-open-kiosk.sh"), "utf8")).replaceAll("\r\n", "\n"));
     for (const [directory, suffix] of [["systemd", ".service"], ["polkit", ".rules"]]) {

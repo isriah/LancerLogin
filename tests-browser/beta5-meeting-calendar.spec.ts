@@ -3,7 +3,7 @@ import { setDashboardTheme } from "./dashboard-theme";
 import { outreachSnapshot } from "./module-fixtures";
 import { requireOutreachPlugin } from "./outreach-fixtures";
 import { pairedViews } from "./paired-views";
-import { calendarDay, selectCalendarDay } from "./meeting-calendar-fixture";
+import { calendarDay, expectCalendarDaySelected, selectCalendarDay } from "./meeting-calendar-fixture";
 
 test.use({ timezoneId: "America/New_York" });
 async function calendarPresentation(page: Page, day: Locator, title: string, detail: string, width: number, opensOnDesktop = false) {
@@ -19,7 +19,7 @@ async function calendarPresentation(page: Page, day: Locator, title: string, det
   await day.focus(); await page.keyboard.press("Enter");
   // A desktop day with exactly one meeting opens it directly instead of selecting the day.
   if (opensOnDesktop && width > 900) { await expect(page).toHaveURL(/\/meetings\/active-meeting$/); await page.goBack(); }
-  await expect(day).toHaveAttribute("aria-pressed", "true");
+  await expectCalendarDaySelected(day);
 }
 
 const overnight = { id: "active-meeting", title: "Synthetic overnight planning", startsAt: "2026-10-21T03:31:28.123Z", endsAt: "2026-10-21T06:32:28.123Z", attendanceClosesAt: "2026-10-21T07:02:28.123Z", required: true, notes: "Synthetic schedule fixture", audienceMode: "all", audienceLabelIds: [] };
@@ -87,10 +87,10 @@ for (const { theme, width } of pairedViews) test(`Dashboard selected day survive
   await setDashboardTheme(page, theme); await calendarPresentation(page, selected, overnight.title, "1:00 PM - 2:00 PM", width, true);
   if (theme === "light") await page.screenshot({ path: test.info().outputPath("meeting-calendar.png"), fullPage: true });
   await page.getByRole("radio", { name: "Table", exact: true }).check(); await page.getByRole("radio", { name: "Calendar", exact: true }).check();
-  await expect(selected).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: `Open meeting ${overnight.title}`, exact: true }).click();
-  await page.getByRole("button", { name: "Back to Dashboard", exact: true }).click(); await expect(selected).toHaveAttribute("aria-pressed", "true");
-  await page.reload(); await expect(selected).toHaveAttribute("aria-pressed", "true");
+  await expectCalendarDaySelected(selected);
+  await page.getByRole("link", { name: `Open meeting ${overnight.title}`, exact: true }).click();
+  await page.getByRole("button", { name: "Back to Dashboard", exact: true }).click(); await expectCalendarDaySelected(selected);
+  await page.reload(); await expectCalendarDaySelected(selected);
   await expect(page.locator(".compact-month-navigation > strong")).toHaveText("September 2026");
   await page.getByRole("button", { name: "Today", exact: true }).click(); await expect(page.getByRole("button", { name: "October 19, 2026, 0 meetings", exact: true })).toHaveAttribute("aria-pressed", "true");
 });

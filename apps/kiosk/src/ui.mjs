@@ -3,7 +3,7 @@ export const kioskHtml = `<!doctype html>
 <body><main id="kiosk" class="kiosk-shell kiosk-shell-ready" aria-live="polite">
   <button id="network-status" class="network-status" type="button" aria-label="Network status" title="Network status"><span class="network-icon" aria-hidden="true"><i></i><i></i><i></i></span></button>
   <header id="brand" class="kiosk-brand" role="button" tabindex="0" aria-label="Authentication maintenance" title="Hold for authentication maintenance"><span id="brand-name">LancerLogin</span><span id="brand-logo-frame" class="adaptive-logo backdrop-none" hidden><img id="brand-logo" alt=""></span><strong id="brand-subtitle"></strong></header>
-  <section id="display" class="scan-panel scan-panel-ready" aria-labelledby="display-message"><div class="reader-mark" aria-hidden="true"></div><p id="display-kicker" hidden>Ready</p><h1 id="display-message">Starting attendance...</h1><p id="display-name" hidden></p><p id="display-detail">Connecting to the local service</p><p id="display-meeting" hidden></p><p id="display-notice" hidden></p><form id="identity-entry" class="identity-entry" hidden><label id="identity-label" for="identity-value">Credential</label><input id="identity-value" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="none" maxlength="256" required><div id="member-id-keyboard" class="member-id-keyboard" hidden aria-label="Member ID keyboard"></div><button class="identity-submit" type="submit">Continue</button></form></section>
+  <section id="display" class="scan-panel scan-panel-ready" aria-labelledby="display-message"><div class="reader-mark" aria-hidden="true"></div><p id="display-kicker" hidden>Ready</p><h1 id="display-message">Starting attendance...</h1><p id="display-name" hidden></p><p id="display-detail">Connecting to the local service</p><p id="display-meeting" hidden></p><p id="display-notice" hidden></p><form id="identity-entry" class="identity-entry" hidden><label id="identity-label" for="identity-value">Credential</label><input id="identity-value" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="none" maxlength="256" required><div id="member-results" class="member-results" hidden aria-live="polite"></div><div id="member-id-keyboard" class="member-id-keyboard" hidden aria-label="Member ID keyboard"></div><div id="member-id-keypad" class="member-id-keypad" hidden aria-label="Member ID keypad"></div><button class="identity-submit" type="submit">Continue</button></form><div id="member-flow" class="member-flow" hidden aria-live="polite"><div class="member-flow-text"><h2 id="member-flow-title"></h2><p id="member-flow-name" hidden></p><p id="member-flow-detail" hidden></p><p id="member-flow-dots" class="member-flow-dots" aria-label="PIN digits entered" hidden></p><p id="member-flow-note" hidden></p><div id="member-flow-actions" class="member-flow-actions"></div></div><div id="member-flow-keypad" class="member-flow-keypad" aria-label="PIN keypad" hidden></div></div></section>
   <aside id="attendance-warning" role="status" hidden></aside>
   <footer class="debug-status"><span class="kiosk-identity"><strong id="kiosk-name" hidden></strong><span id="kiosk-version"></span><span id="reader-status">Reader starting…</span></span><span id="queue-status">No scans waiting</span><span id="uptime">Uptime 0m</span></footer>
 </main>
@@ -15,7 +15,10 @@ export const kioskStyles = `:root{--page-bg:#f4f6f8;--surface-bg:#424a53;--text-
 
 export const kioskStatusStyles = `#display-notice{max-width:32ch;margin:8px auto 0;padding:6px 12px;border:2px solid var(--accent-color);border-radius:8px;font-size:18px;font-weight:700;line-height:1.3}.kiosk-shell-rescan{box-shadow:inset 0 0 0 12px var(--accent-color)}.scan-panel-rescan .reader-mark{border-color:var(--accent-color);box-shadow:inset 0 0 0 18px var(--accent-color)}#attendance-warning{position:absolute;bottom:58px;left:16px;right:16px;padding:8px 12px;border:2px solid #f2c14e;border-radius:8px;background:#292e39;color:#fff;text-align:center;font-size:14px;line-height:1.3}#attendance-warning[hidden]{display:none}.network-status .network-icon{position:relative;display:flex;width:42px;height:42px;align-items:end;justify-content:center;gap:4px;border:0;border-radius:0;font-size:inherit}.network-status .network-icon::after{display:none}.network-status .network-icon i{display:block;width:9px;border-radius:2px 2px 0 0;background:currentColor}.network-status .network-icon i:nth-child(1){height:14px}.network-status .network-icon i:nth-child(2){height:25px}.network-status .network-icon i:nth-child(3){height:36px}.network-status.ethernet .network-icon{display:block;width:43px;height:35px;border:4px solid currentColor;border-radius:4px}.network-status.ethernet .network-icon i{position:absolute;bottom:-10px;width:4px;height:12px;border-radius:0;background:currentColor}.network-status.ethernet .network-icon i:nth-child(1){left:8px}.network-status.ethernet .network-icon i:nth-child(2){left:16px}.network-status.ethernet .network-icon i:nth-child(3){left:24px}`;
 
-export const kioskIdentityStyles = `[hidden]{display:none!important}.identity-submit{grid-column:2;grid-row:2}.member-id-keyboard{grid-row:3}@media(max-height:520px){.scan-panel-identity #display-detail{display:none}.member-id-keyboard button{min-height:44px;width:44px}}`;
+
+// Member ID keypad, Member search results, and the confirm and PIN steps that replace the scan panel while they run.
+const memberFlowStyles = `.member-id-keypad,.member-flow-keypad{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.member-id-keypad{grid-column:1/-1;grid-row:3;width:min(360px,100%);justify-self:center}.member-id-keypad button,.member-flow-keypad button,.member-flow-actions button,.member-results button{min-height:52px;border:1px solid rgb(255 255 255 / 32%);border-radius:10px;background:color-mix(in srgb,var(--surface-bg),#fff 12%);color:var(--on-surface-color);font-weight:900}.member-id-keypad button,.member-flow-keypad button{padding:4px;font-size:24px}.identity-entry.member-keypad .member-id-keyboard{display:none}.identity-entry.member-search{grid-template-columns:minmax(0,1fr) minmax(0,236px);column-gap:12px}.identity-entry.member-search label,.identity-entry.member-search input{grid-column:1}.identity-entry.member-search input{grid-row:2}.identity-entry.member-search .member-id-keyboard{grid-column:1;grid-row:3}.identity-entry.member-search .member-id-keyboard button{width:42px}.identity-entry.member-search .identity-submit{display:none}.member-results{grid-column:2;grid-row:1/4;display:grid;align-content:start;gap:6px;min-width:0;overflow:hidden}.member-results button{display:grid;min-height:44px;padding:4px 10px;text-align:left}.member-results button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:18px}.member-results button small{font-size:14px;color:var(--muted-color)}.member-results p{margin:0;font-size:16px}.scan-panel.member-flow-active>:not(#member-flow){display:none!important}.member-flow{width:min(720px,100%);display:grid;grid-template-columns:minmax(0,1fr);gap:12px 28px;align-items:center;text-align:center}.member-flow.with-keypad{grid-template-columns:minmax(0,1fr) minmax(0,290px);text-align:left}.member-flow-text{display:grid;gap:10px;justify-items:center;min-width:0}.member-flow.with-keypad .member-flow-text{justify-items:start}#member-flow-title{margin:0;font-size:42px;line-height:1.1;font-weight:800}#member-flow-name{color:var(--on-surface-color);font-size:30px;font-weight:800;overflow-wrap:anywhere}#member-flow-detail,#member-flow-note{font-size:21px}#member-flow-note{color:var(--accent-color);font-weight:700}.member-flow-dots{min-height:40px;color:var(--on-surface-color);font-size:32px;letter-spacing:.3em}.member-flow-actions{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:4px}.member-flow.with-keypad .member-flow-actions{justify-content:start}.member-flow-actions button{min-width:140px;padding:8px 22px;font-size:22px}.member-flow-actions button.primary{background:var(--primary-color);color:var(--on-primary-color)}.member-flow-actions button:disabled{opacity:.45}.member-flow-keypad button{min-height:58px}.member-id-keypad button:focus-visible,.member-flow-keypad button:focus-visible,.member-flow-actions button:focus-visible,.member-results button:focus-visible{outline:4px solid #f7c948;outline-offset:2px}@media(max-height:520px){#member-flow-title{font-size:34px}#member-flow-name{font-size:26px}#member-flow-detail,#member-flow-note{font-size:18px}.member-flow-text{gap:6px}.member-flow-keypad button{min-height:52px}.member-id-keypad button{min-height:46px}}`;
+export const kioskIdentityStyles = `[hidden]{display:none!important}.identity-submit{grid-column:2;grid-row:2}.member-id-keyboard{grid-row:3}@media(max-height:520px){.scan-panel-identity #display-detail{display:none}.member-id-keyboard button{min-height:44px;width:44px}}` + memberFlowStyles;
 
 export function kioskReaderStatus({ readerOnline = false, releaseVersion = "development", authenticationMethod = "fingerprint" } = {}) {
   const version = typeof releaseVersion === "string" && releaseVersion.trim() ? releaseVersion.trim() : "development";
@@ -63,7 +66,13 @@ ${kioskAttendanceNotice.toString()}
 const byId = (id) => document.getElementById(id);
 let lastLogoSource = "";
 let lastAuthenticationMethod = "";
+let lastEntryMode = "";
 let identityEntryWasInteractive = false;
+// Member ID kiosks: entry or search, Require PIN, and a keypad when every member ID is a number (from /display-state).
+let memberLookup = "entry", requirePin = false, memberIdKeypad = false;
+let memberFlow = { step: "entry" }, memberFlowGeneration = 0, memberFlowTimer, memberFlowTick, pinRequestPoll;
+let searchResults = [], searchSequence = 0, searchTimer;
+const confirmTimeoutMs = 15000, pinIdleMs = 60000, messageMs = 6000, pinRequestPollMs = 3000;
 let presenceState;
 let presenceError;
 let attendanceRecoveryRequired = false;
@@ -91,6 +100,7 @@ function pausePresentation() {
   byId("display-detail").textContent = presenceError || (presenceState?.reason === "operator_active" && !attendanceRecoveryRequired ? "Return from maintenance or network settings to resume." : "Use Retry attendance to reconnect this screen.");
   byId("display-name").hidden = true; byId("display-meeting").hidden = true;
   byId("identity-entry").hidden = true;
+  resetMemberFlow();
   byId("identity-value").value = "";
   identityEntryWasInteractive = false;
 }
@@ -101,6 +111,13 @@ async function request(path, options) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || "Request failed");
   return body;
+}
+
+async function call(path, options) {
+  try {
+    const response = await fetch(path, { ...options, headers: { ...(options?.body ? { "content-type": "application/json" } : {}), ...options?.headers } });
+    return { ok: response.ok, status: response.status, body: await response.json().catch(() => ({})) };
+  } catch { return { ok: false, status: 0, body: { error: "The kiosk service is not answering. Try again." } }; }
 }
 
 function statusClass(display) {
@@ -168,30 +185,236 @@ function adaptLogo(src, requestedBackdrop, organizationName) {
   image.src = src;
 }
 
+function entryMode(method) {
+  if (method !== "member_id") return method;
+  return memberLookup === "search" ? "search" : memberIdKeypad ? "keypad" : "keyboard";
+}
+
 function configureIdentityEntry(method, displayId) {
   const form = byId("identity-entry");
   const input = byId("identity-value");
   const keyboard = byId("member-id-keyboard");
-  const interactive = presenceState?.mode === "attendance" && !presenceState.captureSuspended && method !== "fingerprint" && displayId === "ready";
+  const interactive = presenceState?.mode === "attendance" && !presenceState.captureSuspended && method !== "fingerprint" && displayId === "ready" && memberFlow.step === "entry";
   const becameInteractive = interactive && !identityEntryWasInteractive;
   identityEntryWasInteractive = interactive;
   form.hidden = !interactive;
   byId("display").classList.toggle("scan-panel-identity", interactive);
-  if (!interactive) { input.value = ""; return; }
+  // A member who is confirming keeps their search text for Back to search.
+  if (!interactive) { if (memberFlow.step === "entry") { input.value = ""; showSearchResults([]); } return; }
   const memberEntry = method === "member_id";
-  if (method !== lastAuthenticationMethod) {
-    lastAuthenticationMethod = method;
+  const mode = entryMode(method);
+  if (method !== lastAuthenticationMethod || mode !== lastEntryMode) {
+    lastAuthenticationMethod = method; lastEntryMode = mode;
     input.value = "";
-    keyboard.hidden = !memberEntry;
+    keyboard.hidden = !memberEntry || mode === "keypad";
+    byId("member-id-keypad").hidden = mode !== "keypad";
+    byId("member-results").hidden = mode !== "search";
+    form.classList.toggle("member-search", mode === "search");
+    form.classList.toggle("member-keypad", mode === "keypad");
     input.readOnly = false;
     input.inputMode = memberEntry ? "text" : "none";
     input.type = memberEntry ? "text" : "password";
     input.maxLength = memberEntry ? 100 : 256;
-    byId("identity-label").textContent = memberEntry ? "Member ID" : method === "qr" ? "QR scanner input" : method.toUpperCase() + " badge input";
+    input.placeholder = mode === "search" ? "Name, ID or email" : "";
+    byId("identity-label").textContent = mode === "search" ? "Search by name, member ID or email" : memberEntry ? "Member ID" : method === "qr" ? "QR scanner input" : method.toUpperCase() + " badge input";
     byId("identity-entry").querySelector("button[type=submit]").textContent = memberEntry ? "Submit member ID" : "Read credential";
+    showSearchResults([]);
   }
   if (!memberEntry && (becameInteractive || document.activeElement !== input)) input.focus({ preventScroll: true });
 }
+
+// ---- Member search, the confirm step and member PINs ----
+const memberName = (member) => ((member.firstName || "") + " " + (member.lastName || "")).trim();
+
+function showSearchResults(members) {
+  searchResults = members;
+  const list = byId("member-results");
+  const query = byId("identity-value").value.trim();
+  list.replaceChildren();
+  for (const member of members) {
+    const button = document.createElement("button"); button.type = "button";
+    const name = document.createElement("span"); name.textContent = memberName(member);
+    const id = document.createElement("small"); id.textContent = member.memberId;
+    button.append(name, id); button.setAttribute("aria-label", memberName(member) + ", member ID " + member.memberId);
+    button.addEventListener("click", () => startConfirm(member));
+    list.append(button);
+  }
+  if (!members.length) { const empty = document.createElement("p"); empty.textContent = query ? "No matches. Check the spelling, or ask an operator." : "Type your name, member ID or email."; list.append(empty); }
+}
+function scheduleSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 120); }
+async function runSearch() {
+  const query = byId("identity-value").value; const sequence = ++searchSequence;
+  if (!query.trim()) { showSearchResults([]); return; }
+  const result = await call("/identity/search", { method: "POST", body: JSON.stringify({ query }) });
+  if (sequence !== searchSequence || lastEntryMode !== "search") return;
+  showSearchResults(result.ok && Array.isArray(result.body.members) ? result.body.members : []);
+}
+
+function clearMemberFlowTimers() { clearTimeout(memberFlowTimer); clearInterval(memberFlowTick); clearTimeout(pinRequestPoll); memberFlowTimer = memberFlowTick = pinRequestPoll = undefined; }
+function resetMemberFlow({ keepSearch = false } = {}) {
+  const wasActive = memberFlow.step !== "entry";
+  clearMemberFlowTimers(); memberFlowGeneration++;
+  memberFlow = { step: "entry" };
+  if (wasActive && !keepSearch) { byId("identity-value").value = ""; showSearchResults([]); }
+  renderMemberFlow();
+}
+function setMemberFlow(next, { timeoutMs } = {}) {
+  clearMemberFlowTimers(); memberFlowGeneration++;
+  memberFlow = next;
+  if (next.step === "confirm") {
+    const until = Date.now() + confirmTimeoutMs; memberFlow.until = until;
+    memberFlowTick = setInterval(renderMemberFlow, 250);
+    memberFlowTimer = setTimeout(() => resetMemberFlow(), confirmTimeoutMs);
+  } else if (timeoutMs) memberFlowTimer = setTimeout(() => resetMemberFlow(), timeoutMs);
+  renderMemberFlow();
+  return memberFlowGeneration;
+}
+function startConfirm(member) { setMemberFlow({ step: "confirm", member: { memberId: member.memberId, firstName: member.firstName, lastName: member.lastName } }); }
+
+function flowButton(label, action, { primary = false, disabled = false } = {}) {
+  const button = document.createElement("button"); button.type = "button"; button.textContent = label;
+  if (primary) button.className = "primary"; button.disabled = disabled;
+  button.addEventListener("click", action); return button;
+}
+function lockLine(lockedUntil) {
+  const time = new Date(lockedUntil); return Number.isFinite(time.getTime()) ? time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "later";
+}
+function renderMemberFlow() {
+  const flow = memberFlow; const panel = byId("member-flow"); const active = flow.step !== "entry";
+  panel.hidden = !active; byId("display").classList.toggle("member-flow-active", active);
+  if (!active) return;
+  const keypad = ["pin", "choose", "choose_again"].includes(flow.step);
+  panel.classList.toggle("with-keypad", keypad); byId("member-flow-keypad").hidden = !keypad;
+  const text = (id, value) => { const element = byId(id); element.textContent = value || ""; element.hidden = !value; };
+  let title = "", name = flow.member ? memberName(flow.member) : "", detail = "", note = "", actions = [];
+  const cancel = () => resetMemberFlow();
+  if (flow.step === "confirm") {
+    title = "Is this you?"; detail = "Member ID " + flow.member.memberId;
+    note = "Returns to start in " + Math.max(0, Math.ceil((flow.until - Date.now()) / 1000)) + " s";
+    actions = [flowButton(memberLookup === "search" ? "Back to search" : "Not me", () => resetMemberFlow({ keepSearch: memberLookup === "search" })), flowButton("Confirm", () => void confirmMember(), { primary: true })];
+  } else if (flow.step === "pin" || flow.step === "choose" || flow.step === "choose_again") {
+    title = flow.step === "pin" ? "Enter your PIN" : flow.step === "choose" ? "Choose a PIN" : "Type your PIN again";
+    detail = flow.step === "pin" ? "Then tap Enter" : "4 to 6 digits";
+    note = flow.note || "";
+    const ready = flow.digits.length >= 4;
+    actions = [flowButton("Cancel", cancel), flowButton(flow.step === "pin" ? "Enter" : flow.step === "choose" ? "Next" : "Save PIN", () => void submitDigits(), { primary: true, disabled: !ready })];
+  } else if (flow.step === "sending") {
+    title = flow.title || "Recording attendance";
+  } else if (flow.step === "wrong_pin") {
+    title = "Wrong PIN"; detail = "Try again, or ask an Operator to reset it.";
+    note = flow.lockedUntil ? "Your PIN is locked until " + lockLine(flow.lockedUntil) + "." : Number.isInteger(flow.attemptsLeft) ? flow.attemptsLeft + (flow.attemptsLeft === 1 ? " try" : " tries") + " left before your PIN locks." : "";
+    actions = flow.lockedUntil ? [flowButton("OK", cancel, { primary: true })] : [flowButton("Cancel", cancel), flowButton("Try again", () => setMemberFlow({ step: "pin", member: flow.member, digits: "" }, { timeoutMs: pinIdleMs }), { primary: true })];
+  } else if (flow.step === "locked") {
+    title = "PIN locked"; detail = "Too many wrong tries."; note = "Try again after " + lockLine(flow.lockedUntil) + ", or ask an Operator to unlock it.";
+    actions = [flowButton("OK", cancel, { primary: true })];
+  } else if (flow.step === "no_pin") {
+    title = "You don't have a PIN yet"; detail = "An Operator approves your new PIN. Then you choose it here.";
+    actions = [flowButton("Cancel", cancel), flowButton("Ask for approval", () => void askForApproval(), { primary: true })];
+  } else if (flow.step === "waiting") {
+    title = "Waiting for approval"; detail = "Ask an Operator to approve it on the dashboard's Manage kiosk page.";
+    note = "An Operator can also set your PIN from this kiosk's maintenance screen.";
+    actions = [flowButton("Cancel", cancel)];
+  } else if (flow.step === "message") {
+    title = flow.title; name = flow.name || ""; detail = flow.detail;
+    actions = [flowButton("OK", cancel, { primary: true })];
+  }
+  text("member-flow-title", title); text("member-flow-name", name); text("member-flow-detail", detail); text("member-flow-note", note);
+  const dots = byId("member-flow-dots"); dots.hidden = !keypad; dots.textContent = keypad ? "●".repeat(flow.digits.length) || " " : "";
+  byId("member-flow-actions").replaceChildren(...actions);
+}
+
+function showFlowMessage(title, detail, member) { setMemberFlow({ step: "message", title, detail, member }, { timeoutMs: messageMs }); }
+async function confirmMember() {
+  const member = memberFlow.member;
+  if (requirePin) {
+    // The kiosk says whether the member has a PIN yet, so a member without one is not asked to type it.
+    const generation = setMemberFlow({ step: "sending", member, title: "One moment" });
+    const result = await call("/identity", { method: "POST", body: JSON.stringify({ method: "member_id", memberId: member.memberId, confirmed: true }) });
+    if (generation !== memberFlowGeneration) return;
+    if (result.body.code === "pin_required") setMemberFlow({ step: "pin", member, digits: "" }, { timeoutMs: pinIdleMs });
+    else pinOutcome(member, result);
+    return;
+  }
+  const generation = setMemberFlow({ step: "sending", member });
+  const result = await call("/identity", { method: "POST", body: JSON.stringify({ method: "member_id", memberId: member.memberId, confirmed: true }) });
+  if (generation !== memberFlowGeneration) return;
+  if (result.ok) resetMemberFlow(); else showFlowMessage("Input not accepted", result.body.error || "Ask an operator for help.");
+}
+function pinOutcome(member, result) {
+  const code = result.body.code;
+  if (result.ok) { resetMemberFlow(); return; }
+  if (code === "pin_incorrect") setMemberFlow({ step: "wrong_pin", member, attemptsLeft: result.body.attemptsLeft, lockedUntil: result.body.lockedUntil }, { timeoutMs: pinIdleMs });
+  else if (code === "pin_locked") setMemberFlow({ step: "locked", member, lockedUntil: result.body.lockedUntil }, { timeoutMs: pinIdleMs });
+  else if (code === "pin_not_set") setMemberFlow({ step: "no_pin", member }, { timeoutMs: pinIdleMs });
+  else showFlowMessage("Input not accepted", result.body.error || "Ask an operator for help.");
+}
+async function submitDigits() {
+  const flow = memberFlow; const pin = flow.digits;
+  if (pin.length < 4) return;
+  if (flow.step === "choose") { setMemberFlow({ step: "choose_again", member: flow.member, request: flow.request, first: pin, digits: "" }, { timeoutMs: pinIdleMs }); return; }
+  if (flow.step === "choose_again" && pin !== flow.first) { setMemberFlow({ step: "choose", member: flow.member, request: flow.request, digits: "", note: "The two PINs don't match. Choose a PIN again." }, { timeoutMs: pinIdleMs }); return; }
+  const generation = setMemberFlow({ step: "sending", member: flow.member, title: flow.step === "pin" ? "Checking your PIN" : "Saving your PIN" });
+  const result = flow.step === "pin"
+    ? await call("/identity", { method: "POST", body: JSON.stringify({ method: "member_id", memberId: flow.member.memberId, confirmed: true, pin }) })
+    : await call("/identity/pin-requests/" + encodeURIComponent(flow.request.id) + "/pin", { method: "POST", body: JSON.stringify({ memberId: flow.member.memberId, pin }) });
+  if (generation !== memberFlowGeneration) return;
+  if (flow.step === "choose_again" && result.body.code === "pin_request_not_approved") { showFlowMessage("Approval ran out", "Ask for approval again.", flow.member); return; }
+  pinOutcome(flow.member, result);
+}
+async function askForApproval() {
+  const member = memberFlow.member;
+  const generation = setMemberFlow({ step: "sending", member, title: "Asking for approval" });
+  const result = await call("/identity/pin-requests", { method: "POST", body: JSON.stringify({ memberId: member.memberId }) });
+  if (generation !== memberFlowGeneration) return;
+  if (result.body.code === "pin_already_set") { setMemberFlow({ step: "pin", member, digits: "", note: "You already have a PIN." }, { timeoutMs: pinIdleMs }); return; }
+  if (!result.ok || !result.body.request?.id) { showFlowMessage("Couldn't ask for approval", result.body.error || "Ask an operator for help.", member); return; }
+  waitForApproval(member, result.body.request);
+}
+function waitForApproval(member, pinRequest) {
+  const generation = setMemberFlow({ step: "waiting", member, request: pinRequest });
+  const poll = async () => {
+    const result = await call("/identity/pin-requests/" + encodeURIComponent(pinRequest.id));
+    if (generation !== memberFlowGeneration) return;
+    const status = result.ok ? result.body.request?.status : undefined;
+    if (status === "approved") setMemberFlow({ step: "choose", member, request: pinRequest, digits: "" }, { timeoutMs: pinIdleMs });
+    else if (status === "declined") showFlowMessage("Request declined", "Ask an Operator for help.", member);
+    else if (status === "expired" || status === "used") showFlowMessage("Request expired", "Ask for approval again.", member);
+    else pinRequestPoll = setTimeout(poll, pinRequestPollMs);
+  };
+  pinRequestPoll = setTimeout(poll, pinRequestPollMs);
+}
+function pressPinKey(key) {
+  if (!["pin", "choose", "choose_again"].includes(memberFlow.step)) return;
+  const digits = key === "Clear" ? "" : key === "⌫" ? memberFlow.digits.slice(0, -1) : memberFlow.digits.length < 6 ? memberFlow.digits + key : memberFlow.digits;
+  memberFlow = { ...memberFlow, digits, note: key === "Clear" || key === "⌫" ? memberFlow.note : "" };
+  // Typing restarts the idle timeout.
+  clearTimeout(memberFlowTimer); memberFlowTimer = setTimeout(() => resetMemberFlow(), pinIdleMs);
+  renderMemberFlow();
+}
+function buildDigitPad(container, onKey) {
+  for (const key of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "Clear", "0", "⌫"]) {
+    const button = document.createElement("button"); button.type = "button"; button.textContent = key;
+    if (key === "⌫") button.setAttribute("aria-label", "Backspace");
+    button.addEventListener("click", () => onKey(key));
+    container.append(button);
+  }
+}
+document.addEventListener("keydown", (event) => {
+  if (event.ctrlKey || event.altKey || event.metaKey) return;
+  if (["pin", "choose", "choose_again"].includes(memberFlow.step)) {
+    if (/^[0-9]$/.test(event.key)) pressPinKey(event.key);
+    else if (event.key === "Backspace") pressPinKey("⌫");
+    else if (event.key === "Enter") void submitDigits();
+    else if (event.key === "Escape") resetMemberFlow();
+    else return;
+    event.preventDefault();
+  } else if (memberFlow.step === "confirm") {
+    if (event.key === "Enter") void confirmMember();
+    else if (event.key === "Escape") resetMemberFlow({ keepSearch: memberLookup === "search" });
+    else return;
+    event.preventDefault();
+  }
+});
 
 function render(value) {
   const display = value.display || {};
@@ -222,7 +445,13 @@ function render(value) {
   const notice = byId("display-notice");
   notice.textContent = display.notice || "";
   notice.hidden = !display.notice;
-  configureIdentityEntry(value.authenticationMethod || "fingerprint", display.id || "ready");
+  const method = value.authenticationMethod || "fingerprint";
+  const nextLookup = value.memberLookup === "search" ? "search" : "entry", nextRequirePin = value.requirePin === true;
+  // A changed mode, method or screen ends a member's confirm or PIN step; the service decides what is shown.
+  if (memberFlow.step !== "entry" && (method !== "member_id" || nextLookup !== memberLookup || nextRequirePin !== requirePin || (display.id || "ready") !== "ready")) resetMemberFlow();
+  memberLookup = nextLookup; requirePin = nextRequirePin; memberIdKeypad = value.memberIdKeypad === true;
+  configureIdentityEntry(method, display.id || "ready");
+  renderMemberFlow();
   clockMaintenance.hidden = display.id !== "clock_required";
   const kioskName = typeof value.kioskName === "string" ? value.kioskName.trim() : "";
   byId("kiosk-name").textContent = kioskName;
@@ -311,10 +540,14 @@ byId("identity-entry").addEventListener("submit", async (event) => {
   const method = lastAuthenticationMethod;
   const value = input.value;
   if (!value.trim()) return;
+  // Member search: Enter picks the first result.
+  if (method === "member_id" && lastEntryMode === "search") { if (searchResults[0]) startConfirm(searchResults[0]); return; }
   const button = event.currentTarget.querySelector("button[type=submit]");
   button.disabled = true;
   try {
-    await request("/identity", { method: "POST", body: JSON.stringify(method === "member_id" ? { method, memberId: value } : { method, credential: value }) });
+    const result = await request("/identity", { method: "POST", body: JSON.stringify(method === "member_id" ? { method, memberId: value } : { method, credential: value }) });
+    // A known member ID answers with the member to confirm; nothing is recorded until they tap Confirm.
+    if (method === "member_id" && result.confirm?.memberId) startConfirm(result.confirm);
     input.value = "";
   } catch (error) {
     byId("display-message").textContent = "Input not accepted";
@@ -341,6 +574,7 @@ function buildMemberIdKeyboard() {
         else if (key === "Clear") input.value = "";
         else if (key === "⌫") input.value = input.value.slice(0, -1);
         else if (input.value.length < input.maxLength) input.value += key === "Space" ? " " : lowerCase && /^[A-Z]$/.test(key) ? key.toLowerCase() : key;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
       });
       if (/^[A-Z]$/.test(key)) button.dataset.letter = key;
       row.append(button);
@@ -349,6 +583,12 @@ function buildMemberIdKeyboard() {
   }
 }
 buildMemberIdKeyboard();
+buildDigitPad(byId("member-id-keypad"), (key) => {
+  const input = byId("identity-value");
+  input.value = key === "Clear" ? "" : key === "⌫" ? input.value.slice(0, -1) : input.value.length < input.maxLength ? input.value + key : input.value;
+});
+buildDigitPad(byId("member-flow-keypad"), pressPinKey);
+byId("identity-value").addEventListener("input", () => { if (lastEntryMode === "search") scheduleSearch(); });
 
 installHoldGesture(byId("brand"), async () => {
   if (!operatorPresence) return;

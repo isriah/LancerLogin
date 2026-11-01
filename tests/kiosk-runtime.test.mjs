@@ -1579,6 +1579,22 @@ test("unknown normalized identities fail closed with method-specific feedback", 
   assert.deepEqual(displays, [{ state: "unknown", message: "Credential not recognized", detail: "This nfc badge is not registered" }]);
 });
 
+test("a poor fingerprint read asks for a rescan, and only a reader that fails shows offline", async () => {
+  const displays = []; const inputs = []; let outcome;
+  const scanner = createIdentityScanner({
+    captureIdentity: async () => { if (outcome instanceof Error) throw outcome; return outcome; },
+    queue: { pending: async () => [], enqueue: async () => assert.fail("A poor read must not be recorded") }, loadPairing: async () => ({ pairingId: "one" }),
+    flushAttendance: async () => assert.fail("A poor read must not reach the Worker"), onDisplay: async (state, values) => displays.push({ state, ...values }), onInput: (online) => inputs.push(online), onCloud: () => undefined,
+    now: () => Date.parse("2026-09-29T12:00:00.000Z"), delay: async () => undefined,
+  });
+  outcome = { status: "rescan", detail: "Wipe the reader, then place your finger flat and hold it still." };
+  await scanner.tick();
+  outcome = new Error("R503 response timed out");
+  await scanner.tick();
+  assert.deepEqual(displays, [{ state: "rescan", detail: "Wipe the reader, then place your finger flat and hold it still." }, { state: "reader_offline" }]);
+  assert.deepEqual(inputs, [true, false]);
+});
+
 test("legacy fingerprint import prepares roster and slot mappings without templates", async () => {
   const directory = await mkdtemp(join(tmpdir(), "lancerlogin-legacy-import-"));
   try {

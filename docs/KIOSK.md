@@ -44,11 +44,13 @@ Unpairing is local, not server-side retirement: retire the old device in the ori
 
 ## Authentication methods
 
-An Administrator selects a kiosk on **Kiosks**, opens **Manage kiosk > Authentication settings**, and saves its method. Existing kiosks keep their effective configured method during an upgrade; new pairings start with fingerprint. Each device receives only its own configured method on its normal sync, and the dashboard separately shows the method the kiosk last reported. When they differ, the change is pending.
+An Administrator selects a kiosk on **Kiosks**, opens **Manage kiosk > Identification**, and saves its method. With **Member ID entry**, the kiosk can also use **Member search** instead: members search the roster by name, member ID or the start of their email, see only names and member IDs, and confirm before anything is recorded. Without a PIN, anyone can sign in someone else with either one; use a fingerprint kiosk where that matters. Existing kiosks keep their effective configured method during an upgrade; new pairings start with fingerprint. Each device receives only its own configured method on its normal sync, and the dashboard separately shows the method the kiosk last reported. When they differ, the change is pending.
 
 RFID, NFC and QR support expects a keyboard-wedge reader that submits one complete token followed by Enter. LancerLogin adds no camera, vendor SDK or device driver for these methods. Validate reader models, key layouts, prefixes, suffixes and USB behavior on the installation's own hardware.
 
 For RFID, NFC or QR, **Authentication maintenance** links a credential to an active roster member. The kiosk transforms the value with HMAC-SHA256 and an owner-only kiosk secret and keeps only the keyed digest, the member mapping, the method and an optional label. The raw value is cleared after success, failure, lock or reload. The digest and secret are on the same Pi, so this prevents routine disclosure and cloud propagation but not an attacker with owner-level access to the Pi. Member ID entry needs no mapping.
+
+A Raspberry Pi kiosk with **Member ID entry** works like a web kiosk, so it can run without its fingerprint reader. It shows a large keypad when every member ID is a number, otherwise the on-screen keyboard, then **Is this you?** with the member's name and ID: **Confirm** records the visit, **Not me** (or **Back to search**) goes back, and the step returns to the start after 15 seconds. It can use **Member search** too, and **Require PIN** on **Manage kiosk** adds the PIN step after **Confirm**, with setup approved by an Operator on the dashboard or set from **Authentication maintenance** (**Set member PIN** and **Reset member PIN**, which need the network). It checks PINs as described under PINs in [Web kiosks](#web-kiosks). Offline, the Pi checks a PIN against the hash cached in its owner-only roster cache, counts wrong tries in its state folder and reports them when it reconnects. It keeps the hashes only while **Require PIN** is on, and removes them when it is turned off or the kiosk is unpaired. In these modes an unplugged fingerprint reader doesn't stop attendance or show **Reader offline**.
 
 Member ID entry and stored credential mappings are checked against the owner-only active-roster cache. A deactivated or unknown member fails closed locally, even when an older badge mapping remains. After one roster sync, the cache supports offline identity resolution.
 
@@ -101,6 +103,34 @@ Operators can open **Manage kiosk > Diagnostics** for any active kiosk. Admins c
 
 The kiosk polls for commands every five seconds; commands expire from polling after 15 minutes. The API accepts no shell text or arbitrary arguments, and the service account receives only narrow NetworkManager, reboot and one-unit update permissions. There is no remote command that erases mappings, the queue or the Pi's other state; before repurposing a kiosk, remove its mappings in **Authentication maintenance** and wipe its card.
 
+## Web kiosks
+
+A web kiosk is any touchscreen laptop or tablet that opens the kiosk page of the dashboard site, `/kiosk`, instead of a Raspberry Pi. Members identify themselves with **Member ID** (a large keypad when every member ID is a number, otherwise an on-screen keyboard) or **Member search**, and confirm their name before anything is recorded.
+
+1. In the dashboard, open **Kiosks**, choose **Add kiosk** and then **Web kiosk**, enter a name, and choose **Create pairing code**. Only Administrators can do this.
+2. On the device, scan the QR code, or open the link shown and enter the 8-character code. The code works once and expires after 10 minutes.
+3. On the device, choose a 6 to 12 digit settings PIN. Holding the organization name for 3 seconds and entering it opens the kiosk's maintenance menu, which can unpair the device.
+
+The pairing lasts until the device is unpaired or the kiosk is retired on **Kiosks**; retire a lost device to revoke it at once. The device keeps its pairing in the browser's storage, so don't use a private window, and don't clear the site's data. If a kiosk with the same name stopped checking in more than 10 minutes ago, **Add kiosk** offers **Retire and replace**, which keeps its attendance history. A web kiosk takes only **Reload display** and **Reset settings PIN** from **Manage kiosk**.
+
+### Offline
+
+A web kiosk keeps working when the network drops. Each confirmed scan is saved on the device first and then sent; when the server can't be reached, the member sees **Welcome** or **Goodbye** with **Saved for sync**. Saved scans are sent in the order they were taken, one at a time, as soon as the network returns, and again on every heartbeat, waiting longer between failed tries (up to 5 minutes). Each scan keeps its own ID, so one that is sent twice is still recorded once. A scan the server refuses, for example because no meeting was accepting scans, is listed for review on the dashboard as for a Pi kiosk. The footer shows whether the kiosk is online and how many scans are waiting, for example **Offline · 2 waiting**, and the maintenance menu shows both counts. Unpairing a kiosk with scans still waiting loses them, so reconnect it first.
+
+The kiosk keeps its last settings and roster, so it also starts with no network once it has loaded them, and it stamps scans with the server's time rather than the device's: each heartbeat measures how far the device clock is off, and the kiosk keeps that correction offline.
+
+### PINs
+
+Without a PIN, anyone can sign anyone in. Turn on **Require PIN** under **Identification** on **Manage kiosk** (with **Member ID** or **Member search**), and members enter a 4 to 6 digit PIN after **Confirm**. A member without a PIN taps **Ask for approval** and chooses one, typed twice, once an Operator approves: from **PIN requests** on **Manage kiosk**, or at the kiosk with **Set member PIN** in its maintenance menu (opened with its settings PIN). Admins and Operators reset a PIN, or unlock it, from the **Kiosk PIN** card on the member's roster page; **Reset member PIN** in kiosk maintenance resets one too. An Admin can lock a PIN after repeated wrong tries with **Kiosk PIN lockout** on **Settings > Modules > Attendance > Meeting configuration** (off by default). Offline, the kiosk checks the PIN against a hash of it cached on the device, and counts wrong tries there until it syncs. Those cached hashes are kept only while Require PIN is on, and are wiped on unpair, but a hash of a short PIN can be cracked from a stolen device, so retire a lost kiosk on **Kiosks** at once.
+
+### Install the kiosk page as an app
+
+Install the page after pairing, so it runs full screen and the browser keeps its storage. Don't use a private window, and don't clear the site's data: either one forgets the pairing and any scans still waiting.
+
+- **Chrome or Edge on Windows, and Chrome on ChromeOS:** open the browser menu (or the install icon at the end of the address bar) and choose **Install app** (in Edge, **Apps** > **Install this site as an app**).
+- **iPad or iPhone:** in Safari, tap **Share** > **Add to Home Screen**, then open the kiosk from the Home Screen. This is required: Safari clears the storage of a page not added to the Home Screen after about 7 days without use, which would unpair the kiosk.
+- **Android:** in Chrome, open the menu and choose **Add to Home screen** or **Install app**.
+
 ## Update a physical kiosk
 
 A kiosk update changes the Pi software only. It does not back up or deploy the dashboard. The procedure is [Update kiosks](https://isriah.github.io/LancerLogin/updates.html#kiosk-updates); update the dashboard first.
@@ -115,9 +145,15 @@ Before any manual recovery, preserve a private copy of the local state directory
 
 The footer reports the local service version, including any development suffix, and the dashboard receives it through the heartbeat. A recognized development build may be replaced with a verified official release on the selected track at the same or a newer base version, after confirmation. Unknown versions and older base releases remain blocked. The installer archives obsolete development version assignments from systemd drop-ins under `/var/backups/lancerlogin-version-overrides-*`.
 
-## Browser simulator
+## Trying kiosks without a Pi
 
-The browser simulator is Admin-only and uses its own credential. It submits simulated attendance for a roster member during an open meeting window, reusing the kiosk display styles in a scaled preview. It never handles fingerprint, badge, NFC or QR data, and its attendance remains marked as simulated. It does not test a reader, the Pi, Chromium or the physical queue.
+A web kiosk on any touchscreen laptop or tablet pairs from **Kiosks > Add kiosk > Web kiosk**. With Debug mode on, an Admin can also choose **Open web kiosk on this device** under **Debug tools** on the Kiosks page: it creates a web kiosk code named `Debug kiosk <device id>` after the browser and opens the kiosk page with it in a new tab. A debug kiosk from the same browser that stopped checking in is retired and replaced. Check-ins from a web kiosk are real attendance, so use synthetic test members. A web kiosk does not test a reader, the Pi, Chromium kiosk mode or the Pi's queue.
+
+The browser simulator that earlier releases had is gone (migration `0092_remove_simulator.sql`). Attendance setup's **Verified attendance input** step now completes once a paired kiosk, Pi or web, has checked in. A kiosk can pair and check in while Attendance setup is still running; it takes attendance once setup is finished.
+
+## Testing kiosk changes without a kiosk
+
+Developers can run the real kiosk service on their own computer with a virtual fingerprint reader, network and system, paired to a local preview: `npm run kiosk:virtual`. Every release runs its scenarios in **Verify**. See "Virtual kiosk" in [DEVELOPMENT.md](DEVELOPMENT.md). It doesn't replace testing changes to the reader driver, installer or system services on a real kiosk.
 
 ## Legacy fingerprint import
 

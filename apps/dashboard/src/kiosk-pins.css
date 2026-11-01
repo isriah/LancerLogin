@@ -1,0 +1,43 @@
+/* Member PINs: Manage kiosk PIN requests and Require PIN, the member page Kiosk PIN card, and the PIN lockout setting. */
+.kiosk-pin-card-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin-bottom: var(--space-3); }
+.kiosk-pin-card-heading h2 { margin: 0; }
+.kiosk-pin-hint { margin: 0; color: var(--ui-text-muted); font-size: var(--text-small); }
+.kiosk-pin-requests { display: grid; gap: var(--space-3); border-color: color-mix(in srgb,var(--ui-warning) 38%,var(--ui-border)); }
+.kiosk-pin-requests .kiosk-pin-card-heading { margin-bottom: 0; }
+.kiosk-pin-request-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.kiosk-pin-request { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--ui-border); border-radius: var(--radius-control); background: var(--ui-surface-subtle); }
+.kiosk-pin-request-member { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; }
+.kiosk-pin-request-member strong { color: var(--ui-text); }
+.kiosk-pin-request-member small { color: var(--ui-text-muted); font-size: var(--text-small); }
+.kiosk-pin-request-actions,.kiosk-pin-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.app .kiosk-pin-request-actions .ui-button,.app .kiosk-pin-actions .ui-button { min-height: var(--control-min-block-size); }
+.member-kiosk-pin { display: grid; gap: var(--space-3); }
+.member-kiosk-pin .kiosk-pin-card-heading { margin-bottom: 0; }
+.member-kiosk-pin > p { margin: 0; }
+.kiosk-pin-facts { display: grid; grid-template-columns: repeat(auto-fit,minmax(12rem,1fr)); gap: var(--space-3); margin: 0; }
+.kiosk-pin-facts div { min-width: 0; }
+.kiosk-pin-facts dt { color: var(--ui-text-muted); font-size: var(--text-small); }
+.kiosk-pin-facts dd { margin: var(--space-1) 0 0; color: var(--ui-text); font-weight: 700; overflow-wrap: anywhere; }
+/* Require PIN sits in the Identification form, whose .ui-form input rule would stretch the checkbox; this restores it. */
+.kiosk-authentication-form .kiosk-require-pin { align-items: flex-start; grid-column: 1 / -1; }
+.app .kiosk-authentication-form .kiosk-require-pin input[type="checkbox"],.app .kiosk-pin-lockout-form .kiosk-pin-checkbox input[type="checkbox"] { width: 1.25rem; height: 1.25rem; min-height: 1.25rem; margin: .1rem 0 0; padding: 0; border: 2px solid var(--ui-border); border-radius: .3rem; color: var(--on-primary); background: var(--ui-surface); }
+.app .kiosk-authentication-form .kiosk-require-pin input[type="checkbox"]:checked,.app .kiosk-pin-lockout-form .kiosk-pin-checkbox input[type="checkbox"]:checked { border-color: var(--primary); background: var(--primary); }
+.kiosk-require-pin span { display: grid; gap: var(--space-1); min-width: 0; }
+.kiosk-require-pin strong { color: var(--ui-text); }
+.kiosk-require-pin small { color: var(--ui-text-muted); font-size: var(--text-small); }
+.kiosk-pin-lockout { display: grid; gap: var(--space-3); margin-top: var(--space-4); }
+.kiosk-pin-lockout .kiosk-pin-card-heading { margin-bottom: 0; }
+.kiosk-pin-lockout > p { margin: 0; }
+.kiosk-pin-lockout-form { display: grid; gap: var(--space-4); }
+.kiosk-pin-lockout-form .kiosk-pin-checkbox { color: var(--ui-text); font-weight: 700; }
+.kiosk-pin-lockout-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-4); }
+.kiosk-pin-number { display: grid; gap: var(--space-2); align-content: start; min-width: 0; }
+.kiosk-pin-number label { margin: 0; font-weight: 700; }
+.kiosk-pin-number input:disabled { opacity: .6; cursor: not-allowed; }
+.kiosk-pin-number .inline-field-error { margin: 0; }
+.kiosk-pin-lockout-form > button { justify-self: start; }
+@media (max-width: 560px) {
+  .kiosk-pin-lockout-fields { grid-template-columns: 1fr; }
+  .kiosk-pin-request { align-items: stretch; flex-direction: column; }
+  .kiosk-pin-request-actions .ui-button,.kiosk-pin-actions .ui-button,.kiosk-pin-lockout-form > button { flex: 1 1 auto; justify-self: stretch; }
+}

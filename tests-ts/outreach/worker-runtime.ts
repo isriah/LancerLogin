@@ -367,55 +367,102 @@ test("multi-kiosk pairing preserves existing credentials and rejects duplicate a
   assert.match(batch[insertIndex]!.sql, /pairing_bound/); assert.ok(batch[insertIndex]!.sql.includes(", 1 WHERE"));
 
   const duplicateDatabase = new FakeDatabase();
-  duplicateDatabase.rows.set("active = 1 AND lower(name) = lower(?)", { id: "kiosk-existing" });
+  duplicateDatabase.rows.set("active = 1 AND lower(name) = lower(?)", { id: "kiosk-existing", name: "Workshop entrance", lastSeenAt: new Date().toISOString() });
   const duplicateEnv = { ...env, DB: duplicateDatabase } as unknown as Env;
   const duplicate = await worker.fetch(request("/admin/pairing-codes", { kioskName: "Workshop entrance" }, { cookie: await sessionCookie("admin") }), duplicateEnv);
   assert.equal(duplicate.status, 409);
-  assert.deepEqual(await duplicate.json(), { error: "An active kiosk already uses that name. Choose a distinct device name." });
+  assert.deepEqual(await duplicate.json(), { error: "An active kiosk already uses that name. Choose a distinct device name.", code: "kiosk_name_in_use" });
 });
 
-test("browser simulator uses a distinct one-time code and never creates a hardware kiosk credential", async () => {
+test("web kiosk codes are 8 characters, carry their name and kind, and cancel only earlier web codes", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const created = await worker.fetch(request("/admin/pairing-codes", { kioskName: "Test Web Kiosk A", kind: "web" }, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(created.status, 201);
+  const body = await created.json() as { code: string; displayCode: string; kind: string; kioskName: string; expiresAt: string; workerApiUrl?: string };
+  assert.match(body.code, /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/);
+  assert.equal(body.displayCode, `${body.code.slice(0, 4)}-${body.code.slice(4)}`);
+  assert.equal(body.kind, "web"); assert.equal(body.kioskName, "Test Web Kiosk A"); assert.ok(Date.parse(body.expiresAt) > Date.now()); assert.equal(body.workerApiUrl, undefined);
+  const batch = database.batches.at(-1) ?? [];
+  const insert = batch.find((statement) => statement.sql.includes("INSERT INTO pairing_codes"));
+  assert.equal(insert?.values[1], createHash("sha256").update(body.code).digest("base64url"));
+  assert.deepEqual(insert?.values.slice(5, 8), ["hardware", "web", "Test Web Kiosk A"]);
+  const cancel = batch.find((statement) => statement.sql.startsWith("DELETE FROM pairing_codes"));
+  assert.match(cancel!.sql, /kiosk_kind = \?/); assert.deepEqual(cancel?.values.slice(0, 2), ["hardware", "web"]);
+  const pi = await (await worker.fetch(request("/admin/pairing-codes", { kioskName: "Test Pi Kiosk B" }, { cookie: await sessionCookie("admin") }), env)).json() as { code: string; kind: string; displayCode?: string };
+  assert.equal(pi.kind, "pi"); assert.equal(pi.code.length, 12); assert.equal(pi.displayCode, undefined);
+  assert.deepEqual(database.batches.at(-1)?.find((statement) => statement.sql.includes("INSERT INTO pairing_codes"))?.values.slice(5, 8), ["hardware", "pi", null]);
+  assert.equal((await worker.fetch(request("/admin/pairing-codes", { kioskName: "Test Web Kiosk C", kind: "tablet" }, { cookie: await sessionCookie("admin") }), env)).status, 400);
+  assert.equal((await worker.fetch(request("/admin/pairing-codes", { kioskName: "Test Web Kiosk C", kind: "web", purpose: "simulator" }, { cookie: await sessionCookie("admin") }), env)).status, 400);
+});
+
+test("web pairing takes only the code, case and dash insensitive, and creates a web kiosk on member ID entry", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  database.rows.set("FROM pairing_codes WHERE", (sql: string, values: unknown[]) => sql.includes("kiosk_kind = ?") && values[0] === "web" && values[1] === createHash("sha256").update("K7Q2M9XD").digest("base64url") ? { id: "pairing-web", kioskName: "Test Web Kiosk A" } : undefined);
+  const paired = await worker.fetch(request("/kiosk/pair", { code: " k7q2-m9xd " }), env);
+  assert.equal(paired.status, 201, await paired.clone().text());
+  const body = await paired.json() as { kioskId: string; kioskToken: string; pairingId: string; name: string; kind: string };
+  assert.equal(body.pairingId, "pairing-web"); assert.equal(body.name, "Test Web Kiosk A"); assert.equal(body.kind, "web"); assert.ok(body.kioskToken.length >= 40);
+  const insert = database.batches.at(-1)?.find((statement) => statement.sql.includes("INSERT INTO kiosks"));
+  assert.match(insert!.sql, /kind, configured_authentication_method, authentication_method, member_lookup\) SELECT \?, 'primary', \?, \?, \?, \?, 1, 'web', 'member_id', 'member_id', 'entry'/);
+  assert.equal(insert?.values[2], "Test Web Kiosk A");
+  // A Pi sends its name, and is matched only against Pi codes, so the web code is invalid for it.
+  const piWithWebCode = await worker.fetch(request("/kiosk/pair", { code: "K7Q2M9XD", kioskName: "Test Pi Kiosk B" }), env);
+  assert.equal(piWithWebCode.status, 401);
+  assert.equal(database.calls.filter((call) => call.sql.includes("FROM pairing_codes WHERE")).at(-1)?.values[0], "pi");
+  // A web kiosk never matches a Pi code: Pi codes are 12 characters, and the lookup asks only for web codes.
+  const before = database.calls.length;
+  assert.equal((await worker.fetch(request("/kiosk/pair", { code: "ABCDEFGHJKLM" }), env)).status, 401);
+  assert.equal(database.calls.slice(before).some((call) => call.sql.includes("FROM pairing_codes WHERE")), false);
+  assert.equal((await worker.fetch(request("/kiosk/pair", { code: "K7Q2-M9XE" }), env)).status, 401);
+  assert.equal((await worker.fetch(request("/kiosk/pair", { code: "K7Q2M9XD", kioskName: "" }), env)).status, 400);
+});
+
+test("a name in use offers Retire and replace only for a kiosk that stopped checking in", async () => {
+  const cookie = await sessionCookie("admin");
+  const setup = (lastSeenAt: string | null) => {
+    const database = new FakeDatabase();
+    database.rows.set("active = 1 AND lower(name) = lower(?)", { id: "kiosk-old", name: "Test Web Kiosk A", lastSeenAt });
+    return { database, env: { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env };
+  };
+  const create = (env: Env, input: Record<string, unknown>) => worker.fetch(request("/admin/pairing-codes", { kioskName: "test web kiosk a", kind: "web", ...input }, { cookie }), env);
+  const recent = setup(new Date(Date.now() - 9 * 60_000).toISOString());
+  const live = await create(recent.env, {});
+  assert.equal(live.status, 409); assert.deepEqual(await live.json(), { error: "An active kiosk already uses that name. Choose a distinct device name.", code: "kiosk_name_in_use" });
+  const refused = await create(recent.env, { replaceKioskId: "kiosk-old" });
+  assert.equal(refused.status, 409); assert.equal((await refused.json() as { code: string }).code, "kiosk_not_replaceable");
+  assert.equal(recent.database.batches.length, 0);
+
+  for (const lastSeenAt of [null, new Date(Date.now() - 11 * 60_000).toISOString()]) {
+    const stale = setup(lastSeenAt);
+    const offered = await create(stale.env, {});
+    assert.equal(offered.status, 409); assert.deepEqual(await offered.json(), { error: "An active kiosk already uses that name. Choose a distinct device name.", code: "kiosk_name_in_use", replaceableKioskId: "kiosk-old" });
+    assert.equal((await create(stale.env, { replaceKioskId: "kiosk-other" })).status, 409);
+    assert.equal(stale.database.batches.length, 0);
+    const replaced = await create(stale.env, { replaceKioskId: "kiosk-old" });
+    assert.equal(replaced.status, 201, await replaced.clone().text());
+    const batch = stale.database.batches.at(-1) ?? [];
+    // The old kiosk is retired as Retire kiosk does, in the same batch, and only while it is still silent.
+    assert.match(batch[0]!.sql, /^UPDATE kiosks SET active = 0 WHERE installation_id = 'primary' AND id = \? AND active = 1 AND \(last_seen_at IS NULL OR last_seen_at < \?\)/); assert.equal(batch[0]!.values[0], "kiosk-old");
+    assert.ok(batch[1]!.sql.includes("INSERT INTO audit_log") && batch[1]!.values.includes("kiosk.replaced") && batch[1]!.values.includes("kiosk-old"));
+    assert.ok(batch.slice(2).every((statement) => statement.values.includes("kiosk-old") || statement.sql.includes("'pairing_code.created'")));
+    assert.ok(batch.some((statement) => statement.sql.includes("INSERT INTO pairing_codes")));
+  }
+  // A kiosk that checks in between the check and the batch keeps its name, and no code is created.
+  const raced = setup(null); raced.database.runChangeHandler = (sql) => sql.includes("INSERT INTO pairing_codes") ? 0 : 1;
+  const lost = await create(raced.env, { replaceKioskId: "kiosk-old" });
+  assert.equal(lost.status, 409); assert.equal((await lost.json() as { code: string }).code, "kiosk_not_replaceable");
+});
+
+test("the browser simulator is gone: simulator pairing codes are refused and its route is not found", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const cookie = await sessionCookie("admin");
-  const created = await worker.fetch(request("/admin/pairing-codes", { kioskName: "Browser test", purpose: "simulator" }, { cookie }), env);
-  assert.equal(created.status, 201);
-  const code = (await created.json() as { code: string }).code;
-  const pairingWrite = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO pairing_codes"));
-  assert.ok(pairingWrite?.values.includes("simulator"));
-  assert.equal(database.calls.some((call) => call.sql.includes("FROM kiosks WHERE")), false);
-
-  // Attendance setup starts the simulator itself (attendance-module-setup.ts); the legacy wizard's pair action is retired.
-  database.rows.set("purpose = 'simulator'", { id: "simulator-code" });
-  const batches = database.batches.length;
-  const paired = await worker.fetch(request("/admin/simulator", { action: "pair", code, kioskName: "Browser test" }, { cookie }), env);
-  assert.notEqual(paired.status, 201);
-  assert.equal(database.batches.length, batches);
-  assert.equal(database.calls.some((call) => call.sql.includes("INSERT INTO simulated_kiosk_sessions") || call.sql.includes("INSERT INTO kiosks")), false);
-  assert.equal((await paired.text()).includes("kioskToken"), false);
-});
-
-test("browser simulator check-ins are Admin-only and restricted to active meetings", async () => {
-  const database = new FakeDatabase();
-  database.rows.set("FROM simulated_kiosk_sessions", { name: "Browser test", active: 1, online: 1 });
-  database.rows.set("FROM members", { id: "member-1" });
-  database.rows.set("FROM meetings", { id: "meeting-1", startsAt: "2020-01-01T00:00:00.000Z", endsAt: "2030-01-01T00:00:00.000Z" });
-  database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
-  database.lists.set("FROM attendance_events", []);
-  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const body = { action: "check-in", memberId: "ROSTER-001", meetingId: "meeting-1" };
-  assert.equal((await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("operator") }), env)).status, 403);
-  const accepted = await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("admin") }), env);
-  assert.equal(accepted.status, 202);
-  assert.ok(database.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events") && call.values.includes("simulator")));
-  assert.ok(database.calls.some((call) => call.values.includes("simulator.check_in")));
-
-  const normalDatabase = new FakeDatabase();
-  normalDatabase.rows.set("FROM simulated_kiosk_sessions", { name: "Browser test", active: 1, online: 1 });
-  const normalEnv = { ...env, DB: normalDatabase } as unknown as Env;
-  const rejected = await worker.fetch(request("/admin/simulator", { ...body, meetingId: "deleted-meeting" }, { cookie: await sessionCookie("admin") }), normalEnv);
-  assert.equal(rejected.status, 400);
-  assert.equal(normalDatabase.calls.some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events")), false);
+  assert.equal((await worker.fetch(request("/admin/pairing-codes", { kioskName: "Browser test", purpose: "simulator" }, { cookie }), env)).status, 400);
+  assert.equal(database.batches.length, 0);
+  assert.equal((await worker.fetch(request("/admin/simulator", { action: "scan", memberId: "ROSTER-001", meetingId: "meeting-1" }, { cookie }), env)).status, 404);
+  assert.equal(database.calls.some((call) => call.sql.includes("simulated_kiosk_sessions")), false);
 });
 
 test("invalid optional Discord IDs do not block core roster import", async () => {
@@ -438,7 +485,9 @@ test("Admin can rename and retire a kiosk without returning to onboarding", asyn
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET name") && call.values.includes("Event entrance")));
   const retired = await worker.fetch(request("/admin/kiosks/kiosk-1", { confirmation: "RETIRE KIOSK" }, { method: "DELETE", cookie }), env);
   assert.equal(retired.status, 200);
-  assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET active = 0") && call.values.includes("kiosk-1")));
+  const retirement = database.batches.at(-1) ?? [];
+  assert.ok(retirement.some((call) => call.sql.includes("UPDATE kiosks SET active = 0") && call.values.includes("kiosk-1")));
+  assert.ok(retirement.some((call) => call.sql.includes("INSERT INTO audit_log") && call.values.includes("kiosk.retired") && call.values.includes("kiosk-1")));
 
   const duplicateDatabase = new FakeDatabase();
   duplicateDatabase.rows.set("SELECT id, name, active FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1 });
@@ -451,19 +500,49 @@ test("Admin can rename and retire a kiosk without returning to onboarding", asyn
 
 test("kiosk authentication configuration is Admin-only, validated, audited, and reported separately from the applied method", async () => {
   const database = new FakeDatabase();
-  database.rows.set("SELECT id, configured_authentication_method AS authenticationMethod", { id: "kiosk-1", authenticationMethod: "qr" });
+  database.rows.set("SELECT id, kind, configured_authentication_method AS authenticationMethod", { id: "kiosk-1", kind: "pi", authenticationMethod: "qr", memberLookup: "entry" });
   database.lists.set("SELECT id, name, active, last_seen_at AS lastSeenAt", [{ id: "kiosk-1", name: "Front desk", active: 1, authenticationMethod: "fingerprint", configuredAuthenticationMethod: "qr", pairedAt: "2026-09-01T00:00:00.000Z" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const status = await worker.fetch(request("/admin/kiosks", undefined, { cookie: await sessionCookie("admin") }), env);
   assert.equal(status.status, 200);
-  assert.deepEqual(await status.json(), { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, authenticationMethod: "fingerprint", configuredAuthenticationMethod: "qr", pairedAt: "2026-09-01T00:00:00.000Z" }] });
+  assert.deepEqual(await status.json(), { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, authenticationMethod: "fingerprint", configuredAuthenticationMethod: "qr", pairedAt: "2026-09-01T00:00:00.000Z", requirePin: false }] });
   assert.equal((await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "nfc" }, { method: "PATCH", cookie: await sessionCookie("operator") }), env)).status, 403);
   assert.equal((await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "camera" }, { method: "PATCH", cookie: await sessionCookie("admin") }), env)).status, 400);
   const updated = await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "nfc" }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
   assert.equal(updated.status, 200);
-  assert.deepEqual(await updated.json(), { kioskId: "kiosk-1", authenticationMethod: "nfc" });
+  assert.deepEqual(await updated.json(), { kioskId: "kiosk-1", authenticationMethod: "nfc", memberLookup: "entry", requirePin: false });
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET configured_authentication_method") && call.values[0] === "nfc"));
   assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO audit_log") && call.values.includes("kiosk.authentication_method_updated") && call.values.every((value) => value !== "raw-private-token")));
+});
+
+test("member search is a lookup of the member ID method, and web kiosks accept only member ID", async () => {
+  const cookie = await sessionCookie("admin");
+  const setup = (kind: "pi" | "web") => {
+    const database = new FakeDatabase();
+    database.rows.set("SELECT id, kind, configured_authentication_method AS authenticationMethod", { id: "kiosk-1", kind, authenticationMethod: "member_id", memberLookup: "entry" });
+    return { database, env: { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env };
+  };
+  const patch = (env: Env, input: Record<string, unknown>) => worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", input, { method: "PATCH", cookie }), env);
+  const saved = (database: FakeDatabase) => database.calls.filter((call) => call.sql.includes("UPDATE kiosks SET configured_authentication_method")).map((call) => call.values.slice(0, 2));
+
+  const pi = setup("pi");
+  const search = await patch(pi.env, { authenticationMethod: "member_id", memberLookup: "search" });
+  assert.equal(search.status, 200); assert.deepEqual(await search.json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "search", requirePin: false });
+  assert.deepEqual(await (await patch(pi.env, { authenticationMethod: "member_id" })).json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "entry", requirePin: false });
+  assert.equal((await patch(pi.env, { authenticationMethod: "fingerprint", memberLookup: "search" })).status, 400);
+  assert.equal((await patch(pi.env, { authenticationMethod: "fingerprint", memberLookup: "entry" })).status, 400);
+  assert.equal((await patch(pi.env, { authenticationMethod: "member_id", memberLookup: "email" })).status, 400);
+  assert.equal((await patch(pi.env, { authenticationMethod: "fingerprint" })).status, 200);
+  assert.deepEqual(saved(pi.database), [["member_id", "search"], ["member_id", "entry"], ["fingerprint", "entry"]]);
+  assert.ok(pi.database.calls.some((call) => call.sql.includes("INSERT INTO audit_log") && String(call.values.find((value) => typeof value === "string" && value.includes("memberLookup"))).includes('"memberLookup":"search"')));
+
+  const web = setup("web");
+  for (const authenticationMethod of ["fingerprint", "rfid", "nfc", "qr"]) {
+    const refused = await patch(web.env, { authenticationMethod });
+    assert.equal(refused.status, 400); assert.equal((await refused.json() as { error: string }).error, "Web kiosks identify members by member ID or member search.");
+  }
+  assert.equal((await patch(web.env, { authenticationMethod: "member_id", memberLookup: "search" })).status, 200);
+  assert.deepEqual(saved(web.database), [["member_id", "search"]]);
 });
 
 test("paired kiosk receives configured authentication method without credential material", async () => {
@@ -519,6 +598,25 @@ test("Admin queues only fixed recovery and latest-stable update commands", async
   const completed = await worker.fetch(new Request("https://api.example.test/kiosk/commands/command-1/result", { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ success: true, message: "Display reload requested" }) }), env);
   assert.equal(completed.status, 200);
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosk_commands SET completed_at") && call.values.includes("kiosk-1") && call.values.includes("command-1")));
+});
+
+test("web kiosks take only display reload and settings PIN reset commands, and the kiosk list reports kind and lookup", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM kiosks", { id: "kiosk-web", name: "Test Web Kiosk A", kind: "web", active: 1, releaseVersion: "2.0.0-beta.20" });
+  database.lists.set("SELECT id, name, active, last_seen_at AS lastSeenAt", [{ id: "kiosk-web", name: "Test Web Kiosk A", active: 1, kind: "web", memberLookup: "search" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("admin");
+  for (const command of ["restart_service", "reboot", "install_latest", "erase_unlinked_fingerprints"]) {
+    const refused = await worker.fetch(request("/admin/kiosks/kiosk-web/commands", { command }, { cookie }), env);
+    assert.equal(refused.status, 409); assert.equal((await refused.json() as { error: string }).error, "Web kiosks can only reload their display or reset their settings PIN.");
+  }
+  assert.equal(database.batches.length, 0);
+  for (const command of ["reload_display", "reset_network_pin"]) {
+    assert.equal((await worker.fetch(request("/admin/kiosks/kiosk-web/commands", { command }, { cookie }), env)).status, 202);
+    assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO kiosk_commands") && call.values.includes(command)));
+  }
+  const listed = await (await worker.fetch(request("/admin/kiosks", undefined, { cookie }), env)).json() as { kiosks: { kind: string; memberLookup: string }[] };
+  assert.deepEqual(listed.kiosks.map(({ kind, memberLookup }) => ({ kind, memberLookup })), [{ kind: "web", memberLookup: "search" }]);
 });
 
 test("latest kiosk update accepts strict stable majors and rejects incomplete releases without fallback", async () => {
@@ -979,6 +1077,160 @@ test("authenticated kiosk can fetch active roster labels without biometric data"
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const result = await worker.fetch(new Request("https://api.example.test/kiosk/roster", { headers: { authorization: "Bearer very-secret" } }), env);
   assert.equal(result.status, 200); const text = await result.text(); assert.match(text, /Avery/); assert.match(text, /"rosterId":"member-1"/); assert.doesNotMatch(text, /fingerprint|template|biometric/i);
+});
+
+test("only a kiosk set to member search receives roster email, under its own ETag, and config reports kind and lookup", async () => {
+  const members = [{ rosterId: "member-a", memberId: "1001", firstName: "Test Student", lastName: "A", email: "test-student-a@example.test" }, { rosterId: "member-b", memberId: "1002", firstName: "Test Student", lastName: "B", email: null }];
+  const read = async (kiosk: Record<string, unknown>, etag?: string) => {
+    const database = new FakeDatabase();
+    database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Test Web Kiosk A", pairingId: "pairing-1", pairingBound: 1, rosterRevision: 7, ...kiosk });
+    database.rows.set("organization_name AS organizationName", { organizationName: "Test Robotics" });
+    database.lists.set("SELECT id AS rosterId, external_id AS memberId", members);
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const headers = { authorization: "Bearer synthetic-web-kiosk", ...(etag ? { "if-none-match": etag } : {}) };
+    const roster = await worker.fetch(new Request("https://api.example.test/kiosk/roster", { headers }), env);
+    const config = await (await worker.fetch(new Request("https://api.example.test/kiosk/config", { headers }), env)).json() as { settings: Record<string, unknown> };
+    return { status: roster.status, etag: roster.headers.get("etag"), body: roster.status === 200 ? await roster.json() as { members: Record<string, unknown>[] } : undefined, settings: config.settings };
+  };
+  const entry = await read({ kioskKind: "web", configuredAuthenticationMethod: "member_id", memberLookup: "entry" });
+  assert.equal(entry.etag, '"kiosk-roster-v1-7"'); assert.equal(entry.body!.members.some((member) => "email" in member), false);
+  assert.equal(entry.settings.kind, "web"); assert.equal(entry.settings.memberLookup, "entry"); assert.equal(entry.settings.authenticationMethod, "member_id");
+  const search = await read({ kioskKind: "web", configuredAuthenticationMethod: "member_id", memberLookup: "search" });
+  assert.equal(search.etag, '"kiosk-roster-v1-search-7"'); assert.equal(search.settings.memberLookup, "search");
+  assert.deepEqual(search.body!.members, [{ rosterId: "member-a", memberId: "1001", firstName: "Test Student", lastName: "A", email: "test-student-a@example.test" }, { rosterId: "member-b", memberId: "1002", firstName: "Test Student", lastName: "B" }]);
+  // A switch of lookup changes the ETag, so a kiosk holding the other version always refetches.
+  assert.equal((await read({ kioskKind: "web", configuredAuthenticationMethod: "member_id", memberLookup: "search" }, entry.etag!)).status, 200);
+  assert.equal((await read({ kioskKind: "web", configuredAuthenticationMethod: "member_id", memberLookup: "search" }, search.etag!)).status, 304);
+  // A lookup left on a kiosk using another method never sends email; older rows default to a Pi on entry.
+  const fingerprint = await read({ configuredAuthenticationMethod: "fingerprint", memberLookup: "search" });
+  assert.equal(fingerprint.etag, '"kiosk-roster-v1-7"'); assert.equal(fingerprint.body!.members.some((member) => "email" in member), false);
+  const legacy = await read({ configuredAuthenticationMethod: "fingerprint" });
+  assert.equal(legacy.settings.kind, "pi"); assert.equal(legacy.settings.memberLookup, "entry");
+});
+
+test("member PIN routes check roles and the dashboard origin, and lockout settings are validated before any write", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM members m LEFT JOIN member_pins p", { rosterId: "member-a", memberId: "1001", firstName: "Test Student", lastName: "A", pinHash: null, pinSalt: null });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const send = async (path: string, method: string, role: "admin" | "operator" | undefined, body?: unknown, origin: string | undefined = "https://dashboard.example.test") => worker.fetch(new Request(`https://api.example.test${path}`, { method, headers: { ...(role ? { cookie: await sessionCookie(role) } : {}), ...(origin ? { origin } : {}), ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), env);
+  const writes = () => [...database.calls, ...database.batches.flat()].filter((call) => /^\s*(?:INSERT|UPDATE|DELETE)/i.test(call.sql) && /member_pins|pin_setup_requests|pin_lockout/.test(call.sql));
+
+  for (const [path, method] of [["/admin/members/member-a/pin", "GET"], ["/admin/members/member-a/pin", "DELETE"], ["/admin/members/member-a/pin/unlock", "POST"], ["/admin/pin-requests/request-1/approve", "POST"], ["/admin/pin-requests/request-1/decline", "POST"], ["/admin/settings/pin-lockout", "GET"], ["/admin/settings/pin-lockout", "PUT"]] as const) {
+    assert.equal((await send(path, method, undefined, method === "GET" ? undefined : {})).status, 401, `${method} ${path} needs a session`);
+  }
+  for (const [path, method] of [["/admin/members/member-a/pin", "DELETE"], ["/admin/members/member-a/pin/unlock", "POST"], ["/admin/pin-requests/request-1/approve", "POST"], ["/admin/pin-requests/request-1/decline", "POST"]] as const) {
+    assert.equal((await send(path, method, "operator", {}, "")).status, 403, `${method} ${path} needs the dashboard origin`);
+    assert.equal((await send(path, method, "operator", {}, "https://other.example.test")).status, 403);
+  }
+  assert.equal((await send("/admin/settings/pin-lockout", "GET", "operator")).status, 403);
+  assert.equal((await send("/admin/settings/pin-lockout", "PUT", "operator", { enabled: true, attempts: 5, minutes: 15 })).status, 403);
+  assert.equal((await send("/admin/settings/pin-lockout", "PUT", "admin", { enabled: true, attempts: 5, minutes: 15 }, "")).status, 403);
+  // Lockout reads default safely when the settings row is not set up.
+  assert.deepEqual(await (await send("/admin/settings/pin-lockout", "GET", "admin")).json(), { enabled: false, attempts: 5, minutes: 15 });
+  for (const invalid of [{}, { enabled: true }, { enabled: true, attempts: 3 }, { enabled: 1, attempts: 5, minutes: 15 }, { enabled: true, attempts: 2, minutes: 15 }, { enabled: true, attempts: 21, minutes: 15 }, { enabled: true, attempts: 5, minutes: 0 }, { enabled: true, attempts: 5, minutes: 1441 }, { enabled: true, attempts: "5", minutes: 15 }, { enabled: true, attempts: 5, minutes: 15, scope: "all" }]) {
+    const refused = await send("/admin/settings/pin-lockout", "PUT", "admin", invalid); assert.equal(refused.status, 400, JSON.stringify(invalid));
+    assert.equal((await refused.json() as { code?: string }).code, "invalid_pin_lockout");
+  }
+  assert.deepEqual(writes(), []);
+  // An Operator reads a member's PIN state; it never includes the hash.
+  const state = await send("/admin/members/member-a/pin", "GET", "operator");
+  assert.equal(state.status, 200); assert.deepEqual(await state.json(), { pin: { set: false, setAt: null, setKioskName: null, failedAttempts: 0, lockedUntil: null } });
+  const unlock = await send("/admin/members/member-a/pin/unlock", "POST", "operator", {}); assert.equal(unlock.status, 409); assert.equal((await unlock.json() as { code: string }).code, "pin_not_set");
+  const saved = await send("/admin/settings/pin-lockout", "PUT", "admin", { enabled: false, attempts: 20, minutes: 1440 });
+  assert.equal(saved.status, 200); assert.deepEqual(await saved.json(), { enabled: false, attempts: 20, minutes: 1440 });
+  const batch = database.batches.find((statements) => statements.some((call) => call.sql.includes("UPDATE organization_settings SET pin_lockout_enabled")))!;
+  assert.deepEqual(batch[0]!.values, [0, 20, 1440]);
+  assert.ok(batch.some((call) => call.sql.includes("UPDATE member_pins SET locked_until = NULL")), "turning lockout off ends current locks");
+  assert.ok(batch.some((call) => call.values.includes("settings.pin_lockout_updated")));
+});
+
+test("only a member ID kiosk with Require PIN receives PIN hashes and checks a PIN before recording a scan", async () => {
+  const pins = [{ rosterId: "member-a", hash: "c3ludGhldGljLWhhc2g=", salt: "c3ludGhldGljLXNhbHQ=", iterations: 100000, lockedUntil: null }];
+  const members = [{ rosterId: "member-a", memberId: "1001", firstName: "Test Student", lastName: "A", email: "test-student-a@example.test" }, { rosterId: "member-b", memberId: "1002", firstName: "Test Student", lastName: "B", email: null }];
+  const setup = (kiosk: Record<string, unknown>) => {
+    const database = new FakeDatabase();
+    database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Test Web Kiosk A", pairingId: "pairing-1", pairingBound: 0, rosterRevision: 7, kioskKind: "web", ...kiosk });
+    database.rows.set("organization_name AS organizationName", { organizationName: "Test Robotics" });
+    database.lists.set("SELECT id AS rosterId, external_id AS memberId", members);
+    database.lists.set("FROM member_pins WHERE installation_id", pins);
+    return { database, env: { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env };
+  };
+  const headers = { authorization: "Bearer synthetic-web-kiosk" };
+  const read = async (kiosk: Record<string, unknown>) => {
+    const { env } = setup(kiosk);
+    const roster = await worker.fetch(new Request("https://api.example.test/kiosk/roster", { headers }), env);
+    const config = await (await worker.fetch(new Request("https://api.example.test/kiosk/config", { headers }), env)).json() as { settings: Record<string, unknown> };
+    return { etag: roster.headers.get("etag"), members: (await roster.json() as { members: Record<string, unknown>[] }).members, settings: config.settings };
+  };
+  const pinKiosk = await read({ configuredAuthenticationMethod: "member_id", memberLookup: "entry", requirePin: 1 });
+  assert.equal(pinKiosk.etag, '"kiosk-roster-v1-pin-7"');
+  assert.deepEqual(pinKiosk.members, [
+    { rosterId: "member-a", memberId: "1001", firstName: "Test Student", lastName: "A", pin: { hash: "c3ludGhldGljLWhhc2g=", salt: "c3ludGhldGljLXNhbHQ=", iterations: 100000 }, pinLockedUntil: null },
+    { rosterId: "member-b", memberId: "1002", firstName: "Test Student", lastName: "B", pin: null, pinLockedUntil: null },
+  ]);
+  assert.equal(pinKiosk.settings.requirePin, true); assert.deepEqual(pinKiosk.settings.pinLockout, { enabled: false, attempts: 5, minutes: 15 });
+  const searchPin = await read({ configuredAuthenticationMethod: "member_id", memberLookup: "search", requirePin: 1 });
+  assert.equal(searchPin.etag, '"kiosk-roster-v1-search-pin-7"'); assert.equal(searchPin.members[0]!.email, "test-student-a@example.test"); assert.ok(searchPin.members[0]!.pin);
+  // A stale flag on a kiosk using another method, or a kiosk without Require PIN, never receives PIN data.
+  for (const kiosk of [{ configuredAuthenticationMethod: "fingerprint", requirePin: 1 }, { configuredAuthenticationMethod: "member_id", requirePin: 0 }, { configuredAuthenticationMethod: "member_id" }]) {
+    const plain = await read(kiosk);
+    assert.equal(plain.etag, '"kiosk-roster-v1-7"'); assert.equal(plain.settings.requirePin, false);
+    assert.equal(plain.members.some((member) => "pin" in member || "pinLockedUntil" in member), false);
+  }
+
+  const scan = async (kiosk: Record<string, unknown>, body: Record<string, unknown>) => {
+    const { database, env } = setup(kiosk);
+    database.rows.set("FROM members m LEFT JOIN member_pins p", { rosterId: "member-a", memberId: "1001", firstName: "Test Student", lastName: "A", pinHash: null, pinSalt: null });
+    const result = await worker.fetch(new Request("https://api.example.test/kiosk/attendance", { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ eventId: "test-scan-1", memberId: "1001", occurredAt: "2026-09-30T12:00:00Z", ...body }) }), env);
+    return { status: result.status, code: (await result.json() as { code?: string }).code, recorded: [...database.calls, ...database.batches.flat()].some((call) => call.sql.includes("INSERT OR IGNORE INTO attendance_events")) };
+  };
+  const pinMethod = { configuredAuthenticationMethod: "member_id", requirePin: 1 };
+  assert.deepEqual(await scan(pinMethod, {}), { status: 400, code: "pin_required", recorded: false });
+  assert.deepEqual(await scan(pinMethod, { pin: 1234 }), { status: 400, code: "invalid_pin", recorded: false });
+  assert.deepEqual(await scan(pinMethod, { pin: "1234567" }), { status: 400, code: "invalid_pin", recorded: false });
+  assert.deepEqual(await scan(pinMethod, { pinCheck: "trusted" }), { status: 400, code: "invalid_pin_check", recorded: false });
+  assert.deepEqual(await scan(pinMethod, { pin: "1234" }), { status: 409, code: "pin_not_set", recorded: false });
+  assert.deepEqual(await scan(pinMethod, { memberId: 1001, pin: "1234" }), { status: 400, code: "invalid_member", recorded: false }, "a numeric member ID cannot skip the PIN check");
+  // Kiosks without Require PIN ignore pin and pinCheck and go straight to the scan checks.
+  assert.notEqual((await scan({ configuredAuthenticationMethod: "member_id" }, { pinCheck: "trusted" })).code, "invalid_pin_check");
+  assert.notEqual((await scan({ configuredAuthenticationMethod: "member_id" }, {})).code, "pin_required");
+});
+
+test("Require PIN is saved only with the member ID method and cleared by any other method", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("SELECT id, kind, configured_authentication_method AS authenticationMethod", { id: "kiosk-1", kind: "pi", authenticationMethod: "member_id", memberLookup: "entry", requirePin: 1 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const cookie = await sessionCookie("admin");
+  const patch = (input: Record<string, unknown>) => worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", input, { method: "PATCH", cookie }), env);
+  const saved = () => database.calls.filter((call) => call.sql.includes("UPDATE kiosks SET configured_authentication_method")).map((call) => call.values.slice(0, 3));
+  for (const input of [{ authenticationMethod: "fingerprint", requirePin: true }, { authenticationMethod: "qr", requirePin: true }, { authenticationMethod: "member_id", requirePin: "true" }, { authenticationMethod: "member_id", requirePin: 1 }]) assert.equal((await patch(input)).status, 400, JSON.stringify(input));
+  assert.equal((await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "member_id", requirePin: true }, { method: "PATCH", cookie: await sessionCookie("operator") }), env)).status, 403);
+  assert.deepEqual(await (await patch({ authenticationMethod: "member_id", requirePin: true })).json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "entry", requirePin: true });
+  assert.deepEqual(await (await patch({ authenticationMethod: "member_id", memberLookup: "search" })).json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "search", requirePin: true });
+  assert.deepEqual(await (await patch({ authenticationMethod: "fingerprint" })).json(), { kioskId: "kiosk-1", authenticationMethod: "fingerprint", memberLookup: "entry", requirePin: false });
+  assert.deepEqual(await (await patch({ authenticationMethod: "fingerprint", requirePin: false })).json(), { kioskId: "kiosk-1", authenticationMethod: "fingerprint", memberLookup: "entry", requirePin: false });
+  assert.deepEqual(saved(), [["member_id", "entry", 1], ["member_id", "search", 1], ["fingerprint", "entry", 0], ["fingerprint", "entry", 0]]);
+  assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO audit_log") && String(call.values.find((value) => typeof value === "string" && value.includes("requirePin"))).includes('"requirePin":true')));
+});
+
+test("kiosk PIN routes need a kiosk credential and refuse PIN setup at kiosks without Require PIN", async () => {
+  const database = new FakeDatabase();
+  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Test Web Kiosk B", pairingId: "pairing-1", pairingBound: 1, kioskKind: "web", configuredAuthenticationMethod: "member_id", requirePin: 0 });
+  database.rows.set("FROM members m LEFT JOIN member_pins p", { rosterId: "member-a", memberId: "1001", firstName: "Test Student", lastName: "A", pinHash: null, pinSalt: null });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const kiosk = (path: string, body?: unknown, token: string | undefined = "synthetic-web-kiosk") => worker.fetch(new Request(`https://api.example.test${path}`, { method: body === undefined ? "GET" : "POST", headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), env);
+  for (const [path, body] of [["/kiosk/pin-requests", { memberId: "1001" }], ["/kiosk/pin-requests/request-1", undefined], ["/kiosk/pin-requests/request-1/pin", { pin: "2468" }], ["/kiosk/pins", { memberId: "1001", pin: "2468" }], ["/kiosk/pins/1001/reset", {}], ["/kiosk/pin-failures", { failures: [] }]] as const) {
+    assert.equal((await kiosk(path, body, "")).status, 401, path);
+  }
+  for (const [path, body] of [["/kiosk/pin-requests", { memberId: "1001" }], ["/kiosk/pins", { memberId: "1001", pin: "2468" }], ["/kiosk/pins/1001/reset", {}]] as const) {
+    const refused = await kiosk(path, body); assert.equal(refused.status, 409, path); assert.equal((await refused.json() as { code: string }).code, "pin_not_required");
+  }
+  assert.deepEqual(await (await kiosk("/kiosk/pin-failures", { failures: [{ memberId: "1001", count: 2, lastAt: "2026-09-30T12:00:00Z" }] })).json(), { recorded: 0 });
+  for (const failures of [undefined, "1001", [{ memberId: "1001", count: 0, lastAt: "2026-09-30T12:00:00Z" }], [{ memberId: "1001", count: 1001, lastAt: "2026-09-30T12:00:00Z" }], [{ memberId: "1001", count: 1, lastAt: "yesterday" }], [{ memberId: "", count: 1, lastAt: "2026-09-30T12:00:00Z" }], Array.from({ length: 201 }, () => ({ memberId: "1001", count: 1, lastAt: "2026-09-30T12:00:00Z" }))]) {
+    assert.equal((await kiosk("/kiosk/pin-failures", { failures })).status, 400);
+  }
+  assert.equal((await kiosk("/kiosk/pins/1001", {})).status, 404);
+  assert.equal([...database.calls, ...database.batches.flat()].some((call) => /^\s*(?:INSERT|UPDATE|DELETE)/i.test(call.sql) && /member_pins|pin_setup_requests/.test(call.sql)), false);
 });
 
 test("Operator can create a bounded recurring meeting series", async () => {
@@ -2435,7 +2687,7 @@ test("channel manager deletes only an expired tracked absence message and record
   globalThis.fetch = async (input, init) => { if (init?.method === "DELETE") deletes.push(String(input)); if (init?.method === "POST") created += 1; return new Response(init?.method === "DELETE" ? null : JSON.stringify({ id: `managed-${created}` }), { status: init?.method === "DELETE" ? 204 : 200, headers: init?.method === "DELETE" ? undefined : { "content-type": "application/json" } }); };
   try {
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
-    assert.deepEqual(deletes, ["https://discord.com/api/v10/channels/223456789012345678/messages/absence-1", "https://discord.com/api/v10/channels/223456789012345678/messages/absence-2"]);
+    assert.deepEqual(deletes, ["https://discord.com/api/v10/channels/223456789012345678/messages/absence-1", "https://discord.com/api/v10/channels/223456789012345678/messages/absence-2", "https://discord.com/api/v10/channels/absence-1"]);
     assert.ok(database.calls.some((call) => call.sql.includes("SET deleted_at = ?") && call.values.includes("meeting-1") && call.values.includes("absence-1")));
     assert.equal(deletes.some((url) => url.includes("unrelated")), false);
   } finally { globalThis.fetch = originalFetch; }
@@ -2454,8 +2706,41 @@ test("expired tracked notices are removed without the optional channel manager",
   globalThis.fetch = async (input, init) => { if (init?.method === "DELETE") deletes.push(String(input)); return new Response(init?.method === "DELETE" ? null : JSON.stringify({ id: "managed-1" }), { status: init?.method === "DELETE" ? 204 : 200, headers: init?.method === "DELETE" ? undefined : { "content-type": "application/json" } }); };
   try {
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
-    assert.deepEqual(deletes, ["https://discord.com/api/v10/channels/223456789012345678/messages/absence-1"]);
+    assert.deepEqual(deletes, ["https://discord.com/api/v10/channels/223456789012345678/messages/absence-1", "https://discord.com/api/v10/channels/absence-1"]);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+// Expires one tracked notice on a scheduled pass. The thread deletion answers with the given status and Discord error code.
+async function expiredNoticeThreadFixture(threadStatus: number, threadCode?: number) {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 0 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24 });
+  database.lists.set("FROM meetings m LEFT JOIN", []);
+  database.lists.set("FROM discord_attendance_notifications WHERE", [{ meetingId: "meeting-1", messageId: "absence-1", channelId: "223456789012345678", expiresAt: new Date(Date.now() - 60_000).toISOString() }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const deletes: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    if (init?.method !== "DELETE") return new Response(JSON.stringify({ id: "managed-1" }), { status: 200, headers: { "content-type": "application/json" } });
+    deletes.push(String(input));
+    if (!String(input).endsWith("/channels/absence-1")) return new Response(null, { status: 204 });
+    return new Response(threadStatus === 204 ? null : JSON.stringify({ message: "Discord error", code: threadCode }), { status: threadStatus, headers: threadStatus === 204 ? undefined : { "content-type": "application/json" } });
+  };
+  try { await worker.scheduled({ cron: "*/5 * * * *" }, env); } finally { globalThis.fetch = originalFetch; }
+  return { database, deletes };
+}
+
+test("expired notice cleanup treats an already deleted question thread as removed", async () => {
+  const { database, deletes } = await expiredNoticeThreadFixture(404, 10_003);
+  assert.ok(deletes.includes("https://discord.com/api/v10/channels/absence-1"));
+  assert.ok(database.calls.some((call) => call.sql.includes("SET deleted_at = ?") && call.values.includes("absence-1")));
+});
+
+test("a refused question thread deletion keeps the expired notice for the next cleanup pass", async () => {
+  const { database } = await expiredNoticeThreadFixture(403, 50_013);
+  assert.equal(database.calls.some((call) => call.sql.includes("SET deleted_at = ?")), false);
+  assert.ok(database.calls.some((call) => call.sql.includes("SET last_error = ?") && call.values.includes("meeting-1")));
 });
 
 test("scheduled attendance thread retry recovers an already created thread", async () => {
@@ -2884,7 +3169,7 @@ test("rescheduling a meeting withdraws its live absence notice so the scheduler 
     assert.deepEqual(await fixture.edit({ title: "Renamed meeting" }), []);
     assert.equal(fixture.database.calls.some((call) => call.sql.includes("FROM discord_attendance_notifications")), false);
     assert.deepEqual(await fixture.edit({ startsAt: "2026-10-26T21:00:00.000Z", endsAt: "2026-10-27T00:30:00.000Z" }), [{ meetingId: "meeting-1", outcome: "retracted" }]);
-    assert.deepEqual(fixture.deletes, ["https://discord.com/api/v10/channels/223456789012345678/messages/absence-1", "https://discord.com/api/v10/channels/223456789012345678/messages/absence-2"]);
+    assert.deepEqual(fixture.deletes, ["https://discord.com/api/v10/channels/223456789012345678/messages/absence-1", "https://discord.com/api/v10/channels/223456789012345678/messages/absence-2", "https://discord.com/api/v10/channels/absence-1"]);
     assert.ok(fixture.database.calls.some((call) => call.sql.startsWith("DELETE FROM discord_attendance_notifications") && call.values.includes("meeting-1") && call.values.includes("absence-1")));
     assert.ok(fixture.database.calls.some((call) => call.sql.includes("INSERT INTO audit_log") && call.values.includes("discord.missing_notice_retracted")));
   } finally { fixture.restore(); }
@@ -3142,7 +3427,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 45); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 49); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
@@ -3162,7 +3447,7 @@ test("installation backup retains Discord role mappings while roster backup omit
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 45); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 49); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(installation.tables.saved_report_views.length, 1); assert.equal(installation.tables.saved_report_tabs.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   assert.equal(Object.hasOwn(roster.tables, "saved_report_views"), false);
@@ -3177,9 +3462,8 @@ test("installation backup retains Discord role mappings while roster backup omit
 
 test("installation restore validates ownership before writes and replaces transient authority", async () => {
   const database = new FakeDatabase(); const cookie = await sessionCookie("admin"); seedInstallationBackupFoundation(database);
-  database.lists.set("FROM pairing_codes WHERE", [{ id: "pairing-1", installation_id: "primary", code_hash: "old-code-hash", expires_at: "2026-10-01T00:00:00Z", redeemed_at: "2026-09-01T00:00:00Z", created_by: "admin-1", created_at: "2026-09-01T00:00:00Z", purpose: "hardware" }]);
-  database.lists.set("FROM kiosks WHERE", [{ id: "kiosk-1", installation_id: "primary", pairing_code_id: "pairing-1", name: "Front desk", token_hash: "old-token-hash", active: 1, last_seen_at: "2026-09-27T12:00:00Z", created_at: "2026-09-01T00:00:00Z", reader_online: 1, release_version: "1.2.4", pending_events: 2, last_sync_at: "2026-09-27T12:00:00Z", error_category: null, pairing_bound: 1, authentication_method: "fingerprint", configured_authentication_method: "qr" }]);
-  database.lists.set("FROM simulated_kiosk_sessions WHERE", [{ installation_id: "primary", pairing_code_id: "pairing-1", name: "Browser", active: 1, online: 1, last_seen_at: "2026-09-27T12:00:00Z", created_by: "admin-1", created_at: "2026-09-01T00:00:00Z" }]);
+  database.lists.set("FROM pairing_codes WHERE", [{ id: "pairing-1", installation_id: "primary", code_hash: "old-code-hash", expires_at: "2026-10-01T00:00:00Z", redeemed_at: "2026-09-01T00:00:00Z", created_by: "admin-1", created_at: "2026-09-01T00:00:00Z", purpose: "hardware", kiosk_kind: "pi", kiosk_name: null }]);
+  database.lists.set("FROM kiosks WHERE", [{ id: "kiosk-1", installation_id: "primary", pairing_code_id: "pairing-1", name: "Front desk", token_hash: "old-token-hash", active: 1, last_seen_at: "2026-09-27T12:00:00Z", created_at: "2026-09-01T00:00:00Z", reader_online: 1, release_version: "1.2.4", pending_events: 2, last_sync_at: "2026-09-27T12:00:00Z", error_category: null, pairing_bound: 1, authentication_method: "fingerprint", configured_authentication_method: "qr", kind: "pi", member_lookup: "entry", require_pin: 0 }]);
   database.lists.set("FROM integration_deliveries WHERE", [{ id: "delivery-1", installation_id: "primary", provider: "resend", delivery_key: "report:one", status: "pending", external_id: null, created_at: "2026-09-27T00:00:00Z", updated_at: "2026-09-27T00:00:00Z" }]);
   database.lists.set("FROM google_calendar_operations WHERE", [{ installation_id: "primary", meeting_id: "meeting-1", event_id: "event-1", action: "upsert", starts_at: "2026-10-01T20:00:00Z", ends_at: "2026-10-01T21:00:00Z", status: "pending", attempts: 0, next_attempt_at: "2026-09-28T00:00:00Z", last_error: null, updated_at: "2026-09-27T00:00:00Z" }]);
   database.lists.set("FROM discord_calendar_operations WHERE", [{ installation_id: "primary", meeting_id: "meeting-1", generation: 1, action: "upsert", event_id: null, status: "processing", attempts: 1, revision: 1, next_attempt_at: "2026-09-28T00:00:00Z", lease_token: "old-lease", lease_expires_at: "2026-09-28T00:05:00Z", last_error: null, actor_user_id: "admin-1", updated_at: "2026-09-27T00:00:00Z" }]);
@@ -3378,30 +3662,6 @@ for (const scenario of ["update", "conflict", "retry"] as const) {
   });
 }
 
-test("normal simulator scans use kiosk attendance sequencing and audit the actual result", async () => {
-  const database = new FakeDatabase();
-  database.rows.set("FROM simulated_kiosk_sessions", { name: "Browser test", active: 1, online: 1 });
-  database.rows.set("FROM members", { id: "member-1", firstName: "Avery", lastName: "Stone" });
-  database.rows.set("FROM meetings", { id: "meeting-1", startsAt: new Date(Date.now() - 600_000).toISOString(), endsAt: new Date(Date.now() + 600_000).toISOString() });
-  database.rows.set("late_scan_minutes AS lateScanMinutes", { lateScanMinutes: 30 });
-  database.lists.set("FROM attendance_events", []);
-  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const cookie = await sessionCookie("admin");
-  const body = { action: "scan", memberId: "member-1", meetingId: "meeting-1" };
-  const arrival = await worker.fetch(request("/admin/simulator", body, { cookie }), env);
-  assert.equal(arrival.status, 202); assert.equal((await arrival.json() as { action: string }).action, "check_in");
-  database.lists.set("FROM attendance_events", [{ action: "check_in", occurredAt: new Date(Date.now() - 1_000).toISOString() }]);
-  const debounce = await worker.fetch(request("/admin/simulator", body, { cookie }), env);
-  assert.equal(debounce.status, 200); assert.equal((await debounce.json() as { duplicate: boolean }).duplicate, true);
-  database.lists.set("FROM attendance_events", [{ action: "check_in", occurredAt: new Date(Date.now() - 120_000).toISOString() }]);
-  const departure = await worker.fetch(request("/admin/simulator", body, { cookie }), env);
-  assert.equal(departure.status, 202); assert.equal((await departure.json() as { action: string }).action, "check_out");
-  assert.ok(database.calls.some(call => call.values.includes("simulator.check_out")));
-  const invalid = await worker.fetch(request("/admin/simulator", { ...body, scanAction: "invalid" }, { cookie }), env);
-  assert.equal(invalid.status, 400);
-  assert.equal((await worker.fetch(request("/admin/simulator", body, { cookie: await sessionCookie("operator") }), env)).status, 403);
-});
-
 test("unchanged but deleted Discord status is recreated only after verifying its tracked ID", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
@@ -3460,7 +3720,7 @@ test("contest backups retain rejected submission history, default schema40 and r
   const history = JSON.stringify([{ messageId: "original-message", createdAt: "2026-10-15T10:00:00Z", status: "rejected", resolvedBy: "admin-1", resolvedAt: "2026-10-15T11:00:00Z", reviewNote: "Original review", submittedByDiscordUserId: "synthetic-discord" }]);
   database.lists.set("FROM discord_attendance_contests WHERE", [{ installation_id: "primary", meeting_id: "meeting", member_id: "member", message_id: "new-message", status: "open", resolved_by: null, resolved_at: null, created_at: "2026-10-15T12:00:00Z", submitted_by_discord_user_id: "synthetic-discord", review_note: null, prior_reviews_json: history }]);
   const backup = await (await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie }), env)).json() as any;
-  assert.equal(backup.schemaVersion, 45); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
+  assert.equal(backup.schemaVersion, 49); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
   const restore = (value: unknown) => worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup: value }, { cookie }), env);
   const restored = await restore(backup); assert.equal(restored.status, 200, await restored.clone().text());
   assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("INSERT INTO discord_attendance_contests") && call.values.includes(history)));

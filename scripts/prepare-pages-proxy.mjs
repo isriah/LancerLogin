@@ -1,4 +1,12 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+// Vite writes only content-hashed files under /assets/. HTML there is Pages' SPA fallback for a missing file, never a real asset.
+// The web kiosk's service worker and manifest keep their names across deploys, so browsers check them on every load.
+const REVALIDATED_FILES = new Set(["/kiosk-sw.js", "/kiosk.webmanifest"]);
+function cacheHashedAsset(pathname, method, response) {
+  if (response.status !== 200 || (method !== "GET" && method !== "HEAD")) return response;
+  if (pathname.startsWith("/assets/") && !response.headers.get("content-type")?.includes("text/html")) response.headers.set("cache-control", "public, max-age=31536000, immutable");
+  else if (REVALIDATED_FILES.has(pathname)) response.headers.set("cache-control", "no-cache");
+  return response;
+}import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { parseReleaseVersion } from "../packages/shared/src/release-policy.mjs";
 
@@ -29,8 +37,12 @@ export default {
   },
 };
 // Vite writes only content-hashed files under /assets/. HTML there is Pages' SPA fallback for a missing file, never a real asset.
+// The web kiosk's service worker and manifest keep their names across deploys, so browsers check them on every load.
+const REVALIDATED_FILES = new Set(["/kiosk-sw.js", "/kiosk.webmanifest"]);
 function cacheHashedAsset(pathname, method, response) {
-  if (response.status === 200 && (method === "GET" || method === "HEAD") && pathname.startsWith("/assets/") && !response.headers.get("content-type")?.includes("text/html")) response.headers.set("cache-control", "public, max-age=31536000, immutable");
+  if (response.status !== 200 || (method !== "GET" && method !== "HEAD")) return response;
+  if (pathname.startsWith("/assets/") && !response.headers.get("content-type")?.includes("text/html")) response.headers.set("cache-control", "public, max-age=31536000, immutable");
+  else if (REVALIDATED_FILES.has(pathname)) response.headers.set("cache-control", "no-cache");
   return response;
 }
 function badRequest() {

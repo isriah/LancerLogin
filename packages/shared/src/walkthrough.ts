@@ -24,13 +24,12 @@ export const coreWalkthroughs = {
   },
   kiosks: {
     version: 1,
-    steps: ["status", "diagnostics", "pairing", "device-actions", "rename", "fingerprints", "restart", "network-pin", "updates", "retirement", "simulator", "history"],
-  },
-  simulator: {
-    version: 1,
-    steps: ["boundary", "preview", "inputs", "simulate"],
+    steps: ["status", "diagnostics", "pairing", "device-actions", "rename", "fingerprints", "restart", "network-pin", "updates", "retirement", "history"],
   },
 } as const;
+
+/** Pages whose walkthrough was removed with the page: the browser simulator (migration 0092). Saved progress is ignored. */
+export const removedWalkthroughPages: ReadonlySet<string> = new Set(["simulator"]);
 
 type WalkthroughDefinition = { readonly version: number; readonly steps: readonly string[] };
 /** Core pages plus the pages installed modules declare, keyed by page ID. */
@@ -55,8 +54,8 @@ export function validWalkthroughProgress(value: unknown): value is WalkthroughPr
   const definition = walkthroughs[progress.pageId]!;
   return typeof progress.pageId === "string" && Number.isInteger(progress.version) && progress.version > 0 && progress.version <= definition.version
     && ["not_started", "in_progress", "completed", "dismissed"].includes(progress.status)
-    // Retain saved progress from the removed roster summary step. Resuming starts at filters.
-    && (progress.stepId === null ? progress.status !== "in_progress" : (definition.steps as readonly string[]).includes(progress.stepId) || progress.pageId === "roster" && progress.stepId === "summary");
+    // Retain saved progress from the removed roster summary and Kiosks simulator steps. Resuming starts at the first step.
+    && (progress.stepId === null ? progress.status !== "in_progress" : (definition.steps as readonly string[]).includes(progress.stepId) || progress.pageId === "roster" && progress.stepId === "summary" || progress.pageId === "kiosks" && progress.stepId === "simulator");
 }
 
 export const initialWalkthroughProgress = (pageId: WalkthroughPage): WalkthroughProgress => ({ pageId, version: walkthroughs[pageId]!.version, status: "not_started", stepId: null });

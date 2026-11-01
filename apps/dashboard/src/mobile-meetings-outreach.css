@@ -19,7 +19,9 @@
 .app .compact-month-calendar .compact-calendar-day { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; min-width: 0; width: 100%; min-height: calc(var(--control-min-block-size) + var(--space-2)); padding: var(--space-1); margin: 0; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ui-text); font-size: var(--text-small); cursor: pointer; }
 .app .compact-month-calendar .compact-calendar-day.outside-month { color: var(--ui-text-muted); }
 .app .compact-month-calendar .compact-calendar-day.today { border-color: var(--ui-border); font-weight: 750; }
-.app .compact-month-calendar .compact-calendar-day[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+/* A day that opens its one record is a link (selection in data-selected); it keeps the button days' look. */
+.app .compact-month-calendar a.compact-calendar-day { text-decoration: none; }
+.app .compact-month-calendar .compact-calendar-day:is([aria-pressed="true"], [data-selected="true"]) { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
 .app .compact-month-calendar .compact-calendar-day:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: -3px; }
 .app .calendar-day-indicator { min-height: var(--space-4); line-height: 1; font-size: var(--text-caption); }
 .app .calendar-day-summaries { display: none; }
@@ -37,7 +39,7 @@
 .app .calendar-selected-record { display: grid; gap: var(--space-2); padding: var(--space-3) 0; border-bottom: 1px solid var(--ui-border); overflow-wrap: anywhere; }
 .app .calendar-selected-record:last-child { border-bottom: 0; padding-bottom: 0; }
 .app .calendar-selected-record > p { margin: 0; color: var(--ui-text-muted); font-size: var(--text-small); }
-.app .calendar-selected-record > button { justify-self: start; margin: 0; }
+.app .calendar-selected-record > :is(button, a.ui-button) { justify-self: start; margin: 0; }
 .app button.compact-pencil { display: inline-flex; justify-content: center; align-items: center; width: var(--control-min-block-size); min-width: var(--control-min-block-size); height: var(--control-min-block-size); padding: var(--space-2); margin: 0; }
 .app .meeting-more-actions { position: relative; }
 .app .meeting-more-actions > summary { display: flex; align-items: center; justify-content: center; min-height: var(--control-min-block-size); padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-control); color: var(--ui-text); background: var(--ui-surface-subtle); cursor: pointer; list-style: none; }
@@ -64,7 +66,7 @@
   .app .compact-month-calendar .calendar-heading { padding: var(--space-4); }
   .app .compact-month-navigation { gap: var(--space-1); }
   .app .compact-month-navigation > strong { font-size: var(--text-small); }
-  .app .calendar-selected-record > button { width: 100%; }
+  .app .calendar-selected-record > :is(button, a.ui-button) { width: 100%; }
   .app .meeting-detail-workspace:not([data-module] *) .meeting-detail-actions { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: var(--space-2); }
   .app .meeting-detail-workspace:not([data-module] *) .meeting-summary { display: grid; grid-template-columns: 1fr; gap: 0; padding: var(--space-4); background: var(--ui-surface); }
   .app .meeting-detail-workspace:not([data-module] *) .meeting-summary > div { display: grid; grid-template-columns: minmax(0,.7fr) minmax(0,1.3fr); gap: var(--space-3); padding: var(--space-2) 0; background: transparent; }

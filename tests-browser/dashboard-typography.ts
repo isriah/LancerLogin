@@ -7,7 +7,6 @@ export async function expectDashboardTypography(page: Page) {
     root.append(expected);
     const failures: string[] = [];
     function check(element: Element, family: string, size: string, weight: string) {
-      if (element.closest(".simulator-page")) return;
       expected.style.fontFamily = `var(${family})`;
       expected.style.fontSize = `var(${size})`;
       const actual = getComputedStyle(element); const reference = getComputedStyle(expected);

@@ -14,7 +14,7 @@ test("Dashboard delegates live attendance and contest review to complete replace
   await expect(page.getByRole("button", { name: /attendance contest awaiting review/i })).toBeVisible();
   expect(attendanceLoads).toBe(0);
 
-  await page.getByRole("button", { name: "Open meeting Build session", exact: true }).click();
+  await page.getByRole("link", { name: "Open meeting Build session", exact: true }).click();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Meeting actions" })).toHaveCount(0);

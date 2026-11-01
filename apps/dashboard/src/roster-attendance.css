@@ -5,7 +5,7 @@
 .roster-page .bulk-select-label { min-width: var(--control-min-block-size); margin: 0; }
 .quick-member-labels { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--ui-border); border-radius: var(--radius-card); background: var(--ui-surface-subtle); }
 .quick-member-labels h3,.quick-member-labels p { margin: 0; }
-.bulk-roster-fields input,.bulk-roster-fields select { width: 100%; min-height: var(--control-min-block-size); padding: var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-control); color: var(--ui-text); background: var(--ui-surface); }
+.bulk-roster-fields input:where(:not([type="checkbox"],[type="radio"])),.bulk-roster-fields select { width: 100%; min-height: var(--control-min-block-size); padding: var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-control); color: var(--ui-text); background: var(--ui-surface); }
 .bulk-roster-fields small { color: var(--ui-text-muted); font-size: var(--text-small); }
 .quick-member-labels details { border: 1px solid var(--ui-border); border-radius: var(--radius-control); background: var(--ui-surface); }
 .quick-member-labels summary { min-height: var(--control-min-block-size); display: flex; align-items: center; padding: var(--space-3); cursor: pointer; }

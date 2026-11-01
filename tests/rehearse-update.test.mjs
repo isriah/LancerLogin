@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { childEnvironment, compareSnapshots, parseArguments, refSource, removeTree, renderReport, wranglerEnvironment } from "../scripts/rehearse-update.mjs";
+import { childEnvironment, compareSnapshots, expectedRemovals, parseArguments, refSource, removeTree, renderReport, verifyAttendanceInput, wranglerEnvironment } from "../scripts/rehearse-update.mjs";
 
 test("arguments require both trees and a well-formed target tag", () => {
   assert.deepEqual(parseArguments(["--from", "v2.0.0-beta.12", "--to", "origin/main", "--target-tag", "v2.0.0-beta.13", "--keep"]), { from: "v2.0.0-beta.12", to: "origin/main", targetTag: "v2.0.0-beta.13", keep: true });
@@ -38,6 +38,44 @@ test("snapshot comparison reports lost tables, rows and changed key records", ()
   assert.ok(kept.notes.some((note) => note.includes("new table fresh")));
   const changed = compareSnapshots(before, { tables: ["members"], counts: { members: 1 }, records: { members: record([["1", "Z"]]) } });
   assert.equal(changed.problems.length, 3);
+});
+
+test("tables a migration drops or prunes on purpose are notes, not problems", () => {
+  const before = { tables: ["simulated_kiosk_sessions", "pairing_codes", "members"], counts: { simulated_kiosk_sessions: 1, pairing_codes: 3, members: 2 }, records: {} };
+  const after = { tables: ["pairing_codes", "members"], counts: { pairing_codes: 2, members: 1 }, records: {} };
+  const diff = compareSnapshots(before, after, { allowRemoved: expectedRemovals });
+  assert.deepEqual(diff.problems, ["members: 2 rows before, 1 after"]);
+  assert.ok(diff.notes.some((note) => note.includes("table simulated_kiosk_sessions removed as expected")));
+  assert.ok(diff.notes.some((note) => note.includes("pairing_codes: 1 rows removed as expected")));
+});
+
+/** A FROM Worker's API, answering only the Attendance input setup calls the rehearsal makes. */
+function setupApi(simulator) {
+  const calls = [];
+  return {
+    calls,
+    async ok(method, path, body, options) {
+      calls.push({ method, path, body, options });
+      if (method === "GET" && path === "/module-setup/attendance/input") return simulator ? { mode: "browser", simulator: null, members: [], meetings: [] } : { kiosks: [] };
+      if (path === "/admin/pairing-codes") return { code: "ABCD2345", kind: "web" };
+      if (path === "/kiosk/pair") return { kioskId: "setup-kiosk", kioskToken: "token" };
+      return {};
+    },
+  };
+}
+
+test("Attendance input setup uses the simulator when the FROM release has it, and a paired web kiosk otherwise", async () => {
+  const withSimulator = setupApi(true); const seeded = { currentMeeting: "meeting-1" };
+  assert.equal(await verifyAttendanceInput(withSimulator, seeded), "simulator");
+  assert.deepEqual(withSimulator.calls.slice(1).map((call) => call.body?.action), ["start", "scan"]);
+  assert.equal(seeded.setupKioskId, undefined);
+
+  const withoutSimulator = setupApi(false); const later = { currentMeeting: "meeting-1" };
+  assert.equal(await verifyAttendanceInput(withoutSimulator, later), "kiosk");
+  assert.deepEqual(withoutSimulator.calls.map((call) => `${call.method} ${call.path}`), ["GET /module-setup/attendance/input", "POST /admin/pairing-codes", "POST /kiosk/pair", "POST /kiosk/heartbeat"]);
+  assert.deepEqual(withoutSimulator.calls[1].body, { kioskName: "Rehearsal setup kiosk", kind: "web" });
+  assert.equal(withoutSimulator.calls[3].options.headers.authorization, "Bearer token");
+  assert.equal(later.setupKioskId, "setup-kiosk");
 });
 
 test("removing the work folder unlinks links without following them", async () => {

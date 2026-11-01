@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 
-type PageId = "roster" | "member" | "reports" | "meeting" | "kiosks" | "simulator";
+type PageId = "roster" | "member" | "reports" | "meeting" | "kiosks";
 type Progress = { pageId: PageId; version: number; status: string; stepId: string | null };
 type Story = { pageId: PageId; path: string; welcome: string; finish: string; steps: number; root: string };
 
@@ -10,11 +10,10 @@ const stories: Story[] = [
   { pageId: "member", path: "/roster/A-101", welcome: "Understand this member", finish: "You're ready to review a member", steps: 5, root: '[data-walkthrough-page="member"]' },
   { pageId: "reports", path: "/reports", welcome: "Turn attendance into answers", finish: "You're ready to explore reports", steps: 6, root: '[data-walkthrough-page="reports"]' },
   { pageId: "meeting", path: "/meetings/active-meeting", welcome: "Manage this meeting's attendance", finish: "You're ready to manage a meeting", steps: 7, root: '[data-walkthrough-page="meeting"]' },
-  { pageId: "kiosks", path: "/kiosks", welcome: "Understand kiosk health", finish: "You're ready to monitor kiosks", steps: 12, root: '[data-walkthrough-page="kiosks"]' },
-  { pageId: "simulator", path: "/simulator", welcome: "Practice the kiosk scan flow", finish: "You're ready to use the simulator", steps: 4, root: '[data-walkthrough-page="simulator"]' },
+  { pageId: "kiosks", path: "/kiosks", welcome: "Understand kiosk health", finish: "You're ready to monitor kiosks", steps: 11, root: '[data-walkthrough-page="kiosks"]' },
 ];
 
-const completedSteps: Record<PageId | "dashboard", string> = { dashboard: "recurrence", roster: "bulk-tools", member: "member-actions", reports: "report-actions", meeting: "corrections", kiosks: "history", simulator: "simulate" };
+const completedSteps: Record<PageId | "dashboard", string> = { dashboard: "recurrence", roster: "bulk-tools", member: "member-actions", reports: "report-actions", meeting: "corrections", kiosks: "history" };
 const panel = (page: Page) => page.locator(".walkthrough-panel");
 
 async function walkthroughAccount(page: Page, pageId: PageId, state: { progress: Progress }, debugMode = true) {
@@ -222,8 +221,8 @@ for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, 
     await expect(page.locator(".kiosk-summary")).toContainText(`${version}Up to date`);
     await expect(page.getByRole("button", { name: "Rename Example kiosk", exact: true })).toBeDisabled();
     await panel(page).getByRole("button", { name: "Start walkthrough" }).click();
-    for (let index = 0; index < 12; index++) {
-      await expect(panel(page)).toContainText(`Step ${index + 1} of 12`);
+    for (let index = 0; index < 11; index++) {
+      await expect(panel(page)).toContainText(`Step ${index + 1} of 11`);
       await expect(page.locator(".walkthrough-highlight").first()).toBeVisible();
       if (index === 2) {
         await expect(panel(page)).toContainText("Adding a kiosk preserves every existing kiosk and its credential.");

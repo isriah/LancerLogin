@@ -3,3 +3,4 @@ export type KioskDisplay = { id: KioskStateId; message: string; detail: string; 
 export const kioskStates: Readonly<Record<KioskStateId, Omit<KioskDisplay, "id" | "updatedAt">>>;
 export function kioskState(id: KioskStateId, overrides?: Partial<KioskDisplay>): KioskDisplay;
 export function kioskDisplayForAttendance(result?: { action?: "check_in" | "check_out"; duplicate?: boolean }): KioskDisplay;
+export function kioskDisplayForQueuedScan(memberId: string, pending: { memberId: string }[]): KioskDisplay;

@@ -17,6 +17,8 @@ import { outreachPublicationRoute, processOutreachPublicationOperations, outreac
 import { readModuleSetup, updateModuleSetup } from "../../apps/api/src/module-platform.ts";
 import { outreachReportHandlers } from "@lancerlogin-test/outreach/src/api/outreach-reporting.ts";
 import { defaultReportDefinition } from "../../apps/api/src/report-builder.ts";
+import { externalModuleMigrations } from "../../apps/api/src/generated/external-module-data.ts";
+import { applyComposedModuleMigrations, recordCoreMigrations } from "../fixtures/d1-database.ts";
 
 class Statement implements D1Statement {
   readonly database: DatabaseSync;
@@ -35,6 +37,8 @@ class Database implements D1Database {
   readonly sqlite = new DatabaseSync(":memory:");
   constructor() {
     for (const file of readdirSync("apps/api/migrations").filter((name) => name.endsWith(".sql")).sort()) this.sqlite.exec(readFileSync(`apps/api/migrations/${file}`, "utf8"));
+    // Then the composed Outreach plugin's own migrations, as the Worker's module reconciliation applies them after Core's.
+    recordCoreMigrations(this.sqlite); applyComposedModuleMigrations(this.sqlite, externalModuleMigrations, { now: "2026-09-28T00:00:00.000Z" });
     this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-09-28','local');
       INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','America/New_York');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-09-28');
@@ -722,7 +726,7 @@ test("portable publication snapshots validate before restore and adapt schema 35
     const result = await worker.fetch(new Request("https://synthetic.test/admin/data/backup?scope=installation", { headers: { cookie } }), env); assert.equal(result.status, 200, await result.clone().text());
     const backup = await result.json() as { schemaVersion: number; tables: Record<string, Array<Record<string, unknown>>> };
     // Outreach rows travel in the Outreach plugin section; older schemas below carry them in Core's section, as first-party Outreach exported them.
-    assert.equal(backup.schemaVersion, 45); const snapshot = JSON.parse(String(pluginSectionTables(backup, "hour-tracking")!.hours_publication_operations![0]!.event_snapshot_json)); assert.equal(snapshot.allDay, true);
+    assert.equal(backup.schemaVersion, 49); const snapshot = JSON.parse(String(pluginSectionTables(backup, "hour-tracking")!.hours_publication_operations![0]!.event_snapshot_json)); assert.equal(snapshot.allDay, true);
     const restore = (value: unknown) => worker.fetch(new Request("https://synthetic.test/admin/data/restore", { method: "POST", headers: { cookie, origin: "https://synthetic.test", "content-type": "application/json" }, body: JSON.stringify({ scope: "installation", confirmation: "RESTORE INSTALLATION", backup: value }) }), env);
     const corrupted = structuredClone(backup); pluginSectionTables(corrupted, "hour-tracking")!.hours_publication_operations![0]!.event_snapshot_json = JSON.stringify({ ...snapshot, activityId: "unrelated" });
     const rejected = await restore(corrupted); assert.equal(rejected.status, 400, await rejected.clone().text()); assert.match(await rejected.text(), /publication snapshots/); assert.equal(database.sqlite.prepare("SELECT status FROM hours_publication_operations WHERE activity_id=?").get(id)?.status, "pending");

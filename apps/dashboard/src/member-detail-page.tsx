@@ -8,6 +8,7 @@ import type { RosterMember } from "./user-settings";
 import type { MemberLabel, LabelHistory, LabelData } from "./member-labels";
 import { attendanceRateText, policyHistoryText, policyResultText, type ReportMember } from "./report-attendance";
 import { InfoHeading } from "./info-tip";
+import { MemberKioskPin } from "./member-kiosk-pin";
 import { dismissReenrollSuggestion, loadReenrollSuggestions, reenrollExplanation, type ReenrollSuggestion, type ReenrollSuggestions } from "./kiosk-reenroll-suggestions";
 
 type HistoryRow = { meetingId: string; title: string; startsAt: string; endsAt: string; checkedInAt?: string; checkedOutAt?: string; reason?: string; disposition: "present" | "absent" | "excused" | "not_required"; eligibility?: string; audience?: string; policy?: string };
@@ -81,6 +82,7 @@ export function MemberDetailPage({ role, memberId, discordEnabled, debugMode }: 
         {reenrollNotice && <p className="setup-status" role="status">{reenrollNotice}</p>}
         {detail.attendancePolicy?.belowTargetWeeks.length ? <p className="ui-status" data-tone="warning" role="status">Below target: {detail.attendancePolicy.belowTargetWeeks.map((week) => week.weekStartsOn).join(", ")}</p> : null}
       </article>
+      <MemberKioskPin rosterId={detail.member.id} memberName={`${detail.member.firstName} ${detail.member.lastName}`} />
       {debugMode && detail.attendancePolicy?.historySummaries.length ? <section className="task-card ui-card" aria-labelledby="member-policy-history-title"><h2 id="member-policy-history-title">Current label attendance history</h2><ul className="compact-list">{detail.attendancePolicy.historySummaries.map((item) => <li key={item.ruleId}>{policyHistoryText(item)} · {item.startsOn ?? "Standing"} to {item.endsOn ?? "ongoing"}</li>)}</ul></section> : null}
       {debugMode && <section className="task-card ui-card" aria-labelledby="member-label-history-title"><h2 id="member-label-history-title">Label history</h2>{detail.labelHistory.length ? <ul className="compact-list">{detail.labelHistory.map((change) => <li key={change.id}>{change.effectiveDate}: {change.action} {detail.labels.find((label) => label.id === change.labelId)?.name ?? "retired label"}{change.source === "discord" && " · From Discord"}</li>)}</ul> : <p>No dated label changes.</p>}</section>}
       <section className="task-card member-history-card" aria-labelledby="member-attendance-history-title" data-walkthrough="member-history">
@@ -88,7 +90,7 @@ export function MemberDetailPage({ role, memberId, discordEnabled, debugMode }: 
         {detail.history.length ? <div className="member-history-scroll"><div className="member-history" role="table" aria-label="Complete attendance history">
           <div className="member-history-row header" role="row"><span role="columnheader">Meeting</span><span role="columnheader">Check-in</span><span role="columnheader">Check-out</span><span role="columnheader">Outcome</span><span role="columnheader">Actions</span></div>
           {detail.history.map((row) => <div className="member-history-row" role="row" key={row.meetingId} aria-busy={savingMeetingId === row.meetingId}>
-            <span role="cell" className="member-history-meeting"><strong>{row.title}</strong><small>{new Date(row.startsAt).toLocaleString()} · Audience: {row.audience ?? "All"}</small></span>
+            <span role="cell" className="member-history-meeting"><strong>{row.meetingId ? <RouteLink href={`/meetings/${encodeURIComponent(row.meetingId)}`} currentPath={path} navigate={navigate} className="member-history-meeting-link">{row.title}</RouteLink> : row.title}</strong><small>{new Date(row.startsAt).toLocaleString()} · Audience: {row.audience ?? "All"}</small></span>
             <span role="cell" className="member-history-check-in">{formatTime(row.checkedInAt)}</span>
             <span role="cell" className="member-history-check-out">{formatTime(row.checkedOutAt)}</span>
             <span role="cell" className="member-history-outcome"><strong className={`attendance-state ${row.disposition}`}>{row.disposition.replace("_", " ")}</strong><small>{row.eligibility?.replace("_", " ") ?? "required"} · {row.policy ?? "standard"}</small>{row.reason && <small>{row.reason}</small>}</span>

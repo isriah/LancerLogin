@@ -35,8 +35,12 @@ export { useModalFocus } from "../../../apps/dashboard/src/modal-focus.ts";
 /**
  * Client-side navigation: `usePath` reads the current path and search and navigates; `RouteLink` is an anchor that navigates
  * in place. Listen for `routeWillChangeEvent` on window and call `preventDefault()` to keep unsaved work before navigation.
+ * Anything that opens a record or page is a real link so Ctrl/Cmd/middle-click opens a new tab: `AppLink` is an anchor
+ * without RouteLink's active state, `followInApp` is the click handler for your own `<a href>`, `followRowInApp` handles a
+ * clickable row that also contains the record's link, and `isModifiedClick` tells the browser's clicks from plain ones.
+ * A `MonthCalendar` `desktopDayOpen` result with `href` renders that day as a link too.
  */
-export { RouteLink, routeWillChangeEvent, usePath } from "../../../apps/dashboard/src/router.tsx";
+export { AppLink, followInApp, followRowInApp, isModifiedClick, RouteLink, routeWillChangeEvent, usePath } from "../../../apps/dashboard/src/router.tsx";
 /** Section links (with a narrow-screen picker) for a module settings page that has several sections, as Core settings pages use. */
 export { SettingsSectionNavigation, settingsSectionHref } from "../../../apps/dashboard/src/settings-section-navigation.tsx";
 

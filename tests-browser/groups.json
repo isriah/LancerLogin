@@ -66,7 +66,7 @@
       "area": "Dashboard shell and UI foundations",
       "seconds": 41
     },
-    "dashboard-layout-simulator.spec.ts": {
+    "dashboard-layout.spec.ts": {
       "group": "core",
       "area": "Dashboard shell and UI foundations",
       "seconds": 26
@@ -116,10 +116,20 @@
       "area": "Kiosks and fingerprints",
       "seconds": 12
     },
+    "first-integration.spec.ts": {
+      "group": "core",
+      "area": "Settings, modules, backup and restore",
+      "seconds": 15
+    },
     "kiosk-dashboard-enrollment.spec.ts": {
       "group": "core",
       "area": "Kiosks and fingerprints",
       "seconds": 4
+    },
+    "kiosk-debug-web-kiosk.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 10
     },
     "kiosk-fingerprint-diagnostics.spec.ts": {
       "group": "core",
@@ -135,6 +145,11 @@
       "group": "core",
       "area": "Kiosks and fingerprints",
       "seconds": 1
+    },
+    "kiosk-pins-admin.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 40
     },
     "kiosk-reassociation.spec.ts": {
       "group": "core",
@@ -320,6 +335,11 @@
       "group": "core",
       "area": "Kiosks and fingerprints",
       "seconds": 4
+    },
+    "web-kiosk-admin.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 20
     },
     "web-updates.spec.ts": {
       "group": "core",

@@ -218,7 +218,7 @@ test("kiosk guide covers hardware, installation, pairing, and fixed recovery com
   assert.match(kiosk, /phone or laptop/);
   assert.match(kiosk, /ten minutes/);
   assert.match(kiosk, /Pair kiosk/);
-  for (const label of ["Add physical kiosk", "Prepare the Pi", "This kiosk has an R503 fingerprint reader", "Copy install commands", "Create one-time pairing key", "Copy pairing key", "Pair this kiosk", "One-time pairing key", "Open simulator"]) assert.match(kiosk, new RegExp(label));
+  for (const label of ["Add physical kiosk", "Prepare the Pi", "This kiosk has an R503 fingerprint reader", "Copy install commands", "Create one-time pairing key", "Copy pairing key", "Pair this kiosk", "One-time pairing key", "Open web kiosk on this device"]) assert.match(kiosk, new RegExp(label));
   for (const method of ["Fingerprint", "RFID badge", "NFC badge", "Member ID entry", "QR code"]) assert.match(kiosk, new RegExp(method));
   for (const command of ["Reload display", "Restart software", "Reboot Pi", "Reset network PIN", "Update kiosk", "Erase unlinked fingerprints"]) assert.match(kiosk, new RegExp(`<td>${command}</td>`));
   assert.match(kiosk, /Scan without choosing a meeting/);

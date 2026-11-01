@@ -176,6 +176,39 @@ test("first-Admin setup registers composed plugins at once, after earlier reques
   assert.equal(db.count("SELECT COUNT(*) AS n FROM platform_module_catalog WHERE module_id='example'"), 1);
 });
 
+test("a composed plugin looks up FIRST teams through Core, counted per visitor only on public requests", async (t) => {
+  const { db, call } = installation();
+  const { encryptIntegration } = await import("../apps/api/src/integration-crypto.ts");
+  let modules = await call("/platform/modules");
+  modules = await call("/admin/modules", { method: "PUT", body: { enabled: ["attendance", "example"], revision: modules.body.revision } });
+  db.raw.exec("INSERT INTO example_items(installation_id,id,title,created_at) VALUES ('primary','first','First item','2026-10-26T00:00:00.000Z')");
+  const generation = modules.body.modules.find((module: any) => module.id === "example").generation;
+  assert.equal((await call("/admin/modules/example/setup", { method: "PUT", body: { generation, stepId: "catalog", outcome: "completed" } })).status, 200);
+  const encrypted = await encryptIntegration({ token: "synthetic-frc-token" }, sessionSecret);
+  db.raw.prepare("INSERT INTO first_credentials(installation_id,program,username,ciphertext,iv,checked_at,updated_at) VALUES ('primary','FRC','test-frc-user',?,?,'2026-10-31T00:00:00.000Z','2026-10-31T00:00:00.000Z')").run(encrypted.ciphertext, encrypted.iv);
+  const realFetch = globalThis.fetch; const asked: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input instanceof Request ? input.url : input); asked.push(url);
+    if (!url.startsWith("https://frc-api.firstinspires.org/v3.0/")) throw new Error(`Unexpected provider request ${url}`);
+    return url.includes("/teams?") ? Response.json({ teams: [{ teamNumber: Number(new URL(url).searchParams.get("teamNumber")), nameShort: "Test Robotics A", city: "Testville", stateProv: "PA", country: "USA" }] }) : Response.json({ currentSeason: 2026 });
+  }) as typeof fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+  const visitorRows = () => db.count("SELECT COUNT(*) AS n FROM first_requests WHERE bucket LIKE 'visitor:%'");
+
+  const guest = await call("/public/example/first", { body: { number: "321" }, signedIn: false });
+  assert.equal(guest.status, 200, JSON.stringify(guest.body));
+  assert.deepEqual(guest.body.lookup, { status: "found", team: { program: "FRC", number: "321", name: "Test Robotics A", location: "Testville, PA", season: 2026, source: "events-api" } });
+  assert.equal(guest.body.importStatus, 403, "only Guest Visits may import a legacy credential");
+  assert.equal(visitorRows(), 1, "a public request counts toward the visitor's limit");
+  assert.equal(JSON.stringify(guest.body).includes("synthetic-frc-token"), false);
+  const staff = await call("/public/example/first", { body: { number: "322" } });
+  assert.equal(staff.body.lookup.status, "found");
+  assert.equal(visitorRows(), 1, "a signed-in request on the same route counts only toward the installation limit");
+  await call("/public/example/first", { body: { number: "321" }, signedIn: false });
+  assert.equal(visitorRows(), 1, "a cache hit counts toward nothing");
+  assert.ok(asked.every((url) => url.startsWith("https://frc-api.firstinspires.org/")));
+});
+
 test("a composed plugin sends email through Core's Resend connection and reads the installation time zone", async (t) => {
   const { db, env, call } = installation();
   const { encryptIntegration } = await import("../apps/api/src/integration-crypto.ts");

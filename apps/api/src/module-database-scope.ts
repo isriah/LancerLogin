@@ -59,6 +59,11 @@ export function captureModuleServiceDatabase(db: D1Database, moduleId: string, g
   return scopedDatabase(db, moduleStatePredicate(moduleId, generation, true));
 }
 
+/** A service route that also runs during setup: the module must be enabled, its setup need not be finished. */
+export function captureModuleEnabledDatabase(db: D1Database, moduleId: string, generation: number) {
+  return scopedDatabase(db, moduleStatePredicate(moduleId, generation, false));
+}
+
 export function captureModuleSetupDatabase(db: D1Database, moduleId: string, generation: number, userId: string) {
   const state = moduleStatePredicate(moduleId, generation, false);
   return scopedDatabase(db, {

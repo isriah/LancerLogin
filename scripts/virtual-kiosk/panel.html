@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Virtual Kiosks</title>
+<style>
+/* Colors and spacing follow the dashboard's dark theme (apps/dashboard/src/styles.css). Development tool only. */
+:root { --bg: #111315; --surface: #191c1f; --surface-soft: #24282d; --ink: #f1f3f4; --muted: #a9b0b7; --line: #343a40; --primary: #146c5b; --secondary: #dba72d;
+  --ok: #b7f7d1; --ok-bg: #123b29; --warn: #ffddb3; --warn-bg: #512b12; --err: #ffd5d2; --err-bg: #531b17; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.5 "Roboto", system-ui, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid var(--line); }
+h1 { margin: 0; font-size: 22px; letter-spacing: .02em; }
+h2 { margin: 0; font-size: 17px; }
+a { color: #7fd4c1; }
+.links { display: flex; flex-wrap: wrap; gap: 16px; color: var(--muted); font-size: 13px; }
+main { display: grid; gap: 24px; padding: 24px; }
+.kiosk { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+/* The kiosk screen is drawn at a fixed kiosk-display size and scaled to fit, so it lays out as it would on a kiosk. */
+.screen { position: relative; aspect-ratio: 1024 / 600; width: 100%; border: 8px solid #050607; border-radius: 16px; background: #000; overflow: hidden; }
+.screen iframe { position: absolute; top: 0; left: 0; width: 1024px; height: 600px; border: 0; transform-origin: 0 0; }
+.reader, .system { grid-column: 1 / -1; }
+.columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 16px; }
+.columns h3 { margin: 0 0 6px; font-size: 14px; }
+ul.plain { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.hint { color: var(--muted); font-size: 12px; }
+.fingers { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap: 8px; }
+.finger { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); font-size: 13px; }
+.finger .buttons button { min-height: 34px; padding: 4px 10px; }
+.stored { color: var(--ok); font-size: 12px; font-weight: 800; }
+label.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+select { min-height: 40px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface-soft); font: inherit; font-size: 13px; }
+.card { display: grid; gap: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.pill { display: inline-flex; align-items: center; min-height: 26px; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+.pill.ok { color: var(--ok); background: var(--ok-bg); } .pill.warn { color: var(--warn); background: var(--warn-bg); } .pill.err { color: var(--err); background: var(--err-bg); }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
+dt { color: var(--muted); } dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+button { min-height: 40px; padding: 6px 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface-soft); font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }
+button:hover { border-color: color-mix(in srgb, var(--primary) 55%, var(--line)); }
+button.primary { color: #fff; background: var(--primary); border-color: var(--primary); }
+button:disabled { opacity: .55; cursor: wait; }
+ol { margin: 0; padding-left: 18px; max-height: 160px; overflow: auto; color: var(--muted); font-size: 12px; }
+#message { min-height: 20px; color: var(--warn); font-size: 13px; }
+@media (max-width: 900px) { .kiosk { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Virtual kiosks</h1><div class="links" id="links"></div></div>
+  <div class="row" style="gap:12px"><span>Worker</span><span id="cloud" class="pill ok">Online</span><button id="cloud-toggle" data-testid="cloud-toggle">Go offline</button></div>
+</header>
+<main id="kiosks"><p>Loading…</p></main>
+<div id="message" role="status" style="padding:0 24px 24px"></div>
+<script type="module">
+const kioskList = document.querySelector("#kiosks"); const message = document.querySelector("#message");
+let status;
+const text = (value) => value === null || value === undefined ? "–" : String(value);
+const time = (value) => value ? new Date(value).toLocaleTimeString() : "–";
+async function post(path, body) {
+  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error ?? `Request failed (${response.status})`);
+  return result;
+}
+function renderKiosk(kiosk) {
+  let section = document.querySelector(`[data-kiosk="${kiosk.index}"]`);
+  if (!section) {
+    section = document.createElement("section"); section.className = "kiosk"; section.dataset.kiosk = String(kiosk.index);
+    section.innerHTML = `<div class="screen"><iframe title="${kiosk.name} screen" src="${kiosk.screenUrl}"></iframe></div>
+      <div class="card"><div class="row"><h2>${kiosk.name}</h2><span class="pill" data-field="state"></span></div>
+      <dl><dt>Paired</dt><dd data-field="paired"></dd><dt>Cloud reachable</dt><dd data-field="cloud"></dd><dt>Scans waiting</dt><dd data-field="pending"></dd>
+      <dt>Roster members cached</dt><dd data-field="roster"></dd><dt>Last heartbeat</dt><dd data-field="seen"></dd><dt>Service starts</dt><dd data-field="starts"></dd></dl>
+      <div class="buttons">
+        <button data-action="pair" class="primary">Pair</button><button data-action="unpair">Unpair</button>
+        <button data-action="restart">Restart service</button><button data-action="reboot">Reboot</button>
+        <button data-action="reload">Reload screen</button></div>
+      <ol data-field="events"></ol></div>
+      <div class="card reader"><div class="row"><h2>Fingerprint reader</h2><span class="pill" data-field="reader-state"></span></div>
+        <div class="row" style="justify-content:flex-start"><span data-field="on-reader"></span></div>
+        <div class="fingers" data-field="fingers"></div>
+        <div class="buttons"><button data-reader="unknown">Tap an unknown finger</button><button data-reader="hold">Hold the last finger</button><button data-reader="lift">Lift finger</button></div>
+        <div class="row" style="justify-content:flex-start;gap:14px">
+          <label class="toggle">Next read <select data-fault="image"><option value="">Clean</option><option value="faint">Too faint</option><option value="messy">Too messy</option><option value="unusable">Unusable</option></select></label>
+          <label class="toggle"><input type="checkbox" data-fault="noMatch"> No match</label>
+          <label class="toggle"><input type="checkbox" data-fault="weak"> Weak match (score 40)</label>
+          <label class="toggle"><input type="checkbox" data-fault="slow"> Slow reader (1.5 s)</label>
+          <label class="toggle"><input type="checkbox" data-fault="unplugged"> Unplugged</label>
+        </div></div>
+      <div class="card system"><div class="columns">
+        <div><h3>Network</h3>
+          <div class="buttons" data-field="networks"></div>
+          <p class="hint">Virtual Lab's password is <code>virtual-lab-1</code>; Virtual Guest is open. Join from the kiosk's own Wi-Fi screen (hold the network dot, settings PIN <code>246810</code>) or set it here.</p>
+          <span data-field="link"></span></div>
+        <div><h3>Dashboard commands</h3>
+          <div class="buttons">
+            <button data-command="reload_display">Reload display</button><button data-command="restart_service">Restart software</button>
+            <button data-command="reboot">Reboot</button><button data-command="reset_network_pin">Reset settings PIN</button>
+            <button data-command="install_latest">Update kiosk</button><button data-command="erase_unlinked_fingerprints">Erase unlinked fingerprints</button></div>
+          <ul class="plain" data-field="commands"></ul></div>
+        <div><h3>System</h3>
+          <label class="toggle"><input type="checkbox" data-system="updateFails"> The next update fails</label><br>
+          <label class="toggle"><input type="checkbox" data-system="noClock"> The next boot has no network time</label>
+          <p class="hint" data-field="clock"></p></div>
+      </div></div>`;
+    section.querySelectorAll("[data-command]").forEach((button) => button.addEventListener("click", () => sendCommand(kiosk.index, button)));
+    section.querySelectorAll("[data-system]").forEach((input) => input.addEventListener("change", () => setSystem(kiosk.index, section)));
+    section.querySelectorAll("[data-reader]").forEach((button) => button.addEventListener("click", () => readerAction(kiosk.index, button.dataset.reader, button)));
+    section.querySelectorAll("[data-fault]").forEach((input) => input.addEventListener("change", () => setFaults(kiosk.index, section)));
+    const frame = section.querySelector(".screen"), iframe = frame.querySelector("iframe");
+    new ResizeObserver(() => { iframe.style.transform = `scale(${frame.clientWidth / 1024})`; }).observe(frame);
+    section.querySelectorAll("button[data-action]").forEach((button) => button.addEventListener("click", () => act(kiosk.index, button)));
+    kioskList.append(section);
+  }
+  const field = (name) => section.querySelector(`[data-field="${name}"]`);
+  const state = field("state");
+  state.textContent = !kiosk.running ? "Restarting" : kiosk.paired ? "Running" : "Unpaired";
+  state.className = `pill ${!kiosk.running ? "warn" : kiosk.paired ? "ok" : "err"}`;
+  field("paired").textContent = kiosk.paired ? "Yes" : "No"; field("cloud").textContent = kiosk.cloudOnline ? "Yes" : "No";
+  field("pending").textContent = text(kiosk.pendingScans); field("roster").textContent = text(kiosk.rosterMembers);
+  field("seen").textContent = time(kiosk.lastSeenAt); field("starts").textContent = text(kiosk.starts);
+  field("events").innerHTML = kiosk.events.map((event) => `<li>${time(event.at)} · ${event.message}</li>`).join("");
+  renderReader(kiosk, section, field);
+  renderSystem(kiosk, section, field);
+}
+const networkChoices = [{ label: "Ethernet", network: { connection: "ethernet", ssid: null } }, { label: "Wi-Fi: Virtual Lab", network: { connection: "wifi", ssid: "Virtual Lab" } }, { label: "Wi-Fi: Virtual Guest", network: { connection: "wifi", ssid: "Virtual Guest" } }, { label: "No network", network: { connection: "none", ssid: null } }];
+function renderSystem(kiosk, section, field) {
+  const networks = field("networks");
+  const html = networkChoices.map((choice, index) => {
+    const current = choice.network.connection === kiosk.network.connection && choice.network.ssid === kiosk.network.ssid;
+    return `<button data-network="${index}" class="${current ? "primary" : ""}" aria-pressed="${current}">${choice.label}</button>`;
+  }).join("");
+  if (networks.dataset.html !== html) {
+    networks.innerHTML = html; networks.dataset.html = html;
+    networks.querySelectorAll("[data-network]").forEach((button) => button.addEventListener("click", async () => {
+      button.disabled = true; message.textContent = "";
+      try { await post(`/api/kiosks/${kiosk.index}/network`, { network: networkChoices[Number(button.dataset.network)].network }); } catch (error) { message.textContent = error.message; } finally { void refresh(); }
+    }));
+  }
+  const link = field("link"); link.textContent = kiosk.linkOnline ? "Worker reachable from this kiosk" : "Worker unreachable from this kiosk"; link.className = `pill ${kiosk.linkOnline ? "ok" : "err"}`;
+  field("commands").innerHTML = kiosk.commands.map((command) => `<li>${time(command.createdAt)} · ${command.type} · ${command.completedAt ? (command.success ? "done" : "failed") : "waiting"}${command.resultMessage ? ` · ${command.resultMessage}` : ""}</li>`).join("") || "<li>No commands yet</li>";
+  field("clock").textContent = `This boot ${kiosk.bootClockSynced ? "has" : "has no"} network time; the kiosk clock is ${kiosk.clockVerified ? "confirmed" : "waiting for confirmation"}.`;
+  if (!section.contains(document.activeElement)) {
+    section.querySelector('[data-system="updateFails"]').checked = kiosk.nextUpdate === "fail";
+    section.querySelector('[data-system="noClock"]').checked = !kiosk.nextBootClockSynced;
+  }
+}
+async function sendCommand(index, button) {
+  button.disabled = true; message.textContent = "";
+  try { await post(`/api/kiosks/${index}/command`, { command: button.dataset.command }); } catch (error) { message.textContent = error.message; } finally { button.disabled = false; void refresh(); }
+}
+async function setSystem(index, section) {
+  try { await post(`/api/kiosks/${index}/system`, { nextUpdate: section.querySelector('[data-system="updateFails"]').checked ? "fail" : "install", nextBootClockSynced: !section.querySelector('[data-system="noClock"]').checked }); }
+  catch (error) { message.textContent = error.message; }
+  document.activeElement?.blur(); void refresh();
+}
+const fingerName = (finger) => {
+  const [kind, id, number] = String(finger).split(":");
+  if (kind !== "member") return "an unknown finger";
+  return `${status.members.find((member) => member.memberId === id)?.name ?? `member ${id}`} · finger ${number}`;
+};
+function renderReader(kiosk, section, field) {
+  const reader = kiosk.reader, state = field("reader-state");
+  state.textContent = !reader ? "Unavailable" : reader.faults.unplugged ? "Unplugged" : kiosk.readerOnline ? "Connected" : "Not seen yet";
+  state.className = `pill ${!reader || reader.faults.unplugged ? "err" : kiosk.readerOnline ? "ok" : "warn"}`;
+  field("on-reader").textContent = reader?.finger ? `On the reader: ${fingerName(reader.finger)}` : "Nothing on the reader";
+  const stored = new Set(Object.values(reader?.slots ?? {}));
+  const fingers = field("fingers");
+  const html = status.members.map((member) => `<div class="finger"><strong>${member.name}</strong><span style="color:var(--muted)">Member ID ${member.memberId}</span><div class="buttons">${[1, 2].map((number) => {
+    const finger = `member:${member.memberId}:${number}`;
+    return `<button data-finger="${finger}" title="Tap this finger on the reader">Finger ${number}${stored.has(finger) ? " ✓" : ""}</button>`;
+  }).join("")}</div></div>`).join("");
+  if (fingers.dataset.html !== html) {
+    fingers.innerHTML = html; fingers.dataset.html = html;
+    fingers.querySelectorAll("[data-finger]").forEach((button) => button.addEventListener("click", () => readerAction(kiosk.index, "tap", button, button.dataset.finger)));
+  }
+  if (reader && !section.contains(document.activeElement)) {
+    section.querySelector('[data-fault="image"]').value = reader.faults.image ?? "";
+    section.querySelector('[data-fault="noMatch"]').checked = reader.faults.noMatch;
+    section.querySelector('[data-fault="weak"]').checked = reader.faults.score < 100;
+    section.querySelector('[data-fault="slow"]').checked = reader.faults.delayMs > 0;
+    section.querySelector('[data-fault="unplugged"]').checked = reader.faults.unplugged;
+  }
+}
+// A tap holds the finger for 1.2 s, about how long a member presses the reader.
+const lastFinger = new Map();
+async function readerAction(index, action, button, finger) {
+  button.disabled = true; message.textContent = "";
+  try {
+    if (action === "tap") { lastFinger.set(index, finger); await post(`/api/kiosks/${index}/reader`, { action: "present", finger, holdMs: 1200 }); }
+    if (action === "unknown") await post(`/api/kiosks/${index}/reader`, { action: "present", finger: `unknown:${Math.random().toString(36).slice(2, 10)}`, holdMs: 1200 });
+    if (action === "hold") { if (!lastFinger.has(index)) throw new Error("Tap a finger first"); await post(`/api/kiosks/${index}/reader`, { action: "present", finger: lastFinger.get(index) }); }
+    if (action === "lift") await post(`/api/kiosks/${index}/reader`, { action: "lift" });
+  } catch (error) { message.textContent = error.message; } finally { button.disabled = false; void refresh(); }
+}
+async function setFaults(index, section) {
+  const image = section.querySelector('[data-fault="image"]').value || null;
+  const faults = { image, noMatch: section.querySelector('[data-fault="noMatch"]').checked, score: section.querySelector('[data-fault="weak"]').checked ? 40 : 180,
+    delayMs: section.querySelector('[data-fault="slow"]').checked ? 1500 : 0, unplugged: section.querySelector('[data-fault="unplugged"]').checked };
+  try { await post(`/api/kiosks/${index}/reader`, { action: "faults", faults }); } catch (error) { message.textContent = error.message; }
+  document.activeElement?.blur(); void refresh();
+}
+async function act(index, button) {
+  const action = button.dataset.action;
+  if (action === "reload") { document.querySelector(`[data-kiosk="${index}"] iframe`).src = status.kiosks[index].screenUrl; return; }
+  button.disabled = true; message.textContent = "";
+  try { await post(`/api/kiosks/${index}/${action}`); } catch (error) { message.textContent = error.message; } finally { button.disabled = false; void refresh(); }
+}
+async function refresh() {
+  try {
+    status = await (await fetch("/api/status")).json();
+    if (kioskList.querySelector("p")) kioskList.innerHTML = "";
+    const cloud = document.querySelector("#cloud"); cloud.textContent = status.cloudOnline ? "Reachable" : "Unreachable"; cloud.className = `pill ${status.cloudOnline ? "ok" : "err"}`;
+    document.querySelector("#cloud-toggle").textContent = status.cloudOnline ? "Make unreachable" : "Make reachable";
+    document.querySelector("#links").innerHTML = [status.dashboardUrl ? `<a href="${status.dashboardUrl}" target="_blank">Local dashboard</a> (sign in as ${status.adminUsername})` : "", `Worker <a href="${status.apiUrl}/health" target="_blank">${status.apiUrl}</a>`].filter(Boolean).join(" · ");
+    status.kiosks.forEach(renderKiosk);
+  } catch { message.textContent = "The virtual kiosk script isn't responding."; }
+}
+document.querySelector("#cloud-toggle").addEventListener("click", async () => { await post("/api/cloud", { online: !status.cloudOnline }); void refresh(); });
+await refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>

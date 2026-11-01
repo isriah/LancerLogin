@@ -31,7 +31,7 @@ Roster membership never grants dashboard access. Accounts are managed in **Setti
 
 ## Page walkthroughs
 
-First-visit walkthroughs introduce Meetings, Roster, member detail, Reports, the meeting workspace, Kiosks, the browser simulator and module pages that provide one. Settings pages have none. Walkthroughs use practice previews that cannot save or delete records and never send provider actions or device commands; the Kiosks tour shows a labelled example device when none is paired. **Not now** postpones the invitation and **Don't show automatically again** stops it for that page. Progress follows the signed-in account across browsers.
+First-visit walkthroughs introduce Meetings, Roster, member detail, Reports, the meeting workspace, Kiosks and module pages that provide one. Settings pages have none. Walkthroughs use practice previews that cannot save or delete records and never send provider actions or device commands; the Kiosks tour shows a labelled example device when none is paired. **Not now** postpones the invitation and **Don't show automatically again** stops it for that page. Progress follows the signed-in account across browsers.
 
 Every user can turn on **Debug mode** in the Settings navigation. It reveals diagnostic history such as member label history and recent roster imports, and a **Reset page walkthrough** button on pages with a walkthrough, for that user only.
 
@@ -55,7 +55,7 @@ The report builder supports fixed and rolling periods, active or complete roster
 
 ## Kiosks and rejected scans
 
-**Rejected scans** on the Kiosks page lists evidence uploaded by active or retired kiosks, in **Needs review** and **Reviewed** lists. Expand a record for its IDs, reason, original scan time, cloud receipt time and clock evidence. Correct attendance in the meeting if the evidence supports it, then add a note and **Mark reviewed**; reviewing never changes attendance. **Dismiss scans** marks up to 500 filtered or selected records reviewed in one request, with a separate audit entry for each. Reviewed status synchronizes back to the originating kiosks.
+**Rejected scans**, under **Debug tools** on the Kiosks page when Debug mode is on, lists evidence uploaded by active or retired kiosks, in **Needs review** and **Reviewed** lists. Expand a record for its IDs, reason, original scan time, cloud receipt time and clock evidence. Correct attendance in the meeting if the evidence supports it, then add a note and **Mark reviewed**; reviewing never changes attendance. **Dismiss scans** marks up to 500 filtered or selected records reviewed in one request, with a separate audit entry for each. Reviewed status synchronizes back to the originating kiosks.
 
 Kiosk diagnostics, authentication methods and maintenance commands are described in the [kiosk reference](KIOSK.md#dashboard-management-and-recovery).
 

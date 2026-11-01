@@ -6,7 +6,7 @@ The shared foundations are the safe default for existing and future content. A f
 
 ## Scope and principles
 
-This standard applies to the authenticated dashboard, its setup and sign-in flows, dashboard dialogs and popovers, walkthroughs, and public forms rendered by the dashboard application. It does not govern the physical kiosk, the kiosk simulator presentation, provisioning pages outside the React dashboard, or public documentation.
+This standard applies to the authenticated dashboard, its setup and sign-in flows, dashboard dialogs and popovers, walkthroughs, and public forms rendered by the dashboard application. It does not govern the physical kiosk, the web kiosk page, provisioning pages outside the React dashboard, or public documentation.
 
 - Preserve the current visual character: Roboto for body and controls, Bebas Neue for display headings, adopter-selected primary and secondary colors, rounded panels, and calm light and dark surfaces.
 - Prefer a shared token or established pattern over a page-local value. Add a semantic token only when an existing role cannot express a recurring need; explain the addition in the change review.

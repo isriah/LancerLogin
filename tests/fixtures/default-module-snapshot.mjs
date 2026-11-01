@@ -32,7 +32,7 @@ const attendance = {
     data: [
       "Meetings and meeting templates",
       "Attendance events and corrections",
-      "Kiosk, simulator, and pairing records",
+      "Kiosk and pairing records",
       "Attendance policy and delivery records",
     ],
   },

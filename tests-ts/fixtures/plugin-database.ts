@@ -1,6 +1,6 @@
 // The migrated backup fixture database with D1 batch semantics for Worker route handlers and module reconciliation.
-import { readdirSync } from "node:fs";
 import { BackupDatabase } from "./backup-database.ts";
+import { recordCoreMigrations } from "./d1-database.ts";
 
 /** The migrated fixture database, with D1 batch semantics for route handlers: reads inside a batch return rows. */
 export class PluginDatabase extends BackupDatabase {
@@ -26,9 +26,5 @@ export class PluginDatabase extends BackupDatabase {
     catch (error) { this.raw.exec("ROLLBACK"); throw error; }
   }
   /** Record every Core migration as applied, as D1 does, so adopted baselines can be checked. */
-  recordCoreMigrations() {
-    this.raw.exec("CREATE TABLE IF NOT EXISTS d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
-    const insert = this.raw.prepare("INSERT OR IGNORE INTO d1_migrations(name) VALUES (?)");
-    for (const name of readdirSync("apps/api/migrations").filter((file) => file.endsWith(".sql")).sort()) insert.run(name);
-  }
+  recordCoreMigrations() { recordCoreMigrations(this.raw); }
 }

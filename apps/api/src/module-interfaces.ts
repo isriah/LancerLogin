@@ -106,7 +106,7 @@ export function moduleInterfaceServices(options: ModuleInterfaceServiceOptions):
     try { result = await handler(Object.freeze({ db, services: options.providerServices(db, provider.id), caller }), JSON.parse(serialized)); }
     catch (error) {
       // The caller receives the provider's own status and message; anything else stays in Worker logs.
-      if (error instanceof HttpError) throw new HttpError(error.status >= 400 && error.status <= 599 ? error.status : 500, error.message, error.details, error.code);
+      if (error instanceof HttpError) throw new HttpError(error.status >= 400 && error.status <= 599 ? error.status : 500, error.message, error.details, error.code, error.extra);
       const errorId = crypto.randomUUID();
       console.error(JSON.stringify({ event: "module_interface_error", errorId, provider: provider.id, interface: definition.id, operation: operationId, message: error instanceof Error ? error.message : String(error) }));
       throw new HttpError(500, `${provider.label} could not complete the request (reference ${errorId})`);

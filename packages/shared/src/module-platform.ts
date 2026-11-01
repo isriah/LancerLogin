@@ -459,7 +459,6 @@ export const attendanceModule = freeze<ModuleDefinition>({
     { path: "/admin/attendance/members", match: "prefix", access: "workspace" },
     { path: "/admin/pairing-codes", match: "prefix", access: "workspace" },
     { path: "/admin/kiosks", match: "prefix", access: "workspace" },
-    { path: "/admin/simulator", match: "prefix", access: "workspace" },
     { path: "/communications/email", match: "exact", access: "workspace" },
     { path: "/calendars/sync", match: "exact", access: "workspace" },
     // Google returns the browser here cross-site, without the SameSite=Strict session cookie. The handler authenticates
@@ -476,7 +475,7 @@ export const attendanceModule = freeze<ModuleDefinition>({
     tables: [
       "label_weekly_targets", "label_attendance_rules", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
       "kiosk_scan_reviews", "kiosk_enrollment_sessions",
-      "attendance_events", "attendance_corrections", "pairing_codes", "kiosks", "simulated_kiosk_sessions",
+      "attendance_events", "attendance_corrections", "pairing_codes", "kiosks",
       "kiosk_fingerprint_sync", "kiosk_fingerprint_keys", "kiosk_fingerprint_deliveries",
       "kiosk_fingerprint_vault_settings", "kiosk_fingerprint_vault_templates", "kiosk_fingerprint_vault_enrollments", "kiosk_fingerprint_vault_retirements",
       "kiosk_fingerprint_review_requests", "kiosk_fingerprint_review_manifests", "kiosk_fingerprint_review_slots", "kiosk_fingerprint_reset_batches", "kiosk_fingerprint_reset_commands",
@@ -509,14 +508,14 @@ export const attendanceModule = freeze<ModuleDefinition>({
     nonPortableTables: ["kiosk_scan_reviews", "kiosk_enrollment_sessions", "kiosk_fingerprint_sync", "kiosk_fingerprint_keys", "kiosk_fingerprint_deliveries", "kiosk_fingerprint_vault_settings", "kiosk_fingerprint_vault_templates", "kiosk_fingerprint_vault_enrollments", "kiosk_fingerprint_vault_retirements", "kiosk_fingerprint_review_requests", "kiosk_fingerprint_review_manifests", "kiosk_fingerprint_review_slots", "kiosk_fingerprint_reset_batches", "kiosk_fingerprint_reset_commands", "kiosk_fingerprint_retired_review_grants"],
     tables: [
       "label_weekly_targets", "label_attendance_rules", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
-      "attendance_events", "attendance_corrections", "pairing_codes", "kiosks", "simulated_kiosk_sessions",
+      "attendance_events", "attendance_corrections", "pairing_codes", "kiosks",
       "google_calendar_event_mappings", "google_calendar_operations", "discord_calendar_event_mappings", "discord_calendar_operations",
       "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports",
     ],
   },
   lifecycle: {
     cleanupTargets: [
-      "kiosk_scan_reviews", "kiosk_enrollment_sessions", "kiosk_commands", "simulated_kiosk_sessions", "kiosks", "pairing_codes", "discord_attendance_recipients", "discord_attendance_contests",
+      "kiosk_scan_reviews", "kiosk_enrollment_sessions", "kiosk_commands", "kiosks", "pairing_codes", "discord_attendance_recipients", "discord_attendance_contests",
       "discord_attendance_notifications", "discord_anomaly_reports", "discord_calendar_operations", "discord_calendar_event_mappings",
       "google_calendar_operations", "google_calendar_event_mappings", "attendance_corrections", "attendance_events", "meeting_audience_labels",
       "meetings", "meeting_templates", "label_attendance_rules", "meeting_weight_categories", "integration_deliveries:attendance",
@@ -531,7 +530,7 @@ export const attendanceModule = freeze<ModuleDefinition>({
   deletedData: [
     "Meetings and meeting templates",
     "Attendance events and corrections",
-    "Kiosk, simulator, and pairing records",
+    "Kiosk and pairing records",
     "Attendance policy and delivery records",
   ],
 });

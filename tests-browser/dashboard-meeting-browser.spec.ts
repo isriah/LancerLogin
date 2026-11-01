@@ -45,7 +45,7 @@ test("calendar range controls and all meeting choices open canonical detail rout
   await page.getByRole("radio", { name: "Calendar" }).check();
   // Month navigation selects its first day. Explicitly return to the active meeting's day.
   await selectActiveDay();
-  await page.getByRole("button", { name: "Open meeting Build session", exact: true }).click();
+  await page.getByRole("link", { name: "Open meeting Build session", exact: true }).click();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await page.goBack();
   await page.goForward();
@@ -340,7 +340,7 @@ test.describe("meeting creation refresh", () => {
     await dialog.getByLabel("Title", { exact: true }).fill("Calendar planning");
     await dialog.getByRole("button", { name: "Create meeting", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Meeting", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Open meeting Calendar planning", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open meeting Calendar planning", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: `${start.toLocaleDateString("en-US", { timeZone: "UTC", dateStyle: "long" })}, 2 meetings`, exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("radio", { name: "Calendar" })).toBeChecked();
 

@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 
 test("canonical meeting routes, legacy redirects, switching, and browser history stay synchronized", async ({ page }) => {
   await openActiveMeetingCalendar(page);
-  await page.getByRole("button", { name: "Open meeting Build session", exact: true }).click();
+  await page.getByRole("link", { name: "Open meeting Build session", exact: true }).click();
   await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
   await page.goBack();

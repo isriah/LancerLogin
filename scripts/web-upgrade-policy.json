@@ -445,6 +445,26 @@
       "name": "0089_discord_label_two_way.sql",
       "sha256": "238980f365aa56c3972f89984c8f1afcac65e77ff63d946f65bcc3ce0dfbf3b6",
       "forwardCompatible": true
+    },
+    {
+      "name": "0090_web_kiosks.sql",
+      "sha256": "406a207815d2f246317701da421d859bc129763984ce9239d176cf33496f10fe",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0091_member_pins.sql",
+      "sha256": "77df007f410e29cec162da423077c1f1be9070196d12f335b2b352f06354bdf0",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0092_remove_simulator.sql",
+      "sha256": "fbcfded848e6a6424a0d2d0b4cfb386a31d0a098c2f6760b858bb3c054f55483",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0093_first_connection.sql",
+      "sha256": "f057a13c3df3a91d4d533d07a7e22faa6fbf702aa6c729bf76f807eafcf861aa",
+      "forwardCompatible": true
     }
   ]
 }

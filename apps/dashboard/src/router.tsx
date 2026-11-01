@@ -1,4 +1,4 @@
-import { MouseEvent, useEffect, useRef, useState } from "react";
+import { type AnchorHTMLAttributes, MouseEvent, useEffect, useRef, useState } from "react";
 
 const routeChangeEvent = "lancerlogin:route-change";
 export const routeWillChangeEvent = "lancerlogin:route-will-change";
@@ -16,8 +16,32 @@ export function usePath() {
   return { ...location, navigate };
 }
 
+type ClickLike = { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean };
+/** True for a click the browser should handle itself: a middle or other button, or Ctrl, Cmd, Shift or Alt (new tab, new window, download). */
+export function isModifiedClick(event: ClickLike) { return Boolean(event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey); }
+/**
+ * Click handler for an in-app `<a href>`: a plain left click runs `go` in place of loading the page, while modified and
+ * middle clicks keep the browser's link behavior, so Ctrl/Cmd-click and "Open link in new tab" open `href` elsewhere.
+ */
+export function followInApp(event: MouseEvent<HTMLAnchorElement>, go: () => void) { if (isModifiedClick(event)) return; event.preventDefault(); go(); }
+
+/**
+ * Click and auxclick handler for a clickable row whose record link (`href`) is also a real anchor inside it. A plain
+ * click runs `go`; Ctrl/Cmd-click and middle-click open `href` in a new tab like the link would, and other modified
+ * clicks leave this page alone. Clicks on the row's own links and controls are theirs to handle.
+ */
+export function followRowInApp(event: MouseEvent<HTMLElement>, href: string, go: () => void) {
+  if ((event.target as Element).closest("a, button, input, select, textarea, label, summary")) return;
+  if (!isModifiedClick(event)) { if (event.type === "click") go(); return; }
+  if (event.button === 1 || ((event.ctrlKey || event.metaKey) && event.button === 0)) window.open(href, "_blank", "noopener");
+}
+
+/** An anchor to an in-app page that navigates in place on a plain click. Use it for anything that opens a record or page. */
+export function AppLink({ href, navigate, onClick, ...props }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & { href: string; navigate: (path: string) => void }) {
+  return <a {...props} href={href} onClick={(event) => { onClick?.(event); followInApp(event, () => navigate(href)); }} />;
+}
+
 export function RouteLink({ href, currentPath, navigate, children, className = "", role }: { href: string; currentPath: string; navigate: (path: string) => void; children: React.ReactNode; className?: string; role?: React.AriaRole }) {
   const active = currentPath === href || (href !== "/dashboard" && currentPath.startsWith(`${href}/`));
-  function click(event: MouseEvent<HTMLAnchorElement>) { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate(href); }
-  return <a href={href} role={role === "row" ? undefined : role} onClick={click} className={`${className}${active ? " active" : ""}`} aria-current={active ? "page" : undefined}>{children}</a>;
+  return <a href={href} role={role === "row" ? undefined : role} onClick={(event) => followInApp(event, () => navigate(href))} className={`${className}${active ? " active" : ""}`} aria-current={active ? "page" : undefined}>{children}</a>;
 }

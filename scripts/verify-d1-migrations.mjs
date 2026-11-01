@@ -63,11 +63,12 @@ try {
   const schema = new Map((result[1]?.results ?? []).map((row) => [row.name, row.sql]));
   const brandingSql = schema.get("organization_settings") ?? "";
   const kioskSql = schema.get("kiosks") ?? "";
-  const meetingSql = schema.get("meetings") ?? ""; const meetingSeriesIndexSql = schema.get("idx_meetings_series") ?? ""; const pairingSql = schema.get("pairing_codes") ?? ""; const simulatorSql = schema.get("simulated_kiosk_sessions") ?? "";
+  const meetingSql = schema.get("meetings") ?? ""; const meetingSeriesIndexSql = schema.get("idx_meetings_series") ?? ""; const pairingSql = schema.get("pairing_codes") ?? "";
   const usersSql = schema.get("users") ?? ""; const memberUserIndexSql = schema.get("idx_one_user_per_member") ?? "";
   if (!brandingSql.includes("'themed'") || !kioskSql.includes("reader_online") || !kioskSql.includes("release_version") || !kioskSql.includes("pending_events") || !kioskSql.includes("last_sync_at") || !kioskSql.includes("pairing_bound") || !kioskSql.includes("configured_authentication_method")) throw new Error("Final D1 schema is missing themed branding, retained kiosk health, or pairing authority fields");
   if (!(schema.get("idx_kiosks_active_name") ?? "").includes("lower(name)") || !(schema.get("idx_kiosks_active_name") ?? "").includes("active = 1")) throw new Error("Final D1 schema is missing unique active kiosk names");
-  if (!meetingSql.includes("is_test") || !pairingSql.includes("'simulator'") || !simulatorSql.includes("online")) throw new Error("Final D1 schema is missing isolated browser simulator fields");
+  // 0092 dropped the browser simulator's sessions; pairing_codes keeps its historical purpose CHECK.
+  if (!meetingSql.includes("is_test") || !pairingSql.includes("kiosk_kind") || schema.has("simulated_kiosk_sessions")) throw new Error("Final D1 schema still has the browser simulator's sessions, or is missing test meetings or web kiosk pairing");
   if (!meetingSql.includes("recurrence_frequency") || !meetingSql.includes("series_id") || !meetingSeriesIndexSql.includes("series_id")) throw new Error("Final D1 schema is missing recurring-meeting fields or index");
   const templateSql = schema.get("meeting_templates") ?? ""; const templateIndexSql = schema.get("idx_meeting_templates_installation_name") ?? "";
   if (!templateSql.includes("duration_minutes") || !templateSql.includes("recurrence_duration_days") || !templateIndexSql.includes("installation_id")) throw new Error("Final D1 schema is missing meeting-template timing or tenant scope");

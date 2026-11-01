@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { openActiveMeetingCalendar } from "./meeting-calendar-fixture";
+import { openActiveMeetingCalendar, selectedCalendarDays } from "./meeting-calendar-fixture";
 
 for (const timeZone of ["UTC", "America/New_York"]) test.describe(`calendar fixture in ${timeZone}`, () => {
   test.use({ timezoneId: timeZone });
@@ -14,8 +14,8 @@ for (const timeZone of ["UTC", "America/New_York"]) test.describe(`calendar fixt
       await route.fulfill({ response, json: body });
     });
     await openActiveMeetingCalendar(page);
-    await expect(page.locator('.compact-calendar-day[aria-pressed="true"]')).not.toHaveAttribute("aria-current", "date");
-    await page.getByRole("button", { name: "Open meeting Build session", exact: true }).click();
+    await expect(selectedCalendarDays(page)).not.toHaveAttribute("aria-current", "date");
+    await page.getByRole("link", { name: "Open meeting Build session", exact: true }).click();
     await expect(page).toHaveURL(/\/meetings\/active-meeting$/);
   });
 });

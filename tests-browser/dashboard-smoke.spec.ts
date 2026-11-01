@@ -175,13 +175,15 @@ test("integration enablement is accessible, sorted, and compact when disabled", 
   await page.setViewportSize({ width: 700, height: 900 });
   await page.goto("/settings/integrations");
   const cards = page.locator(".integration-card");
-  await expect(cards).toHaveCount(4);
+  // The FIRST card has no enable switch and always sits just before Discord.
+  await expect(cards).toHaveCount(5);
   await expect(cards.nth(0)).toContainText("Google OAuth");
   await expect(cards.nth(1)).toContainText("Google Calendar");
   await expect(cards.nth(2)).toContainText("Resend email");
-  await expect(cards.nth(3)).toContainText("Discord bot");
+  await expect(cards.nth(3)).toContainText("FIRST");
+  await expect(cards.nth(4)).toContainText("Discord bot");
   await expect(page.getByRole("switch", { name: "Enable Discord bot" })).not.toBeChecked();
-  await expect(cards.nth(3).locator(".integration-details")).toHaveCount(0);
+  await expect(cards.nth(4).locator(".integration-details")).toHaveCount(0);
   const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
   expect(widths.scroll).toBeLessThanOrEqual(widths.client);
 });
@@ -363,8 +365,8 @@ test("Reports selectors keep selected values and inset arrows visible at support
 test("Kiosks hides routine refresh success and preserves action feedback", async ({ page }) => {
   await page.route("**/admin/kiosks/kiosk-1", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
   await page.goto("/kiosks");
-  await expect(page.getByRole("heading", { name: "Kiosks", exact: true })).toBeVisible();
-  const physicalKiosk = page.locator(".kiosk-grid > .task-card").filter({ has: page.getByRole("heading", { name: "Physical kiosks" }) });
+  await expect(page.getByRole("heading", { level: 1, name: "Kiosks", exact: true })).toBeVisible();
+  const physicalKiosk = page.locator(".kiosk-grid > .task-card").filter({ has: page.getByRole("heading", { level: 2, name: "Kiosks", exact: true }) });
   const addButton = physicalKiosk.getByRole("button", { name: "Add kiosk" });
   await expect(addButton).toBeVisible();
   await expect(page.locator(".page-intro").getByRole("button", { name: "Add kiosk" })).toHaveCount(0);
@@ -372,7 +374,7 @@ test("Kiosks hides routine refresh success and preserves action feedback", async
   await expect(page.locator(".setup-status")).toHaveCount(0);
 
   await addButton.click();
-  const dialog = page.getByRole("dialog", { name: "Add physical kiosk" });
+  const dialog = page.getByRole("dialog", { name: "Add kiosk" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Create one-time pairing key" })).toBeEnabled();
   await dialog.getByRole("button", { name: "Close pairing dialog" }).click();
@@ -389,7 +391,7 @@ test("Kiosks keeps pairing actions Admin-only and contained on narrow screens", 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/kiosks");
 
-  const physicalKiosk = page.locator(".kiosk-grid > .task-card").filter({ has: page.getByRole("heading", { name: "Physical kiosks" }) });
+  const physicalKiosk = page.locator(".kiosk-grid > .task-card").filter({ has: page.getByRole("heading", { level: 2, name: "Kiosks", exact: true }) });
   await expect(physicalKiosk).toBeVisible();
   await expect(page.getByRole("button", { name: /^(Add|Replace) kiosk$/ })).toHaveCount(0);
   const [cardBounds, pageWidth] = await Promise.all([physicalKiosk.boundingBox(), page.evaluate(() => document.documentElement.clientWidth)]);

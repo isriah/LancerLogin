@@ -6,11 +6,15 @@ import { readFileSync, readdirSync } from "node:fs";
 import worker, { type Env } from "../../apps/api/src/index.ts";
 import { createSessionCodec } from "../../apps/api/src/runtime-security.ts";
 import { walkthroughs } from "../../packages/shared/src/walkthrough.ts";
+import { externalModuleMigrations } from "../../apps/api/src/generated/external-module-data.ts";
+import { applyComposedModuleMigrations, recordCoreMigrations } from "../fixtures/d1-database.ts";
 
 class Database {
   sqlite = new DatabaseSync(":memory:");
   constructor() {
     for (const file of readdirSync("apps/api/migrations").sort()) this.sqlite.exec(readFileSync(`apps/api/migrations/${file}`, "utf8"));
+    // Then the composed Outreach plugin's own migrations, as the Worker's module reconciliation applies them after Core's.
+    recordCoreMigrations(this.sqlite); applyComposedModuleMigrations(this.sqlite, externalModuleMigrations, { now: "2026-09-25T00:00:00.000Z" });
     this.sqlite.exec(`INSERT INTO installations (id, created_at, auth_mode) VALUES ('primary', '2026-09-25', 'local'), ('other', '2026-09-25', 'local');
       INSERT INTO users (id, installation_id, local_username, role, created_at) VALUES ('admin', 'primary', 'admin', 'admin', '2026-09-25'), ('operator', 'primary', 'operator', 'operator', '2026-09-25'), ('outsider', 'other', 'outsider', 'admin', '2026-09-25');
       INSERT INTO platform_module_administration VALUES ('primary', 0, 1);
@@ -83,7 +87,7 @@ test("portable kiosk methods round-trip independently and older backups preserve
       ('side','primary','pair-side','Side','synthetic-side',1,'2026-09-25','rfid','nfc');
       UPDATE organization_settings SET kiosk_authentication_method='member_id' WHERE installation_id='primary'`);
     const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
-    assert.equal(backup.schemaVersion, 45);
+    assert.equal(backup.schemaVersion, 49);
     const restore = (source: any) => call(db, "/admin/data/restore", "admin", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: source });
     for (const method of ["camera", null, undefined]) {
       const invalid = structuredClone(backup); invalid.tables.kiosks[0].configured_authentication_method = method;
@@ -113,7 +117,7 @@ test("Outreach schema33 restores privacy and event corrections while older owner
     const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
     // Current backups carry Outreach in its plugin section; the schema 32 form below carries it in Core's section.
     const outreach = (source: any) => pluginSectionTables(source, "hour-tracking")!;
-    assert.equal(backup.schemaVersion, 45); assert.equal(outreach(backup).hours_public_form_settings![0]!.member_validation, "name");
+    assert.equal(backup.schemaVersion, 49); assert.equal(outreach(backup).hours_public_form_settings![0]!.member_validation, "name");
     assert.equal(outreach(backup).hours_correction_requests![0]!.activity_id, "synthetic-event"); assert.equal(outreach(backup).hours_public_lookup_limits, undefined); assert.equal(backup.tables.hours_public_form_settings, undefined);
     const restore = (source: unknown) => call(db, "/admin/data/restore", "admin", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: source });
     const invalid = structuredClone(backup); outreach(invalid).hours_public_form_settings![0]!.member_validation = "roster";
@@ -194,7 +198,7 @@ test("entire-installation backups round-trip progress, older backups reset it, a
     await call(db, endpoint, "admin", { ...progress, status: "completed", stepId: "recurrence" });
     db.sqlite.exec("INSERT INTO hours_publication_settings(installation_id,automatic,revision,created_at,updated_at) VALUES('primary',0,0,'2026-09-28','2026-09-28'); INSERT INTO hours_activities(installation_id,id,category_id,mode,service_date,title,event_start_local,event_end_local,created_at,updated_at) VALUES('primary','scheduled-event','event','event','2026-10-10','Scheduled event','17:00','18:00','2026-09-28','2026-09-28')");
     const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
-    assert.equal(backup.schemaVersion, 45);
+    assert.equal(backup.schemaVersion, 49);
     assert.equal(backup.tables.organization_settings[0].kiosk_authentication_method, "fingerprint");
     // Outreach rows travel in its plugin section; the historical forms below carry them in Core's section.
     const outreach = pluginSectionTables(backup, "hour-tracking")!;

@@ -129,7 +129,7 @@ test("member ID entry is touch-friendly, case-capable, and fully visible at 800 
   const geometry = await page.evaluate(() => ({
     viewport: { width: innerWidth, height: innerHeight },
     document: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },
-    controls: Array.from(document.querySelectorAll<HTMLElement>("#identity-entry input, #identity-entry button")).filter((element) => !element.hidden).map((element) => {
+    controls: Array.from(document.querySelectorAll<HTMLElement>("#identity-entry input, #identity-entry button")).filter((element) => element.getClientRects().length > 0).map((element) => { // Visible controls only: the numeric keypad is hidden in this mode.
       const bounds = element.getBoundingClientRect(); return { width: bounds.width, height: bounds.height, left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom };
     }),
   }));
@@ -271,19 +271,6 @@ test("physical kiosk replaces motion with persistent state cues", async ({ page 
   await expect(page.getByRole("heading", { name: "Already recorded" })).toBeVisible();
   expect(await shell.evaluate((element) => ({ animation: getComputedStyle(element).animationName, fallback: getComputedStyle(element).boxShadow }))).toEqual(expect.objectContaining({ animation: "none" }));
   expect(await shell.evaluate((element) => getComputedStyle(element).boxShadow)).not.toBe("none");
-});
-
-test("browser kiosk emulator keeps the shared display surface within 800 by 480", async ({ page }) => {
-  await page.setViewportSize({ width: 800, height: 480 });
-  await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot() }));
-  await page.goto("/simulator");
-  await expect(page.getByText("SIMULATED · BROWSER INPUT")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Place finger on reader" })).toBeVisible();
-  await expect(page.getByText("Not a physical kiosk")).toBeVisible();
-  const bounds = await page.locator(".simulator-kiosk").boundingBox();
-  expect(bounds).not.toBeNull();
-  expect(bounds!.width).toBeLessThanOrEqual(800);
-  expect(bounds!.height).toBeLessThanOrEqual(480);
 });
 
 test("fingerprint maintenance unlock fits the supported 800 by 480 display", async ({ page }) => {

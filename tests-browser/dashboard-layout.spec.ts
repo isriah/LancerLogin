@@ -55,57 +55,6 @@ for (const viewport of references.viewports) for (const theme of references.them
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath("roster.png"), fullPage: true });
   });
-
-  test(`simulator matches physical display and themed controls at ${viewport.width} in ${theme}`, async ({ page }) => {
-    await page.setViewportSize(viewport);
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
-    await context(page);
-    let reads = 0;
-    await page.route("**/admin/simulator", route => {
-      if (route.request().method() === "POST") {
-        expect(route.request().postDataJSON()).toEqual({ action: "scan", memberId: "member-1", meetingId: "meeting-1" });
-        return route.fulfill({ json: { action: ++reads === 1 ? "check_in" : "check_out" } });
-      }
-      return route.fulfill({ json: { simulator: { name: "Browser test", active: 1, online: 1 } } });
-    });
-    await page.route("**/admin/members", route => route.fulfill({ json: { members: [{ id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: 1 }] } }));
-    await page.route("**/meetings", route => route.fulfill({ json: { meetings: [{ id: "meeting-1", title: "Build planning", startsAt: new Date().toISOString() }] } }));
-    await page.goto("/simulator");
-    const preview = page.locator(".simulator-kiosk");
-    await expect(preview.getByRole("heading", { name: "Place finger on reader" })).toBeVisible();
-    await expect(preview.locator("#brand-name")).toHaveText(branding.organizationName);
-    await expect(preview.locator(".kiosk-brand strong")).toHaveText(branding.subtitle);
-    await expect(preview.locator(".network-status, .maintenance-shortcut")).toHaveCount(0);
-    await expect(preview.locator(".debug-status")).toContainText("Not a physical kiosk");
-    await expect(preview.locator(".scan-panel h1")).toHaveCSS("font-size", "44px");
-    for (const selector of [page.getByLabel("Roster member"), page.getByLabel("Meeting", { exact: true })]) {
-      await expect(selector).toHaveCSS("appearance", "none");
-      expect(await selector.evaluate(el => getComputedStyle(el).backgroundImage)).not.toBe("none");
-      await expect(selector).toHaveCSS("font-family", /Roboto/);
-      expect((await selector.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-      await selector.focus();
-      await expect(selector).toHaveCSS("outline-style", "solid");
-      expect(await selector.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe("rgb(255, 255, 255)");
-    }
-    await page.getByLabel("Roster member").selectOption("member-1");
-    await page.getByLabel("Meeting", { exact: true }).selectOption("meeting-1");
-    const read = page.getByRole("button", { name: "Simulate member read" });
-    const button = await read.boundingBox();
-    const controls = await page.locator(".simulator-controls").boundingBox();
-    expect(Math.abs(button!.x + button!.width / 2 - controls!.x - controls!.width / 2)).toBeLessThan(2);
-    if (viewport.width <= 760) expect(button!.width).toBeCloseTo((await page.getByLabel("Roster member").boundingBox())!.width, 0);
-    else expect(button!.width).toBeLessThan(controls!.width - 32);
-    await read.press("Enter");
-    await expect(preview.getByRole("heading", { name: "Welcome", exact: true })).toBeVisible();
-    await expect(preview.locator("#display-name")).toHaveText("Avery Stone");
-    await expect(preview.locator("#display-meeting")).toHaveText("Build planning");
-    await page.screenshot({ path: test.info().outputPath("simulator.png"), fullPage: true });
-    await expect(preview.getByRole("heading", { name: "Place finger on reader" })).toBeVisible({ timeout: 4000 });
-    await read.click();
-    await expect(preview.getByRole("heading", { name: "Goodbye", exact: true })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  });
 }
 
 test("Roster attendance start date stays automatic unless Custom date is checked", async ({ page }) => {

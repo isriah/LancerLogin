@@ -23,6 +23,9 @@ import { Database } from "../fixtures/lifecycle-database.ts";
 import { PluginDatabase } from "../fixtures/plugin-database.ts";
 import { stylesheetRules } from "../fixtures/stylesheet-rules.ts";
 import { readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
+import { externalModuleMigrations } from "../../apps/api/src/generated/external-module-data.ts";
+import { expectedModuleLedger } from "../fixtures/d1-database.ts";
 
 const root = outreachPlugin.available ? outreachPlugin.root : "";
 const extracted = extractedModules.find((module) => module.id === "hour-tracking")!;
@@ -61,7 +64,9 @@ test("the plugin keeps the identity, lifecycle and cleanup it had as a first-par
   assert.deepEqual(Object.keys(api.backup!.tables), [...manifest.backup.tables]);
   // The plugin restores parent tables first in its own order; Core's historical section listed the same tables in its order.
   assert.deepEqual(Object.keys(api.backup!.tables).sort(), extracted.tables.map((table) => table.name).sort());
-  assert.equal(api.backup!.version, 3); assert.equal(extracted.backupVersion, 2);
+  // Plugin sections start at module backup version 3 and follow the composed plugin's manifest from there; version 2 is
+  // only ever Core's historical section.
+  assert.equal(api.backup!.version, manifest.backup.version); assert.ok(api.backup!.version >= 3); assert.equal(extracted.backupVersion, 2);
   assert.deepEqual(api.rosterReferences, extracted.rosterReferences);
   assert.deepEqual(api.privateResponseRoutes, ["/public/hours"]);
   assert.equal(installedApiModule("hour-tracking"), api);
@@ -88,7 +93,7 @@ test("the Outreach stylesheet stays beneath its module root and Core stylesheets
 test("raw Outreach dashboard controls remain in the reviewed UI inventory", async () => {
   type Counts = Partial<Record<"button" | "input" | "select" | "textarea" | "summary", number>>;
   // Moved unchanged from Core's inventory when Outreach became a plugin.
-  const reviewed: Record<string, Counts> = {
+  const extractedInventory: Record<string, Counts> = {
     "outreach-activity-publication.tsx": { button: 4, input: 2, select: 1 },
     "outreach-clock.tsx": { button: 9, select: 1 },
     "outreach-setup-workspace.tsx": { button: 2, input: 3, select: 1 },
@@ -98,6 +103,17 @@ test("raw Outreach dashboard controls remain in the reviewed UI inventory", asyn
     "public-outreach-form.tsx": { button: 10, input: 1, select: 2, textarea: 2 },
     "outreach-public-settings.tsx": { button: 1, select: 1 },
   };
+  // Reviewed for member self-logging of Team support and Other service time (duration-only entries, member-added teams and
+  // the reviewed-team filter). All new staff controls use ui-control, ui-native-select and ui-button; the public form keeps
+  // its existing bare fields, styled beneath its module root. Drop the extracted inventory once Core's pin includes this.
+  const selfLoggingInventory: Record<string, Counts> = {
+    ...extractedInventory,
+    "outreach-entry-edit.tsx": { button: 3, input: 1, select: 2, textarea: 2 },
+    "outreach-settings.tsx": { button: 14, input: 4, select: 3 },
+    "outreach-workspace.tsx": { button: 24, input: 13, select: 10, textarea: 6, summary: 3 },
+    "public-outreach-form.tsx": { button: 10, input: 8, select: 4, textarea: 2 },
+  };
+  const reviewed = [selfLoggingInventory, extractedInventory];
   const actual: Record<string, Counts> = {};
   const files = [...(await readdir(join(root, "src/dashboard"))).filter((file) => file.endsWith(".tsx")).map((file) => join("dashboard", file)), "dashboard.tsx"];
   for (const file of files) {
@@ -105,7 +121,7 @@ test("raw Outreach dashboard controls remain in the reviewed UI inventory", asyn
     for (const tag of ["button", "input", "select", "textarea", "summary"] as const) { const count = [...source.matchAll(new RegExp(`<${tag}\\b`, "g"))].length; if (count) counts[tag] = count; }
     if (Object.keys(counts).length) actual[file.replace(/^dashboard[\\/]/, "")] = counts;
   }
-  assert.deepEqual(actual, reviewed, "Native control markup changed. Use the shared UI patterns and focused rendered coverage, then review and update this inventory deliberately.");
+  if (!reviewed.some((inventory) => isDeepStrictEqual(actual, inventory))) assert.deepEqual(actual, reviewed[0], "Native control markup changed. Use the shared UI patterns and focused rendered coverage, then review and update this inventory deliberately.");
 });
 
 test("a new installation receives Outreach's former installation defaults on first enablement", async () => {
@@ -158,8 +174,11 @@ test("an installation that used first-party Outreach keeps its data and lifecycl
   db.raw.prepare("INSERT INTO platform_module_catalog(installation_id,module_id,origin,source,source_commit,contract_version,definition_json,definition_sha256,installed,recorded_at) VALUES ('primary','hour-tracking','first-party',NULL,NULL,1,?,?,1,'2026-02-01T00:00:00.000Z')").run(recordedCatalog.json, recordedCatalog.sha);
   const result = await reconcileInstalledModules(db as never);
   assert.deepEqual(result.failures, []);
-  // The adopted baseline is recorded without running SQL, the catalog now names the external plugin, and nothing else changes.
-  assert.deepEqual(db.rows("SELECT module_id, sequence, name FROM platform_module_migrations WHERE module_id='hour-tracking'"), [{ module_id: "hour-tracking", sequence: 0, name: "adopted-baseline" }]);
+  // The adopted baseline is recorded without running SQL, then any of the composed plugin's own migrations run after it; the
+  // catalog now names the external plugin, and nothing else changes.
+  const ledger = expectedModuleLedger(externalModuleMigrations.find((pkg) => pkg.moduleId === "hour-tracking"));
+  assert.deepEqual(ledger[0], { sequence: 0, name: "adopted-baseline" });
+  assert.deepEqual(db.rows("SELECT module_id, sequence, name FROM platform_module_migrations WHERE module_id='hour-tracking' ORDER BY sequence"), ledger.map((entry) => ({ module_id: "hour-tracking", ...entry })));
   assert.deepEqual(db.rows("SELECT origin, installed, source, source_commit FROM platform_module_catalog WHERE module_id='hour-tracking'"), [{ origin: "external", installed: 1, source: outreachPlugin.available ? outreachPlugin.source : null, source_commit: outreachPlugin.available ? outreachPlugin.commit : null }]);
   assert.deepEqual(db.rows("SELECT phase, generation, setup_complete FROM platform_modules WHERE module_id='hour-tracking'"), [{ phase: "enabled", generation: 2, setup_complete: 1 }]);
   assert.equal(db.count("SELECT COUNT(*) AS n FROM platform_module_assignments WHERE module_id='hour-tracking'"), 1);
@@ -170,9 +189,9 @@ test("an installation that used first-party Outreach keeps its data and lifecycl
   assert.deepEqual([listed.phase, listed.workspaceReady, "unavailable" in listed], ["enabled", true, false]);
   // Its next backup carries Outreach in the plugin section, and that backup restores the same rows.
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 45);
+  assert.equal(backup.schemaVersion, 49);
   const section = backup.externalModules.find((entry: { id: string }) => entry.id === "hour-tracking");
-  assert.deepEqual({ ...section, tables: undefined }, { id: "hour-tracking", label: "Outreach Participation", contractVersion: 1, backupVersion: 3, source: outreachPlugin.available ? outreachPlugin.source : null, commit: outreachPlugin.available ? outreachPlugin.commit : null, tables: undefined });
+  assert.deepEqual({ ...section, tables: undefined }, { id: "hour-tracking", label: "Outreach Participation", contractVersion: 1, backupVersion: manifest.backup.version, source: outreachPlugin.available ? outreachPlugin.source : null, commit: outreachPlugin.available ? outreachPlugin.commit : null, tables: undefined });
   assert.deepEqual(section.tables.hours_activities.map((row: { id: string }) => row.id), ["activity-1"]);
   const restored = await client.restore(backup); assert.equal(restored.status, 200, await restored.clone().text());
   assert.deepEqual(db.rows("SELECT id FROM hours_teams"), [{ id: "team-1" }]);

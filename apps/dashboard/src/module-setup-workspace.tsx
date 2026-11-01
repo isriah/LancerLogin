@@ -4,6 +4,7 @@ import type { ModuleSnapshotItem } from "../../../packages/shared/src/module-pla
 import { api } from "./dashboard-api";
 import type { DashboardSetupProps } from "./module-contributions.ts";
 import { ModuleRoot } from "./module-slots";
+import { PairKioskDialog } from "./pair-kiosk-dialog";
 import { AddMemberForm } from "./roster-page";
 import { RosterImportPanel } from "./roster-import-panel";
 import { RouteLink } from "./router";
@@ -11,11 +12,14 @@ import type { RosterMember } from "./user-settings";
 
 type SetupStep = ModuleSnapshotItem["setup"]["steps"][number] & { valid: boolean; outcome: "completed" | "skipped" | null; completedAt: string | null };
 type SetupState = { moduleId: string; generation: number; ready: boolean; phase: string; version: number; steps: SetupStep[] };
-// The Roster card is dashboard-only: the server records no outcome for it, and Verified attendance input already requires an active member.
+// The Roster card is dashboard-only: the server records no outcome for it.
 type SetupCard = SetupStep & { local?: true };
 type Rules = { lateScanMinutes: number; attendanceReportingStartsOn: string | null; anomalyLateThresholdMinutes: number; anomalyEarlyThresholdMinutes: number };
 type Meeting = { id: string; title: string; startsAt: string; endsAt: string };
-type InputState = { simulator: { name: string; active: number; online: number } | null; members: { id: string; label: string }[]; meetings: Meeting[] };
+type SetupKiosk = { id: string; name: string; kind: "pi" | "web"; lastSeenAt: string | null };
+type InputState = { kiosks: SetupKiosk[] };
+// While the Verified attendance input card waits for a newly paired kiosk to check in.
+const kioskCheckInPollMs = 5000;
 
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
@@ -29,11 +33,11 @@ function readState(value: unknown, module: ModuleSnapshotItem): SetupState {
   return { moduleId: module.id, generation: module.generation, ready: value.ready, phase: "enabled", version: module.setup.version, steps };
 }
 
-/** Setup cards in order, with the dashboard-only Roster card before Verified attendance input. A verified check-in already proves an active member exists. */
+/** Setup cards in order, with the dashboard-only Roster card before Verified attendance input. An unreadable roster does not block setup. */
 function setupCards(state: SetupState, activeMembers: number | undefined): SetupCard[] {
   return state.steps.flatMap((step): SetupCard[] => {
     if (step.id !== "input") return [step];
-    const valid = Boolean(activeMembers) || step.valid;
+    const valid = activeMembers === undefined || activeMembers > 0;
     return [{ id: "roster", label: "Roster", required: true, valid, outcome: valid ? "completed" : null, completedAt: null, local: true }, step];
   });
 }
@@ -90,11 +94,9 @@ export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSe
   const [createAnotherMeeting, setCreateAnotherMeeting] = useState(false);
   const [input, setInput] = useState<InputState>();
   const [roster, setRoster] = useState<RosterMember[]>();
-  const [simulatorName, setSimulatorName] = useState("Browser simulator");
-  const [memberId, setMemberId] = useState("");
-  const [meetingId, setMeetingId] = useState("");
+  const [pairing, setPairing] = useState(false);
 
-  // An unreadable roster leaves the Roster card to the server-verified check-in instead of blocking setup.
+  // An unreadable roster leaves the Roster card complete instead of blocking setup; Roster is available after setup.
   const readRoster = () => api<{ members: RosterMember[] }>("/admin/members").then((result) => result.members, () => undefined);
   const activeMembers = roster?.filter((member) => member.active).length;
 
@@ -115,16 +117,32 @@ export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSe
   const step = cards[current];
 
   function loadInput() {
-    return api<InputState>("/module-setup/attendance/input").then((result) => { setInput(result); setMemberId((value) => result.members.some((item) => item.id === value) ? value : result.members[0]?.id ?? ""); setMeetingId(result.meetings[0]?.id ?? ""); }).catch((error: Error) => setNotice(error.message));
+    return api<InputState>("/module-setup/attendance/input").then((result) => { setInput(result); return result; }, (error: Error) => { setNotice(error.message); return undefined; });
+  }
+
+  /** Rereads the kiosks and, once one has checked in, the setup state, so the card turns Ready without a reload. */
+  async function refreshInput() {
+    const result = await loadInput();
+    if (!result?.kiosks.some((kiosk) => kiosk.lastSeenAt)) return;
+    try { setState(readState(await api<unknown>(`/admin/modules/${encodeURIComponent(module.id)}/setup`), module)); }
+    catch (error) { setNotice((error as Error).message); }
   }
 
   useEffect(() => {
     if (!step) return;
     setNotice("");
     if (step.id === "rules") void api<{ values: Rules }>("/module-setup/attendance/rules").then((result) => { setRules(result.values); setStoredRules(result.values); }).catch((error: Error) => setNotice(error.message));
-    if (step.id === "meeting") void api<{ meetings: Meeting[]; timeZone: string }>("/module-setup/attendance/meeting").then((result) => { if (!result.timeZone) throw new Error("The organization time zone is unavailable. Reload setup."); setMeeting((current) => current ?? defaultMeeting(result.timeZone)); setMeetings(result.meetings); setMeetingId(result.meetings[0]?.id ?? ""); setCreateAnotherMeeting(false); }).catch((error: Error) => setNotice(error.message));
+    if (step.id === "meeting") void api<{ meetings: Meeting[]; timeZone: string }>("/module-setup/attendance/meeting").then((result) => { if (!result.timeZone) throw new Error("The organization time zone is unavailable. Reload setup."); setMeeting((current) => current ?? defaultMeeting(result.timeZone)); setMeetings(result.meetings); setCreateAnotherMeeting(false); }).catch((error: Error) => setNotice(error.message));
     if (step.id === "input") void loadInput();
   }, [step?.id]);
+
+  // A kiosk checks in within seconds of pairing; keep looking while this card waits for one.
+  const waitingForKiosk = step?.id === "input" && !step.valid;
+  useEffect(() => {
+    if (!waitingForKiosk) return;
+    const timer = window.setInterval(() => void refreshInput(), kioskCheckInPollMs);
+    return () => window.clearInterval(timer);
+  }, [waitingForKiosk]);
 
   const reportRequiredComplete = useContext(RequiredStepsComplete);
   useEffect(() => { reportRequiredComplete?.(Boolean(state?.ready)); }, [state?.ready]);
@@ -140,19 +158,18 @@ export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSe
         setCurrent((index) => index + 1);
         return;
       }
+      if (step.id === "input" && !step.valid) {
+        const kiosks = (await loadInput())?.kiosks ?? [];
+        if (!kiosks.some((kiosk) => kiosk.lastSeenAt)) throw new Error(kiosks.length ? "Wait for the paired kiosk to check in, then continue. A kiosk checks in within a minute of pairing." : "Pair a kiosk with Add kiosk, then continue once it checks in.");
+      }
       if (step.id === "rules") {
         if (!rules || !storedRules) throw new Error("Attendance rules are still loading.");
         await api("/module-setup/attendance/rules", { method: "PUT", body: JSON.stringify({ values: rules, expected: storedRules }) });
         setStoredRules(rules);
       } else if (step.id === "meeting" && (!meetings.length || createAnotherMeeting)) {
         if (!meeting) throw new Error("Meeting defaults are still loading. Try again.");
-        const created = await api<{ id: string }>("/module-setup/attendance/meeting", { method: "POST", body: JSON.stringify({ title: meeting.title, startsAt: meetingInstant(meeting.startsAt, meeting.originalStartsAt), endsAt: meetingInstant(meeting.endsAt, meeting.originalEndsAt), required: meeting.required }) });
-        setMeetingId(created.id);
+        await api<{ id: string }>("/module-setup/attendance/meeting", { method: "POST", body: JSON.stringify({ title: meeting.title, startsAt: meetingInstant(meeting.startsAt, meeting.originalStartsAt), endsAt: meetingInstant(meeting.endsAt, meeting.originalEndsAt), required: meeting.required }) });
         setCreateAnotherMeeting(false);
-      } else if (step.id === "input" && !step.valid) {
-        if (!memberId || !meetingId) throw new Error("Choose an active roster member and a meeting that is happening now.");
-        await api("/module-setup/attendance/input", { method: "POST", body: JSON.stringify({ action: "start", name: simulatorName }) });
-        await api("/module-setup/attendance/input", { method: "POST", body: JSON.stringify({ action: "scan", memberId, meetingId }) });
       }
       const outcome = step.required || step.valid ? "completed" : "skipped";
       const next = readState(await api<unknown>(`/admin/modules/${encodeURIComponent(module.id)}/setup`, { method: "PUT", body: JSON.stringify({ generation: module.generation, stepId: step.id, outcome }) }), module);
@@ -168,7 +185,6 @@ export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSe
   const required = cards.filter((item) => item.required);
   const requiredDone = required.filter((item) => item.valid && item.outcome === "completed").length;
   const badge = step ? stepBadge(step) : undefined;
-  const rosterIndex = cards.findIndex((item) => item.id === "roster");
   return <section className="module-onboarding" aria-labelledby="module-setup-title">
     <div className="page-intro"><p className="kicker">Attendance module</p><h1 id="module-setup-title">Attendance setup</h1><p>Complete one card at a time. Optional integrations can be configured now or skipped and added later.</p></div>
     {notice && <p className="ui-status settings-notice" data-tone="error" role="alert">{notice}</p>}
@@ -180,18 +196,19 @@ export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSe
         {step.id === "rules" && <RulesStep value={rules} onChange={setRules} />}
         {step.id === "meeting" && <MeetingStep meetings={meetings} value={meeting} onChange={setMeeting} createAnother={createAnotherMeeting} onCreateAnother={setCreateAnotherMeeting} />}
         {step.id === "roster" && <RosterStep members={roster} onChanged={rosterChanged} />}
-        {step.id === "input" && <InputStep state={input} simulatorName={simulatorName} setSimulatorName={setSimulatorName} memberId={memberId} setMemberId={setMemberId} meetingId={meetingId} setMeetingId={setMeetingId} onOpenRoster={() => setCurrent(rosterIndex)} onOpenMeeting={() => setCurrent(cards.findIndex((item) => item.id === "meeting"))} valid={step.valid} />}
+        {step.id === "input" && <InputStep state={input} valid={step.valid} setupComplete={state.ready} onAddKiosk={() => setPairing(true)} onRefresh={() => void refreshInput()} navigate={navigate} />}
         {step.id === "calendar" && <IntegrationStep provider="Google Calendar" valid={step.valid} navigate={navigate} />}
         {step.id === "discord" && <IntegrationStep provider="Discord" valid={step.valid} navigate={navigate} />}
         <div className="module-actions"><button type="button" disabled={busy || current === 0} onClick={() => setCurrent((index) => index - 1)}>Back</button><button className="primary-button" type="button" disabled={busy || step.id === "meeting" && !meeting || step.local && !step.valid} onClick={() => void saveCurrent()}>{busy ? "Saving..." : step.local ? "Continue" : !step.required && !step.valid ? "Set up later and continue" : current === cards.length - 1 ? "Finish Attendance setup" : "Save and continue"}</button></div>
       </article>
     </>}
     {!state && !busy && <button type="button" onClick={() => void load()}>Try again</button>}
+    {pairing && <PairKioskDialog onClose={() => setPairing(false)} onPaired={refreshInput} />}
   </section>;
 }
 
 const nextSteps: { href: string; label: string; detail: string }[] = [
-  { href: "/kiosks", label: "Pair a kiosk", detail: "Install the kiosk software on a Raspberry Pi so members can check in on their own. Open Kiosks and choose Add kiosk." },
+  { href: "/kiosks", label: "Add more kiosks", detail: "Pair another Raspberry Pi or web kiosk so members can check in at more places. Open Kiosks and choose Add kiosk." },
   { href: "/roster", label: "Add or import members", detail: "Add the rest of your members one at a time, or import a CSV file, in Roster." },
   { href: "/settings/access", label: "Invite other Admins", detail: "Give other staff their own dashboard accounts in Settings > Access." },
   { href: "/settings/integrations", label: "Connect Google Calendar or Discord", detail: "Import meetings and share attendance updates from Settings > Integrations." },
@@ -233,7 +250,7 @@ function RosterStep({ members, onChanged }: { members?: RosterMember[]; onChange
   const active = members?.filter((member) => member.active) ?? [];
   const importButton = <button type="button" onClick={() => setImporting(true)}>Import CSV</button>;
   return <div className="module-setup-roster">
-    <p>Add at least one person to the roster so the next step can record a test check-in. You can add everyone else later in Roster.</p>
+    <p>Add at least one person to the roster so they can check in at the kiosk you pair next. You can add everyone else later in Roster.</p>
     {added && <p className="ui-status" data-tone="success" role="status">{added}</p>}
     {active.length > 0 && <p>{active.length} active member{active.length === 1 ? " is" : "s are"} on the roster{active.length <= 3 ? `: ${active.map((member) => `${member.firstName} ${member.lastName}`).join(", ")}` : ""}.</p>}
     {active.length > 0 && !adding ? <div className="module-actions"><button type="button" onClick={() => setAdding(true)}>Add another member</button>{importButton}</div>
@@ -242,11 +259,18 @@ function RosterStep({ members, onChanged }: { members?: RosterMember[]; onChange
   </div>;
 }
 
-function InputStep({ state, simulatorName, setSimulatorName, memberId, setMemberId, meetingId, setMeetingId, onOpenRoster, onOpenMeeting, valid }: { state?: InputState; simulatorName: string; setSimulatorName: (value: string) => void; memberId: string; setMemberId: (value: string) => void; meetingId: string; setMeetingId: (value: string) => void; onOpenRoster: () => void; onOpenMeeting: () => void; valid: boolean }) {
-  const kiosks = <p className="field-help">Using a physical kiosk? Pair it from Kiosks once setup is finished. A kiosk can only connect after Attendance is ready, so this step uses the browser simulator.</p>;
-  if (valid) return <div><p>A kiosk or browser simulator check-in has been verified. Continue to optional integrations.</p>{kiosks}</div>;
-  if (!state) return <p role="status">Loading browser simulator choices...</p>;
-  return <div><p>Record a test check-in with the browser simulator. It uses the real attendance rules and server time. It does not test or store fingerprint data.</p><label htmlFor="setup-simulator-name">Simulator name<input id="setup-simulator-name" maxLength={80} value={simulatorName} onChange={(event) => setSimulatorName(event.target.value)} /></label>{state.members.length ? <label htmlFor="setup-input-member">Roster member<select id="setup-input-member" value={memberId} onChange={(event) => setMemberId(event.target.value)}>{state.members.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label> : <p className="warning-callout">No active members yet. Add one in the <button type="button" className="link-button" onClick={onOpenRoster}>Roster step</button>.</p>}{state.meetings.length ? <label htmlFor="setup-input-meeting">Meeting happening now<select id="setup-input-meeting" value={meetingId} onChange={(event) => setMeetingId(event.target.value)}>{state.meetings.map((item) => <option key={item.id} value={item.id}>{item.title} - {meetingTime(item.startsAt)}</option>)}</select></label> : <p className="warning-callout">No meetings yet. Create one in the <button type="button" className="link-button" onClick={onOpenMeeting}>First meeting step</button>.</p>}{kiosks}</div>;
+const lastSeen = (value: string) => new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+
+/** Verified attendance input: pair a kiosk and wait for it to check in. Kiosks opens once setup is finished, so this card pairs with the same Add kiosk dialog. */
+function InputStep({ state, valid, setupComplete, onAddKiosk, onRefresh, navigate }: { state?: InputState; valid: boolean; setupComplete: boolean; onAddKiosk: () => void; onRefresh: () => void; navigate: (path: string) => void }) {
+  const kiosks = state?.kiosks ?? [];
+  const waiting = kiosks.filter((kiosk) => !kiosk.lastSeenAt);
+  return <div className="module-setup-input">
+    <p>Pair a kiosk: a Raspberry Pi with a fingerprint reader, or a touchscreen laptop or tablet as a web kiosk. Add kiosk here opens the same dialog as Kiosks &gt; Add kiosk. This step is complete once the kiosk checks in, usually within a minute of pairing.</p>
+    {!state ? <p role="status">Loading paired kiosks...</p> : kiosks.length ? <ul className="compact-list" aria-label="Paired kiosks">{kiosks.map((kiosk) => <li key={kiosk.id}><strong>{kiosk.name}</strong> ({kiosk.kind === "web" ? "web kiosk" : "Raspberry Pi"}) - {kiosk.lastSeenAt ? `checked in ${lastSeen(kiosk.lastSeenAt)}` : "waiting for its first check-in"}</li>)}</ul> : <p>No kiosk is paired yet.</p>}
+    {valid ? <p className="ui-status" data-tone="success" role="status">A paired kiosk has checked in. Continue to the optional integrations.</p> : waiting.length > 0 && <p className="field-help" role="status">Waiting for {waiting.map((kiosk) => kiosk.name).join(", ")} to check in. This card updates on its own.</p>}
+    <div className="module-actions"><button type="button" className={valid ? undefined : "primary-button"} onClick={onAddKiosk}>Add kiosk</button>{!valid && state && <button type="button" onClick={onRefresh}>Check again</button>}{setupComplete && <button type="button" className="quiet-button" onClick={() => navigate("/kiosks")}>Open Kiosks</button>}</div>
+  </div>;
 }
 
 function IntegrationStep({ provider, valid, navigate }: { provider: string; valid: boolean; navigate: (path: string) => void }) {

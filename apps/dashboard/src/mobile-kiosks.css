@@ -19,15 +19,11 @@
 .app .kiosk-device-row button.kiosk-edit-button { display: inline-flex; justify-content: center; align-items: center; padding: 0; min-height: var(--control-min-block-size); }
 .app .kiosk-device-row button.kiosk-edit-button svg { display: block; margin: 0; flex: none; }
 .fingerprint-sharing-page > .settings-card { padding: var(--space-4); }
-.simulator-page .simulator-about { font-size: var(--text-small); }
-.simulator-about > summary { min-height: var(--control-min-block-size); padding: var(--space-3); cursor: pointer; }
 @media (max-width: 760px) {
   .kiosk-diagnostics dt, .kiosk-diagnostics dd { font-size: var(--text-small); }
   .kiosk-diagnostics dd { overflow-wrap: anywhere; }
   .kiosk-card-actions { flex-direction: column; align-items: stretch; }
   .app .kiosk-card-actions > .kiosk-manage-link, .app .kiosk-card-actions .kiosk-enrollment-button, .kiosk-update-action > button { width: 100%; justify-content: center; }
-  .simulator-page .simulator-controls .primary-button { justify-self: stretch; width: 100%; margin-top: 0; }
-  .simulator-page .simulator-controls { gap: var(--space-4); }
 }
 
 .fingerprint-sharing-page .kiosk-actions { display: flex; align-items: center; flex-wrap: wrap; }

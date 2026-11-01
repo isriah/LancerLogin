@@ -239,12 +239,23 @@ export function snapshot(path) {
   return { tables, counts, records };
 }
 
+/**
+ * Tables a Core migration drops or prunes on purpose. 0092 drops the browser simulator's sessions and deletes its pairing
+ * codes and its page's walkthrough progress; a rehearsal from a release with the simulator sees them go.
+ */
+export const expectedRemovals = Object.freeze({
+  simulated_kiosk_sessions: "0092 drops the browser simulator",
+  pairing_codes: "0092 deletes browser simulator codes",
+  user_walkthroughs: "0092 deletes Simulator page walkthrough progress",
+});
+
 /** Rows present before the update that are missing or changed afterwards, and tables whose row count fell. */
-export function compareSnapshots(before, after, { allowChanged = {} } = {}) {
+export function compareSnapshots(before, after, { allowChanged = {}, allowRemoved = {} } = {}) {
   const problems = []; const notes = [];
   for (const table of before.tables) {
-    if (!after.tables.includes(table)) { problems.push(`table ${table} no longer exists`); continue; }
-    if (after.counts[table] < before.counts[table]) problems.push(`${table}: ${before.counts[table]} rows before, ${after.counts[table]} after`);
+    if (!after.tables.includes(table)) { if (allowRemoved[table]) notes.push(`table ${table} removed as expected (${allowRemoved[table]})`); else problems.push(`table ${table} no longer exists`); continue; }
+    if (after.counts[table] < before.counts[table] && allowRemoved[table]) notes.push(`${table}: ${before.counts[table] - after.counts[table]} rows removed as expected (${allowRemoved[table]})`);
+    else if (after.counts[table] < before.counts[table]) problems.push(`${table}: ${before.counts[table]} rows before, ${after.counts[table]} after`);
     else if (after.counts[table] > before.counts[table]) notes.push(`${table}: +${after.counts[table] - before.counts[table]} rows`);
   }
   for (const table of after.tables) if (!before.tables.includes(table)) notes.push(`new table ${table} (${after.counts[table]} rows)`);
@@ -351,6 +362,25 @@ async function completeSetupStep(api, moduleId, stepId) {
   return api.ok("PUT", `/admin/modules/${moduleId}/setup`, { generation, stepId, outcome: "completed" });
 }
 
+/**
+ * Attendance setup's Verified attendance input step. Releases with the browser simulator (before web kiosk phase 5) take
+ * a simulator check-in; later ones complete it once a paired kiosk has checked in, so a web kiosk pairs, reports in once
+ * and is retired after setup. The setup route's GET tells them apart: only the simulator one lists members.
+ */
+export async function verifyAttendanceInput(api, seeded) {
+  const input = await api.ok("GET", "/module-setup/attendance/input");
+  if (Array.isArray(input?.members)) {
+    await api.ok("POST", "/module-setup/attendance/input", { action: "start", name: "Rehearsal simulator" });
+    await api.ok("POST", "/module-setup/attendance/input", { action: "scan", memberId: "R-1001", meetingId: seeded.currentMeeting });
+    return "simulator";
+  }
+  const pairing = await api.ok("POST", "/admin/pairing-codes", { kioskName: "Rehearsal setup kiosk", kind: "web" });
+  const kiosk = await api.ok("POST", "/kiosk/pair", { code: pairing.code }, { cookie: null, dashboard: false });
+  await api.ok("POST", "/kiosk/heartbeat", { readerOnline: false, releaseVersion: "rehearsal" }, { cookie: null, dashboard: false, headers: { authorization: `Bearer ${kiosk.kioskToken}` } });
+  seeded.setupKioskId = kiosk.kioskId;
+  return "kiosk";
+}
+
 /** Seed through the FROM Worker's API, as an Administrator and a kiosk would. Returns what later checks look for. */
 export async function seedInstallation(api, { setupCode, password, step }) {
   const seeded = { username: "rehearsal-admin" };
@@ -375,9 +405,9 @@ export async function seedInstallation(api, { setupCode, password, step }) {
     const window = currentMeetingWindow();
     seeded.currentMeeting = (await api.ok("POST", "/module-setup/attendance/meeting", { title: "Rehearsal build session", ...window, required: true })).id;
     await completeSetupStep(api, "attendance", "meeting");
-    await api.ok("POST", "/module-setup/attendance/input", { action: "start", name: "Rehearsal simulator" });
-    await api.ok("POST", "/module-setup/attendance/input", { action: "scan", memberId: "R-1001", meetingId: seeded.currentMeeting });
+    await verifyAttendanceInput(api, seeded);
     await completeSetupStep(api, "attendance", "input");
+    if (seeded.setupKioskId) await api.ok("DELETE", `/admin/kiosks/${encodeURIComponent(seeded.setupKioskId)}`, { confirmation: "RETIRE KIOSK" });
   });
   await step("past meetings and attendance", async () => {
     // Since v2.1.0-beta.1 a member's attendance starts the day they join the roster, so the synthetic members start a
@@ -676,7 +706,7 @@ export async function rehearse(options) {
     report.check("same run again is a duplicate without mutation", duplicate?.duplicate === true, JSON.stringify(duplicate));
 
     // Data preserved by the migrations alone.
-    const migrationDiff = compareSnapshots(before, afterMigrations);
+    const migrationDiff = compareSnapshots(before, afterMigrations, { allowRemoved: expectedRemovals });
     report.check("migrations preserve every table and key record", migrationDiff.problems.length === 0, migrationDiff.problems.join("; ") || migrationDiff.notes.join("; "));
     const newMigrations = afterMigrations.records.d1_migrations.rows.length - before.records.d1_migrations.rows.length;
     report.notes.push(`Core migrations applied by the update: ${newMigrations} (${afterMigrations.records.d1_migrations.rows.filter((row) => !before.records.d1_migrations.rows.includes(row)).map((row) => JSON.parse(row)[0]).join(", ") || "none"}).`);
@@ -687,7 +717,7 @@ export async function rehearse(options) {
       const health = await api.ok("GET", "/health", undefined, { dashboard: false });
       report.check("TO health and module list", health.ok === true && health.releaseVersion === targetVersion && ["attendance", "hour-tracking", "carpool"].every((id) => health.modules.includes(id)), `modules ${health.modules.join(", ")}`);
       const afterStart = snapshot(databasePath);
-      const startDiff = compareSnapshots(before, afterStart);
+      const startDiff = compareSnapshots(before, afterStart, { allowRemoved: expectedRemovals });
       report.check("data preserved after the new Worker started", startDiff.problems.length === 0, startDiff.problems.join("; ") || startDiff.notes.join("; "));
       const catalog = query(databasePath, "SELECT module_id, origin, source_commit, installed FROM platform_module_catalog ORDER BY module_id");
       const carpoolPin = selection.modules.find((module) => module.id === "carpool")?.commit;

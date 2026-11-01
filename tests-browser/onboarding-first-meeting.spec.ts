@@ -34,7 +34,8 @@ async function attendanceSetup(page: Page, existingMeeting = false): Promise<Set
       };
       outcomes[body.stepId] = body.outcome;
       if (body.stepId === "meeting" && meetings.length) valid.add("meeting");
-      if (body.stepId === "input" && requests.some((item) => item.path === "input:scan")) valid.add("input");
+      // A web kiosk paired earlier has checked in, so the server accepts Verified attendance input.
+      if (body.stepId === "input") valid.add("input");
       state = attendanceSetupState(outcomes, [...valid]);
       if (body.stepId === "discord") snapshotReady = true;
     }
@@ -60,21 +61,8 @@ async function attendanceSetup(page: Page, existingMeeting = false): Promise<Set
     await route.fulfill({ status: 201, json: { id: meeting.id } });
   });
   await page.route("**/module-setup/attendance/input", async (route) => {
-    if (route.request().method() === "GET") {
-      return route.fulfill({
-        json: {
-          simulator: null,
-          members: [{ id: "TRANS001", label: "Rehearsal One" }],
-          meetings,
-        },
-      });
-    }
-    const body = route.request().postDataJSON() as Record<string, unknown>;
-    requests.push({ path: `input:${String(body.action)}`, body });
-    await route.fulfill({
-      status: body.action === "scan" ? 202 : 200,
-      json: { accepted: true, action: "check_in" },
-    });
+    requests.push({ path: `input:${route.request().method()}`, body: {} });
+    await route.fulfill({ json: { kiosks: [{ id: "kiosk-1", name: "Test web kiosk A", kind: "web", lastSeenAt: "2026-10-25T00:00:00.000Z" }] } });
   });
   await page.goto("/dashboard");
   return {
@@ -105,7 +93,7 @@ async function finishOptionalSteps(page: Page) {
 }
 
 for (const { viewport, theme } of pairedViews) {
-    test(`empty Attendance setup creates a same-day meeting and verifies browser input at ${viewport.width} in ${theme}`, async ({
+    test(`empty Attendance setup creates a same-day meeting and verifies a paired kiosk at ${viewport.width} in ${theme}`, async ({
       page,
     }) => {
       await page.clock.setFixedTime(new Date(viewport.width === 390 ? "2026-10-25T00:02:00.000Z" : "2026-10-25T23:59:59.900Z"));
@@ -121,7 +109,7 @@ for (const { viewport, theme } of pairedViews) {
       await page.getByRole("button", { name: "Save and continue" }).click();
       await continuePastRoster(page);
       await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();
-      await expect(page.getByText("It does not test or store fingerprint data.")).toBeVisible();
+      await expect(page.getByRole("list", { name: "Paired kiosks" })).toContainText("Test web kiosk A (web kiosk) - checked in");
       await page.getByRole("button", { name: "Save and continue" }).click();
       await finishOptionalSteps(page);
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard", exact: true })).toBeVisible();
@@ -130,10 +118,8 @@ for (const { viewport, theme } of pairedViews) {
       const now = await page.evaluate(() => Date.now());
       expect(Date.parse(String(meeting.startsAt))).toBeLessThanOrEqual(now);
       expect(Date.parse(String(meeting.endsAt))).toBeGreaterThanOrEqual(now);
-      expect(fixture.requests.filter((item) => item.path.startsWith("input:")).map((item) => item.path)).toEqual([
-        "input:start",
-        "input:scan",
-      ]);
+      // Setup only reads the paired kiosks; it records no check-in of its own.
+      expect(new Set(fixture.requests.filter((item) => item.path.startsWith("input:")).map((item) => item.path))).toEqual(new Set(["input:GET"]));
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
       ).toBe(true);

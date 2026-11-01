@@ -1,15 +1,18 @@
 import { inactiveAt, inactivePeriodsUpdateSql, validateInactivePeriods } from "./member-participation.ts";
 import { meetingDeletion, restoreMeetingDeletion } from "./meeting-deletion.ts";
-import { initialWalkthroughProgress, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough.ts";
+import { initialWalkthroughProgress, removedWalkthroughPages, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough.ts";
 import { createSessionCodec, createSignedStateCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
 import { authRateLimits, bootstrapClaimKey, clearFailedLogins, consumeAuthRateLimit, lockActive, pruneAuthProtection, recordFailedLogin, setupResetCookie, setupResetGrantKey, setupResetGrantMs } from "./auth-protection.ts";
 import { decryptIntegration, encryptIntegration, moduleCredentials } from "./integration-crypto.ts";
 import { moduleEmailIdempotencyKey, moduleEmailMessage, resendModuleEmailPayload } from "./module-email.ts";
+import { clearFirstCache, firstDataService, firstIntegrationStatus, firstVisitorKey, removeFirstCredential, saveFirstCredential, type FirstDataDeps } from "./first-data.ts";
 import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance, updateRepositoryFiles, recheckUpdateSetup } from "./web-updates.ts";
 import { commitPluginChange, currentSelectionSha, freshUntil, lookupPluginRelease, pluginManagementState, requiredModuleMigrations, requireNoModuleMigration, reviewPluginChange, selectionCredentialState } from "./plugin-selection.ts";
 import { discoveryForChannel, releaseRequestHeaders, resolveOfficialRelease } from "./release-discovery.ts";
 import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
+import { checkScanPin, dashboardKioskPinRequests, dashboardMemberPin, decidePinRequest, kioskPinRoute, pinLockoutSettings, readPinLockout, rosterPins } from "./member-pins.ts";
 import { kioskReleaseTransition } from "../../../packages/shared/src/release-policy.mjs";
+import { formatPairingCode, generateWebPairingCode, normalizePairingCode, validWebPairingCode } from "../../../packages/shared/src/pairing-code.mjs";
 import { resolveDefaultTheme } from "../../../packages/shared/src/product.ts";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
@@ -28,8 +31,8 @@ import { acceptedScanStatements, dismissReenrollSuggestion, findImpossibleScan, 
 import { readKioskEnrollment, startKioskEnrollment, selectEnrollmentMember, cancelKioskEnrollment, progressKioskEnrollment } from "./kiosk-enrollment.ts";
 import { fingerprintResetRoute } from "./fingerprint-reset.ts";
 import { bundledModuleRegistry } from "../../../packages/shared/src/module-platform.ts";
-import { ModuleRegistrationIncomplete, configureModulePlatform, readModuleAssignments, readModulePlatformSnapshot, readModuleSetup, requireModuleService, requireModuleSetup, requireModuleWorkspace, setModuleAssignments, updateModuleSetup } from "./module-platform.ts";
-import { captureModuleServiceDatabase, captureModuleSetupDatabase, captureModuleWorkspaceDatabase } from "./module-database-scope.ts";
+import { ModuleRegistrationIncomplete, configureModulePlatform, readModuleAssignments, readModulePlatformSnapshot, readModuleSetup, requireModuleEnabled, requireModuleService, requireModuleSetup, requireModuleWorkspace, setModuleAssignments, updateModuleSetup } from "./module-platform.ts";
+import { captureModuleEnabledDatabase, captureModuleServiceDatabase, captureModuleSetupDatabase, captureModuleWorkspaceDatabase } from "./module-database-scope.ts";
 import { attendanceSetupRoute } from "./attendance-module-setup.ts";
 import { confirmTwoWay, disableTwoWay, forgetTwoWayStatements, hasTwoWayLabels, isTwoWayPaused, pauseRestoredTwoWayStatements, pollTwoWayLabels, previewTwoWay, sortRolesByName, twoWayPausedMessage, twoWayRestorePaused, unmatchedRoleMembers, type TwoWayDependencies, type TwoWayServer } from "./discord-label-two-way.ts";
 import { dispatchModuleDiscordCommand } from "./module-discord.ts";
@@ -68,6 +71,11 @@ type MeetingWeightCategoryInput = { name?: string; weight?: number; minimumDurat
 type KioskCommandType = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest" | "erase_unlinked_fingerprints";
 type KioskAuthenticationMethod = "fingerprint" | "rfid" | "nfc" | "member_id" | "qr";
 const kioskAuthenticationMethods = new Set<KioskAuthenticationMethod>(["fingerprint", "rfid", "nfc", "member_id", "qr"]);
+type KioskKind = "pi" | "web";
+type KioskMemberLookup = "entry" | "search";
+const kioskKinds = new Set<unknown>(["pi", "web"]); const kioskMemberLookups = new Set<unknown>(["entry", "search"]);
+// A kiosk that has not checked in for this long can be retired and replaced under its name from Add kiosk.
+const KIOSK_REPLACEABLE_AFTER_MS = 10 * 60_000;
 async function latestCompatibleKioskRelease(env: Env, channel: "stable" | "beta") {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 4_000);
   try {
@@ -142,6 +150,10 @@ function providerConfiguration(value: Record<string, string>, env: Env): Provide
   if (env.moduleProviderAuthority) Object.defineProperty(config, moduleProviderAuthority, { value: env.moduleProviderAuthority });
   return config;
 }
+// Attendance setup's Verified attendance input step is pairing a kiosk, so while Attendance is enabled, before its setup is
+// finished, an Admin can create a pairing code and a kiosk can pair and check in. Everything else a kiosk or the Kiosks
+// page does waits for setup to finish.
+const attendanceSetupPairingPaths: ReadonlySet<string> = new Set(["/admin/pairing-codes", "/kiosk/pair", "/kiosk/heartbeat"]);
 function moduleScopedEnvironment(env: Env, db: D1Database): Env {
   return { ...env, DB: db, moduleProviderAuthority: async () => { await db.prepare("SELECT 1").first(); } };
 }
@@ -845,41 +857,73 @@ async function memberHistory(request: Request, env: Env, externalId: string): Pr
 async function pairingCodes(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") { const active = await db.prepare("SELECT id, expires_at AS expiresAt FROM pairing_codes WHERE installation_id = 'primary' AND redeemed_at IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT 1").bind(new Date().toISOString()).first(); return response({ active }); }
-  const input = await parseJson<{ kioskName?: string; purpose?: "hardware" | "simulator" }>(request); const kioskName = input.kioskName?.trim(); const purpose = input.purpose ?? "hardware";
+  const input = await parseJson<{ kioskName?: string; purpose?: "hardware"; kind?: KioskKind; replaceKioskId?: string }>(request); const kioskName = input.kioskName?.trim(); const purpose = input.purpose ?? "hardware"; const kind = input.kind ?? "pi";
   if (!kioskName || kioskName.length > 80) throw new HttpError(400, "Kiosk name is required and must be at most 80 characters");
-  if (!["hardware", "simulator"].includes(purpose)) throw new HttpError(400, "Pairing purpose must be hardware or simulator");
+  // The browser simulator is gone (migration 0092), so every code pairs a real kiosk.
+  if (purpose !== "hardware") throw new HttpError(400, "Pairing purpose must be hardware");
+  if (!kioskKinds.has(kind)) throw new HttpError(400, "Kiosk kind must be pi or web");
+  if (input.replaceKioskId !== undefined && (typeof input.replaceKioskId !== "string" || !input.replaceKioskId)) throw new HttpError(400, "Choose the kiosk to retire and replace");
+  const now = new Date(); const silentBefore = new Date(now.getTime() - KIOSK_REPLACEABLE_AFTER_MS).toISOString(); let replaced: { id: string; name: string } | undefined;
   if (purpose === "hardware") {
-    const duplicate = await db.prepare("SELECT id FROM kiosks WHERE installation_id = 'primary' AND active = 1 AND lower(name) = lower(?) LIMIT 1").bind(kioskName).first<{ id: string }>();
-    if (duplicate) throw new HttpError(409, "An active kiosk already uses that name. Choose a distinct device name.");
+    const duplicate = await db.prepare("SELECT id, name, last_seen_at AS lastSeenAt FROM kiosks WHERE installation_id = 'primary' AND active = 1 AND lower(name) = lower(?) LIMIT 1").bind(kioskName).first<{ id: string; name: string; lastSeenAt?: string | null }>();
+    // Only a kiosk that stopped checking in can be retired and replaced under its name.
+    const replaceable = Boolean(duplicate) && !(duplicate?.lastSeenAt && duplicate.lastSeenAt >= silentBefore);
+    if (input.replaceKioskId !== undefined) {
+      if (!duplicate || duplicate.id !== input.replaceKioskId || !replaceable) throw new HttpError(409, "Only an active kiosk with this name that has not checked in for 10 minutes can be retired and replaced.", undefined, "kiosk_not_replaceable");
+      replaced = { id: duplicate.id, name: duplicate.name };
+    } else if (duplicate) throw new HttpError(409, "An active kiosk already uses that name. Choose a distinct device name.", undefined, "kiosk_name_in_use", replaceable ? { replaceableKioskId: duplicate.id } : undefined);
   }
-  const code = randomToken(9).slice(0, 12).toUpperCase(); const id = crypto.randomUUID(); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
-  await db.batch([
-    db.prepare("DELETE FROM pairing_codes WHERE installation_id = 'primary' AND redeemed_at IS NULL AND purpose = ?").bind(purpose),
-    db.prepare("INSERT INTO pairing_codes (id, installation_id, code_hash, expires_at, created_by, created_at, purpose) VALUES (?, 'primary', ?, ?, ?, ?, ?)").bind(id, await sha256(code), expiresAt, principal.userId, now.toISOString(), purpose),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'pairing_code.created', 'pairing_code', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ kioskName, purpose }), now.toISOString()),
+  const code = kind === "web" ? generateWebPairingCode((count) => crypto.getRandomValues(new Uint8Array(count))) : randomToken(9).slice(0, 12).toUpperCase(); const id = crypto.randomUUID(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
+  // A replacement retires the old kiosk in the same batch; if it checked in meanwhile, nothing is written.
+  const unlessStillActive = "(? IS NULL OR NOT EXISTS (SELECT 1 FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1))"; const replacedId = replaced?.id ?? null;
+  const results = await db.batch([
+    ...(replaced ? retireKioskStatements(db, principal, replaced, "kiosk.replaced", { silentBefore, metadata: { pairingCodeId: id } }) : []),
+    db.prepare(`DELETE FROM pairing_codes WHERE installation_id = 'primary' AND redeemed_at IS NULL AND purpose = ? AND kiosk_kind = ? AND ${unlessStillActive}`).bind(purpose, kind, replacedId, replacedId),
+    db.prepare(`INSERT INTO pairing_codes (id, installation_id, code_hash, expires_at, created_by, created_at, purpose, kiosk_kind, kiosk_name) SELECT ?, 'primary', ?, ?, ?, ?, ?, ?, ? WHERE ${unlessStillActive}`).bind(id, await sha256(code), expiresAt, principal.userId, now.toISOString(), purpose, kind, kind === "web" ? kioskName : null, replacedId, replacedId),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, 'pairing_code.created', 'pairing_code', ?, ?, ? WHERE EXISTS (SELECT 1 FROM pairing_codes WHERE id = ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ kioskName, purpose, kind, ...(replaced ? { replacedKioskId: replaced.id } : {}) }), now.toISOString(), id),
   ]);
-  return response({ code, expiresAt, kioskName, workerApiUrl: new URL(request.url).origin }, 201);
+  if ((results[replaced ? 3 : 1]?.meta?.changes ?? 1) < 1) throw new HttpError(409, "That kiosk checked in again, so it was not replaced.", undefined, "kiosk_not_replaceable");
+  return response({ code, expiresAt, kioskName, kind, ...(kind === "web" ? { displayCode: formatPairingCode(code) } : { workerApiUrl: new URL(request.url).origin }) }, 201);
 }
+// A Pi sends { code, kioskName }; a web kiosk sends only { code } and takes the name the Admin gave its code.
 async function redeemPairingCode(request: Request, env: Env): Promise<Response> {
-  const db = requireDatabase(env); const input = await parseJson<{ code?: string; kioskName?: string }>(request); const code = input.code?.trim().toUpperCase(); const kioskName = input.kioskName?.trim();
-  if (!code || !kioskName || kioskName.length > 80) throw new HttpError(400, "Pairing code and kiosk name are required");
-  const now = new Date().toISOString(); const pairing = await db.prepare("SELECT id FROM pairing_codes WHERE installation_id = 'primary' AND purpose = 'hardware' AND code_hash = ? AND redeemed_at IS NULL AND expires_at > ?").bind(await sha256(code), now).first<{ id: string }>();
-  if (!pairing) throw new HttpError(401, "Pairing code is invalid or expired");
+  const db = requireDatabase(env); const input = await parseJson<{ code?: string; kioskName?: string }>(request); const kind: KioskKind = input.kioskName === undefined || input.kioskName === null ? "web" : "pi";
+  const code = kind === "web" ? normalizePairingCode(input.code) : typeof input.code === "string" ? input.code.trim().toUpperCase() : ""; const piName = kind === "pi" && typeof input.kioskName === "string" ? input.kioskName.trim() : "";
+  if (!code || kind === "pi" && (!piName || piName.length > 80)) throw new HttpError(400, "Pairing code and kiosk name are required");
+  if (kind === "web" && !validWebPairingCode(code)) throw new HttpError(401, "Pairing code is invalid or expired");
+  const now = new Date().toISOString(); const pairing = await db.prepare("SELECT id, kiosk_name AS kioskName FROM pairing_codes WHERE installation_id = 'primary' AND purpose = 'hardware' AND kiosk_kind = ? AND code_hash = ? AND redeemed_at IS NULL AND expires_at > ?").bind(kind, await sha256(code), now).first<{ id: string; kioskName?: string | null }>();
+  const kioskName = kind === "web" ? pairing?.kioskName?.trim() : piName;
+  if (!pairing || !kioskName) throw new HttpError(401, "Pairing code is invalid or expired");
   const kioskId = crypto.randomUUID(); const kioskToken = randomToken();
+  // A web kiosk starts on member ID entry; an Admin can switch it to member search on Manage kiosk.
   const results = await db.batch([
     db.prepare("UPDATE pairing_codes SET redeemed_at = ? WHERE id = ? AND redeemed_at IS NULL AND expires_at > ? AND NOT EXISTS (SELECT 1 FROM kiosks WHERE installation_id = 'primary' AND active = 1 AND lower(name) = lower(?))").bind(now, pairing.id, now, kioskName),
-    db.prepare("INSERT INTO kiosks (id, installation_id, pairing_code_id, name, token_hash, created_at, pairing_bound) SELECT ?, 'primary', ?, ?, ?, ?, 1 WHERE EXISTS (SELECT 1 FROM pairing_codes WHERE id = ? AND redeemed_at = ?) AND NOT EXISTS (SELECT 1 FROM kiosks WHERE installation_id = 'primary' AND pairing_code_id = ?)").bind(kioskId, pairing.id, kioskName, await sha256(kioskToken), now, pairing.id, now, pairing.id),
+    kind === "web"
+      ? db.prepare("INSERT INTO kiosks (id, installation_id, pairing_code_id, name, token_hash, created_at, pairing_bound, kind, configured_authentication_method, authentication_method, member_lookup) SELECT ?, 'primary', ?, ?, ?, ?, 1, 'web', 'member_id', 'member_id', 'entry' WHERE EXISTS (SELECT 1 FROM pairing_codes WHERE id = ? AND redeemed_at = ?) AND NOT EXISTS (SELECT 1 FROM kiosks WHERE installation_id = 'primary' AND pairing_code_id = ?)").bind(kioskId, pairing.id, kioskName, await sha256(kioskToken), now, pairing.id, now, pairing.id)
+      : db.prepare("INSERT INTO kiosks (id, installation_id, pairing_code_id, name, token_hash, created_at, pairing_bound) SELECT ?, 'primary', ?, ?, ?, ?, 1 WHERE EXISTS (SELECT 1 FROM pairing_codes WHERE id = ? AND redeemed_at = ?) AND NOT EXISTS (SELECT 1 FROM kiosks WHERE installation_id = 'primary' AND pairing_code_id = ?)").bind(kioskId, pairing.id, kioskName, await sha256(kioskToken), now, pairing.id, now, pairing.id),
     db.prepare("INSERT INTO audit_log (id, installation_id, action, target_type, target_id, created_at) SELECT ?, 'primary', 'kiosk.paired', 'kiosk', ?, ? WHERE EXISTS (SELECT 1 FROM kiosks WHERE id = ?)").bind(crypto.randomUUID(), kioskId, now, kioskId),
   ]);
   if ((results[1]?.meta?.changes ?? 1) < 1) throw new HttpError(409, "Pairing code was already used or that kiosk name is already active");
-  return response({ kioskId, kioskToken, pairingId: pairing.id, name: kioskName }, 201);
+  return response({ kioskId, kioskToken, pairingId: pairing.id, name: kioskName, kind }, 201);
 }
-async function kioskFor(request: Request, env: Env, includeRosterRevision = false): Promise<{ id: string; name: string; pairingId: string; pairingBound: boolean; configuredAuthenticationMethod: KioskAuthenticationMethod; rosterRevision?: number }> {
+// Retiring revokes the kiosk's credential at once (kioskFor reads only active kiosks) and keeps its attendance history.
+// With silentBefore, only a kiosk that has not checked in since then is retired, and the audit row follows the retirement.
+function retireKioskStatements(db: D1Database, principal: Principal, kiosk: { id: string; name: string }, action: "kiosk.retired" | "kiosk.replaced", options: { silentBefore?: string; metadata?: Record<string, unknown> } = {}) {
+  return [
+    options.silentBefore
+      ? db.prepare("UPDATE kiosks SET active = 0 WHERE installation_id = 'primary' AND id = ? AND active = 1 AND (last_seen_at IS NULL OR last_seen_at < ?)").bind(kiosk.id, options.silentBefore)
+      : db.prepare("UPDATE kiosks SET active = 0 WHERE installation_id = 'primary' AND id = ?").bind(kiosk.id),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, ?, 'kiosk', ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1)").bind(crypto.randomUUID(), principal.userId, action, kiosk.id, JSON.stringify({ name: kiosk.name, ...options.metadata }), new Date().toISOString(), kiosk.id),
+  ];
+}
+type PairedKiosk = { id: string; name: string; pairingId: string; pairingBound: boolean; configuredAuthenticationMethod: KioskAuthenticationMethod; kioskKind: KioskKind; memberLookup: KioskMemberLookup; requirePin: boolean; rosterRevision?: number };
+async function kioskFor(request: Request, env: Env, includeRosterRevision = false): Promise<PairedKiosk> {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
-  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound, configured_authentication_method AS configuredAuthenticationMethod${includeRosterRevision ? ", (SELECT revision FROM kiosk_roster_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<{ id: string; name: string; pairingId: string; pairingBound: number; configuredAuthenticationMethod: KioskAuthenticationMethod; rosterRevision?: number }>();
+  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound, configured_authentication_method AS configuredAuthenticationMethod, kind AS kioskKind, member_lookup AS memberLookup, require_pin AS requirePin${includeRosterRevision ? ", (SELECT revision FROM kiosk_roster_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<Omit<PairedKiosk, "pairingBound" | "kioskKind" | "memberLookup" | "requirePin"> & { pairingBound: number; kioskKind?: KioskKind; memberLookup?: KioskMemberLookup; requirePin?: number }>();
   if (!kiosk) throw new HttpError(401, "Kiosk credential is invalid");
-  return { ...kiosk, pairingBound: Boolean(kiosk.pairingBound) };
+  // Require PIN applies only with the member ID method; the method PATCH keeps them together, and this guards older rows.
+  return { ...kiosk, pairingBound: Boolean(kiosk.pairingBound), kioskKind: kiosk.kioskKind === "web" ? "web" : "pi", memberLookup: kiosk.memberLookup === "search" ? "search" : "entry", requirePin: Number(kiosk.requirePin) === 1 && kiosk.configuredAuthenticationMethod === "member_id" };
 }
 type KioskAttention = { scansNeedReview: number; clockConfirmed: boolean; clockPendingScans: number; reviewSyncFailing: boolean; weakMatches?: number; readerTemplates?: number; linkedTemplates?: number };
 // The causes behind a kiosk's error category, plus fingerprint matches below the minimum score that it asked to
@@ -933,27 +977,39 @@ async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContex
 async function kioskStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]);
   const db = requireDatabase(env);
-  const result = await db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, configured_authentication_method AS configuredAuthenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, scans_need_review AS scansNeedReview, clock_confirmed AS clockConfirmed, clock_pending_scans AS clockPendingScans, review_sync_failing AS reviewSyncFailing, weak_matches AS weakMatches, reader_templates AS readerTemplates, linked_templates AS linkedTemplates, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all();
-  return response({ kiosks: result.results ?? [] });
+  const result = await db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, configured_authentication_method AS configuredAuthenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, scans_need_review AS scansNeedReview, clock_confirmed AS clockConfirmed, clock_pending_scans AS clockPendingScans, review_sync_failing AS reviewSyncFailing, weak_matches AS weakMatches, reader_templates AS readerTemplates, linked_templates AS linkedTemplates, kind, member_lookup AS memberLookup, require_pin AS requirePin, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all<Record<string, unknown>>();
+  return response({ kiosks: (result.results ?? []).map((kiosk) => ({ ...kiosk, requirePin: Number(kiosk.requirePin) === 1 })) });
 }
 async function kioskConfiguration(request: Request, env: Env): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const settings = await requireDatabase(env).prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop FROM organization_settings WHERE installation_id = 'primary'").first();
-  return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings: settings ? { ...settings, authenticationMethod: kiosk.configuredAuthenticationMethod, ...await fingerprintMinimumScore(requireDatabase(env)).catch(() => 0).then(minimumScore => ({ fingerprintMinimumScore: minimumScore, fingerprintReenrollScore: reenrollThreshold(minimumScore) })) } : null });
+  const kiosk = await kioskFor(request, env); const db = requireDatabase(env); const [settings, pinLockout] = await Promise.all([db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop FROM organization_settings WHERE installation_id = 'primary'").first(), readPinLockout(db)]);
+  return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings: settings ? { ...settings, authenticationMethod: kiosk.configuredAuthenticationMethod, kind: kiosk.kioskKind, memberLookup: kiosk.memberLookup, requirePin: kiosk.requirePin, pinLockout, ...await fingerprintMinimumScore(requireDatabase(env)).catch(() => 0).then(minimumScore => ({ fingerprintMinimumScore: minimumScore, fingerprintReenrollScore: reenrollThreshold(minimumScore) })) } : null });
 }
-type KioskRosterMember = { rosterId: string; memberId: string; firstName: string; lastName: string };
+type KioskRosterMember = { rosterId: string; memberId: string; firstName: string; lastName: string; email?: string | null };
 const kioskRosterCache = new ReportDataCache<KioskRosterMember[]>();
 async function kioskRoster(request: Request, env: Env): Promise<Response> {
   const kiosk = await kioskFor(request, env, true);
   const db = requireDatabase(env);
-  const etag = typeof kiosk.rosterRevision === "number" && Number.isSafeInteger(kiosk.rosterRevision) && kiosk.rosterRevision >= 0 ? `"kiosk-roster-v1-${kiosk.rosterRevision}"` : undefined;
+  // Member search matches on email (never shown), so only a kiosk set to search receives it. Its ETag differs, so
+  // switching the lookup always refetches.
+  const search = kiosk.configuredAuthenticationMethod === "member_id" && kiosk.memberLookup === "search";
+  // PIN hashes go only to a kiosk that requires a PIN, under their own ETag. A PIN set, reset, lock or unlock changes the
+  // roster revision (migration 0091's triggers), so a cached roster never keeps a stale hash or lock.
+  const pins = kiosk.requirePin;
+  const etag = typeof kiosk.rosterRevision === "number" && Number.isSafeInteger(kiosk.rosterRevision) && kiosk.rosterRevision >= 0 ? `"kiosk-roster-v1-${search ? "search-" : ""}${pins ? "pin-" : ""}${kiosk.rosterRevision}"` : undefined;
   if (etag && request.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers: { etag, "cache-control": "no-store" } });
   let initial = true;
   const members = await kioskRosterCache.read(databaseIdentity(db), "active-roster", async () => {
     if (initial) { initial = false; return kiosk.rosterRevision; }
     const current = await db.prepare("SELECT revision FROM kiosk_roster_revision WHERE installation_id = 'primary'").first<{ revision: number }>();
     return current && Number.isSafeInteger(current.revision) ? current.revision : undefined;
-  }, async () => (await db.prepare("SELECT id AS rosterId, external_id AS memberId, first_name AS firstName, last_name AS lastName FROM members WHERE installation_id = 'primary' AND active = 1 ORDER BY last_name, first_name").all<KioskRosterMember>()).results ?? []);
-  const reply = response({ members });
+  }, async () => (await db.prepare("SELECT id AS rosterId, external_id AS memberId, first_name AS firstName, last_name AS lastName, email FROM members WHERE installation_id = 'primary' AND active = 1 ORDER BY last_name, first_name").all<KioskRosterMember>()).results ?? []);
+  const pinData = pins ? await rosterPins(db) : undefined;
+  const reply = response({ members: members.map(({ email, ...member }) => {
+    const listed = search && email ? { ...member, email } : member;
+    if (!pinData) return listed;
+    const pin = pinData.get(member.rosterId);
+    return { ...listed, pin: pin?.pin ?? null, pinLockedUntil: pin?.lockedUntil ?? null };
+  }) });
   if (etag) reply.headers.set("etag", etag);
   return reply;
 }
@@ -974,21 +1030,29 @@ async function manageKiosk(request: Request, env: Env, kioskId: string): Promise
   }
   const input = await parseJson<{ confirmation?: string }>(request);
   if (input.confirmation !== "RETIRE KIOSK") throw new HttpError(400, "Type RETIRE KIOSK exactly to continue");
-  await db.prepare("UPDATE kiosks SET active = 0 WHERE installation_id = 'primary' AND id = ?").bind(kioskId).run();
-  await writeAudit(db, principal, "kiosk.retired", "kiosk", kioskId, { name: kiosk.name });
+  await db.batch(retireKioskStatements(db, principal, kiosk, "kiosk.retired"));
   return response({ retired: true, kioskId });
 }
 async function kioskAuthenticationConfiguration(request: Request, env: Env, kioskId?: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (!kioskId) throw new HttpError(400, "Select a kiosk and save its authentication method individually");
-  const input = await parseJson<{ authenticationMethod?: KioskAuthenticationMethod }>(request);
+  const input = await parseJson<{ authenticationMethod?: KioskAuthenticationMethod; memberLookup?: KioskMemberLookup; requirePin?: boolean }>(request);
   if (!input.authenticationMethod || !kioskAuthenticationMethods.has(input.authenticationMethod)) throw new HttpError(400, "Choose fingerprint, RFID badge, NFC badge, member ID entry, or QR code");
-  const kiosk = await db.prepare("SELECT id, configured_authentication_method AS authenticationMethod FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; authenticationMethod: KioskAuthenticationMethod }>();
+  if (input.memberLookup !== undefined && (input.authenticationMethod !== "member_id" || !kioskMemberLookups.has(input.memberLookup))) throw new HttpError(400, "Member search or member ID entry can be chosen only with the member ID method");
+  if (input.requirePin !== undefined && (typeof input.requirePin !== "boolean" || input.requirePin && input.authenticationMethod !== "member_id")) throw new HttpError(400, "Require PIN can be turned on only with the member ID method");
+  const kiosk = await db.prepare("SELECT id, kind, configured_authentication_method AS authenticationMethod, member_lookup AS memberLookup, require_pin AS requirePin FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; kind?: KioskKind; authenticationMethod: KioskAuthenticationMethod; memberLookup?: KioskMemberLookup; requirePin?: number }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
-  const result = await db.prepare("UPDATE kiosks SET configured_authentication_method = ? WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.authenticationMethod, kioskId).run();
+  if (kiosk.kind === "web" && input.authenticationMethod !== "member_id") throw new HttpError(400, "Web kiosks identify members by member ID or member search.");
+  // Any other method resets the lookup, so a later switch back to member ID starts on entry.
+  const memberLookup: KioskMemberLookup = input.authenticationMethod === "member_id" ? input.memberLookup ?? "entry" : "entry";
+  // Require PIN stays as it was when omitted with the member ID method, so a save that does not mention it never turns
+  // PINs off; any other method clears it.
+  const previousRequirePin = Number(kiosk.requirePin) === 1 && kiosk.authenticationMethod === "member_id";
+  const requirePin = input.authenticationMethod === "member_id" ? input.requirePin ?? previousRequirePin : false;
+  const result = await db.prepare("UPDATE kiosks SET configured_authentication_method = ?, member_lookup = ?, require_pin = ? WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.authenticationMethod, memberLookup, requirePin ? 1 : 0, kioskId).run();
   if (result.meta?.changes === 0) throw new HttpError(409, "Kiosk was retired before its method could be saved");
-  await writeAudit(db, principal, "kiosk.authentication_method_updated", "kiosk", kioskId, { previousMethod: kiosk.authenticationMethod, authenticationMethod: input.authenticationMethod });
-  return response({ kioskId, authenticationMethod: input.authenticationMethod });
+  await writeAudit(db, principal, "kiosk.authentication_method_updated", "kiosk", kioskId, { previousMethod: kiosk.authenticationMethod, authenticationMethod: input.authenticationMethod, previousMemberLookup: kiosk.memberLookup ?? "entry", memberLookup, previousRequirePin, requirePin });
+  return response({ kioskId, authenticationMethod: input.authenticationMethod, memberLookup, requirePin });
 }
 async function dashboardKioskEnrollment(request: Request, env: Env, kioskId: string, sessionId?: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]), db = requireDatabase(env);
@@ -1027,8 +1091,9 @@ async function queueKioskCommand(request: Request, env: Env, kioskId: string): P
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ command?: KioskCommandType; replaceDevelopmentBuild?: boolean }>(request);
   const supported: KioskCommandType[] = ["reload_display", "restart_service", "reboot", "reset_network_pin", "install_latest", "erase_unlinked_fingerprints"];
   if (!isObject(input) || Object.keys(input).some((key) => key !== "command" && key !== "replaceDevelopmentBuild") || input.replaceDevelopmentBuild !== undefined && (input.command !== "install_latest" || input.replaceDevelopmentBuild !== true) || !input.command || !supported.includes(input.command)) throw new HttpError(400, "Choose a supported kiosk command without additional arguments");
-  const kiosk = await db.prepare("SELECT id, name, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, reader_templates AS readerTemplates FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string; releaseVersion?: string; updatePolicyVersion?: number; readerTemplates?: number | null }>();
+  const kiosk = await db.prepare("SELECT id, name, kind, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, reader_templates AS readerTemplates FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; name: string; kind?: KioskKind; releaseVersion?: string; updatePolicyVersion?: number; readerTemplates?: number | null }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
+  if (kiosk.kind === "web" && input.command !== "reload_display" && input.command !== "reset_network_pin") throw new HttpError(409, "Web kiosks can only reload their display or reset their settings PIN.");
   // Kiosks before 2.0.0-beta.14 reject unknown command types; only kiosks reporting reader counts understand this one.
   if (input.command === "erase_unlinked_fingerprints" && typeof kiosk.readerTemplates !== "number") throw new HttpError(409, "Update this kiosk to 2.0.0-beta.14 or later, and connect its fingerprint reader, before erasing unlinked fingerprints.");
   let requestedReleaseVersion: string | null = null;
@@ -1274,7 +1339,7 @@ async function restoreMeetings(request: Request, env: Env, meetingId: string): P
   return response({ restored: deletion.meetingIds.length, scope: input.scope ?? "occurrence", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 type KioskScanOrigin = { kioskId: string; refuseWrongMatches: boolean; matchScore?: unknown };
-async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual" | "simulator", actorId?: string, origin?: KioskScanOrigin): Promise<Response> {
+async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual", actorId?: string, origin?: KioskScanOrigin): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required", undefined, "invalid_scan");
   const existing = await db.prepare("SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?").bind(input.eventId.trim()).first<{ action: AttendanceAction }>();
   if (existing) return response({ accepted: false, duplicate: true, eventId: input.eventId, action: existing.action }, 200);
@@ -1315,44 +1380,17 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt, meeting: { id: meeting.id, title: meeting.title }, member: { id: member.id, externalId: member.externalId, displayName: `${member.firstName} ${member.lastName}`.trim() } }, 202);
 }
 async function kioskAttendance(request: Request, env: Env): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string; matchScore?: unknown; rescanSupported?: unknown }>(request);
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string; matchScore?: unknown; rescanSupported?: unknown; pin?: unknown; pinCheck?: unknown }>(request);
   if ((kiosk.pairingBound || input.pairingId !== undefined) && input.pairingId !== kiosk.pairingId) throw new HttpError(409, "This queued scan belongs to a different kiosk pairing and was not attached to the current kiosk", undefined, "pairing_mismatch");
   const db = requireDatabase(env);
+  // A kiosk with Require PIN checks the member's PIN before the scan is recorded; other kiosks ignore pin and pinCheck.
+  // A malformed scan skips the check and fails below with its usual reason.
+  if (kiosk.requirePin && input.eventId?.trim() && input.eventId.length <= 100 && input.memberId && validTimestamp(input.occurredAt)) await checkScanPin(db, kiosk, input);
   // Recorded whatever the outcome, so rejected scans show their match confidence too. Diagnostics never block attendance.
   if (input.matchScore !== undefined) await recordScanMatch(db, kiosk.id, input.eventId, input.matchScore).catch(() => undefined);
   // Only kiosks that can ask for a rescan are refused a possible wrong match. Older kiosks retry an unknown refusal
   // forever, holding up every scan queued behind it, so their scans are recorded as before.
   return recordAttendance(db, input, "kiosk", undefined, { kioskId: kiosk.id, refuseWrongMatches: input.rescanSupported === true, matchScore: input.matchScore });
-}
-async function simulatedKiosk(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-  if (request.method === "GET") {
-    const simulator = await db.prepare("SELECT name, active, online, last_seen_at AS lastSeenAt, created_at AS pairedAt FROM simulated_kiosk_sessions WHERE installation_id = 'primary'").first();
-    return response({ simulator: simulator ? { ...simulator, readerOnline: false, releaseVersion: "browser simulator" } : null });
-  }
-  const input = await parseJson<{ action?: "heartbeat" | "check-in" | "scan" | "stop"; scanAction?: AttendanceAction; online?: boolean; memberId?: string; meetingId?: string; eventId?: string }>(request);
-  const simulator = await db.prepare("SELECT name, active, online FROM simulated_kiosk_sessions WHERE installation_id = 'primary'").first<{ name: string; active: number; online: number }>();
-  if (!simulator?.active) throw new HttpError(409, "Pair the browser simulator before using it");
-  if (input.action === "heartbeat") {
-    if (typeof input.online !== "boolean") throw new HttpError(400, "Simulator online status is required");
-    const now = new Date().toISOString(); await db.prepare("UPDATE simulated_kiosk_sessions SET online = ?, last_seen_at = CASE WHEN ? = 1 THEN ? ELSE last_seen_at END WHERE installation_id = 'primary'").bind(input.online ? 1 : 0, input.online ? 1 : 0, now).run();
-    await writeAudit(db, principal, "simulator.status_changed", "simulated_kiosk", "browser", { online: input.online });
-    return response({ online: input.online, lastSeenAt: input.online ? now : undefined, readerOnline: false });
-  }
-  if (input.action === "stop") {
-    await db.prepare("UPDATE simulated_kiosk_sessions SET active = 0, online = 0 WHERE installation_id = 'primary'").run();
-    await writeAudit(db, principal, "simulator.stopped", "simulated_kiosk", "browser"); return response({ active: false });
-  }
-  if (input.action === "check-in" || input.action === "scan") {
-    if (!simulator.online) throw new HttpError(409, "Bring the simulated kiosk online before checking in");
-    const meeting = input.meetingId ? await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first() : null;
-    if (!meeting) throw new HttpError(400, "Choose an active meeting for the simulator scan");
-    if (input.action === "scan" && input.scanAction !== undefined && !["check_in", "check_out"].includes(input.scanAction)) throw new HttpError(400, "Simulator scanAction must be check_in or check_out");
-    const result = await recordAttendance(db, { eventId: input.eventId ?? `simulator-${crypto.randomUUID()}`, memberId: input.memberId, meetingId: input.meetingId, occurredAt: new Date().toISOString(), desiredAction: input.action === "scan" ? input.scanAction : undefined }, "simulator", principal.userId);
-    const outcome = await result.clone().json() as { action: AttendanceAction; duplicate?: boolean };
-    await writeAudit(db, principal, outcome.action === "check_out" ? "simulator.check_out" : "simulator.check_in", "meeting", input.meetingId!, { memberId: input.memberId, origin: "browser_simulator", duplicate: Boolean(outcome.duplicate) }); return result;
-  }
-  throw new HttpError(400, "Simulator action must be heartbeat, scan, or stop");
 }
 async function attendance(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const url = new URL(request.url);
@@ -1869,6 +1907,18 @@ async function integrationsStatus(request: Request, env: Env): Promise<Response>
   const [result, flags, calendar, discordCalendar, discordCommands] = await Promise.all([requireDatabase(env).prepare("SELECT i.provider, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, EXISTS(SELECT 1 FROM integration_verification_challenges c WHERE c.installation_id = i.installation_id AND c.provider = i.provider AND c.expires_at > ?) AS verificationPending FROM encrypted_integrations i WHERE i.installation_id = 'primary' ORDER BY i.provider").bind(new Date().toISOString()).all<{ provider: IntegrationProvider; updatedAt: string; verifiedAt?: string | null; verificationPending: number }>(), integrationFlags(env), googleCalendarIntegrationStatus(env), discordCalendarQueueStatus(env), discordCommandStatus(env)]);
   const saved = new Map((result.results ?? []).map((item) => [item.provider, item]));
   return response({ integrations: [...[...integrationProviders].map((provider) => { const item = saved.get(provider); const enabled = Boolean(flags[integrationFlagColumns[provider]]); return { provider, enabled, saved: Boolean(item), configured: enabled && Boolean(item?.verifiedAt), state: !enabled ? "disabled" : !item ? "not_configured" : item.verifiedAt ? "configured" : "verification_required", updatedAt: item?.updatedAt, verifiedAt: item?.verifiedAt ?? undefined, verificationPending: enabled && Boolean(item?.verificationPending), ...(provider === "google" ? { redirectUri: optionalPublicUrl(() => googleRedirectUri(env)) } : {}), ...(provider === "discord" ? { ...discordCalendar, ...discordCommands, interactionsUrl: optionalPublicUrl(() => discordInteractionsUrl(env)) } : {}) }; }), { ...calendar, redirectUri: optionalPublicUrl(() => googleCalendarRedirectUri(env)) }] });
+}
+/**
+ * Settings > Integrations > FIRST (first-data.ts): status, check-and-save and remove a program's credential, test a team
+ * and clear cached answers. Admin only; tokens never return. A test lookup counts only toward the installation limit.
+ */
+async function firstIntegration(request: Request, env: Env, url: URL): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const deps = firstDataDeps(env);
+  if (url.pathname.endsWith("/lookup")) { const input = await parseJson<Record<string, unknown>>(request, 1024); return response(await firstDataService(deps, { moduleId: "core", visitor: async () => null }).lookupTeam({ program: input?.program as never, number: input?.number as string })); }
+  if (url.pathname.endsWith("/clear-cache")) { await clearFirstCache(deps); await writeAudit(deps.db, principal, "integration.first_cache_cleared", "integration", "first"); return response(await firstIntegrationStatus(deps)); }
+  if (request.method === "PUT") { const program = await saveFirstCredential(deps, await parseJson(request, 2048)); await writeAudit(deps.db, principal, "integration.saved", "integration", `first:${program}`); return response(await firstIntegrationStatus(deps)); }
+  if (request.method === "DELETE") { const program = await removeFirstCredential(deps, url.searchParams.get("program")); await writeAudit(deps.db, principal, "integration.removed", "integration", `first:${program}`); return response(await firstIntegrationStatus(deps)); }
+  return response(await firstIntegrationStatus(deps));
 }
 async function discordChannelManagerSettings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -2483,11 +2533,22 @@ async function sendModuleEmail(env: Env, moduleId: string, value: unknown): Prom
   return { id: typeof body.id === "string" ? body.id : null };
 }
 
+const firstDataDeps = (env: Env, db = requireDatabase(env)): FirstDataDeps => ({ db, fetch: (input, init) => fetch(input, init), now: Date.now, credentials: moduleCredentials(env.INTEGRATION_KEY) });
+/**
+ * Whom a module's FIRST lookups count against: null for a signed-in user or a job, else the hashed address of the visitor
+ * on a public route. A service route without a user still counts as staff when its request carries a valid session.
+ */
+async function firstVisitor(env: Env, caller: ModuleServiceCaller): Promise<string | null> {
+  if (caller.userId || !caller.request) return null;
+  try { await principalFor(caller.request, env); return null; } catch { return firstVisitorKey(caller.request.headers.get("cf-connecting-ip")); }
+}
+type ModuleServiceCaller = { readonly userId?: string; readonly nested?: boolean; readonly request?: Request };
 /**
  * Shared provider access for module code, bound to the current (module-scoped) environment. `userId` is the signed-in user
  * of a workspace or setup request, whose own access can authorize interface calls; `nested` marks an interface handler.
+ * `request` is the route's request, which tells `services.first` whether a public visitor is asking.
  */
-function coreModuleServices(env: Env, moduleId: string, caller: { readonly userId?: string; readonly nested?: boolean } = {}): CoreModuleServices {
+function coreModuleServices(env: Env, moduleId: string, caller: ModuleServiceCaller = {}): CoreModuleServices {
   return Object.freeze({
     googleCalendar: Object.freeze({
       ready: () => googleCalendarIsReady(env),
@@ -2507,9 +2568,10 @@ function coreModuleServices(env: Env, moduleId: string, caller: { readonly userI
       providerStatus: (error: unknown) => error instanceof EmailProviderError ? error.emailStatus : undefined,
     }),
     credentials: moduleCredentials(env.INTEGRATION_KEY),
+    first: firstDataService(firstDataDeps(env), { moduleId, visitor: () => firstVisitor(env, caller) }),
     modules: moduleInterfaceServices({
       db: requireDatabase(env), consumerId: moduleId, userId: caller.userId, nested: caller.nested, handlers: (providerId) => apiModules.get(providerId)?.interfaces,
-      providerServices: (db, providerId) => coreModuleServices(moduleScopedEnvironment(env, db), providerId, { nested: true }),
+      providerServices: (db, providerId) => coreModuleServices(moduleScopedEnvironment(env, db), providerId, { nested: true, request: caller.userId ? undefined : caller.request }),
     }),
   });
 }
@@ -2523,7 +2585,7 @@ function moduleEnvironment(moduleId: string, env: Env): Env {
 /** `userId`: the signed-in user of a workspace or setup route. Service routes act without one. */
 function moduleRouteContext(moduleId: string, request: Request, env: Env, url: URL, userId?: string): ModuleRouteContext<Env> {
   return {
-    request, url, env: moduleEnvironment(moduleId, env), db: requireDatabase(env), services: coreModuleServices(env, moduleId, { userId }),
+    request, url, env: moduleEnvironment(moduleId, env), db: requireDatabase(env), services: coreModuleServices(env, moduleId, { userId, request }),
     requireRole: (roles) => requireRole(request, env, [...roles]),
     json: <T,>(maxBytes?: number) => parseJson<T>(request, maxBytes),
     body: async <T,>(maxBytes?: number) => request.method === "GET" ? undefined : parseJson<T>(request, maxBytes),
@@ -2611,6 +2673,7 @@ async function autoReconcileDiscordCommands(env: Env): Promise<void> {
   }
 }
 const discordMessageMissing = (error: unknown): error is DiscordResponseError => error instanceof DiscordResponseError && error.discordStatus === 404 && error.discordCode === 10_008;
+const discordChannelMissing = (error: unknown): error is DiscordResponseError => error instanceof DiscordResponseError && error.discordStatus === 404 && error.discordCode === 10_003;
 type DiscordMessageComponents = { type: number; components: { type: number; style: number; label: string; custom_id: string }[] }[];
 const discordAttendanceReportComponents: DiscordMessageComponents = [{ type: 1, components: [{ type: 2, style: 1, label: "View my attendance report", custom_id: "lancerlogin-attendance-report" }] }];
 async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string, string>, stateKey: string, content: string, pin = false, components?: DiscordMessageComponents): Promise<{ changed: boolean; messageId: string }> {
@@ -2790,19 +2853,21 @@ async function expireDiscordAttendanceNotifications(env: Env, config: Record<str
     await db.prepare("UPDATE discord_attendance_notifications SET deleted_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(deletedAt, deletedAt, notice.meetingId, notice.messageId).run();
   }
 }
-// Deletes every chunk of a delivered notice. A refused deletion is recorded on the notice and reported as false.
+// Deletes every chunk of a delivered notice and its question thread. A refused deletion is recorded on the notice and reported as false.
 async function deleteDiscordAttendanceMessages(db: D1Database, config: Record<string, string>, notice: { meetingId: string; messageId: string; deliveryId?: string }): Promise<boolean> {
   const messageIds = new Set([notice.messageId]);
   if (notice.deliveryId) {
     const chunks = await db.prepare("SELECT DISTINCT message_id AS messageId FROM discord_attendance_recipients WHERE installation_id = 'primary' AND meeting_id = ? AND delivery_id = ?").bind(notice.meetingId, notice.deliveryId).all<{ messageId: string }>();
     for (const chunk of chunks.results ?? []) messageIds.add(chunk.messageId);
   }
+  // Discord keeps a thread when its starter message is deleted. The thread's ID is the starter message ID.
+  const paths = [...[...messageIds].map((messageId) => `/channels/${encodeURIComponent(config.channelId)}/messages/${encodeURIComponent(messageId)}`), `/channels/${encodeURIComponent(notice.messageId)}`];
   let failed = false;
-  for (const messageId of messageIds) {
+  for (const path of paths) {
     try {
-      await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
+      await discordRequest(config, path, { method: "DELETE" });
     } catch (error) {
-      if (!discordMessageMissing(error)) {
+      if (!discordMessageMissing(error) && !discordChannelMissing(error)) {
         await db.prepare("UPDATE discord_attendance_notifications SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(error instanceof Error ? error.message.slice(0, 300) : "Discord deletion failed", new Date().toISOString(), notice.meetingId).run();
         failed = true;
       }
@@ -3720,7 +3785,7 @@ const tableColumns = {
   platform_module_assignment_revisions: ["installation_id", "user_id", "revision"],
   platform_module_assignments: ["installation_id", "user_id", "module_id", "capabilities_json"],
   platform_module_setup_progress: ["installation_id", "module_id", "step_id", "setup_version", "outcome", "completed_at", "completed_by"],
-  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method", "discord_block_recontests_after_rejection"],
+  organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method", "discord_block_recontests_after_rejection", "pin_lockout_enabled", "pin_lockout_attempts", "pin_lockout_minutes"],
   user_walkthroughs: ["installation_id", "user_id", "page_id", "content_version", "status", "step_id", "updated_at"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id", "debug_mode"],
   user_preferences: ["installation_id", "user_id", "developer_scheduler_enabled", "revision", "updated_at"],
@@ -3739,11 +3804,13 @@ const tableColumns = {
   attendance_events: ["id", "installation_id", "member_id", "meeting_id", "source", "occurred_at", "kiosk_event_id", "created_by", "action"],
   attendance_corrections: ["id", "installation_id", "member_id", "meeting_id", "disposition", "reason", "created_by", "created_at"],
   setup_progress: ["installation_id", "step", "completed_at", "completed_by"],
-  pairing_codes: ["id", "installation_id", "code_hash", "expires_at", "redeemed_at", "created_by", "created_at", "purpose"],
-  kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version", "pending_events", "last_sync_at", "error_category", "pairing_bound", "authentication_method", "configured_authentication_method"],
+  pairing_codes: ["id", "installation_id", "code_hash", "expires_at", "redeemed_at", "created_by", "created_at", "purpose", "kiosk_kind", "kiosk_name"],
+  kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version", "pending_events", "last_sync_at", "error_category", "pairing_bound", "authentication_method", "configured_authentication_method", "kind", "member_lookup", "require_pin"],
+  member_pins: ["installation_id", "member_id", "pin_hash", "pin_salt", "pin_iterations", "set_at", "set_kiosk_id", "failed_attempts", "locked_until", "updated_at"],
   simulated_kiosk_sessions: ["installation_id", "pairing_code_id", "name", "active", "online", "last_seen_at", "created_by", "created_at"],
   encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at", "verified_at"],
   google_calendar_authorizations: ["installation_id", "ciphertext", "iv", "key_version", "authorized_at", "verified_at", "updated_at"],
+  first_credentials: ["installation_id", "program", "username", "ciphertext", "iv", "key_version", "checked_at", "updated_at"],
   google_calendar_event_mappings: ["installation_id", "meeting_id", "event_id", "generation", "active", "synced_at", "last_error", "updated_at"],
   google_calendar_operations: ["installation_id", "meeting_id", "event_id", "action", "starts_at", "ends_at", "status", "attempts", "next_attempt_at", "last_error", "updated_at"],
   discord_calendar_event_mappings: ["installation_id", "meeting_id", "event_id", "generation", "active", "synced_at", "last_error", "updated_at"],
@@ -3762,20 +3829,38 @@ type BackupTable = keyof typeof tableColumns;
 const installationTables: BackupTable[] = [
   "installations", "platform_module_administration", "platform_module_administration_epochs", "platform_module_epochs", "platform_modules", "organization_settings", "members", "users", "user_preferences", "platform_module_assignment_epochs", "platform_module_assignment_revisions", "platform_module_assignments", "platform_module_setup_progress", "user_walkthroughs", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
-  "kiosks", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "integration_deliveries",
+  "kiosks", "member_pins", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "first_credentials", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
   "google_calendar_event_mappings", "google_calendar_operations", "discord_calendar_event_mappings", "discord_calendar_operations",
 ];
 const meetingTables: BackupTable[] = ["meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates", "attendance_events", "attendance_corrections", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports"];
 const rosterTables: BackupTable[] = ["members", "member_labels", "member_label_changes", "label_weekly_targets", "label_attendance_rules"];
 const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
+// Core tables added after the backup format existed; a backup older than the schema that added one never carries it.
+const backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49 };
+// Tables dropped after the backup format existed, with the first schema that no longer carries them and the module that
+// owned them, so older backups still match their ownership metadata. Their rows are read and then ignored.
+const backupTablesRemovedAt: Partial<Record<BackupTable, { schema: number; owner: string }>> = { simulated_kiosk_sessions: { schema: 48, owner: "attendance" } };
+const backupTableAt = (table: BackupTable, schemaVersion: number) => (backupTablesAddedAt[table] ?? 0) <= schemaVersion && schemaVersion < (backupTablesRemovedAt[table]?.schema ?? Infinity);
+const backupTableOwner = (table: BackupTable) => firstPartyBackupRegistry.tableOwner(table)?.id ?? backupTablesRemovedAt[table]?.owner;
 const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const safeBackupValue = (value: unknown) => value === null || ["string", "number", "boolean"].includes(typeof value);
 // Schema 43 and 44: modules that moved into plugins (extracted-modules.ts: Carpool at 43, Outreach at 44) left Core's
 // section; their plugins export them in `externalModules`.
 // Schema 45: each dated label change records its source (dashboard or Discord), and each Discord role link its sync
 // direction. A label exported as two-way restores paused until an Admin reviews it again (discord-label-two-way.ts).
-const backupSchemaVersion = 45;
+// Schema 46: each kiosk records its kind (Pi or web) and member lookup (entry or search), and each pairing code the kind
+// and name of the kiosk it pairs. Older backups restore every kiosk and code as a Pi one on member ID entry.
+// Schema 47: member PINs (member_pins, hashes only) and each kiosk's Require PIN, with the PIN lockout settings, in
+// entire-installation backups. Older backups restore with no PINs, Require PIN off and lockout off (5 tries, 15 minutes).
+// PIN setup requests are short-lived and bound to kiosk credentials, so they never travel.
+// Schema 48: the browser simulator is gone (migration 0092 drops simulated_kiosk_sessions). Older backups' simulator rows
+// are ignored on restore.
+// Schema 49: Core's FIRST connection credentials (first_credentials: username and encrypted token per program, never the
+// token itself) in entire-installation backups. Older backups restore with no FIRST credential. A restored credential
+// the current integration key cannot decrypt shows as saved but unreadable until an Admin saves it again. FIRST's cached
+// answers, seasons and request counts never travel.
+const backupSchemaVersion = 49;
 /** Exported values computed from other columns: a label paused after a restore is still two-way in a backup. */
 const backupColumnExpressions: Partial<Record<BackupTable, Record<string, string>>> = {
   discord_label_role_mappings: { sync_direction: `CASE WHEN sync_direction = 'to_discord' AND two_way_error = '${twoWayRestorePaused}' THEN 'two_way' ELSE sync_direction END AS sync_direction` },
@@ -3788,13 +3873,13 @@ const installedExternalBackupModules = externalBackupModules(bundledModuleRegist
 const installedExternalBackupModuleIds: ReadonlySet<string> = new Set(installedExternalBackupModules.map(({ definition }) => definition.id));
 
 function backupOwnership(scope: BackupScope, schemaVersion = backupSchemaVersion) {
-  const scoped = tablesForScope(scope);
-  const core = scoped.filter((table) => !firstPartyBackupRegistry.tableOwner(table));
+  const scoped = tablesForScope(scope).filter((table) => backupTableAt(table, schemaVersion));
+  const core = scoped.filter((table) => !backupTableOwner(table));
   const modules = firstPartyBackupRegistry.modules.map((module) => ({
     id: module.id,
     contractVersion: module.contractVersion,
     backupVersion: module.backup.version,
-    tables: scoped.filter((table) => firstPartyBackupRegistry.tableOwner(table)?.id === module.id),
+    tables: scoped.filter((table) => backupTableOwner(table) === module.id),
     sharedFields: module.persistence.sharedFields.filter((field) => scoped.includes(field.table as BackupTable)).map(field => ({ ...field, columns: field.columns.filter(column => schemaVersion >= 41 || column !== "discord_block_recontests_after_rejection") })),
     transientAuthority: module.persistence.transientAuthority.filter((field) => scoped.includes(field.table as BackupTable)),
   }));
@@ -3805,7 +3890,7 @@ function backupOwnership(scope: BackupScope, schemaVersion = backupSchemaVersion
 async function backupData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const scope = new URL(request.url).searchParams.get("scope") as BackupScope;
   if (!["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Backup scope must be meetings, roster, or installation");
-  const entries = await Promise.all(tablesForScope(scope).map(async (table) => {
+  const entries = await Promise.all(tablesForScope(scope).filter((table) => backupTableAt(table, backupSchemaVersion)).map(async (table) => {
     const where = table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"; const result = await db.prepare(`SELECT ${backupSelectColumns(table)} FROM ${table} WHERE ${where}`).all<Record<string, unknown>>();
     // Lifecycle, assignment and setup rows of a module whose code is not in this build (a removed plugin, or a module that moved into a
     // plugin that is not composed) stay out: the backup carries none of that module's data, and this build could not restore them.
@@ -3825,7 +3910,7 @@ async function backupData(request: Request, env: Env): Promise<Response> {
 
 type NormalizedBackup = { product: "LancerLogin"; schemaVersion: number; scope: BackupScope; exportedAt: string; attendanceRecentDays: number; attendancePolicyActivatedOn: string | null; tables: Record<BackupTable, Record<string, unknown>[]>; recovery: { revokedKiosks: number; invalidatedPairingCodes: number; pausedProviderOperations: number }; externalModules: { included: readonly PreparedExternalModule[]; excluded: readonly ExcludedModuleSummary[] } };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
-  organization_settings: tableColumns.organization_settings.slice(0, -13),
+  organization_settings: tableColumns.organization_settings.slice(0, -16),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
   discord_attendance_contests: tableColumns.discord_attendance_contests.slice(0, -3),
 };
@@ -3908,7 +3993,7 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   // Public Community 1.2.5 and early Modular archives both used schema 22.
   // Recognize the complete Community table manifest, never a partial Modular
   // archive or an archive carrying Modular ownership metadata.
-  const communityTables = tablesForScope(scope).filter(table => !table.startsWith("platform_module") && table !== "user_preferences");
+  const communityTables = tablesForScope(scope).filter(table => !table.startsWith("platform_module") && table !== "user_preferences" && backupTableAt(table, 22));
   const community22 = sourceSchemaVersion === 22 && value.format === undefined && value.formatVersion === undefined && value.ownership === undefined
     && canonicalBackupJson(Object.keys(value.tables).sort()) === canonicalBackupJson([...communityTables].sort());
   const schemaVersion = community22 ? 21 : sourceSchemaVersion;
@@ -3922,11 +4007,11 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   const externalPlan = planExternalModuleRestore([...extracted.entries, ...sourceSchemaVersion >= externalModuleBackupSchema ? parseExternalModuleSection(value.externalModules, scope, reservedModuleIds) : []], scope === "installation" ? installedExternalBackupModules : [], excludeModules);
   const knownTables = new Set<unknown>([...tablesForScope(scope), ...extractedModuleTables(scope, schemaVersion)]);
   if (Object.keys(sourceTables).some((table) => !knownTables.has(table))) throw new HttpError(400, "Backup contains tables that are not owned by this Community-based application");
-  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 22 && table.startsWith("platform_module")) && !(schemaVersion < 24 && table === "user_preferences") && !(schemaVersion < 23 && table === "platform_module_setup_progress") && !(schemaVersion < 21 && table === "user_walkthroughs") && !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings") && !(schemaVersion < 20 && ["saved_report_views", "saved_report_tabs"].includes(table)));
+  const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 22 && table.startsWith("platform_module")) && !(schemaVersion < 24 && table === "user_preferences") && !(schemaVersion < 23 && table === "platform_module_setup_progress") && !(schemaVersion < 21 && table === "user_walkthroughs") && !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings") && !(schemaVersion < 20 && ["saved_report_views", "saved_report_tabs"].includes(table)) && backupTableAt(table, schemaVersion));
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion < 45 && (table === "member_label_changes" || table === "discord_label_role_mappings") ? tableColumns[table].slice(0, -1) : table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 40 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -3 : schemaVersion < 31 ? -2 : -1) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -11) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -9) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -2) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
+    const columns = schemaVersion < 45 && (table === "member_label_changes" || table === "discord_label_role_mappings") ? tableColumns[table].slice(0, -1) : table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 47 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -6 : schemaVersion < 31 ? -5 : schemaVersion < 40 ? -4 : schemaVersion < 46 ? -3 : -1) : table === "pairing_codes" && schemaVersion < 46 ? tableColumns.pairing_codes.slice(0, -2) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -14) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -12) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -10) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -7) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 47 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -3) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column])) || (sourceSchemaVersion >= 31 || community22) && Object.keys(row).some((column) => !(columns as readonly string[]).includes(column))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   rows += externalPlan.entries.reduce((total, entry) => total + entry.rows, 0);
@@ -3939,12 +4024,19 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
     + tables.discord_calendar_operations.filter((row) => ["pending", "processing"].includes(String(row.status))).length
     + tables.discord_attendance_notifications.filter((row) => row.status === "pending").length
     + tables.discord_anomaly_reports.filter((row) => row.status === "pending").length;
-  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_block_recontests_after_rejection: 0, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, discord_anomaly_reports_enabled: 0, discord_anomaly_report_channel_id: null, discord_anomaly_reports_enabled_at: null, attendance_recent_days: 30, attendance_policy_activated_on: null, ...row, ...(schemaVersion < 31 ? { kiosk_authentication_method: "fingerprint" } : {}) }));
+  if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_block_recontests_after_rejection: 0, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, discord_anomaly_reports_enabled: 0, discord_anomaly_report_channel_id: null, discord_anomaly_reports_enabled_at: null, attendance_recent_days: 30, pin_lockout_enabled: 0, pin_lockout_attempts: 5, pin_lockout_minutes: 15, attendance_policy_activated_on: null, ...row, ...(schemaVersion < 31 ? { kiosk_authentication_method: "fingerprint" } : {}) }));
   if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, thread_created_at: null, delivery_id: null, ...row }));
   if (tables.discord_attendance_recipients) tables.discord_attendance_recipients = tables.discord_attendance_recipients.map((row) => ({ delivery_id: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
-  if (tables.kiosks) tables.kiosks = tables.kiosks.map((row) => ({ pairing_bound: 0, ...row, ...(schemaVersion < 31 ? { authentication_method: "fingerprint" } : {}), ...(schemaVersion < 40 ? { configured_authentication_method: tables.organization_settings.find(settings => settings.installation_id === row.installation_id)?.kiosk_authentication_method ?? "fingerprint" } : {}) }));
+  if (tables.pairing_codes) tables.pairing_codes = tables.pairing_codes.map((row) => ({ kiosk_kind: "pi", kiosk_name: null, ...row }));
+  if (tables.kiosks) tables.kiosks = tables.kiosks.map((row) => ({ pairing_bound: 0, kind: "pi", member_lookup: "entry", require_pin: 0, ...row, ...(schemaVersion < 31 ? { authentication_method: "fingerprint" } : {}), ...(schemaVersion < 40 ? { configured_authentication_method: tables.organization_settings.find(settings => settings.installation_id === row.installation_id)?.kiosk_authentication_method ?? "fingerprint" } : {}) }));
   if (tables.kiosks.some(row => !kioskAuthenticationMethods.has(row.configured_authentication_method as KioskAuthenticationMethod) || !kioskAuthenticationMethods.has(row.authentication_method as KioskAuthenticationMethod))) throw new HttpError(400, "Backup contains an invalid kiosk authentication method");
+  if (tables.kiosks.some(row => !kioskKinds.has(row.kind) || !kioskMemberLookups.has(row.member_lookup) || row.kind === "web" && row.configured_authentication_method !== "member_id") || tables.pairing_codes.some(row => !kioskKinds.has(row.kiosk_kind))) throw new HttpError(400, "Backup contains an invalid kiosk kind or member lookup");
+  if (tables.kiosks.some(row => ![0, 1].includes(row.require_pin as number) || row.require_pin === 1 && row.configured_authentication_method !== "member_id")) throw new HttpError(400, "Backup contains an invalid kiosk Require PIN setting");
+  if (tables.organization_settings.some(row => ![0, 1].includes(row.pin_lockout_enabled as number) || !Number.isInteger(row.pin_lockout_attempts) || Number(row.pin_lockout_attempts) < 3 || Number(row.pin_lockout_attempts) > 20 || !Number.isInteger(row.pin_lockout_minutes) || Number(row.pin_lockout_minutes) < 1 || Number(row.pin_lockout_minutes) > 1440)) throw new HttpError(400, "Backup PIN lockout setting is invalid");
+  const pinMembers = new Set(tables.members.map((row) => row.id)); const pinKiosks = new Set(tables.kiosks.map((row) => row.id));
+  if (tables.member_pins.some(row => !pinMembers.has(row.member_id) || row.set_kiosk_id !== null && !pinKiosks.has(row.set_kiosk_id) || typeof row.pin_hash !== "string" || !row.pin_hash || typeof row.pin_salt !== "string" || !row.pin_salt || !Number.isInteger(row.pin_iterations) || Number(row.pin_iterations) < 1 || Number(row.pin_iterations) > 100_000 || !Number.isInteger(row.failed_attempts) || Number(row.failed_attempts) < 0 || typeof row.set_at !== "string" || typeof row.updated_at !== "string" || row.locked_until !== null && typeof row.locked_until !== "string")) throw new HttpError(400, "Backup contains an invalid member PIN");
+  if (tables.first_credentials.some(row => !["FRC", "FTC"].includes(row.program as string) || [row.username, row.ciphertext, row.iv, row.checked_at, row.updated_at].some(value => typeof value !== "string" || !value) || String(row.username).length > 100 || String(row.ciphertext).length > 4000 || String(row.iv).length > 200 || !Number.isInteger(row.key_version) || Number(row.key_version) < 1) || new Set(tables.first_credentials.map(row => row.program)).size !== tables.first_credentials.length) throw new HttpError(400, "Backup contains an invalid FIRST credential");
   if (schemaVersion < 7 && tables.installations) { const providers = new Set(tables.encrypted_integrations.map((row) => row.provider)); tables.installations = tables.installations.map((row) => ({ ...row, google_enabled: providers.has("google") ? 1 : 0, resend_enabled: providers.has("resend") ? 1 : 0, discord_enabled: providers.has("discord") ? 1 : 0 })); }
   if (schemaVersion < 12 && tables.installations) tables.installations = tables.installations.map((row) => ({ google_calendar_enabled: 0, ...row }));
   if (tables.members) tables.members = tables.members.map((row) => ({ attendance_required_from: String(row.created_at ?? "").slice(0, 10), ...row, ...(schemaVersion < 34 ? { inactive_periods_json: row.active === 0 ? JSON.stringify([[new Date().toISOString(), null]]) : "[]" } : {}) }));
@@ -4024,6 +4116,7 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   // Walkthrough progress on pages of extracted modules whose plugins are not installed is not restored.
   const unavailablePages = unavailableExtractedWalkthroughPages(installedExternalBackupModuleIds);
   if (unavailablePages.size) tables.user_walkthroughs = tables.user_walkthroughs.filter((row) => !unavailablePages.has(String(row.page_id)));
+  tables.user_walkthroughs = tables.user_walkthroughs.filter((row) => !removedWalkthroughPages.has(String(row.page_id)));
   for (const row of tables.user_walkthroughs) {
     if (row.installation_id !== "primary" || !tables.users.some((user) => user.id === row.user_id && user.installation_id === row.installation_id)
       || !validWalkthroughProgress({ pageId: row.page_id, version: row.content_version, status: row.status, stepId: row.step_id })) throw new HttpError(400, "Backup walkthrough progress is invalid");
@@ -4044,7 +4137,8 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   const invalidatedPairingCodes = tables.pairing_codes.length; const revokedKiosks = tables.kiosks.length;
   tables.pairing_codes = tables.pairing_codes.map((row) => ({ ...row, code_hash: `restored-${crypto.randomUUID()}`, expires_at: value.exportedAt, redeemed_at: value.exportedAt }));
   tables.kiosks = tables.kiosks.map((row) => ({ ...row, token_hash: `restored-${crypto.randomUUID()}`, active: 0 }));
-  tables.simulated_kiosk_sessions = tables.simulated_kiosk_sessions.map((row) => ({ ...row, active: 0, online: 0 }));
+  // Schema 47 and earlier carry the browser simulator's session; its table no longer exists.
+  tables.simulated_kiosk_sessions = [];
   const attendanceRecentDays = scope === "roster" && schemaVersion >= 15 ? Number(value.attendanceRecentDays) : 30;
   if (!Number.isSafeInteger(attendanceRecentDays) || attendanceRecentDays < 1 || attendanceRecentDays > 365) throw new HttpError(400, "Backup attendance window is invalid");
   const attendancePolicyActivatedOn = scope === "roster" && schemaVersion >= 15 ? value.attendancePolicyActivatedOn ?? null : schemaVersion < 15 && (tables.member_labels.some((row) => row.formula_enabled === 1) || tables.label_attendance_rules.length) ? new Date().toISOString().slice(0, 10) : null;
@@ -4235,7 +4329,12 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     if (request.method !== "OPTIONS" && moduleRoute) {
       const db = requireDatabase(env);
       // The session lookup and the module access check run together; a 401 or 403 from the session still wins.
-      if (moduleRoute.route.access === "workspace") {
+      if (moduleRoute.module.id === "attendance" && attendanceSetupPairingPaths.has(url.pathname)) {
+        if (moduleRoute.route.access === "workspace") {
+          const [principal, generation] = await authorizedRead(request, env, ["admin"], (userId) => requireModuleSetup(db, userId, moduleRoute.module.id)); moduleUserId = principal.userId;
+          env = moduleScopedEnvironment(env, captureModuleSetupDatabase(db, moduleRoute.module.id, generation, principal.userId));
+        } else env = moduleScopedEnvironment(env, captureModuleEnabledDatabase(db, moduleRoute.module.id, await requireModuleEnabled(db, moduleRoute.module.id)));
+      } else if (moduleRoute.route.access === "workspace") {
         const [principal, generation] = await authorizedRead(request, env, ["admin", "operator"], (userId) => requireModuleWorkspace(db, userId, moduleRoute.module.id)); moduleUserId = principal.userId;
         const capability = moduleRoute.module.capabilities.find((item) => item.operator)?.id;
         if (!capability) throw new HttpError(500, "Module workspace capability is unavailable");
@@ -4296,6 +4395,11 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/members/bulk/preview" && request.method === "POST") result = await bulkMemberStatus(request, env, false);
     else if (url.pathname === "/admin/members/bulk/apply" && request.method === "POST") result = await bulkMemberStatus(request, env, true);
     else if (/^\/admin\/members\/[^/]+\/history$/.test(url.pathname) && request.method === "GET") result = await memberHistory(request, env, decodeURIComponent(url.pathname.split("/")[3]));
+    else if (/^\/admin\/members\/[^/]+\/pin$/.test(url.pathname) && ["GET", "DELETE"].includes(request.method) || /^\/admin\/members\/[^/]+\/pin\/unlock$/.test(url.pathname) && request.method === "POST") {
+      const principal = await requireRole(request, env, ["admin", "operator"]);
+      if (request.method !== "GET" && request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "PIN changes require the dashboard origin");
+      result = await dashboardMemberPin(request, decodeURIComponent(url.pathname.split("/")[3]), url.pathname.endsWith("/unlock"), { db: requireDatabase(env), actor: principal, respond: response });
+    }
     else if (/^\/admin\/members\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageMember(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/admin/pairing-codes" && ["GET", "POST"].includes(request.method)) result = await pairingCodes(request, env);
     else if (url.pathname === "/admin/kiosks/fingerprint-review" || url.pathname.startsWith("/admin/kiosks/fingerprint-review/")) {
@@ -4326,13 +4430,24 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
       throw new HttpError(410, "Peer fingerprint sharing has been retired. Use cloud fingerprint storage.");
     }
     else if (url.pathname === "/admin/kiosks" && request.method === "GET") result = await kioskStatus(request, env);
+    else if (/^\/admin\/kiosks\/[^/]+\/pin-requests$/.test(url.pathname) && request.method === "GET") { await requireRole(request, env, ["admin", "operator"]); result = await dashboardKioskPinRequests(decodeURIComponent(url.pathname.split("/")[3]), { db: requireDatabase(env), respond: response }); }
+    else if (/^\/admin\/pin-requests\/[^/]+\/(?:approve|decline)$/.test(url.pathname) && request.method === "POST") {
+      const principal = await requireRole(request, env, ["admin", "operator"]);
+      if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "PIN approval requires the dashboard origin");
+      const [, , , requestId, decision] = url.pathname.split("/");
+      result = await decidePinRequest(decodeURIComponent(requestId), decision === "approve" ? "approve" : "decline", { db: requireDatabase(env), actor: principal, respond: response });
+    }
+    else if (url.pathname === "/admin/settings/pin-lockout" && ["GET", "PUT"].includes(request.method)) {
+      const principal = await requireRole(request, env, ["admin"]);
+      if (request.method === "PUT" && request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "PIN lockout settings require the dashboard origin");
+      result = await pinLockoutSettings(request, { db: requireDatabase(env), actor: principal, readJson: parseJson, respond: response });
+    }
     else if (/^\/admin\/kiosks\/[^/]+\/enrollment(?:\/[^/]+)?$/.test(url.pathname)) result = await dashboardKioskEnrollment(request, env, decodeURIComponent(url.pathname.split("/")[3]), url.pathname.split("/")[5] ? decodeURIComponent(url.pathname.split("/")[5]) : undefined);
     else if (url.pathname === "/admin/kiosks/authentication-method" && request.method === "PATCH") result = await kioskAuthenticationConfiguration(request, env);
     else if (/^\/admin\/kiosks\/[^/]+\/authentication-method$/.test(url.pathname) && request.method === "PATCH") result = await kioskAuthenticationConfiguration(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+$/.test(url.pathname) && ["PATCH", "DELETE"].includes(request.method)) result = await manageKiosk(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "POST") result = await queueKioskCommand(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/kiosks\/[^/]+\/commands$/.test(url.pathname) && request.method === "GET") result = await kioskCommandStatus(request, env, decodeURIComponent(url.pathname.split("/")[3]));
-    else if (url.pathname === "/admin/simulator" && ["GET", "POST"].includes(request.method)) result = await simulatedKiosk(request, env);
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
     else if (url.pathname === "/meeting-templates" && request.method === "GET") result = await meetingTemplates(request, env);
     else if (url.pathname === "/meetings/bulk-delete" && request.method === "POST") result = await bulkDeleteMeetings(request, env);
@@ -4357,6 +4472,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/exports/attendance.csv" && request.method === "GET") result = await attendanceExport(request, env);
     else if (url.pathname === "/admin/integrations" && request.method === "GET") result = await integrationsStatus(request, env);
     else if (url.pathname === "/admin/integrations/google-calendar" && ["PUT", "PATCH", "DELETE"].includes(request.method)) result = await googleCalendarConfiguration(request, env);
+    else if (url.pathname === "/admin/integrations/first" && ["GET", "PUT", "DELETE"].includes(request.method) || ["/admin/integrations/first/lookup", "/admin/integrations/first/clear-cache"].includes(url.pathname) && request.method === "POST") result = await firstIntegration(request, env, url);
     else if (url.pathname === "/admin/integrations/google-calendar/authorize" && request.method === "GET") result = await googleCalendarStart(request, env);
     else if (url.pathname === "/admin/integrations/google-calendar/callback" && request.method === "GET") result = await googleCalendarCallback(request, env);
     else if (url.pathname === "/admin/integrations/google-calendar/calendars" && request.method === "GET") result = await listGoogleCalendars(request, env);
@@ -4469,6 +4585,10 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/kiosk/commands" && request.method === "GET") result = await pendingKioskCommand(request, env);
     else if (/^\/kiosk\/commands\/[^/]+\/result$/.test(url.pathname) && request.method === "POST") result = await completeKioskCommand(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (url.pathname === "/kiosk/attendance" && request.method === "POST") result = await kioskAttendance(request, env);
+    else if (/^\/kiosk\/(?:pin-failures|pin-requests(?:\/[^/]+(?:\/pin)?)?|pins(?:\/[^/]+\/reset)?)$/.test(url.pathname)) {
+      const kiosk = await kioskFor(request, env);
+      result = await kioskPinRoute(request, url.pathname, { db: requireDatabase(env), kiosk, readJson: parseJson, respond: response }) ?? response({ error: "Not found" }, 404);
+    }
     else result = response({ error: "Not found" }, 404);
   } catch (error) {
     const handled = error instanceof HttpError || error instanceof WebUpdateError;
@@ -4476,7 +4596,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     // Unexpected error text (D1, SQL or provider internals) stays in Worker logs; callers get only a correlation ID.
     const errorId = handled ? undefined : crypto.randomUUID();
     if (errorId) console.error(JSON.stringify({ event: "api_error", errorId, path: url.pathname, message: error instanceof Error ? error.message : String(error) }));
-    result = response({ error: handled ? error.message : "Request failed", details: error instanceof HttpError ? error.details : undefined, ...(error instanceof WebUpdateError ? { code: error.code } : error instanceof HttpError && error.code ? { code: error.code } : {}), ...(errorId ? { errorId } : {}) }, status);
+    result = response({ error: handled ? error.message : "Request failed", details: error instanceof HttpError ? error.details : undefined, ...(error instanceof HttpError ? error.extra : undefined), ...(error instanceof WebUpdateError ? { code: error.code } : error instanceof HttpError && error.code ? { code: error.code } : {}), ...(errorId ? { errorId } : {}) }, status);
   }
   if (privateModuleResponse(url.pathname)) {
     const headers = new Headers(result.headers); headers.set("cache-control", "no-store, private, max-age=0"); headers.set("pragma", "no-cache"); headers.set("expires", "0"); headers.set("x-robots-tag", "noindex, nofollow");

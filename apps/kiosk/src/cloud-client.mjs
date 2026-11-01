@@ -106,6 +106,22 @@ function legacyRejectionCode(status, error) {
   return undefined;
 }
 
+// The PIN step refused a scan sent with a PIN: nothing was recorded, and the member sees why at the kiosk.
+export const pinScanRefusals = new Set(["pin_required", "invalid_pin", "pin_not_set", "pin_locked", "pin_incorrect"]);
+
+/** A Worker answer other than 2xx to kioskApiRequest, with its status, code and body. */
+export class KioskApiError extends Error {
+  constructor(status, body) { super(typeof body?.error === "string" ? body.error.slice(0, 300) : `LancerLogin API returned ${status}`); this.status = status; this.code = typeof body?.code === "string" ? body.code : undefined; this.body = body && typeof body === "object" ? body : {}; }
+}
+
+/** A JSON call to a kiosk endpoint with the kiosk credential. A refusal throws KioskApiError; no connection throws as fetch does. */
+export async function kioskApiRequest(config, method, path, data, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}${path}`, { method, headers: { ...(data === undefined ? {} : { "content-type": "application/json" }), authorization: `Bearer ${config.kioskToken}` }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new KioskApiError(response.status, body);
+  return body;
+}
+
 export class TransientDeliveryError extends Error {
   constructor(status, message) { super(message || `LancerLogin API returned ${status}; the scan stays queued`); this.status = status; this.transient = true; }
 }
@@ -130,12 +146,15 @@ export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) 
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/attendance`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
-    body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt, ...(event.pairingId ? { pairingId: event.pairingId } : {}), ...(Number.isInteger(event.matchScore) ? { matchScore: event.matchScore } : {}), rescanSupported: true }),
+    // pin travels only on a scan sent straight from a Require PIN kiosk; it is never part of a queued event. A scan
+    // queued after the kiosk checked its cached hash says pinCheck "offline" instead.
+    body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt, ...(event.pairingId ? { pairingId: event.pairingId } : {}), ...(Number.isInteger(event.matchScore) ? { matchScore: event.matchScore } : {}), ...(typeof event.pin === "string" ? { pin: event.pin } : {}), ...(event.pinCheck === "offline" ? { pinCheck: "offline" } : {}), rescanSupported: true }),
   });
   if (response.status >= 400 && response.status < 500) {
     const contentType = response.headers.get("content-type") ?? "";
     const body = /^application\/json(?:\s*;|\s*$)/i.test(contentType) ? await response.json().catch(() => ({})) : (await response.body?.cancel(), {});
     const error = typeof body?.error === "string" ? body.error.slice(0, 300) : "";
+    if (typeof event.pin === "string" && pinScanRefusals.has(body?.code)) return { accepted: false, duplicate: false, pinRefused: true, status: response.status, code: body.code, error, ...(Number.isInteger(body.attemptsLeft) ? { attemptsLeft: body.attemptsLeft } : {}), ...(typeof body.lockedUntil === "string" ? { lockedUntil: body.lockedUntil } : {}) };
     if (response.status === 409 && rescanScanRefusals.has(body?.code)) return { accepted: false, duplicate: false, rescan: true, status: response.status, code: body.code, error, eventId: event.eventId };
     const code = typeof body?.code === "string" && permanentScanRejections.has(body.code) ? body.code : legacyRejectionCode(response.status, error);
     if (code) return { accepted: false, rejected: true, status: response.status, code, error };

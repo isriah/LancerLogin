@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // Only these physical runtime/artifact suites are omitted. API pairing,
-// simulator, security, migration and recovery coverage stays in the web gate.
+// web kiosk, security, migration and recovery coverage stays in the web gate.
 export const kioskOnlyTests = [
   "tests/kiosk-artifacts.test.mjs",
   "tests/kiosk-runtime.test.mjs",

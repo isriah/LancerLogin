@@ -11,7 +11,13 @@
   .app main .meeting-browser-controls.ui-card { padding: var(--card-padding); }
 
   /* Meeting and activity tables: the selection column stays compact so titles keep their width. */
-  .app .meeting-directory .ui-table :is(th,td):first-child { width: 3.5rem; min-width: 0; }
+  .app .meeting-directory .ui-table .meeting-selection-column { width: 3.5rem; min-width: 0; }
+  /* Titles take the widest column and wrap between words, not inside them. Tables without a selection column, such as
+     Outreach activities, keep a full-width title. */
+  .app .meeting-directory .ui-table :is(th,td) { min-width: 0; }
+  .app .meeting-directory .ui-table td.meeting-title-cell { min-width: 14rem; }
+  .app .meeting-directory .ui-table td:not(.meeting-title-cell,.meeting-audience-cell,.meeting-notes-cell) { white-space: nowrap; }
+  .app .meeting-directory .meeting-title-cell > a { overflow-wrap: break-word; }
 
   /* Roster filter labels read like every other field label; the filter icon stays decorative. */
   .app .roster-filters label:has(> :is(input:not([type="radio"]):not([type="checkbox"]),select,textarea)):not(.meeting-browser-select) > span:not([class]) { color: var(--ui-text); font-weight: 750; }

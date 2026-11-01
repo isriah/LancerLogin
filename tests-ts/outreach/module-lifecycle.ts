@@ -6,7 +6,7 @@ import { runModuleCleanup } from "../../apps/api/src/module-cleanup.ts";
 import { captureModuleWorkspaceDatabase } from "../../apps/api/src/module-database-scope.ts";
 import { configureModulePlatform, readModulePlatformSnapshot, readModuleSetup, updateModuleSetup } from "../../apps/api/src/module-platform.ts";
 
-test("Attendance setup validates rules, a same-day meeting, browser input, and optional skips", async () => {
+test("Attendance setup validates rules, a same-day meeting, a paired kiosk that checked in, and optional skips", async () => {
   const database = new Database();
   try {
     let state = await readModuleSetup(database, "admin", "attendance");
@@ -24,19 +24,30 @@ test("Attendance setup validates rules, a same-day meeting, browser input, and o
     const endsAt = new Date(Math.min(dayEnd.getTime(), now.getTime() + 55 * 60_000)).toISOString();
     const meetingResponse = await attendanceSetupRoute(request("/module-setup/attendance/meeting", "POST", { title: "Same-day setup meeting", startsAt, endsAt, required: true }), database, "admin");
     assert.equal(meetingResponse.status, 201);
-    const meetingId = String((await meetingResponse.json() as { id: string }).id);
     state = await updateModuleSetup(database, "admin", "attendance", { generation: 1, stepId: "meeting", outcome: "completed" });
     assert.equal(state.steps.find((step) => step.id === "meeting")?.valid, true);
 
-    assert.equal((await attendanceSetupRoute(request("/module-setup/attendance/input", "POST", { action: "start", name: "Synthetic browser" }), database, "admin")).status, 200);
-    const scan = await attendanceSetupRoute(request("/module-setup/attendance/input", "POST", { action: "scan", memberId: "1001", meetingId, eventId: "setup-event" }), database, "admin");
-    assert.equal(scan.status, 202);
+    // Verified attendance input waits for an active paired kiosk, Pi or web, that has checked in.
+    const kiosks = async () => (await (await attendanceSetupRoute(request("/module-setup/attendance/input", "GET"), database, "admin")).json() as { kiosks: { name: string; kind: string; lastSeenAt: string | null }[] }).kiosks;
+    assert.deepEqual(await kiosks(), []);
+    await assert.rejects(attendanceSetupRoute(request("/module-setup/attendance/input", "POST", { action: "start", name: "Synthetic browser" }), database, "admin"), (error: { status?: number }) => error.status === 405);
+    await assert.rejects(updateModuleSetup(database, "admin", "attendance", { generation: 1, stepId: "input", outcome: "completed" }), /Complete the current setup step/);
+    database.sqlite.exec(`INSERT INTO pairing_codes(id,installation_id,code_hash,expires_at,redeemed_at,created_by,created_at,purpose,kiosk_kind,kiosk_name)
+        VALUES('setup-pair','primary','setup-hash','2026-09-29','2026-09-28','admin','2026-09-28','hardware','web','Test web kiosk A');
+      INSERT INTO kiosks(id,installation_id,pairing_code_id,name,token_hash,created_at,kind) VALUES('setup-kiosk','primary','setup-pair','Test web kiosk A','setup-token','2026-09-28','web');`);
+    assert.deepEqual(await kiosks(), [{ id: "setup-kiosk", name: "Test web kiosk A", kind: "web", lastSeenAt: null }]);
+    assert.equal((await readModuleSetup(database, "admin", "attendance")).steps.find((step) => step.id === "input")?.valid, false, "paired but not yet checked in");
+    await assert.rejects(updateModuleSetup(database, "admin", "attendance", { generation: 1, stepId: "input", outcome: "completed" }), /Complete the current setup step/);
+    database.sqlite.exec("UPDATE kiosks SET active=0,last_seen_at='2026-09-28T12:00:00Z' WHERE id='setup-kiosk'");
+    assert.equal((await readModuleSetup(database, "admin", "attendance")).steps.find((step) => step.id === "input")?.valid, false, "a retired kiosk does not count");
+    database.sqlite.exec("UPDATE kiosks SET active=1 WHERE id='setup-kiosk'");
+    assert.equal((await readModuleSetup(database, "admin", "attendance")).steps.find((step) => step.id === "input")?.valid, true);
     state = await updateModuleSetup(database, "admin", "attendance", { generation: 1, stepId: "input", outcome: "completed" });
     assert.equal(state.ready, true);
     state = await updateModuleSetup(database, "admin", "attendance", { generation: 1, stepId: "calendar", outcome: "skipped" });
     state = await updateModuleSetup(database, "admin", "attendance", { generation: 1, stepId: "discord", outcome: "skipped" });
     assert.equal(state.ready, true);
-    assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS count FROM attendance_events WHERE source='simulator'").get()?.count, 1);
+    assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS count FROM attendance_events").get()?.count, 0, "setup records no attendance");
     assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS count FROM platform_module_setup_progress").get()?.count, 5);
   } finally { database.close(); }
 });

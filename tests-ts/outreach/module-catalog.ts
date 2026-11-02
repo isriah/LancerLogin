@@ -174,6 +174,60 @@ test("reconciliation applies pending module migrations through the ledger before
   } finally { database.close(); }
 });
 
+test("an upgrade that skips a required earlier release applies nothing, keeps the recorded definition and reports why", async () => {
+  const database = new Database();
+  try {
+    const sources = { "hour-tracking": { source: "https://example.test/owner/outreach.git", commit: "d".repeat(40) } };
+    const table = (name: string) => `CREATE TABLE ${name}(installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE, id TEXT NOT NULL, PRIMARY KEY(installation_id,id))`;
+    const first = { sequence: 1, name: "0001_extra_records.sql", sha256: "c".repeat(64), statements: [table("hours_extra_records")] };
+    // The second release moves data out of hours_extra_records at run time; the third drops the table.
+    const second = { sequence: 2, name: "0002_moved_records.sql", sha256: "d".repeat(64), statements: [table("hours_moved_records")] };
+    const third = { sequence: 3, name: "0003_drop_extra_records.sql", sha256: "e".repeat(64), statements: ["DROP TABLE hours_extra_records"] };
+    const release = (migrations: ModuleMigrationPackage["migrations"], upgradeRequiresMigrations?: string[]): ModuleMigrationPackage[] => [{ moduleId: "hour-tracking", tablePrefix: "hours_", migrations, ...(upgradeRequiresMigrations ? { upgradeRequiresMigrations } : {}) }];
+    const latest = release([first, second, third], ["0002_moved_records.sql"]);
+    const recorded = () => ({ ...database.sqlite.prepare("SELECT definition_sha256 AS sha, json_extract(definition_json,'$.migrationHead') AS head FROM platform_module_catalog WHERE module_id='hour-tracking'").get() });
+    const ledger = () => database.sqlite.prepare("SELECT name FROM platform_module_migrations WHERE module_id='hour-tracking' ORDER BY sequence").all().map((row) => row.name);
+    const tables = () => database.sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('hours_extra_records','hours_moved_records') ORDER BY name").all().map((row) => row.name);
+    assert.deepEqual(await reconcileInstalledModules(database, new Date(), { migrations: release([first]), sources }), { changed: true, failures: [] });
+    database.sqlite.exec("UPDATE platform_modules SET phase='enabled', setup_complete=1 WHERE module_id='hour-tracking'");
+    const before = recorded();
+    assert.equal(before.head, "c".repeat(64));
+
+    // The installation skips the second release: none of the pending migrations run and the old definition stays recorded.
+    const result = await reconcileInstalledModules(database, new Date(), { migrations: latest, sources });
+    assert.equal(result.changed, false); assert.equal(result.failures.length, 1); assert.equal(result.failures[0]?.moduleId, "hour-tracking");
+    assert.match(result.failures[0]!.message, /^This version of .+ can't be installed as an upgrade yet\. Install an earlier .+ release first: this installation hasn't applied the .+ migration 0002_moved_records\.sql \(it has applied up to 0001_extra_records\.sql\)\./);
+    assert.deepEqual(ledger(), ["0001_extra_records.sql"]);
+    assert.deepEqual(tables(), ["hours_extra_records"]);
+    assert.deepEqual(recorded(), before);
+    // The module keeps its lifecycle state; the failure retries on later passes until the path is fixed.
+    assert.equal((await readModulePlatformSnapshot(database, "admin")).modules.find((module) => module.id === "hour-tracking")?.phase, "enabled");
+    assert.equal((await reconcileInstalledModules(database, new Date(), { migrations: latest, sources })).failures.length, 1);
+
+    // Installing the second release first, then the latest, applies everything in order.
+    assert.deepEqual(await reconcileInstalledModules(database, new Date(), { migrations: release([first, second]), sources }), { changed: true, failures: [] });
+    assert.deepEqual(await reconcileInstalledModules(database, new Date(), { migrations: latest, sources }), { changed: true, failures: [] });
+    assert.deepEqual(ledger(), ["0001_extra_records.sql", "0002_moved_records.sql", "0003_drop_extra_records.sql"]);
+    assert.deepEqual(tables(), ["hours_moved_records"]);
+    assert.equal(recorded().head, "e".repeat(64));
+  } finally { database.close(); }
+});
+
+test("a fresh install applies a release with an upgrade requirement directly", async () => {
+  const database = new Database();
+  try {
+    database.sqlite.exec("DELETE FROM platform_modules WHERE module_id='hour-tracking'; DELETE FROM platform_module_epochs WHERE module_id='hour-tracking'");
+    const table = (name: string) => `CREATE TABLE ${name}(installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE, id TEXT NOT NULL, PRIMARY KEY(installation_id,id))`;
+    const migrations: ModuleMigrationPackage[] = [{ moduleId: "hour-tracking", tablePrefix: "hours_", upgradeRequiresMigrations: ["0001_extra_records.sql"], migrations: [
+      { sequence: 1, name: "0001_extra_records.sql", sha256: "c".repeat(64), statements: [table("hours_extra_records")] },
+      { sequence: 2, name: "0002_drop_extra_records.sql", sha256: "d".repeat(64), statements: ["DROP TABLE hours_extra_records"] },
+    ] }];
+    assert.deepEqual(await reconcileInstalledModules(database, new Date(), { migrations }), { changed: true, failures: [] });
+    assert.equal(database.count("SELECT COUNT(*) AS n FROM platform_module_migrations WHERE module_id='hour-tracking'"), 2);
+    assert.equal((await readModulePlatformSnapshot(database, "admin")).modules.find((module) => module.id === "hour-tracking")?.phase, "disabled");
+  } finally { database.close(); }
+});
+
 test("a module whose migration fails stays unregistered while other modules keep working", async () => {
   const database = new Database();
   try {

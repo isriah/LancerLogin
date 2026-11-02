@@ -8,7 +8,7 @@
  * Plugin metadata for the confirmation is read anonymously, so no credential reaches a plugin's repository.
  */
 import { WebUpdateError, absentSelectionSha, startedUpdate, type WebUpdateEnv } from "./web-updates.ts";
-import { firstPartyModules } from "../../../packages/shared/src/module-platform.ts";
+import { bundledModuleRegistry, firstPartyModules } from "../../../packages/shared/src/module-platform.ts";
 import { supportedModuleContractVersions } from "../../../packages/shared/src/module-contract.ts";
 import { allowlistFileName, entryTrack, parseAllowlist, sourceAllowed, type AllowedSource, type Allowlist, declaredModuleIds, multipleModulesMessage, parseModuleSource, parseSelectionFile, satisfiesCoreRange, selectionFileName, selectionTracks, serializeSelection, SelectionError, moduleIdPattern, commitPattern, type SelectionDocument, type SelectionEntry, type SelectionTrack } from "../../../packages/shared/src/module-selection.ts";
 import { compareReleaseVersions, newestPluginRelease, parseReleaseVersion, pluginReleaseKind } from "../../../packages/shared/src/release-policy.mjs";
@@ -17,6 +17,7 @@ import { externalModuleSources } from "./generated/external-module-data.ts";
 import { extractedModulesInUse } from "./extracted-modules.ts";
 import { knownModule } from "./known-modules.ts";
 import { credentialStatus, observeCredentialResponse } from "./github-credential.ts";
+import { missingUpgradeMigrations, moduleMigrationLedgerTable, upgradePathMessage } from "./module-migrations.ts";
 
 export interface PluginSelectionEnv extends WebUpdateEnv { MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string }
 export type InstalledPlugins = Readonly<Record<string, { readonly source: string; readonly commit: string; readonly official?: boolean; readonly selected?: boolean }>>;
@@ -259,6 +260,8 @@ function proposedSelection(current: SelectionDocument, change: ChangeInput, inst
 export type PluginMetadata = {
   state: "compatible" | "incompatible" | "unknown"; reason?: string;
   version?: string; contract?: number; core?: string; tablePrefix?: string; migrations?: string[]; adoptedCoreMigrations?: number;
+  /** The plugin's earlier migrations an installation must already have applied before upgrading to this commit. */
+  upgradeRequiresMigrations?: string[];
   /** Set when the repository declares more than one module: such a repository is refused, never just marked incompatible. */
   multipleModules?: string[];
 };
@@ -276,7 +279,7 @@ export async function readPluginMetadata(source: string, commit: string, moduleI
   };
   const response = await get("package.json", "application/vnd.github.raw+json");
   if (!response?.ok) return { state: "unknown", reason: response?.status === 404 ? "The module repository's package.json was not found at that commit, or the repository is private. Composition checks it before the change is applied." : "GitHub could not be reached to inspect the module repository. Composition checks it before the change is applied." };
-  let pkg: { version?: unknown; lancerlogin?: { moduleId?: unknown; contract?: unknown; core?: unknown; tablePrefix?: unknown; migrations?: unknown; adoptedCoreMigrations?: unknown } };
+  let pkg: { version?: unknown; lancerlogin?: { moduleId?: unknown; contract?: unknown; core?: unknown; tablePrefix?: unknown; migrations?: unknown; adoptedCoreMigrations?: unknown; upgradeRequiresMigrations?: unknown } };
   try { pkg = JSON.parse((await response.text()).slice(0, 65_536)); } catch { return { state: "incompatible", reason: "The module repository's package.json is not valid JSON." }; }
   const field = pkg?.lancerlogin;
   if (!field || typeof field !== "object") return { state: "incompatible", reason: "The module repository's package.json has no lancerlogin field." };
@@ -284,6 +287,11 @@ export async function readPluginMetadata(source: string, commit: string, moduleI
   if (declared) return { state: "incompatible", reason: multipleModulesMessage(declared), multipleModules: declared };
   const metadata: PluginMetadata = { state: "compatible", version: typeof pkg.version === "string" ? pkg.version.slice(0, 40) : undefined, contract: typeof field.contract === "number" ? field.contract : undefined, core: typeof field.core === "string" ? field.core.slice(0, 200) : undefined, tablePrefix: typeof field.tablePrefix === "string" ? field.tablePrefix.slice(0, 40) : undefined, adoptedCoreMigrations: Array.isArray(field.adoptedCoreMigrations) ? field.adoptedCoreMigrations.length : undefined };
   if (field.moduleId !== moduleId) return { ...metadata, state: "incompatible", reason: `The repository declares module ID ${JSON.stringify(field.moduleId)}, not ${moduleId}.` };
+  const required = field.upgradeRequiresMigrations;
+  if (required !== undefined) {
+    if (!Array.isArray(required) || !required.length || required.length > 50 || required.some((name) => typeof name !== "string" || !/^\d{4}_[a-z0-9][a-z0-9_]*\.sql$/.test(name))) return { ...metadata, state: "incompatible", reason: "The module's upgradeRequiresMigrations is not a list of its own migration file names." };
+    metadata.upgradeRequiresMigrations = required as string[];
+  }
   if (typeof field.contract !== "number" || !supportedModuleContractVersions.includes(field.contract)) return { ...metadata, state: "incompatible", reason: `The module needs module contract ${String(field.contract)}; this LancerLogin supports ${supportedModuleContractVersions.join(", ")}.` };
   if (!coreVersion || !parseReleaseVersion(coreVersion)) { metadata.state = "unknown"; metadata.reason = "This installation is not running an official release, so its Core range cannot be checked."; }
   else {
@@ -303,6 +311,20 @@ function refuseMultipleModules(metadata: PluginMetadata | undefined): void {
   if (metadata?.multipleModules) fail(422, "multiple_modules", metadata.reason ?? multipleModulesMessage(metadata.multipleModules));
 }
 
+/**
+ * A plugin can require an earlier release on the upgrade path (`upgradeRequiresMigrations`), for example when that release
+ * moves data at run time that a later migration drops. When this installation already has the module's migrations
+ * applied (an upgrade) but not every required one, the change is refused. A fresh install, with no ledger rows, is not
+ * affected. Composition and reconciliation enforce the same rule for pins this check cannot see.
+ */
+async function refuseSkippedUpgrade(db: Db, moduleId: string, metadata: PluginMetadata | undefined): Promise<void> {
+  const required = metadata?.upgradeRequiresMigrations;
+  if (!required?.length) return;
+  const applied = (await db.prepare(`SELECT name FROM ${moduleMigrationLedgerTable} WHERE module_id = ? ORDER BY sequence`).bind(moduleId).all<{ name: string }>()).results ?? [];
+  const missing = missingUpgradeMigrations(required, applied);
+  if (missing.length) fail(409, "upgrade_path_required", upgradePathMessage({ label: bundledModuleRegistry.get(moduleId)?.label ?? moduleId, version: metadata?.version, missing, lastApplied: applied.at(-1)?.name }));
+}
+
 /** Confirmation details for a proposed change. Nothing is committed. */
 export async function reviewPluginChange(env: PluginSelectionEnv, input: Record<string, unknown>, installed: InstalledPlugins = externalModuleSources) {
   const change = readChangeInput(input, []);
@@ -313,6 +335,7 @@ export async function reviewPluginChange(env: PluginSelectionEnv, input: Record<
   if (change.source && !sourceAllowed(change.source, allowlist)) fail(403, "source_not_allowed", allowlist.state === "invalid" ? `${allowlistFileName} is invalid, so no module source can be selected. Repair it in the private deployment repository.` : "This installation's source allowlist does not include that plugin host and owner.");
   const metadata = change.action === "remove" ? undefined : await readPluginMetadata(change.source!, change.commit!, change.id, env.RELEASE_VERSION);
   refuseMultipleModules(metadata);
+  await refuseSkippedUpgrade(db, change.id, metadata);
   return {
     action: change.action, id: change.id, source: change.source ?? previous?.source ?? installed[change.id]?.source ?? null, commit: change.commit ?? null,
     previousCommit: previous?.commit ?? installed[change.id]?.commit ?? null, official: installed[change.id]?.official === true,
@@ -337,7 +360,11 @@ export async function commitPluginChange(env: PluginSelectionEnv, principal: Pri
   if (change.source && !sourceAllowed(change.source, allowlist)) fail(403, "source_not_allowed", "This installation's source allowlist does not permit that module source.");
   const { document, previous } = proposedSelection(selection.document, change, installed, await modulePhases(db));
   // Checked again at commit, so a direct request cannot pin a repository the review would refuse.
-  if (change.action !== "remove") refuseMultipleModules(await readPluginMetadata(change.source!, change.commit!, change.id, env.RELEASE_VERSION));
+  if (change.action !== "remove") {
+    const metadata = await readPluginMetadata(change.source!, change.commit!, change.id, env.RELEASE_VERSION);
+    refuseMultipleModules(metadata);
+    await refuseSkippedUpgrade(db, change.id, metadata);
+  }
   const short = (sha?: string) => sha ? sha.slice(0, 12) : "";
   const track = change.action === "remove" ? null : entryTrack(document.modules.find((entry) => entry.id === change.id));
   const previousTrack = previous || installed[change.id] ? entryTrack(previous) : null;

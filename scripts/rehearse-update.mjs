@@ -272,6 +272,30 @@ export function compareSnapshots(before, after, { allowChanged = {}, allowRemove
   return { problems, notes };
 }
 
+/**
+ * The plugin pins the TO build composes: TO's official modules, then the selection, which overrides an official entry.
+ * An update that moves a pin rewrites that plugin's catalog source and commit, so the comparison expects the TO pin
+ * there. Any other change still fails, including a catalog that keeps the FROM commit or records a third one.
+ */
+export function composedPins(officialModules, selection) {
+  const pins = new Map();
+  for (const module of [...(officialModules?.modules ?? []), ...(selection?.modules ?? [])]) pins.set(module.id, { source: module.source, commit: module.commit });
+  return pins;
+}
+export function expectComposedPins(before, pins) {
+  const table = before.records.platform_module_catalog;
+  if (!table) return before;
+  const at = (column) => table.columns.indexOf(column);
+  const rows = table.rows.map((row) => {
+    const values = JSON.parse(row); const pin = pins.get(values[at("module_id")]);
+    if (!pin || at("origin") < 0 || values[at("origin")] !== "external") return row;
+    if (at("source") >= 0) values[at("source")] = pin.source;
+    if (at("source_commit") >= 0) values[at("source_commit")] = pin.commit;
+    return JSON.stringify(values);
+  }).sort();
+  return { ...before, records: { ...before.records, platform_module_catalog: { ...table, rows } } };
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Workers in Miniflare
 
@@ -717,7 +741,8 @@ export async function rehearse(options) {
       const health = await api.ok("GET", "/health", undefined, { dashboard: false });
       report.check("TO health and module list", health.ok === true && health.releaseVersion === targetVersion && ["attendance", "hour-tracking", "carpool"].every((id) => health.modules.includes(id)), `modules ${health.modules.join(", ")}`);
       const afterStart = snapshot(databasePath);
-      const startDiff = compareSnapshots(before, afterStart, { allowRemoved: expectedRemovals });
+      const pins = composedPins(JSON.parse(await readFile(join(paths.to, "scripts/official-modules.json"), "utf8")), selection);
+      const startDiff = compareSnapshots(expectComposedPins(before, pins), afterStart, { allowRemoved: expectedRemovals });
       report.check("data preserved after the new Worker started", startDiff.problems.length === 0, startDiff.problems.join("; ") || startDiff.notes.join("; "));
       const catalog = query(databasePath, "SELECT module_id, origin, source_commit, installed FROM platform_module_catalog ORDER BY module_id");
       const carpoolPin = selection.modules.find((module) => module.id === "carpool")?.commit;

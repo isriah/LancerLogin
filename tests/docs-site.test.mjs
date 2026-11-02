@@ -218,12 +218,13 @@ test("kiosk guide covers hardware, installation, pairing, and fixed recovery com
   assert.match(kiosk, /phone or laptop/);
   assert.match(kiosk, /ten minutes/);
   assert.match(kiosk, /Pair kiosk/);
-  for (const label of ["Add physical kiosk", "Prepare the Pi", "This kiosk has an R503 fingerprint reader", "Copy install commands", "Create one-time pairing key", "Copy pairing key", "Pair this kiosk", "One-time pairing key", "Open web kiosk on this device"]) assert.match(kiosk, new RegExp(label));
+  for (const label of ["Add kiosk dialog", "Kind of kiosk", "Raspberry Pi kiosk", "Web kiosk", "Prepare the Pi", "This kiosk has an R503 fingerprint reader", "Copy install commands", "Create one-time pairing key", "Copy pairing key", "Pair this kiosk", "One-time pairing key", "Open web kiosk on this device"]) assert.match(kiosk, new RegExp(label));
   for (const method of ["Fingerprint", "RFID badge", "NFC badge", "Member ID entry", "QR code"]) assert.match(kiosk, new RegExp(method));
   for (const command of ["Reload display", "Restart software", "Reboot Pi", "Reset network PIN", "Update kiosk", "Erase unlinked fingerprints"]) assert.match(kiosk, new RegExp(`<td>${command}</td>`));
   assert.match(kiosk, /Scan without choosing a meeting/);
   assert.match(kiosk, /Recovery accepts only those fixed commands/);
   assert.match(kiosk, /reader status, the number of scans waiting, and uptime/);
+  assert.doesNotMatch(kiosk, /Add physical kiosk|simulator/i, "the kiosk guide describes the current Add kiosk dialog");
   assert.doesNotMatch(kiosk, /Enter the Worker API URL/);
   assert.doesNotMatch(kiosk, /5-volt pin 2|<td>2 or 4<\/td>|<td>5 V<\/td>/);
   assert.doesNotMatch(kiosk, /one kiosk|local time|Finger labels|label a finger/i);

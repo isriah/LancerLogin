@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import {
   ModuleMigrationError, adoptedBaselineName, applyModuleMigrations, assertPrefixClearOfCoreTables, checkModuleMigrationSql, coreIdentityTables, coreMigrationTables,
-  createAdoptedBaseline, d1ModuleMigrationExecutor, loadModuleMigrationPackage, migrationSha256, planModuleMigrations, readModuleMigrationDirectory, readModuleMigrationLedger,
-  splitSqlStatements, tablesAfterStatements, validateModuleMigrationFiles, validateTablePrefix, type ModuleMigrationPackage,
+  createAdoptedBaseline, d1ModuleMigrationExecutor, loadModuleMigrationPackage, migrationSha256, missingUpgradeMigrations, planModuleMigrations, readModuleMigrationDirectory, readModuleMigrationLedger,
+  splitSqlStatements, tablesAfterStatements, upgradePathMessage, validateModuleMigrationFiles, validateTablePrefix, validateUpgradeRequirements, type ModuleMigrationPackage,
 } from "../apps/api/src/module-migrations.ts";
 import { TestD1Database, createTestD1Database, nodeMigrationDirectoryReader, readCoreMigrations } from "./fixtures/d1-database.ts";
 
@@ -230,6 +230,62 @@ test("the runner applies each migration atomically with its ledger row and recor
   // An older package that lacks the applied migration is refused before any change.
   writeFileSync(join(directory, "reviewed.json"), JSON.stringify([reviewed[0]])); rmSync(join(directory, "0002_broken.sql"));
   await assert.rejects(async () => applyModuleMigrations(executor, await load(), { coreAppliedMigrations: [] }), code("module_migration_downgrade_refused"));
+});
+
+const tags = "CREATE TABLE example_tags (id INTEGER PRIMARY KEY, label TEXT NOT NULL);\n";
+const third = [...files, { name: "0003_create_tags.sql", content: tags }];
+const thirdReviewed = third.map((file) => ({ name: file.name, sha256: sha(file.content) }));
+
+test("an upgrade must already have applied the package's required earlier migrations; a fresh install is unaffected", async (t) => {
+  const migrations = await validateModuleMigrationFiles({ moduleId: "example", tablePrefix: "example_", files: third, reviewed: thirdReviewed });
+  // The declaration must name the package's own migrations, once each in ascending order, and never its newest.
+  assert.deepEqual(validateUpgradeRequirements("example", undefined, migrations), []);
+  assert.deepEqual(validateUpgradeRequirements("example", ["0001_create_items.sql", "0002_add_notes.sql"], migrations), ["0001_create_items.sql", "0002_add_notes.sql"]);
+  for (const [value, pattern] of [
+    ["0002_add_notes.sql", /non-empty array/], [[], /non-empty array/], [[2], /non-empty array/],
+    [["0009_missing.sql"], /"0009_missing\.sql", which is not one of the module's migrations/],
+    [["0003_create_tags.sql"], /0003_create_tags\.sql, the newest migration/],
+    [["0002_add_notes.sql", "0001_create_items.sql"], /unique and in ascending order/],
+    [["0002_add_notes.sql", "0002_add_notes.sql"], /unique and in ascending order/],
+  ] as const) assert.throws(() => validateUpgradeRequirements("example", value, migrations), code("module_migration_invalid", pattern), JSON.stringify(value));
+
+  const pkg: ModuleMigrationPackage = { moduleId: "example", tablePrefix: "example_", migrations, upgradeRequiresMigrations: ["0002_add_notes.sql"] };
+  const entry = (index: number) => ({ sequence: migrations[index]!.sequence, name: migrations[index]!.name, sha256: migrations[index]!.sha256 });
+  // Fresh install: no ledger rows, so every migration applies in order.
+  assert.deepEqual(planModuleMigrations(pkg, [], []).pending.map((pending) => pending.name), ["0001_create_items.sql", "0002_add_notes.sql", "0003_create_tags.sql"]);
+  // Upgrade with the prerequisite applied.
+  assert.deepEqual(planModuleMigrations(pkg, [entry(0), entry(1)], []).pending.map((pending) => pending.name), ["0003_create_tags.sql"]);
+  assert.deepEqual(planModuleMigrations(pkg, [entry(0), entry(1), entry(2)], []).pending, []);
+  // Upgrade that skips the release adding 0002: refused, naming the migration and how far the installation got.
+  assert.throws(() => planModuleMigrations(pkg, [entry(0)], [], { label: "Example" }), code("module_migration_upgrade_path_required",
+    /^This version of Example can't be installed as an upgrade yet\. Install an earlier Example release first: this installation hasn't applied the Example migration 0002_add_notes\.sql \(it has applied up to 0001_create_items\.sql\)\. Update Example to the release that adds it/));
+  assert.throws(() => planModuleMigrations(pkg, [entry(0)], []), code("module_migration_upgrade_path_required", /Module example can't be installed/));
+  assert.equal(upgradePathMessage({ label: "Guest Visits", version: "0.4.0", missing: ["0003_a.sql", "0004_b.sql"] }),
+    "Guest Visits 0.4.0 can't be installed as an upgrade yet. Install an earlier Guest Visits release first: this installation hasn't applied the Guest Visits migrations 0003_a.sql and 0004_b.sql. Update Guest Visits to the release that adds them (its release notes say which), let that update finish, then update to this version.");
+  assert.deepEqual(missingUpgradeMigrations(undefined, [entry(0)]), []);
+  assert.deepEqual(missingUpgradeMigrations(["0002_add_notes.sql"], []), []);
+
+  // Through the runner and loader: the refused upgrade applies and records nothing; the intermediate release unblocks it.
+  const database = await createTestD1Database();
+  const executor = d1ModuleMigrationExecutor(database);
+  const directory = (count: number, required?: string[]) => {
+    const chosen = third.slice(0, count);
+    const path = moduleDirectory(t, { ...Object.fromEntries(chosen.map((file) => [file.name, file.content])), "reviewed.json": JSON.stringify(thirdReviewed.slice(0, count)) });
+    return loadModuleMigrationPackage(nodeMigrationDirectoryReader, { moduleId: "example", tablePrefix: "example_", directory: path, coreMigrations: database.coreMigrations, ...(required ? { upgradeRequiresMigrations: required } : {}) });
+  };
+  const latest = await directory(3, ["0002_add_notes.sql"]);
+  assert.deepEqual(latest.upgradeRequiresMigrations, ["0002_add_notes.sql"]);
+  await assert.rejects(directory(2, ["0002_add_notes.sql"]), code("module_migration_invalid", /the newest migration/));
+  await assert.rejects(directory(3, ["0004_later.sql"]), code("module_migration_invalid", /not one of the module's migrations/));
+  assert.deepEqual((await applyModuleMigrations(executor, await directory(1), { coreAppliedMigrations: [] })).applied, ["0001_create_items.sql"]);
+  await assert.rejects(applyModuleMigrations(executor, latest, { coreAppliedMigrations: [], label: "Example" }), code("module_migration_upgrade_path_required", /0002_add_notes\.sql/));
+  assert.deepEqual((await readModuleMigrationLedger(executor, "example")).map((row) => row.name), ["0001_create_items.sql"]);
+  assert.equal(database.sqlite.prepare("SELECT name FROM sqlite_master WHERE name IN ('example_audit', 'example_tags')").get(), undefined);
+  assert.deepEqual((await applyModuleMigrations(executor, await directory(2), { coreAppliedMigrations: [] })).applied, ["0002_add_notes.sql"]);
+  assert.deepEqual((await applyModuleMigrations(executor, latest, { coreAppliedMigrations: [] })).applied, ["0003_create_tags.sql"]);
+  // A fresh installation applies the latest release directly.
+  const fresh = await createTestD1Database();
+  assert.deepEqual((await applyModuleMigrations(d1ModuleMigrationExecutor(fresh), latest, { coreAppliedMigrations: [] })).applied, ["0001_create_items.sql", "0002_add_notes.sql", "0003_create_tags.sql"]);
 });
 
 test("the shared test database applies module migrations and adopted baselines only when asked", async (t) => {

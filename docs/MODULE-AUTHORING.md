@@ -125,6 +125,8 @@ Migrations may create, alter and drop only the module's own tables, indexes and 
 
 The Worker applies pending migrations through a per-module ledger, one atomic D1 batch per migration, before it registers the module. A module whose migration fails stays "setup incomplete" and retries; it never blocks other modules. Downgrades and changed hashes are refused.
 
+Migrations run before the new release's code. When a release's code moves data at run time and a later release drops the old table, the later release lists the earlier release's migration in `lancerlogin.upgradeRequiresMigrations`, so an installation that already has the module cannot skip the release that moves the data. Fresh installs are unaffected. See [Migrations](PLUGIN-AUTHORING.md#migrations) in the plugin guide for the rules and the Guest Visits example.
+
 ## Backup and lifecycle
 
 Plugins with portable tables provide a `backup` adapter: the manifest's backup version, the portable tables in parent-first order with their columns, and optional `normalize(tables, fromVersion, source)` (older backup versions; `source` carries the backup schema, whether the rows came from Core's section, the export time and the installation's creation time), `validate`, `neutralize` (transient authority, credentials, leases and pending jobs must not revive) and `pausedOperations` (how many provider operations `neutralize` pauses, reported with Core's paused operations). Classify operational tables as `nonPortableTables`. Backups carry plugin rows in a separate `externalModules` section with the plugin's source and commit. See [backup and restore](BACKUP-RESTORE.md).

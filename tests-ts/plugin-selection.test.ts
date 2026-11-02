@@ -339,6 +339,33 @@ test("review shows source, commit, compatibility and declarations without runnin
   });
 });
 
+test("an upgrade that skips a plugin's required earlier release is refused at review and commit; a fresh install is not", async () => {
+  const env = environment();
+  await withGitHub(async (github) => {
+    const base = github.pluginPackage as { lancerlogin: object };
+    github.pluginPackage = { ...base, version: "1.2.0", lancerlogin: { ...base.lancerlogin, upgradeRequiresMigrations: ["0002_carpool_move.sql"] } };
+    const ledger = (sequence: number, name: string) => env.DB.sqlite.prepare("INSERT INTO platform_module_migrations (module_id, sequence, name, sha256, applied_at) VALUES ('carpool', ?, ?, ?, '2026-10-01T00:00:00.000Z')").run(sequence, name, String(sequence).repeat(64));
+    // A fresh install has no ledger rows for the module, so the requirement does not apply.
+    const review = await reviewPluginChange(env, add, installed);
+    assert.equal(review.metadata?.state, "compatible"); assert.deepEqual(review.metadata?.upgradeRequiresMigrations, ["0002_carpool_move.sql"]);
+    // An installation that applied only 0001 must install the release that adds 0002 first, at review and again at commit.
+    ledger(1, "0001_carpool.sql");
+    const message = /^carpool 1\.2\.0 can't be installed as an upgrade yet\. Install an earlier carpool release first: this installation hasn't applied the carpool migration 0002_carpool_move\.sql \(it has applied up to 0001_carpool\.sql\)\. Update carpool to the release that adds it/;
+    await assert.rejects(reviewPluginChange(env, add, installed), { code: "upgrade_path_required", message });
+    await assert.rejects(commitPluginChange(env, fresh, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true }, installed), { code: "upgrade_path_required", message });
+    assert.equal(github.calls.some((call) => call.method === "PUT"), false);
+    // With the prerequisite applied, the upgrade is reviewed and committed.
+    ledger(2, "0002_carpool_move.sql");
+    assert.equal((await reviewPluginChange(env, add, installed)).metadata?.state, "compatible");
+    await commitPluginChange(env, fresh, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true }, installed);
+    assert.equal(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules[0].commit, pluginCommit);
+    // A malformed declaration makes the plugin incompatible instead of being ignored.
+    github.pluginPackage = { ...base, lancerlogin: { ...base.lancerlogin, upgradeRequiresMigrations: "0002_carpool_move.sql" } };
+    const malformed = await reviewPluginChange(env, { action: "upgrade", id: "carpool", source: carpoolSource, commit: nextCommit }, installed);
+    assert.equal(malformed.metadata?.state, "incompatible"); assert.match(String(malformed.metadata?.reason), /upgradeRequiresMigrations/);
+  });
+});
+
 test("a change commits optimistically, is audited, expires prepared updates and survives a concurrent edit only by review", async () => {
   const env = environment();
   await withGitHub(async (github) => {

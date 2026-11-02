@@ -28,6 +28,7 @@ export type ModuleMigrationErrorCode =
   | "module_migration_downgrade_refused"
   | "module_migration_ownership_violation"
   | "module_migration_baseline_unavailable"
+  | "module_migration_upgrade_path_required"
   | "module_migration_failed";
 
 export class ModuleMigrationError extends Error {
@@ -39,7 +40,12 @@ export type MigrationFile = { readonly name: string; readonly content: string };
 export type ReviewedModuleMigration = { readonly name: string; readonly sha256: string };
 export type ModuleMigration = { readonly sequence: number; readonly name: string; readonly sha256: string; readonly statements: readonly string[] };
 export type AdoptedBaseline = { readonly migrations: readonly ReviewedModuleMigration[]; readonly sha256: string };
-export type ModuleMigrationPackage = { readonly moduleId: string; readonly tablePrefix: string; readonly migrations: readonly ModuleMigration[]; readonly baseline?: AdoptedBaseline };
+/**
+ * `upgradeRequiresMigrations`: the package's own earlier migrations an installation must already have applied before it
+ * can upgrade to this package. Only an upgrade is checked (the module already has ledger rows); a fresh install applies
+ * everything in order.
+ */
+export type ModuleMigrationPackage = { readonly moduleId: string; readonly tablePrefix: string; readonly migrations: readonly ModuleMigration[]; readonly baseline?: AdoptedBaseline; readonly upgradeRequiresMigrations?: readonly string[] };
 export type ModuleMigrationLedgerEntry = { readonly sequence: number; readonly name: string; readonly sha256: string };
 export type PendingModuleMigration =
   | { readonly kind: "baseline"; readonly sequence: 0; readonly name: string; readonly sha256: string; readonly statements: readonly []; readonly adopted: readonly string[] }
@@ -425,13 +431,51 @@ export async function createAdoptedBaseline(input: { readonly moduleId: string; 
  * Build a module's migration package from its declarations: an optional migrations directory and optional adopted
  * Core migrations. Also refuses a prefix that would claim Core tables the module did not adopt.
  */
-export async function loadModuleMigrationPackage(reader: MigrationDirectoryReader, input: { readonly moduleId: string; readonly tablePrefix: string; readonly directory?: string; readonly adoptedCoreMigrations?: readonly string[]; readonly coreMigrations: readonly MigrationFile[]; readonly identityTables?: readonly string[] }): Promise<ModuleMigrationPackage> {
+export async function loadModuleMigrationPackage(reader: MigrationDirectoryReader, input: { readonly moduleId: string; readonly tablePrefix: string; readonly directory?: string; readonly adoptedCoreMigrations?: readonly string[]; readonly upgradeRequiresMigrations?: readonly string[]; readonly coreMigrations: readonly MigrationFile[]; readonly identityTables?: readonly string[] }): Promise<ModuleMigrationPackage> {
   const tablePrefix = validateTablePrefix(input.tablePrefix);
   const baseline = input.adoptedCoreMigrations?.length ? await createAdoptedBaseline({ moduleId: input.moduleId, tablePrefix, adopted: input.adoptedCoreMigrations, coreMigrations: input.coreMigrations }) : undefined;
   const adoptedTables = input.coreMigrations.filter((file) => input.adoptedCoreMigrations?.includes(file.name)).flatMap((file) => schemaTargets(file.content, `Core ${file.name}`).created);
   assertPrefixClearOfCoreTables(tablePrefix, coreMigrationTables(input.coreMigrations), adoptedTables);
   const migrations = input.directory === undefined ? [] : await readModuleMigrationDirectory(reader, { moduleId: input.moduleId, tablePrefix, directory: input.directory, identityTables: input.identityTables });
-  return { moduleId: input.moduleId, tablePrefix, migrations, ...baseline ? { baseline } : {} };
+  const required = validateUpgradeRequirements(input.moduleId, input.upgradeRequiresMigrations, migrations);
+  return { moduleId: input.moduleId, tablePrefix, migrations, ...baseline ? { baseline } : {}, ...required.length ? { upgradeRequiresMigrations: required } : {} };
+}
+
+/**
+ * Check `upgradeRequiresMigrations` against the package's own migrations: each name must be a migration the package ships,
+ * listed once in ascending order, and earlier than its newest migration (an upgrade can only require what an earlier
+ * release already shipped).
+ */
+export function validateUpgradeRequirements(moduleId: string, value: unknown, migrations: readonly ModuleMigration[]): string[] {
+  const label = `Module ${moduleId}`;
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.length || value.some((name) => typeof name !== "string")) return fail("module_migration_invalid", `${label}: upgradeRequiresMigrations must be a non-empty array of the module's own migration file names`);
+  const names = value as string[];
+  const newest = migrations.at(-1)?.name;
+  for (const [index, name] of names.entries()) {
+    if (!migrations.some((migration) => migration.name === name)) fail("module_migration_invalid", `${label}: upgradeRequiresMigrations names ${JSON.stringify(name)}, which is not one of the module's migrations`);
+    if (name === newest) fail("module_migration_invalid", `${label}: upgradeRequiresMigrations names ${name}, the newest migration; name a migration an earlier release already shipped`);
+    if (index > 0 && !(names[index - 1]! < name)) fail("module_migration_invalid", `${label}: upgradeRequiresMigrations must be unique and in ascending order`);
+  }
+  return [...names];
+}
+
+/** The required earlier migrations an upgrade lacks. Always empty for a fresh install: a module with no ledger rows. */
+export function missingUpgradeMigrations(required: readonly string[] | undefined, applied: readonly { readonly name: string }[]): string[] {
+  if (!required?.length || !applied.length) return [];
+  return required.filter((name) => !applied.some((entry) => entry.name === name));
+}
+
+const nameList = (names: readonly string[]) => names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+/**
+ * The plain-English refusal for an upgrade that skips a required earlier release, shared by Settings > Modules and
+ * reconciliation. `label` is the module's name, `version` the version being installed when known, and `lastApplied` the
+ * newest migration this installation applied.
+ */
+export function upgradePathMessage(input: { readonly label: string; readonly version?: string | null; readonly missing: readonly string[]; readonly lastApplied?: string }): string {
+  const target = input.version ? `${input.label} ${input.version}` : `This version of ${input.label}`;
+  const plural = input.missing.length > 1;
+  return `${target} can't be installed as an upgrade yet. Install an earlier ${input.label} release first: this installation hasn't applied the ${input.label} migration${plural ? "s" : ""} ${nameList(input.missing)}${input.lastApplied ? ` (it has applied up to ${input.lastApplied})` : ""}. Update ${input.label} to the release that adds ${plural ? "them" : "it"} (its release notes say which), let that update finish, then update to this version.`;
 }
 
 /** The set of tables that exists after applying statements in order, following CREATE, DROP and RENAME. */
@@ -473,9 +517,10 @@ function expectedLedger(pkg: ModuleMigrationPackage): PendingModuleMigration[] {
 /**
  * Validate the applied ledger as an exact prefix of the package's expected list and return the pending entries.
  * Applied entries the package does not know are a downgrade and are refused. A pending baseline requires every
- * adopted Core migration to be applied already.
+ * adopted Core migration to be applied already. An upgrade (a non-empty ledger) that lacks one of the package's
+ * `upgradeRequiresMigrations` is refused with nothing applied; `label` names the module in that refusal.
  */
-export function planModuleMigrations(pkg: ModuleMigrationPackage, ledger: readonly ModuleMigrationLedgerEntry[], coreAppliedMigrations: readonly string[]): ModuleMigrationPlan {
+export function planModuleMigrations(pkg: ModuleMigrationPackage, ledger: readonly ModuleMigrationLedgerEntry[], coreAppliedMigrations: readonly string[], options: { readonly label?: string } = {}): ModuleMigrationPlan {
   const label = `Module ${pkg.moduleId}`; const expected = expectedLedger(pkg);
   const applied = [...ledger].sort((a, b) => a.sequence - b.sequence);
   for (const [index, entry] of applied.entries()) {
@@ -487,6 +532,10 @@ export function planModuleMigrations(pkg: ModuleMigrationPackage, ledger: readon
     }
     if (wanted!.sha256 !== entry.sha256) fail("module_migration_hash_review_required", `${label}: applied ${entry.name} has a different hash than the package's reviewed migration`);
   }
+  // An upgrade that skips a required earlier release is refused before anything is applied, so data that release moves
+  // at run time is never dropped by a later migration first.
+  const missing = missingUpgradeMigrations(pkg.upgradeRequiresMigrations, applied);
+  if (missing.length) fail("module_migration_upgrade_path_required", upgradePathMessage({ label: options.label ?? `Module ${pkg.moduleId}`, missing, lastApplied: applied.at(-1)?.name }));
   const pending = expected.slice(applied.length);
   const baseline = pending.find((entry) => entry.kind === "baseline");
   if (baseline?.kind === "baseline") {
@@ -509,8 +558,8 @@ export async function readModuleMigrationLedger(executor: ModuleMigrationExecuto
  * batch, so a failure records nothing for that migration; earlier migrations stay applied and recorded.
  * An adopted baseline records its ledger row without running any SQL.
  */
-export async function applyModuleMigrations(executor: ModuleMigrationExecutor, pkg: ModuleMigrationPackage, options: { readonly coreAppliedMigrations: readonly string[]; readonly now?: () => string }): Promise<{ readonly applied: readonly string[]; readonly plan: ModuleMigrationPlan }> {
-  const plan = planModuleMigrations(pkg, await readModuleMigrationLedger(executor, pkg.moduleId), options.coreAppliedMigrations);
+export async function applyModuleMigrations(executor: ModuleMigrationExecutor, pkg: ModuleMigrationPackage, options: { readonly coreAppliedMigrations: readonly string[]; readonly now?: () => string; readonly label?: string }): Promise<{ readonly applied: readonly string[]; readonly plan: ModuleMigrationPlan }> {
+  const plan = planModuleMigrations(pkg, await readModuleMigrationLedger(executor, pkg.moduleId), options.coreAppliedMigrations, { label: options.label });
   const applied: string[] = [];
   for (const migration of plan.pending) {
     const record = { sql: `INSERT INTO ${moduleMigrationLedgerTable} (module_id, sequence, name, sha256, applied_at) VALUES (?, ?, ?, ?, ?)`, bindings: [pkg.moduleId, migration.sequence, migration.name, migration.sha256, options.now?.() ?? new Date().toISOString()] };

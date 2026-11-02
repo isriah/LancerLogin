@@ -156,6 +156,8 @@ test("plugin packages declare their module, contract, Core range, prefix and in-
   assert.equal(plugin.entries.api, join(pluginRoot, "src/api.ts"));
   assert.equal(plugin.migrations, join(pluginRoot, "migrations"));
   assert.ok(validate((value) => { delete value.lancerlogin.entries.dashboard; delete value.lancerlogin.migrations; delete value.lancerlogin.adoptedCoreMigrations; }));
+  assert.equal(plugin.upgradeRequiresMigrations, undefined);
+  assert.deepEqual(validate((value) => { value.lancerlogin.upgradeRequiresMigrations = ["0001_create_example_tables.sql"]; }).upgradeRequiresMigrations, ["0001_create_example_tables.sql"]);
   const cases: [(value: any) => void, RegExp][] = [
     [(value) => { delete value.type; }, /"type": "module"/],
     [(value) => { value.lancerlogin.extra = true; }, /unknown keys: extra/],
@@ -177,6 +179,9 @@ test("plugin packages declare their module, contract, Core range, prefix and in-
     [(value) => { delete value.lancerlogin.entries.api; }, /missing: api/],
     [(value) => { value.lancerlogin.migrations = "./../migrations"; }, /relative path/],
     [(value) => { value.lancerlogin.adoptedCoreMigrations = "0049_carpool_module.sql"; }, /must be an array/],
+    [(value) => { value.lancerlogin.upgradeRequiresMigrations = "0001_create_example_tables.sql"; }, /upgradeRequiresMigrations must be a non-empty array/],
+    [(value) => { value.lancerlogin.upgradeRequiresMigrations = []; }, /upgradeRequiresMigrations must be a non-empty array/],
+    [(value) => { delete value.lancerlogin.migrations; value.lancerlogin.upgradeRequiresMigrations = ["0001_create_example_tables.sql"]; }, /upgradeRequiresMigrations needs a migrations directory/],
   ];
   for (const [change, pattern] of cases) assert.throws(() => validate(change), rejects(pattern), String(change));
   assert.throws(() => validate(undefined, "other"), rejects(/does not match the selected module other/));
@@ -307,6 +312,34 @@ test("collisions with first-party or other plugins are refused through the Core 
   writeFileSync(join(probe, "src/manifest.ts"), "export default { environment: Object.keys(process.env) };\n");
   const seen = await inspectPlugin({ pluginRoot: probe, entries: { manifest: join(probe, "src/manifest.ts"), api: join(probe, "src/api.ts") }, env: { ...process.env, CLOUDFLARE_API_TOKEN: "synthetic-deployment-secret", LANCERLOGIN_PLUGIN_TOKEN: "synthetic-plugin-token", WEB_UPDATE_TOKEN: "synthetic", HTTPS_PROXY: "http://user:synthetic@proxy.invalid:8080", ACTIONS_ID_TOKEN_REQUEST_URL: "https://synthetic.invalid" } });
   assert.equal(seen.manifest.environment.some((name: string) => /TOKEN|SECRET|KEY|CLOUDFLARE|PROXY|ACTIONS/i.test(name)), false, seen.manifest.environment.join(","));
+});
+
+test("an upgrade floor must name an earlier migration the plugin ships, and reaches the staged and Worker migration data", async (t) => {
+  // A second release adds 0002 and requires installations upgrading to it to have applied 0001 first.
+  const secondRelease = (directory: string, required: string[]) => {
+    const content = "CREATE INDEX example_requests_item ON example_requests(installation_id, item_id);\n";
+    writeFileSync(join(directory, "migrations/0002_index_requests.sql"), content);
+    const reviewedPath = join(directory, "migrations/reviewed.json");
+    writeFileSync(reviewedPath, JSON.stringify([...JSON.parse(readFileSync(reviewedPath, "utf8")), { name: "0002_index_requests.sql", sha256: sha(content) }], null, 2));
+    const packagePath = join(directory, "package.json"); const pkg = JSON.parse(readFileSync(packagePath, "utf8"));
+    pkg.lancerlogin.upgradeRequiresMigrations = required;
+    writeFileSync(packagePath, JSON.stringify(pkg, null, 2));
+  };
+  const repository = pluginRepository(t, (directory) => secondRelease(directory, ["0001_create_example_tables.sql"]));
+  const { output } = await compose(t, [{ id: "example", source: repository.source, commit: repository.commit }]);
+  const staged = JSON.parse(readFileSync(join(output, ".provision/module-migrations.json"), "utf8"));
+  assert.deepEqual(staged.modules[0].upgradeRequiresMigrations, ["0001_create_example_tables.sql"]);
+  assert.deepEqual(staged.modules[0].migrations.map((migration: { name: string }) => migration.name), ["0001_create_example_tables.sql", "0002_index_requests.sql"]);
+  const { externalModuleMigrations } = await import(pathToFileURL(join(output, moduleDataFile)).href);
+  assert.deepEqual(externalModuleMigrations[0].upgradeRequiresMigrations, ["0001_create_example_tables.sql"]);
+  const refusals: [string[], RegExp][] = [
+    [["0002_index_requests.sql"], /upgradeRequiresMigrations names 0002_index_requests\.sql, the newest migration/],
+    [["0003_later.sql"], /upgradeRequiresMigrations names "0003_later\.sql", which is not one of the module's migrations/],
+  ];
+  for (const [required, pattern] of refusals) {
+    const refused = pluginRepository(t, (directory) => secondRelease(directory, required));
+    await assert.rejects(compose(t, [{ id: "example", source: refused.source, commit: refused.commit }]), rejects(pattern), required.join());
+  }
 });
 
 test("a composed plugin is pinned, checked, generated by relative import and works through the contracts", async (t) => {

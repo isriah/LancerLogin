@@ -28,12 +28,28 @@ const panel = (page: Page) => page.locator(".calendar-selected-day");
 const soloName = "September 9, 2026, 1 meeting, opens meeting Test solo planning";
 
 // A modified or middle click opens the meeting in a new tab or window and leaves the Dashboard where it was.
+// Headless Chromium on Linux now and then drops the tab a trusted modified click asks for, after the page has left the
+// click to the browser (it logs "Message 0 rejected by interface blink.mojom.WidgetHost"). Only when no tab appeared,
+// none was created and the Dashboard stayed put is the same click repeated, up to twice; it must still open exactly
+// one tab at the meeting. The tab only has to reach the meeting's address: loading the whole dev-server app in a
+// background tab is not what this checks, and stalls on a busy runner.
 async function opensElsewhere(page: Page, target: Locator, path: RegExp, options: Parameters<Locator["click"]>[0]) {
-  const opened = page.context().waitForEvent("page");
-  await target.click(options);
-  const tab = await opened;
-  await tab.waitForURL(path);
-  await tab.close();
+  const context = page.context();
+  const before = context.pages().length;
+  let tab: Page | undefined;
+  for (let attempt = 1; attempt <= 3 && !tab; attempt++) {
+    const opened = context.waitForEvent("page", { timeout: 5_000 }).catch(() => undefined);
+    await target.click(options);
+    tab = await opened;
+    if (!tab) {
+      expect(context.pages(), "a click that opened no tab created no page either").toHaveLength(before);
+      await expect(page).toHaveURL(/\/dashboard$/);
+    }
+  }
+  expect(tab, `${JSON.stringify(options)} opens a new tab`).toBeDefined();
+  expect(context.pages()).toHaveLength(before + 1);
+  await tab!.waitForURL(path, { waitUntil: "commit" });
+  await tab!.close();
   await expect(page).toHaveURL(/\/dashboard$/);
 }
 const modifiedClicks: Parameters<Locator["click"]>[0][] = [{ modifiers: ["ControlOrMeta"] }, { modifiers: ["Shift"] }, { button: "middle" }];

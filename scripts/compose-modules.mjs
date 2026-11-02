@@ -158,7 +158,7 @@ export function validatePluginPackage(pkg, { moduleId, pluginRoot, coreVersion }
   // One repository supplies exactly one module; say so before the generic key check would name the extra field.
   const declared = declaredModuleIds(field);
   if (declared) fail(`Module ${moduleId}: ${multipleModulesMessage(declared)}`);
-  exactKeys(field, ["moduleId", "contract", "core", "tablePrefix", "entries"], ["migrations", "adoptedCoreMigrations"], context);
+  exactKeys(field, ["moduleId", "contract", "core", "tablePrefix", "entries"], ["migrations", "adoptedCoreMigrations", "upgradeRequiresMigrations"], context);
   if (field.moduleId !== moduleId) fail(`${context}.moduleId ${JSON.stringify(field.moduleId)} does not match the selected module ${moduleId}`);
   if (!Number.isSafeInteger(field.contract) || field.contract < 1) fail(`${context}.contract must be a positive integer`);
   if (!supportedModuleContractVersions.includes(field.contract)) fail(`Module ${moduleId} needs module contract ${field.contract}; this Core supports contract ${supportedModuleContractVersions.join(", ")}`);
@@ -177,7 +177,11 @@ export function validatePluginPackage(pkg, { moduleId, pluginRoot, coreVersion }
   const migrations = field.migrations === undefined ? undefined : pluginPath(pluginRoot, field.migrations, `${context}.migrations`);
   const adopted = field.adoptedCoreMigrations ?? [];
   if (!Array.isArray(adopted) || adopted.some((name) => typeof name !== "string")) fail(`${context}.adoptedCoreMigrations must be an array of Core migration names`);
-  return { moduleId, contract: field.contract, core: field.core, tablePrefix, entries, migrations, adoptedCoreMigrations: adopted };
+  // Checked against the shipped migrations in checkPluginMigrations.
+  const upgradeRequires = field.upgradeRequiresMigrations;
+  if (upgradeRequires !== undefined && (!Array.isArray(upgradeRequires) || !upgradeRequires.length || upgradeRequires.some((name) => typeof name !== "string"))) fail(`${context}.upgradeRequiresMigrations must be a non-empty array of the module's own migration file names`);
+  if (upgradeRequires !== undefined && migrations === undefined) fail(`${context}.upgradeRequiresMigrations needs a migrations directory`);
+  return { moduleId, contract: field.contract, core: field.core, tablePrefix, entries, migrations, adoptedCoreMigrations: adopted, ...(upgradeRequires ? { upgradeRequiresMigrations: upgradeRequires } : {}) };
 }
 
 // Plugin source scanning. Plugins import only their own files, their declared dependencies, Node built-ins and the
@@ -593,7 +597,7 @@ const nodeReader = { list: (directory) => readdir(directory), read: (path) => re
 async function checkPluginMigrations(plugin, manifest, coreMigrations) {
   let pkg;
   try {
-    pkg = await loadModuleMigrationPackage(nodeReader, { moduleId: plugin.moduleId, tablePrefix: plugin.tablePrefix, directory: plugin.migrations, adoptedCoreMigrations: plugin.adoptedCoreMigrations, coreMigrations });
+    pkg = await loadModuleMigrationPackage(nodeReader, { moduleId: plugin.moduleId, tablePrefix: plugin.tablePrefix, directory: plugin.migrations, adoptedCoreMigrations: plugin.adoptedCoreMigrations, upgradeRequiresMigrations: plugin.upgradeRequiresMigrations, coreMigrations });
   } catch (error) {
     if (error instanceof ModuleMigrationError) fail(error.message);
     if (error?.code === "ENOENT") fail(`Module ${plugin.moduleId} migrations directory is missing`);
@@ -744,6 +748,7 @@ export async function composeModules(options = {}) {
       directory: plugin.migrations ? posixPath(relative(outputRoot, plugin.migrations)) : null,
       root: posixPath(relative(outputRoot, pluginRoot)),
       adoptedCoreMigrations: plugin.adoptedCoreMigrations,
+      ...(migrations.upgradeRequiresMigrations ? { upgradeRequiresMigrations: migrations.upgradeRequiresMigrations } : {}),
       baseline: migrations.baseline ?? null,
       migrations: migrations.migrations.map(({ sequence, name, sha256 }) => ({ sequence, name, sha256 })),
     })),

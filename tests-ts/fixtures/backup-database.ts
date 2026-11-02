@@ -11,7 +11,12 @@ export class BackupDatabase {
   batches = 0;
   constructor() {
     this.raw.exec("PRAGMA foreign_keys=ON");
-    for (const file of readdirSync(migrations).filter((name) => name.endsWith(".sql")).sort()) this.raw.exec(readFileSync(new URL(file, migrations), "utf8"));
+    const applied = readdirSync(migrations).filter((name) => name.endsWith(".sql")).sort();
+    for (const file of applied) this.raw.exec(readFileSync(new URL(file, migrations), "utf8"));
+    // D1 records every applied Core migration in d1_migrations; module reconciliation reads it to accept adopted baselines.
+    this.raw.exec("CREATE TABLE d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+    const record = this.raw.prepare("INSERT INTO d1_migrations(name) VALUES (?)");
+    for (const file of applied) record.run(file);
     this.raw.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES ('primary','2026-01-01T00:00:00.000Z','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('admin','primary','admin','admin','2026-01-01'),('operator','primary','operator','operator','2026-01-01');
       INSERT INTO members(id,installation_id,external_id,first_name,last_name,created_at,attendance_required_from) VALUES ('member','primary','001','Synthetic','Member','2026-01-01','2026-01-01');

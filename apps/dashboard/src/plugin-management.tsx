@@ -24,7 +24,7 @@ type Action = "add" | "upgrade" | "remove";
 type Draft = { action: Action; id: string; source: string; commit: string; track?: Track };
 type Review = {
   action: Action; id: string; source: string | null; commit: string | null; previousCommit: string | null; official: boolean; selectionSha: string; track?: Track | null; previousTrack?: Track | null;
-  metadata: { state: "compatible" | "incompatible" | "unknown"; reason?: string; version?: string; contract?: number; core?: string; tablePrefix?: string; migrations?: string[]; adoptedCoreMigrations?: number } | null;
+  metadata: { state: "compatible" | "incompatible" | "unknown"; reason?: string; version?: string; contract?: number; core?: string; tablePrefix?: string; migrations?: string[]; adoptedCoreMigrations?: number; upgradeRequiresMigrations?: string[] } | null;
   declaredNote: string; trustStatement: string; allowlist: string;
 };
 type ReleaseLookup = { track: Track; release: { tag: string; kind: "stable" | "beta" | "nightly"; commit: string; url: string | null } | null; reason?: string };
@@ -144,7 +144,7 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
         {review.previousCommit && <div><dt>{review.action === "remove" ? "Selected commit" : "Previous commit"}</dt><dd><code>{review.previousCommit}</code></dd></div>}
         {review.track && <div><dt>Release track</dt><dd>{trackLabel[review.track]}{review.previousTrack && review.previousTrack !== review.track ? `, changed from ${trackLabel[review.previousTrack]}` : ""}{offered && offered.commit === review.commit ? `. Release ${offered.tag}` : ""}.</dd></div>}
         {review.metadata && <div><dt>Compatibility</dt><dd>{compatibility}{review.metadata.version ? `. Module version ${review.metadata.version}` : ""}{review.metadata.contract ? `, module contract ${review.metadata.contract}` : ""}{review.metadata.core ? `, supports LancerLogin ${review.metadata.core}` : ""}.{review.metadata.reason ? ` ${review.metadata.reason}` : ""}</dd></div>}
-        {review.metadata && <div><dt>Tables</dt><dd>{review.metadata.tablePrefix ? `Tables named ${review.metadata.tablePrefix}*.` : "Not determined here."}{review.metadata.migrations ? ` ${review.metadata.migrations.length ? `Migrations: ${review.metadata.migrations.join(", ")}.` : "No migrations."}` : ""}{review.metadata.adoptedCoreMigrations ? ` Adopts ${review.metadata.adoptedCoreMigrations} historical LancerLogin migrations.` : ""}</dd></div>}
+        {review.metadata && <div><dt>Tables</dt><dd>{review.metadata.tablePrefix ? `Tables named ${review.metadata.tablePrefix}*.` : "Not determined here."}{review.metadata.migrations ? ` ${review.metadata.migrations.length ? `Migrations: ${review.metadata.migrations.join(", ")}.` : "No migrations."}` : ""}{review.metadata.adoptedCoreMigrations ? ` Adopts ${review.metadata.adoptedCoreMigrations} historical LancerLogin migrations.` : ""}{review.metadata.upgradeRequiresMigrations?.length ? ` Installations upgrading to it must already have applied ${review.metadata.upgradeRequiresMigrations.join(", ")}; this one can install it.` : ""}</dd></div>}
         {review.metadata && <div><dt>Routes, jobs and Discord commands</dt><dd>{review.declaredNote}</dd></div>}
       </dl>
       {review.track === "nightly" && <p className="ui-status plugin-nightly-warning" data-tone="warning">{nightlyWarning}</p>}

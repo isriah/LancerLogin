@@ -11,6 +11,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 ## LancerLogin 2 beta releases
 
+- [v2.1.0-beta.4](v2.1.0-beta.4.md) - Outreach Team support and Other service logging, FIRST checks for new teams and required plugin upgrade paths
 - [v2.1.0-beta.3](v2.1.0-beta.3.md) - Web kiosks with member search and PINs, FIRST team lookup, and the browser simulator removed
 - [v2.1.0-beta.2](v2.1.0-beta.2.md) - Two-way Discord label sync, refused impossible scans, re-enrollment prompts and per-device Debug mode
 - [v2.1.0-beta.1](v2.1.0-beta.1.md) - Labels page, Discord roles from the dashboard, roster bulk edit sidebar and faster pages

@@ -12,6 +12,7 @@ import { omitContestResubmissionFields } from "../fixtures/backup-versions.ts";
 import { BackupDatabase, backupClient } from "../fixtures/backup-database.ts";
 import { PluginDatabase } from "../fixtures/plugin-database.ts";
 import { carpoolPlugin } from "../fixtures/carpool-plugin.ts";
+import { externalModuleSources } from "../../apps/api/src/generated/external-module-data.ts";
 import { FakeDatabase, request, seedInstallationBackupFoundation, sessionCookie, sessionSecret } from "../fixtures/worker-fake-database.ts";
 
 type Backup = Record<string, any>;
@@ -188,7 +189,9 @@ test("a real schema 42 backup exported while Carpool was first-party restores th
   // Outreach also moved into a plugin (schema 44), so Core's ownership metadata lists only Attendance.
   assert.deepEqual(current.ownership.modules.map((module: { id: string }) => module.id), ["attendance"]);
   const carpool = section(current);
-  assert.deepEqual({ ...carpool, tables: undefined }, { id: "carpool", label: "Carpool", contractVersion: 1, backupVersion: 2, source: null, commit: null, tables: undefined });
+  // The installed plugin's catalog record supplies the composed source and pinned commit.
+  assert.ok(externalModuleSources.carpool);
+  assert.deepEqual({ ...carpool, tables: undefined }, { id: "carpool", label: "Carpool", contractVersion: 1, backupVersion: 2, source: externalModuleSources.carpool.source, commit: externalModuleSources.carpool.commit, tables: undefined });
   for (const table of carpoolTables) assert.deepEqual(sortedRows(carpool.tables[table]), sortedRows(fixture.tables[table]), `${table} in the plugin section`);
 
   // The same data restores from the plugin section and from the schema 41 form of the historical archive.

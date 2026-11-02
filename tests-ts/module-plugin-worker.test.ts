@@ -52,6 +52,8 @@ const { default: worker } = await import("../apps/api/src/index.ts");
 const { BackupDatabase, sessionSecret } = await import("./fixtures/backup-database.ts");
 const { createSessionCodec } = await import("../apps/api/src/runtime-security.ts");
 const { runModuleCleanup } = await import("../apps/api/src/module-cleanup.ts");
+const { externalModuleMigrations } = await import("../apps/api/src/generated/external-module-data.ts");
+const { expectedModuleLedger } = await import("./fixtures/d1-database.ts");
 
 /** The migrated fixture database, with D1 batch semantics: every statement runs in one transaction and reads return rows. */
 class PluginDatabase extends BackupDatabase {
@@ -104,7 +106,10 @@ test("a composed plugin is migrated, registered, enabled, served, scheduled, bac
   let modules = await call("/platform/modules");
   assert.equal(modules.status, 200, JSON.stringify(modules.body));
   assert.deepEqual(modules.body.modules.find((module: any) => module.id === "example")?.phase, "disabled");
-  assert.deepEqual(db.rows("SELECT module_id, sequence, name FROM platform_module_migrations"), [{ module_id: "example", sequence: 1, name: "0001_create_example_tables.sql" }]);
+  // Official Outreach, when composed, records its adopted baseline and its own migrations beside Example's.
+  const outreachLedger = expectedModuleLedger(externalModuleMigrations.find((pkg) => pkg.moduleId === "hour-tracking")).map((row) => ({ module_id: "hour-tracking", ...row }));
+  assert.equal(outreachLedger.length > 0, !officialUnavailable);
+  assert.deepEqual(db.rows("SELECT module_id, sequence, name FROM platform_module_migrations ORDER BY module_id, sequence"), [{ module_id: "example", sequence: 1, name: "0001_create_example_tables.sql" }, ...outreachLedger]);
   assert.deepEqual(db.rows("SELECT origin, source, source_commit FROM platform_module_catalog WHERE module_id='example'"), [{ origin: "external", source: pin.source, source_commit: pin.commit }]);
 
   // Enabling requires setup before the workspace opens.

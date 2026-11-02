@@ -79,7 +79,9 @@ export async function reconcileInstalledModules(db: D1Database, now = new Date()
   for (const { module, definitionJson, definitionSha256 } of changedModules) {
     const migrations = migrationPackages.get(module.id);
     if (migrations) {
-      try { await applyModuleMigrations(d1ModuleMigrationExecutor(db), migrations, { coreAppliedMigrations: coreApplied ??= await coreAppliedMigrations(db), now: () => timestamp }); }
+      // A refusal, such as an upgrade that skips a required earlier release, applies and records nothing: the previous
+      // definition stays recorded and the module keeps its lifecycle state, so it retries on a later pass.
+      try { await applyModuleMigrations(d1ModuleMigrationExecutor(db), migrations, { coreAppliedMigrations: coreApplied ??= await coreAppliedMigrations(db), now: () => timestamp, label: module.label }); }
       catch (error) { failures.push({ moduleId: module.id, message: error instanceof Error ? error.message : "Module migrations failed" }); continue; }
     }
     const source = sources[module.id];

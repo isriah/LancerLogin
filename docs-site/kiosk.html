@@ -41,7 +41,7 @@
     <li>Under <strong>Install the kiosk software</strong>, choose <strong>Copy install commands</strong>. The commands match the release your dashboard runs.</li>
     <li>On the Pi, open Terminal and run the commands. They have this form:</li>
   </ol>
-  <figure class="annotated compact-shot"><img src="assets/kiosk-add-kiosk-dialog.png" alt="LancerLogin Add physical kiosk dialog with the sections Prepare the Pi, a Fingerprint reader choice set to This kiosk has an R503 fingerprint reader, Install the kiosk software with three commands for release 2.0.0 and a Copy install commands button, Create the one-time pairing key with a Kiosk name field, and Pair from a phone or laptop instructions."><figcaption>The Add kiosk dialog walks through installing and pairing a Pi.</figcaption></figure>
+  <figure class="annotated compact-shot"><img src="assets/kiosk-add-kiosk-dialog.png" alt="LancerLogin Add kiosk dialog with a Kind of kiosk choice set to Raspberry Pi kiosk, with Web kiosk as the other option, then the sections Prepare the Pi, a Fingerprint reader choice set to This kiosk has an R503 fingerprint reader, Install the kiosk software with three commands for the dashboard's release and a Copy install commands button, Create the one-time pairing key with a Kiosk name field, and Pair from a phone or laptop instructions."><figcaption>The Add kiosk dialog walks through installing and pairing a Pi.</figcaption></figure>
   <pre><code>curl -fLO https://github.com/isriah/LancerLogin/releases/download/v&lt;version&gt;/install-lancerlogin.sh
 sudo bash install-lancerlogin.sh --dry-run
 sudo bash install-lancerlogin.sh --install</code></pre>

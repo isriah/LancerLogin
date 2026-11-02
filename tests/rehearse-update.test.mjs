@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { childEnvironment, compareSnapshots, expectedRemovals, parseArguments, refSource, removeTree, renderReport, verifyAttendanceInput, wranglerEnvironment } from "../scripts/rehearse-update.mjs";
+import { childEnvironment, compareSnapshots, composedPins, expectComposedPins, expectedRemovals, parseArguments, refSource, removeTree, renderReport, verifyAttendanceInput, wranglerEnvironment } from "../scripts/rehearse-update.mjs";
 
 test("arguments require both trees and a well-formed target tag", () => {
   assert.deepEqual(parseArguments(["--from", "v2.0.0-beta.12", "--to", "origin/main", "--target-tag", "v2.0.0-beta.13", "--keep"]), { from: "v2.0.0-beta.12", to: "origin/main", targetTag: "v2.0.0-beta.13", keep: true });
@@ -47,6 +47,22 @@ test("tables a migration drops or prunes on purpose are notes, not problems", ()
   assert.deepEqual(diff.problems, ["members: 2 rows before, 1 after"]);
   assert.ok(diff.notes.some((note) => note.includes("table simulated_kiosk_sessions removed as expected")));
   assert.ok(diff.notes.some((note) => note.includes("pairing_codes: 1 rows removed as expected")));
+});
+
+test("a plugin catalog row is expected to move to the pin TO composes, and nothing else may change", () => {
+  const columns = ["module_id", "origin", "source", "source_commit", "installed"];
+  const outreach = "https://example.test/outreach.git"; const carpool = "https://example.test/carpool.git";
+  const catalog = (rows) => ({ tables: ["platform_module_catalog"], counts: { platform_module_catalog: rows.length }, records: { platform_module_catalog: { columns, rows: rows.map((row) => JSON.stringify(row)).sort() } } });
+  const before = catalog([["attendance", "first-party", null, null, 1], ["carpool", "external", carpool, "c".repeat(40), 1], ["hour-tracking", "external", outreach, "a".repeat(40), 1]]);
+  const pins = composedPins({ modules: [{ id: "hour-tracking", source: outreach, commit: "a".repeat(40) }] }, { modules: [{ id: "carpool", source: carpool, commit: "c".repeat(40) }, { id: "hour-tracking", source: outreach, commit: "b".repeat(40) }] });
+  assert.equal(pins.get("hour-tracking").commit, "b".repeat(40));
+  const moved = catalog([["attendance", "first-party", null, null, 1], ["carpool", "external", carpool, "c".repeat(40), 1], ["hour-tracking", "external", outreach, "b".repeat(40), 1]]);
+  assert.deepEqual(compareSnapshots(expectComposedPins(before, pins), moved).problems, []);
+  assert.equal(compareSnapshots(before, moved).problems.length, 1);
+  const kept = catalog([["attendance", "first-party", null, null, 1], ["carpool", "external", carpool, "c".repeat(40), 1], ["hour-tracking", "external", outreach, "a".repeat(40), 1]]);
+  assert.equal(compareSnapshots(expectComposedPins(before, pins), kept).problems.length, 1);
+  const uninstalled = catalog([["attendance", "first-party", null, null, 1], ["carpool", "external", carpool, "c".repeat(40), 0], ["hour-tracking", "external", outreach, "b".repeat(40), 1]]);
+  assert.equal(compareSnapshots(expectComposedPins(before, pins), uninstalled).problems.length, 1);
 });
 
 /** A FROM Worker's API, answering only the Attendance input setup calls the rehearsal makes. */

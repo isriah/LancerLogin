@@ -23,7 +23,6 @@ import { Database } from "../fixtures/lifecycle-database.ts";
 import { PluginDatabase } from "../fixtures/plugin-database.ts";
 import { stylesheetRules } from "../fixtures/stylesheet-rules.ts";
 import { readFileSync } from "node:fs";
-import { isDeepStrictEqual } from "node:util";
 import { externalModuleMigrations } from "../../apps/api/src/generated/external-module-data.ts";
 import { expectedModuleLedger } from "../fixtures/d1-database.ts";
 
@@ -92,28 +91,20 @@ test("the Outreach stylesheet stays beneath its module root and Core stylesheets
 
 test("raw Outreach dashboard controls remain in the reviewed UI inventory", async () => {
   type Counts = Partial<Record<"button" | "input" | "select" | "textarea" | "summary", number>>;
-  // Moved unchanged from Core's inventory when Outreach became a plugin.
-  const extractedInventory: Record<string, Counts> = {
+  // Reviewed for member self-logging of Team support and Other service time (Outreach #4): the public /submit-hours form
+  // offers Scheduled activity, Team support and Other service choices, with duration-only entries, member-added teams and
+  // the reviewed-team filter. All new staff controls use ui-control, ui-native-select and ui-button; the public form keeps
+  // its existing bare fields, styled beneath its module root.
+  const reviewed: Record<string, Counts> = {
     "outreach-activity-publication.tsx": { button: 4, input: 2, select: 1 },
     "outreach-clock.tsx": { button: 9, select: 1 },
     "outreach-setup-workspace.tsx": { button: 2, input: 3, select: 1 },
-    "outreach-entry-edit.tsx": { button: 3, select: 2, textarea: 2 },
-    "outreach-settings.tsx": { button: 12, input: 4, select: 2 },
-    "outreach-workspace.tsx": { button: 24, input: 12, select: 10, textarea: 6, summary: 3 },
-    "public-outreach-form.tsx": { button: 10, input: 1, select: 2, textarea: 2 },
-    "outreach-public-settings.tsx": { button: 1, select: 1 },
-  };
-  // Reviewed for member self-logging of Team support and Other service time (duration-only entries, member-added teams and
-  // the reviewed-team filter). All new staff controls use ui-control, ui-native-select and ui-button; the public form keeps
-  // its existing bare fields, styled beneath its module root. Drop the extracted inventory once Core's pin includes this.
-  const selfLoggingInventory: Record<string, Counts> = {
-    ...extractedInventory,
     "outreach-entry-edit.tsx": { button: 3, input: 1, select: 2, textarea: 2 },
     "outreach-settings.tsx": { button: 14, input: 4, select: 3 },
     "outreach-workspace.tsx": { button: 24, input: 13, select: 10, textarea: 6, summary: 3 },
     "public-outreach-form.tsx": { button: 10, input: 8, select: 4, textarea: 2 },
+    "outreach-public-settings.tsx": { button: 1, select: 1 },
   };
-  const reviewed = [selfLoggingInventory, extractedInventory];
   const actual: Record<string, Counts> = {};
   const files = [...(await readdir(join(root, "src/dashboard"))).filter((file) => file.endsWith(".tsx")).map((file) => join("dashboard", file)), "dashboard.tsx"];
   for (const file of files) {
@@ -121,7 +112,7 @@ test("raw Outreach dashboard controls remain in the reviewed UI inventory", asyn
     for (const tag of ["button", "input", "select", "textarea", "summary"] as const) { const count = [...source.matchAll(new RegExp(`<${tag}\\b`, "g"))].length; if (count) counts[tag] = count; }
     if (Object.keys(counts).length) actual[file.replace(/^dashboard[\\/]/, "")] = counts;
   }
-  if (!reviewed.some((inventory) => isDeepStrictEqual(actual, inventory))) assert.deepEqual(actual, reviewed[0], "Native control markup changed. Use the shared UI patterns and focused rendered coverage, then review and update this inventory deliberately.");
+  assert.deepEqual(actual, reviewed, "Native control markup changed. Use the shared UI patterns and focused rendered coverage, then review and update this inventory deliberately.");
 });
 
 test("a new installation receives Outreach's former installation defaults on first enablement", async () => {

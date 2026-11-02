@@ -2172,6 +2172,11 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
 .module-setting-choice .module-source { overflow-wrap: anywhere; }
 .module-setting-choice .plugin-track-badge { grid-column: 1 / -1; }
 .module-pending-badge { color: var(--ui-warning); }
+/* A module whose last migration attempt was refused or failed: shown in its row until a later attempt succeeds. */
+.module-update-failure { display: grid; gap: var(--space-1); margin: 0 0 var(--space-3); border-color: var(--ui-warning); color: var(--ui-text); }
+.module-update-failure p { margin: 0; }
+.module-update-failure strong { color: var(--ui-warning); }
+.module-update-failure small { color: var(--ui-text-muted); }
 .module-card .plugin-pending h3 { margin: 0; }
 .module-card .web-update-card .panel-heading { min-height: 0; padding: 0 0 var(--space-3); border-color: var(--ui-border); }
 .module-card .web-update-card .panel-heading > button { flex: 0 0 auto; width: auto; }

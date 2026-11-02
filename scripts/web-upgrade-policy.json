@@ -465,6 +465,11 @@
       "name": "0093_first_connection.sql",
       "sha256": "f057a13c3df3a91d4d533d07a7e22faa6fbf702aa6c729bf76f807eafcf861aa",
       "forwardCompatible": true
+    },
+    {
+      "name": "0094_module_update_failures.sql",
+      "sha256": "c6f45f4ef281c3084881b2fdef2cbe4baaab07cacf200e90bbc1af5fd631bf1d",
+      "forwardCompatible": true
     }
   ]
 }

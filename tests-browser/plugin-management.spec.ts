@@ -539,3 +539,29 @@ test("module access controls use shared themed styles at desktop and mobile in l
     await page.keyboard.press("Escape");
   }
 });
+
+test("Settings > Modules shows an unfinished module update on the module, with its reason and when it was last tried", async ({ page }) => {
+  const message = "This version of Attendance can't be installed as an upgrade yet. Install an earlier Attendance release first: this installation hasn't applied the Attendance migration 0002_synthetic_moved.sql (it has applied up to 0001_synthetic_records.sql).";
+  const lastTriedAt = "2026-11-01T11:01:00.000Z";
+  await setup(page, pluginState({ updateFailures: [{ moduleId: "attendance", code: "module_migration_upgrade_path_required", message, firstFailedAt: "2026-11-01T11:00:00.000Z", lastTriedAt }] }));
+  await page.goto("/settings/modules");
+  const attendance = moduleRow(page, "attendance");
+  await expect(attendance.locator(".module-choice-badge", { hasText: "Update not finished" })).toHaveAttribute("data-tone", "warning");
+  const notice = attendance.locator(".module-update-failure");
+  await expect(notice).toHaveAttribute("data-tone", "warning");
+  await expect(notice).toContainText(`Update not finished: ${message}`);
+  await expect(notice).toContainText(`Last tried ${await page.evaluate((value) => new Date(value).toLocaleString(), lastTriedAt)}.`);
+  await expect(notice).toContainText("Failing since");
+  // The notice uses the theme's warning tokens, like the other status pills.
+  const warning = await notice.evaluate((element) => { const probe = document.createElement("span"); probe.style.borderColor = "var(--ui-warning)"; probe.style.backgroundColor = "var(--ui-warning-surface)"; probe.style.borderStyle = "solid"; element.append(probe); const reference = getComputedStyle(probe); const actual = getComputedStyle(element); const result = actual.borderTopColor === reference.borderTopColor && actual.backgroundColor === reference.backgroundColor; probe.remove(); return result; });
+  expect(warning).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await attendance.screenshot({ path: test.info().outputPath("module-update-failure.png") });
+
+  // Once reconciliation succeeds the Worker reports no failure, and the notice is gone.
+  await setup(page, pluginState({ updateFailures: [] }));
+  await page.reload();
+  await expect(attendance.getByRole("switch", { name: "Attendance", exact: true })).toBeVisible();
+  await expect(attendance.locator(".module-update-failure")).toHaveCount(0);
+  await expect(attendance.getByText("Update not finished")).toHaveCount(0);
+});

@@ -4,7 +4,7 @@ import type { D1Database, D1Statement } from "./d1-usage.ts";
 import type { CleanupStep } from "./module-cleanup.ts";
 import { installedApiModule } from "./installed-api-modules.ts";
 import { externalModuleMigrations, externalModuleSources } from "./generated/external-module-data.ts";
-import { applyModuleMigrations, d1ModuleMigrationExecutor, type ModuleMigrationPackage } from "./module-migrations.ts";
+import { applyModuleMigrations, d1ModuleMigrationExecutor, ModuleMigrationError, type ModuleMigrationPackage } from "./module-migrations.ts";
 import { extractedModules } from "./extracted-modules.ts";
 
 const installationId = "primary";
@@ -49,6 +49,8 @@ async function sha256Hex(value: string): Promise<string> {
  * Apply each module's pending reviewed migrations, record installed module definitions, and register modules seen
  * for the first time as disabled. A module whose migrations fail stays unregistered and retries on the next pass,
  * without affecting other modules. Steady state costs one read; writes happen only when installed code changed.
+ * A module's refused or failed migrations are recorded in platform_module_update_failures for Settings > Modules, and
+ * the record is deleted on the pass that reconciles the module.
  *
  * A module that moved from first-party into a plugin may have lifecycle state from before the catalog existed. When its
  * plugin is not installed and the catalog never recorded it, the definition it had as a first-party module is recorded as
@@ -74,6 +76,7 @@ export async function reconcileInstalledModules(db: D1Database, now = new Date()
 
   const timestamp = now.toISOString();
   const failures: { moduleId: string; message: string }[] = [];
+  const failed: { moduleId: string; code: string; message: string }[] = [];
   const statements: D1Statement[] = [];
   let coreApplied: string[] | undefined;
   for (const { module, definitionJson, definitionSha256 } of changedModules) {
@@ -82,7 +85,11 @@ export async function reconcileInstalledModules(db: D1Database, now = new Date()
       // A refusal, such as an upgrade that skips a required earlier release, applies and records nothing: the previous
       // definition stays recorded and the module keeps its lifecycle state, so it retries on a later pass.
       try { await applyModuleMigrations(d1ModuleMigrationExecutor(db), migrations, { coreAppliedMigrations: coreApplied ??= await coreAppliedMigrations(db), now: () => timestamp, label: module.label }); }
-      catch (error) { failures.push({ moduleId: module.id, message: error instanceof Error ? error.message : "Module migrations failed" }); continue; }
+      catch (error) {
+        failures.push({ moduleId: module.id, message: error instanceof Error ? error.message : "Module migrations failed" });
+        failed.push({ moduleId: module.id, ...moduleUpdateFailureFor(module.label, error) });
+        continue;
+      }
     }
     const source = sources[module.id];
     statements.push(
@@ -104,7 +111,45 @@ export async function reconcileInstalledModules(db: D1Database, now = new Date()
       .bind(installationId, module.id, module.contractVersion, definitionJson, await sha256Hex(definitionJson), timestamp));
   }
   if (statements.length) await db.batch(statements);
+  // Bookkeeping for Settings > Modules, after the catalog is recorded and never in its way: an Admin sees the last refused
+  // or failed attempt on the module until a later pass succeeds.
+  const reconciled = [...changedModules.map(({ module }) => module.id).filter((moduleId) => !failed.some((failure) => failure.moduleId === moduleId)), ...removed.map((row) => row.moduleId)];
+  try { await recordModuleUpdateFailures(db, failed, reconciled, timestamp); } catch { /* Shown again after the next attempt. */ }
   return { changed: statements.length > 0, failures };
+}
+
+/** A module's migration failure as Admins see it in Settings > Modules. */
+export type ModuleUpdateFailure = { readonly moduleId: string; readonly code: string; readonly message: string; readonly firstFailedAt: string; readonly lastTriedAt: string };
+const failureMessageLimit = 2000;
+
+/**
+ * The code and plain-English message recorded for a module whose migrations were refused or failed. A refused upgrade keeps
+ * its own explanation (which earlier release to install first); any other failure gets a generic message, because raw
+ * database errors are neither useful nor safe to show.
+ */
+export function moduleUpdateFailureFor(label: string, error: unknown): { code: string; message: string } {
+  const code = error instanceof ModuleMigrationError ? error.code : "module_migration_failed";
+  if (code === "module_migration_upgrade_path_required" && error instanceof Error && error.message) return { code, message: error.message.slice(0, failureMessageLimit) };
+  return { code, message: `LancerLogin could not finish updating ${label}'s database, so parts of ${label} may not work until it does. LancerLogin tries again automatically. If this message stays, install a newer release of ${label} or contact its maintainer (error code ${code}).` };
+}
+
+async function recordModuleUpdateFailures(db: D1Database, failed: readonly { moduleId: string; code: string; message: string }[], reconciled: readonly string[], timestamp: string): Promise<void> {
+  const statements = failed.map((failure) => db.prepare(`INSERT INTO platform_module_update_failures(installation_id,module_id,code,message,first_failed_at,last_tried_at) VALUES(?,?,?,?,?,?)
+    ON CONFLICT(installation_id,module_id) DO UPDATE SET first_failed_at=CASE WHEN platform_module_update_failures.code=excluded.code AND platform_module_update_failures.message=excluded.message
+      THEN platform_module_update_failures.first_failed_at ELSE excluded.first_failed_at END,code=excluded.code,message=excluded.message,last_tried_at=excluded.last_tried_at`)
+    .bind(installationId, failure.moduleId, failure.code, failure.message, timestamp, timestamp));
+  // Reconciliation only gets here when installed code changed, so this read is rare; it keeps successful passes write-free.
+  const recorded = reconciled.length ? new Set(((await db.prepare("SELECT module_id AS moduleId FROM platform_module_update_failures WHERE installation_id=?").bind(installationId).all<{ moduleId: string }>()).results ?? []).map((row) => row.moduleId)) : new Set<string>();
+  const cleared = reconciled.filter((moduleId) => recorded.has(moduleId));
+  if (cleared.length) statements.push(db.prepare(`DELETE FROM platform_module_update_failures WHERE installation_id=? AND module_id IN (${cleared.map(() => "?").join(",")})`).bind(installationId, ...cleared));
+  if (statements.length) await db.batch(statements);
+}
+
+/** Recorded update failures for modules installed in this build, for Settings > Modules. */
+export async function readModuleUpdateFailures(db: D1Database): Promise<ModuleUpdateFailure[]> {
+  const rows = (await db.prepare(`SELECT module_id AS moduleId,code,message,first_failed_at AS firstFailedAt,last_tried_at AS lastTriedAt
+    FROM platform_module_update_failures WHERE installation_id=? ORDER BY module_id`).bind(installationId).all<ModuleUpdateFailure>()).results ?? [];
+  return rows.filter((row) => bundledModuleRegistry.get(row.moduleId));
 }
 
 const isolateReconciliation = new WeakMap<object, { done: boolean; pending?: Promise<void>; retryAt: number }>();

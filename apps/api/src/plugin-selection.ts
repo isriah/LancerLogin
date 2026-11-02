@@ -18,6 +18,7 @@ import { extractedModulesInUse } from "./extracted-modules.ts";
 import { knownModule } from "./known-modules.ts";
 import { credentialStatus, observeCredentialResponse } from "./github-credential.ts";
 import { missingUpgradeMigrations, moduleMigrationLedgerTable, upgradePathMessage } from "./module-migrations.ts";
+import { readModuleUpdateFailures, type ModuleUpdateFailure } from "./module-catalog.ts";
 
 export interface PluginSelectionEnv extends WebUpdateEnv { MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string }
 export type InstalledPlugins = Readonly<Record<string, { readonly source: string; readonly commit: string; readonly official?: boolean; readonly selected?: boolean }>>;
@@ -157,7 +158,8 @@ export async function pluginManagementState(env: PluginSelectionEnv, options: Pl
   const credential = selectionCredentialState(env);
   let configured = true;
   try { repository(env); } catch { configured = false; }
-  const [phases, active] = await Promise.all([modulePhases(db), startedUpdate(env)]);
+  // A module whose last migration attempt was refused or failed; nothing to show before migration 0094 is applied.
+  const [phases, active, updateFailures] = await Promise.all([modulePhases(db), startedUpdate(env), readModuleUpdateFailures(db as never).catch((): ModuleUpdateFailure[] => [])]);
   let selection: SelectionSnapshot | null = null; let allowlist: Allowlist | { state: "unknown" } = { state: "unknown" }; let error: { code: string; message: string } | null = null;
   if (configured && credential.state === "ready") {
     try { selection = await readSelection(env); allowlist = await readAllowlist(env); }
@@ -189,6 +191,7 @@ export async function pluginManagementState(env: PluginSelectionEnv, options: Pl
     pending,
     allowlist: allowlist.state === "configured" ? { state: "configured", sources: allowlist.sources.map((entry) => entry.owner ? `${entry.host}/${entry.owner}` : entry.host) } : { state: allowlist.state },
     activeUpdate: active ? { requestId: active.id, mode: active.mode ?? "release", state: active.state } : null,
+    updateFailures,
     reauthentication: { freshUntil: freshUntil(options.principal), password: options.passwordAvailable, google: options.googleAvailable },
     error,
   };

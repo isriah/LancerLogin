@@ -17,9 +17,12 @@ export type PluginState = {
   pending: Pending[];
   allowlist: { state: "none" | "configured" | "invalid" | "unknown"; sources?: string[] };
   activeUpdate: { requestId: string; mode: string; state: string } | null;
+  /** Modules whose last migration attempt was refused or failed, so their new code may be running against older tables. */
+  updateFailures?: ModuleUpdateFailure[];
   reauthentication: { freshUntil: number | null; password: boolean; google: boolean };
   error: { code: string; message: string } | null;
 };
+export type ModuleUpdateFailure = { moduleId: string; code: string; message: string; firstFailedAt: string; lastTriedAt: string };
 type Action = "add" | "upgrade" | "remove";
 type Draft = { action: Action; id: string; source: string; commit: string; track?: Track };
 type Review = {
@@ -244,6 +247,28 @@ export function ModuleSourceDetails({ packages, id }: { packages: ModulePackages
     {track === "nightly" && <span className="plugin-track-badge">Nightly track · testing only</span>}
     {blocked && <small>{blocked}</small>}
   </>;
+}
+
+const updateFailureFor = (packages: ModulePackages, id: string) => packages.state?.updateFailures?.find((failure) => failure.moduleId === id);
+
+/** The "Update not finished" badge beside the module's name. */
+export function UpdateFailureBadge({ packages, id }: { packages: ModulePackages; id: string }) {
+  return updateFailureFor(packages, id) ? <span className="ui-status module-choice-badge" data-tone="warning">Update not finished</span> : null;
+}
+
+/**
+ * A module whose installed code is newer than its database: its migrations were refused (an upgrade that skips a required
+ * earlier release) or failed, so some of its pages may not work. LancerLogin keeps retrying; the notice goes away once
+ * an attempt succeeds.
+ */
+export function ModuleUpdateFailureNotice({ packages, id }: { packages: ModulePackages; id: string }) {
+  const failure = updateFailureFor(packages, id);
+  if (!failure) return null;
+  const since = failure.firstFailedAt !== failure.lastTriedAt ? ` Failing since ${new Date(failure.firstFailedAt).toLocaleString()}.` : "";
+  return <div className="ui-status settings-notice module-update-failure" data-tone="warning" role="status" data-code={failure.code}>
+    <p><strong>Update not finished:</strong> {failure.message}</p>
+    <small>Last tried {new Date(failure.lastTriedAt).toLocaleString()}.{since} LancerLogin tries again automatically, and this notice clears once the update finishes.</small>
+  </div>;
 }
 
 /** Update and Remove for a module from a git repository. Both commit a change that Apply changes then deploys. */

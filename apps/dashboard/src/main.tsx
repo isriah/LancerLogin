@@ -55,6 +55,7 @@ function App() {
   const [theme, setTheme] = useState<"light" | "dark">(savedTheme);
   const [remoteStatus, setRemoteStatus] = useState<SetupStatus | "loading" | "unavailable">(apiBaseUrl ? "loading" : "unavailable");
   const startup = useRef<ReturnType<typeof startDashboardEntry<SetupStatus>> | undefined>(undefined);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => {
@@ -68,7 +69,10 @@ function App() {
       setRemoteStatus(status);
     }).catch(() => { if (active) setRemoteStatus("unavailable"); });
     return () => { active = false; };
-  }, []);
+  }, [attempt]);
+
+  // A retry starts a fresh entry: the failed one's session and module reads are never reused.
+  function retrySetup() { startup.current = undefined; setRemoteStatus("loading"); setAttempt((count) => count + 1); }
 
   function chooseTheme(next: "light" | "dark") {
     setTheme(next);
@@ -78,12 +82,12 @@ function App() {
 
   // A build without a Worker API address cannot reach setup. Deployed builds always set one, so this only appears in an unconfigured local preview.
   if (!apiBaseUrl) return <CenteredState theme={theme} title="Setup service not configured" detail="This dashboard build has no Worker API address. Set VITE_API_BASE_URL for a local preview, or deploy with the private setup workflow." link={{ label: "Open the setup guide", href: setupGuideUrl }} />;
-  return <ProvisionedEntry startup={startup.current} status={remoteStatus} onConfigured={(status) => setRemoteStatus(status)} theme={theme} onTheme={chooseTheme} />;
+  return <ProvisionedEntry startup={startup.current} status={remoteStatus} onConfigured={(status) => setRemoteStatus(status)} onRetry={retrySetup} theme={theme} onTheme={chooseTheme} />;
 }
 
-function ProvisionedEntry({ startup, status, onConfigured, theme, onTheme }: { startup?: ReturnType<typeof startDashboardEntry<SetupStatus>>; status: SetupStatus | "loading" | "unavailable"; onConfigured: (status: SetupStatus) => void; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
+function ProvisionedEntry({ startup, status, onConfigured, onRetry, theme, onTheme }: { startup?: ReturnType<typeof startDashboardEntry<SetupStatus>>; status: SetupStatus | "loading" | "unavailable"; onConfigured: (status: SetupStatus) => void; onRetry: () => void; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) {
   if (status === "loading") return <CenteredState theme={theme} title="Checking your installation…" detail="LancerLogin is securely reading setup status." />;
-  if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="The dashboard cannot reach its Worker API. Check the deployment workflow and try again." />;
+  if (status === "unavailable") return <CenteredState theme={theme} title="Setup service unavailable" detail="LancerLogin could not reach its setup service, or it took too long to answer. Check your connection and try again." action={{ label: "Try again", onClick: onRetry }} />;
   const branding = status.configured ? status.settings : undefined;
   const style = branding ? brandTheme(branding.primaryColor, branding.secondaryColor) : undefined;
   if (status.configured && resolveDashboardPublicPage(installedDashboardModules, normalizePath(window.location.pathname))) return <PublicModuleEntry branding={branding} style={style} theme={theme} onTheme={onTheme} />;
@@ -106,8 +110,8 @@ function PublicModuleEntry({ branding, style, theme, onTheme }: { branding?: Bra
 
 function EntryHeader({ branding, theme, onTheme }: { branding?: Branding; theme: "light" | "dark"; onTheme: (theme: "light" | "dark") => void }) { return <header className="setup-header"><a className="brand-home-link" href="/dashboard" aria-label="Go to Dashboard">{branding?.logoData ? <AdaptiveBrandLogo src={branding.logoData} alt="" backdrop={branding.logoBackdrop} className="header-logo" /> : <div className="brand-mark" aria-hidden="true">L</div>}<span className="brand-heading"><strong>{branding?.organizationName ?? "LancerLogin"}</strong>{branding?.subtitle && <span>{branding.subtitle}</span>}</span></a><ThemeToggle theme={theme} onTheme={onTheme} /></header>; }
 
-function CenteredState({ theme, title, detail, link }: { theme: "light" | "dark"; title: string; detail: string; link?: { label: string; href: string } }) {
-  return <div className="app" data-theme={theme}><main className="centered-state" aria-live="polite" aria-busy={title.startsWith("Checking")}><div className="brand-mark" aria-hidden="true">L</div><p className="kicker">LancerLogin dashboard</p><h1>{title}</h1><p>{detail}</p>{link && <a href={link.href} target="_blank" rel="noreferrer">{link.label}<span aria-hidden="true"> ↗</span></a>}</main></div>;
+function CenteredState({ theme, title, detail, link, action }: { theme: "light" | "dark"; title: string; detail: string; link?: { label: string; href: string }; action?: { label: string; onClick: () => void } }) {
+  return <div className="app" data-theme={theme}><main className="centered-state" aria-live="polite" aria-busy={title.startsWith("Checking")}><div className="brand-mark" aria-hidden="true">L</div><p className="kicker">LancerLogin dashboard</p><h1>{title}</h1><p>{detail}</p>{link && <a href={link.href} target="_blank" rel="noreferrer">{link.label}<span aria-hidden="true"> ↗</span></a>}{action && <button className="primary-button" type="button" onClick={action.onClick}>{action.label}</button>}</main></div>;
 }
 
 const authModeChoices = [

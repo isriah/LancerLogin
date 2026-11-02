@@ -1,3 +1,4 @@
+// quick-check: covers docs-site/assets/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";

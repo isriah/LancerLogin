@@ -2,11 +2,15 @@ import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { discovered } from "./release-discovery";
 import { pairedViews } from "./paired-views";
+import { expectResponsiveFit, mockSession, mockSetupStatus } from "./api-fixtures";
 
 type Role = "admin" | "operator";
 type KioskState = "healthy" | "degraded" | "offline" | "unpaired";
 
-const now = Date.now();
+// Times are relative to each test's start: the dashboard counts a kiosk as offline 90 seconds after it was last seen,
+// so a time taken once when the file loads would turn a late test's "just seen" kiosk Offline in a slow run.
+let now = Date.now();
+test.beforeEach(() => { now = Date.now(); });
 const iso = (offsetMinutes: number) => new Date(now + offsetMinutes * 60_000).toISOString();
 const longDeviceName = "North entrance attendance station with a deliberately long operations label that must wrap safely";
 const retiredKiosk = { id: "retired-1", name: "Retired workshop kiosk with a long preserved history label", active: 0, lastSeenAt: iso(-50_000), releaseVersion: "0.17.2", pairedAt: iso(-90_000) };
@@ -41,25 +45,17 @@ async function useKioskContext(page: Page, { role = "admin", state = "healthy", 
   await page.route("**/admin/kiosks/possible-wrong-matches", route => route.fulfill({ json: { windowSeconds: 30, matches: [] } }));
   await page.route("**/admin/kiosks/reenroll-suggestions", route => route.fulfill({ json: { threshold: 70, scans: 5, members: [] } }));
   await page.route("**/admin/integrations/discord/label-roles/unmatched", route => route.fulfill({ json: { labels: [] } }));
-  await page.route("**/setup/status", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      configured: true,
-      installation: { authMode: "local" },
-      settings: {
-        organizationName: "Reference Arts Collective",
-        subtitle: "Shared operations",
-        logoData: "",
-        primaryColor: dashboardConformanceReferences.brand.primary,
-        secondaryColor: dashboardConformanceReferences.brand.secondary,
-        appearance: "dark",
-        logoBackdrop: "auto",
-        lateScanMinutes: 30,
-      },
-    }),
-  }));
-  await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role } }) }));
+  await mockSetupStatus(page, { settings: {
+    organizationName: "Reference Arts Collective",
+    subtitle: "Shared operations",
+    logoData: "",
+    primaryColor: dashboardConformanceReferences.brand.primary,
+    secondaryColor: dashboardConformanceReferences.brand.secondary,
+    appearance: "dark",
+    logoBackdrop: "auto",
+    lateScanMinutes: 30,
+  } });
+  await mockSession(page, role);
   // Debug mode is a per-device switch that only Admins see; Operators keep it off even when this browser has it on.
   await page.addInitScript((enabled) => localStorage.setItem("lancerlogin-debug-mode", enabled), String(debugMode));
   await page.route("**/admin/setup/progress", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }) }));
@@ -221,7 +217,7 @@ for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
     await expect(panel).toContainText("Cloud storage: On · 2 stored fingerprints");
     page.once("dialog", dialog => dialog.accept()); await panel.getByRole("button", { name: "Disable cloud storage", exact: true }).click();
     await expect(panel).toContainText("cloud templates deleted"); expect(writes).toBe(2);
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
   });
   test(`Cloud-only sync has no peer controls at ${width} in ${theme}`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -233,7 +229,7 @@ for (const theme of ["light", "dark"]) for (const width of [390, 1280]) {
     await expect(page.getByRole("article", { name: "Cloud storage", exact: true })).toBeVisible();
     await expect(page.getByRole("article", { name: "Peer sync", exact: true })).toHaveCount(0);
     expect(requests).toEqual([]);
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
   });
 }
 
@@ -259,19 +255,7 @@ test("Missing or changed vault keys fail closed but allow cloud deletion and ref
 });
 
 
-async function expectResponsiveFit(page: Page) {
-  const geometry = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-    clipped: Array.from(document.querySelectorAll<HTMLElement>("main button, main a[href], main input, main [role='status'], main [role='alert']")).flatMap((element) => {
-      const style = getComputedStyle(element); const bounds = element.getBoundingClientRect();
-      if (style.display === "none" || style.visibility === "hidden" || bounds.width === 0 || element.closest(".table-scroll")) return [];
-      return bounds.left < -1 || bounds.right > innerWidth + 1 ? [element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName] : [];
-    }),
-  }));
-  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
-  expect(geometry.clipped).toEqual([]);
-}
+const responsiveFit = { controls: "main button, main a[href], main input, main [role='status'], main [role='alert']", scrollers: ".table-scroll" };
 
 for (const viewport of dashboardConformanceReferences.viewports) {
   for (const theme of dashboardConformanceReferences.themes) {
@@ -319,7 +303,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expect(cloud).toBeVisible();
       const actionCenters = await cloud.evaluate(element => [...element.querySelectorAll(".kiosk-actions button")].map(button => { const box = button.getBoundingClientRect(); return box.y + box.height / 2; }));
       expect(actionCenters[0]).toBeCloseTo(actionCenters[1]!, 0);
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
       await page.screenshot({ path: test.info().outputPath(`kiosks-${viewport.width}-${theme}.png`), fullPage: true });
     });
   }
@@ -351,7 +335,7 @@ test("Kiosks names each reported cause of a degraded kiosk without opening diagn
   await expect(page.getByText("Clock not confirmed.", { exact: false })).toBeVisible();
   await expect(page.getByText("2 scans saved while the clock was unconfirmed. They upload once the clock is confirmed.", { exact: true })).toBeVisible();
   await expect(page.locator(".kiosk-summary")).not.toContainText("rejected");
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 for (const debugMode of [false, true]) test(`rejected scans never degrade a kiosk and a failed review upload shows only in Debug tools (debug ${debugMode ? "on" : "off"})`, async ({ page }) => {
@@ -381,7 +365,7 @@ test("Debug tools hold rejected scans, fingerprint matching and weak-match diagn
     await expect(page.getByRole("region", { name: "Fingerprint matching" })).toHaveCount(debugMode ? 1 : 0);
     for (const name of ["Possible wrong matches", "Re-enroll suggested", "Discord users not on the roster"]) await expect(page.getByRole("region", { name, exact: true })).toHaveCount(debugMode ? 1 : 0);
     if (debugMode) await expect(tools.getByRole("heading", { level: 3 })).toHaveText(["Open web kiosk on this device", "Rejected scans", "Fingerprint matching", "Possible wrong matches", "Re-enroll suggested", "Discord users not on the roster"]);
-    if (debugMode) { await expect(tools.getByRole("region", { name: "Rejected scans", exact: true })).toBeVisible(); await expect(tools.getByRole("region", { name: "Fingerprint matching" })).toBeVisible(); await expectResponsiveFit(page); }
+    if (debugMode) { await expect(tools.getByRole("region", { name: "Rejected scans", exact: true })).toBeVisible(); await expect(tools.getByRole("region", { name: "Fingerprint matching" })).toBeVisible(); await expectResponsiveFit(page, responsiveFit); }
     await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
     await page.getByText("Diagnostics", { exact: true }).click();
     await expect(page.getByText("Pending scans", { exact: true })).toBeVisible();
@@ -406,7 +390,7 @@ test("Admins see recent fingerprint match scores and save a minimum score for ki
   await card.getByRole("button", { name: "Save minimum score" }).click();
   await expect(card.getByText("Saved. Kiosks ask for a rescan below 80 within a minute.", { exact: true })).toBeVisible();
   expect(saved).toEqual({ minimumScore: 80 });
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("multiple active kiosks remain independently selectable and manageable", async ({ page }) => {
@@ -447,7 +431,7 @@ test("Admin pairing, maintenance, action feedback, and long errors remain focuse
   await expect(dialog.getByRole("button", { name: "Close pairing dialog" })).toBeFocused();
   await dialog.getByRole("button", { name: "Create one-time pairing key" }).click();
   await expect(dialog.getByRole("alert")).toHaveText(longError);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(add).toBeFocused();
@@ -538,7 +522,7 @@ test("Cloud storage fills the sharing row without an empty peer column", async (
     return { width: box.width, available: parent.width };
   });
   expect(fit.width).toBeGreaterThanOrEqual(fit.available - 2);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("Operator sees health without Admin management or unconfigured Discord controls", async ({ page }) => {
@@ -550,7 +534,7 @@ test("Operator sees health without Admin management or unconfigured Discord cont
   await expect(page.getByRole("table", { name: "Retired kiosk history" })).toHaveCount(0);
   await expect(page.getByText("Unavailable until the Discord integration is enabled, saved, and verified.")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Add kiosk|Rename|Reload display|Restart software|Reboot Pi|Reset network PIN|Retire kiosk|Sync Discord status/ })).toHaveCount(0);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 for (const { theme, width } of pairedViews) {
@@ -603,7 +587,7 @@ test("unlinked reader fingerprints are shown and erased only after confirmation,
   page.once("dialog", dialog => { expect(dialog.message()).toContain("Erase up to 77 fingerprints"); expect(dialog.message()).toContain("cannot be recovered"); return dialog.accept(); });
   await erase.click();
   await expect.poll(() => writes).toEqual([{ command: "erase_unlinked_fingerprints" }]);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
   counts = { readerTemplates: null, linkedTemplates: null };
   await page.reload();
   await page.getByText("Device maintenance", { exact: true }).click();
@@ -655,7 +639,7 @@ test("management route uses the selected kiosk and never falls back for a missin
   await page.getByRole("button", { name: "Reload display", exact: true }).click();
   await expect.poll(() => commands.length).toBe(1);
   expect(commands[0]).toContain("/kiosk-2/commands");
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
   for (const id of ["missing", "retired-1"]) {
     await page.goto("/kiosks/" + id + "/manage");
     await expect(page.locator('[data-walkthrough-page="kiosks"]')).toHaveAttribute("data-walkthrough-ready", "true");

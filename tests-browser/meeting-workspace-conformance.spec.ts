@@ -2,29 +2,22 @@ import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { expectDashboardTypography } from "./dashboard-typography";
 import { pairedViews } from "./paired-views";
+import { expectResponsiveFit, mockSession, mockSetupStatus } from "./api-fixtures";
 
 type Role = "admin" | "operator";
 
 async function useReferenceContext(page: Page, role: Role = "admin", discordConfigured = true) {
-  await page.route("**/setup/status", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      configured: true,
-      installation: { authMode: "local" },
-      settings: {
-        organizationName: "Reference Arts Collective",
-        subtitle: "Shared operations",
-        logoData: "",
-        primaryColor: dashboardConformanceReferences.brand.primary,
-        secondaryColor: dashboardConformanceReferences.brand.secondary,
-        appearance: "dark",
-        logoBackdrop: "auto",
-        lateScanMinutes: 30,
-      },
-    }),
-  }));
-  await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role } }) }));
+  await mockSetupStatus(page, { settings: {
+    organizationName: "Reference Arts Collective",
+    subtitle: "Shared operations",
+    logoData: "",
+    primaryColor: dashboardConformanceReferences.brand.primary,
+    secondaryColor: dashboardConformanceReferences.brand.secondary,
+    appearance: "dark",
+    logoBackdrop: "auto",
+    lateScanMinutes: 30,
+  } });
+  await mockSession(page, role);
   await page.route("**/integrations/capabilities", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
@@ -32,19 +25,7 @@ async function useReferenceContext(page: Page, role: Role = "admin", discordConf
   }));
 }
 
-async function expectContained(page: Page) {
-  const geometry = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-    clipped: Array.from(document.querySelectorAll<HTMLElement>("main button, main input, main select, main textarea, main [role='status']")).flatMap((element) => {
-      const style = getComputedStyle(element); const bounds = element.getBoundingClientRect();
-      if (style.display === "none" || style.visibility === "hidden" || bounds.width === 0 || element.closest(".responsive-table")) return [];
-      return bounds.left < -1 || bounds.right > innerWidth + 1 ? [element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName] : [];
-    }),
-  }));
-  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
-  expect(geometry.clipped).toEqual([]);
-}
+const expectContained = (page: Page) => expectResponsiveFit(page, { controls: "main button, main input, main select, main textarea, main [role='status']", scrollers: ".responsive-table" });
 
 for (const { viewport, theme } of pairedViews) {
     test(`meeting browser conforms at ${viewport.width}x${viewport.height} in ${theme} mode with reference branding`, async ({ page }) => {

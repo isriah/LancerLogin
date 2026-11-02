@@ -14,8 +14,16 @@
 //
 // tests/browser-groups.test.mjs fails when a spec file is unassigned, a plugin-only file is outside the plugin group,
 // or a file with individual plugin-dependent tests is not an integration file.
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+//
+// Each file's `seconds` balances the gate's --part split. Refresh them from the Playwright JSON reports of a gate run on
+// CI runners (one report per shard; include every shard of the groups you refresh):
+//
+//   node scripts/browser-groups.mjs --refresh-seconds <report.json> [<report.json> ...]
+//
+// A file's seconds become the sum of its tests' first-attempt durations across the reports, so a retry does not count
+// twice; files the reports did not run keep theirs. Use CI reports only: a local machine weighs specs differently.
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -106,4 +114,52 @@ export function parsePart(value) {
   const match = /^([1-9][0-9]*)\/([1-9][0-9]*)$/.exec(String(value));
   if (!match || Number(match[1]) > Number(match[2])) throw new Error(`--part needs the form i/n with 1 <= i <= n, not ${value}`);
   return { part: Number(match[1]), parts: Number(match[2]) };
+}
+
+/** Seconds per spec file in one Playwright JSON report: the sum of each test's first-attempt duration. */
+export function specSecondsFromReport(report) {
+  const milliseconds = new Map();
+  const walk = (suite, file) => {
+    for (const spec of suite.specs ?? []) for (const test of spec.tests ?? []) {
+      const name = basename(String(spec.file ?? file ?? "").replaceAll("\\", "/"));
+      milliseconds.set(name, (milliseconds.get(name) ?? 0) + (test.results?.[0]?.duration ?? 0));
+    }
+    for (const child of suite.suites ?? []) walk(child, child.file ?? file);
+  };
+  for (const suite of report.suites ?? []) walk(suite, suite.file);
+  return new Map([...milliseconds].map(([file, ms]) => [file, ms / 1000]));
+}
+
+/**
+ * Replace each reported file's `seconds` in groups.json with its measured time, rounded up to whole seconds. A file in
+ * several reports (an integration file runs in a Core part and again composed) takes the largest. Keeps the file's line
+ * endings. Returns the changed files.
+ */
+export function refreshSpecSeconds(reports, root = rootDirectory) {
+  const measured = new Map();
+  for (const report of reports) for (const [file, seconds] of specSecondsFromReport(report)) measured.set(file, Math.max(measured.get(file) ?? 0, seconds));
+  const path = join(root, manifestPath);
+  const raw = readFileSync(path, "utf8");
+  const manifest = readBrowserGroupManifest(root);
+  const changes = [];
+  for (const [file, seconds] of [...measured].sort(([a], [b]) => a.localeCompare(b))) {
+    const entry = manifest.specs[file];
+    if (!entry || seconds <= 0) continue;
+    const next = Math.max(1, Math.ceil(seconds));
+    if (entry.seconds !== next) { changes.push({ file, from: entry.seconds, to: next }); entry.seconds = next; }
+  }
+  const eol = raw.includes("\r\n") ? "\r\n" : "\n";
+  if (changes.length) writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`.replaceAll("\n", eol));
+  return changes;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const [option, ...paths] = process.argv.slice(2);
+  if (option !== "--refresh-seconds" || !paths.length) {
+    console.error("Usage: node scripts/browser-groups.mjs --refresh-seconds <playwright-report.json> [...]");
+    process.exit(2);
+  }
+  const changes = refreshSpecSeconds(paths.map((path) => JSON.parse(readFileSync(path, "utf8"))));
+  for (const { file, from, to } of changes) console.log(`${file}: ${from ?? "-"} -> ${to}`);
+  console.log(changes.length ? `Updated ${changes.length} file(s) in ${manifestPath}.` : `${manifestPath} already matches the reports.`);
 }

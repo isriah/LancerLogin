@@ -4,6 +4,8 @@ const identifier = value => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128
 const hash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const revision = value => Number.isSafeInteger(value) && value >= 0;
 const memberId = value => typeof value === "string" && value.length > 0 && value.length <= 100 && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
+// Production cadence. The service and scheduler read it from here so a test process can shorten every interval together.
+export const pollIntervals = Object.freeze({ commandsMs: 5_000, fingerprintsMs: 15_000, configurationMs: 60_000, heartbeatMs: 60_000 });
 const unavailable = () => { const error = new Error("Current kiosk poll metadata is unavailable"); error.reasonCode = "invalid_response"; return error; };
 
 async function readBounded(response, maximum = 16 * 1024 * 1024) {
@@ -122,7 +124,7 @@ export function createKioskPollClient(config, { fetchImpl = fetch, now = Date.no
 
 // A slow fingerprint transfer never holds the five-second command transport.
 // Failed requests do not advance due times or silently select legacy routes.
-export function createKioskPollScheduler({ client, commands, configuration, fingerprints, enrollment, legacy, fingerprintBusy = () => false, peerAfter = () => undefined, onError = () => {}, now = Date.now }) {
+export function createKioskPollScheduler({ client, commands, configuration, fingerprints, enrollment, legacy, fingerprintBusy = () => false, peerAfter = () => undefined, onError = () => {}, now = Date.now, intervals = pollIntervals }) {
   let running, commandRunning, configurationRunning, fingerprintRunning;
   let enrollmentRunning;
   function applyEnrollment(operation) { if (operation && !enrollmentRunning) enrollmentRunning = Promise.resolve().then(operation).catch(error => onError(error, "enrollment")).finally(() => { enrollmentRunning = undefined; }); }
@@ -136,12 +138,12 @@ export function createKioskPollScheduler({ client, commands, configuration, fing
   }
   function applyConfiguration(operation, started) {
     if (!configurationRunning) {
-      nextConfiguration = nextDeadline(nextConfiguration, started, 60000); configurationRetry = false;
+      nextConfiguration = nextDeadline(nextConfiguration, started, intervals.configurationMs); configurationRetry = false;
       configurationRunning = Promise.resolve().then(operation).catch(error => { configurationRetry = true; onError(error, "configuration"); }).finally(() => { configurationRunning = undefined; });
     }
   }
   function applyFingerprints(operation, started) {
-    nextFingerprint = nextDeadline(nextFingerprint, started, 15000);
+    nextFingerprint = nextDeadline(nextFingerprint, started, intervals.fingerprintsMs);
     fingerprintRunning = Promise.resolve().then(operation).catch(error => onError(error, "fingerprints")).finally(() => { fingerprintRunning = undefined; });
   }
   async function run(forceFingerprints) {

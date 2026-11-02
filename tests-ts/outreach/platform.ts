@@ -1,3 +1,4 @@
+// quick-check: covers apps/dashboard/src/*.css
 // Outreach's place in the module platform once composed as the official plugin: registry ownership, the identity and
 // cleanup it had as a first-party module, scoped stylesheet and reviewed controls, first enablement seeds, adoption of
 // an existing installation's data, and historical backups that predate its plugin section.

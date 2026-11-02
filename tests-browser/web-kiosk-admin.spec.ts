@@ -1,21 +1,10 @@
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import qrcode from "qrcode-generator";
+import { useScenario as routeScenario } from "./api-fixtures";
 
 // Web kiosk phase 1 on the Kiosks page, against the dashboard preview API's kiosk state. Each test gets its own scenario:
 // a Raspberry Pi "Front desk", an online "Test web kiosk A" and "Test web kiosk B" that stopped checking in 45 minutes ago.
-async function useScenario(page: Page, id: string) {
-  const scenario = `web-kiosk-admin-${id}`;
-  const writes: Request[] = [];
-  const tag = async (route: Parameters<Parameters<Page["route"]>[1]>[0]) => {
-    if (route.request().method() !== "GET") writes.push(route.request());
-    await route.continue({ headers: { ...route.request().headers(), "x-preview-scenario": scenario } });
-  };
-  await page.route("**/admin/kiosks", tag);
-  await page.route("**/admin/kiosks/*", tag);
-  await page.route("**/admin/kiosks/*/*", tag);
-  await page.route("**/admin/pairing-codes", tag);
-  return writes;
-}
+const useScenario = (page: Page, id: string) => routeScenario(page, `web-kiosk-admin-${id}`, ["**/admin/kiosks", "**/admin/kiosks/*", "**/admin/kiosks/*/*", "**/admin/pairing-codes"]);
 
 const qrPath = (value: string) => {
   const code = qrcode(0, "M"); code.addData(value, "Byte"); code.make();

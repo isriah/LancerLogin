@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { attendanceSetupState, attendanceSnapshot } from "./module-fixtures";
+import { mockSetupStatus } from "./api-fixtures";
 
 type ModuleMode = "ok" | "offline" | "server-error" | "signed-out" | "mismatch";
 
@@ -141,7 +142,7 @@ test("reopened Attendance setup can be closed and its Integrations link opens In
 });
 
 test("first-Admin setup reports an unreachable or failing setup service and stays usable", async ({ page }) => {
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+  await mockSetupStatus(page, { configured: false });
   let attempt = 0;
   await page.route("**/setup/bootstrap", (route) => ++attempt === 1 ? route.abort("connectionfailed") : route.fulfill({ status: 502, contentType: "text/html", body: "<html>Bad gateway</html>" }));
   await page.goto("/dashboard");

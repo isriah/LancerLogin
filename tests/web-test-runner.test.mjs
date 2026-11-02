@@ -109,10 +109,12 @@ test("development and CI avoid duplicate complete verification", () => {
   }
   assert.match(scripts["typecheck:web"], /--workspace @lancerlogin\/shared/);
   assert.match(scripts["build:web"], /verify-template-config/);
-  assert.equal(scripts.test, "node --test --test-concurrency=2 tests/**/*.test.mjs && node --experimental-strip-types --test --test-concurrency=2 tests-ts/**/*.test.ts");
+  assert.equal(scripts.test, "node scripts/run-tests.mjs");
   assert.match(scripts["verify:all"], /verify:migrations.*typecheck.*npm test.*build/);
   assert.match(scripts["verify:release"], /verify:all.*audit:release:local/);
-  assert.equal(scripts["test:release-ci"], "npm run test:web && node --test tests/kiosk-runtime.test.mjs tests/kiosk-reassociation.test.mjs");
+  assert.equal(scripts["test:release-ci"], "npm run test:web && node --test tests/kiosk-runtime.test.mjs");
+  // test:web already discovers kiosk-reassociation, so test:release-ci names only the suite it excludes.
+  assert.ok(discoverWebTests().some(({ files }) => files.includes("tests/kiosk-reassociation.test.mjs")));
   assert.equal(scripts["verify:release-ci"], "npm run verify:migrations && npm run typecheck && npm run test:release-ci && npm run build");
   assert.match(scripts["test:kiosk"], /kiosk-runtime\.test\.mjs.*kiosk-artifacts\.test\.mjs/);
 

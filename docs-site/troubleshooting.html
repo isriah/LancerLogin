@@ -48,6 +48,7 @@
       <tr><td>Google sign-in reports a redirect mismatch.</td><td>Copy the callback address from LancerLogin into the Google client's <strong>Authorized redirect URIs</strong> exactly. See <a href="setup.html#google-oauth">Google sign-in</a>.</td></tr>
       <tr><td>An account is locked after wrong passwords.</td><td>Wait 15 minutes, or have another Admin set a new password in <span class="ui-path">Settings <span>›</span> Access</span>.</td></tr>
       <tr><td>No Admin can sign in.</td><td>Follow <a href="operations.html#recover-access">Recover access</a>.</td></tr>
+      <tr><td>The dashboard shows <strong>Setup service unavailable</strong> or <strong>Session check unavailable</strong>.</td><td>LancerLogin could not reach its server, or the server took longer than 15 seconds to answer. Check your connection and choose <strong>Try again</strong>.</td></tr>
       <tr><td>A page says <strong>Page unavailable</strong>.</td><td>The page does not exist or your role cannot open it. Sign in with an account that has access, or ask an Admin to assign you to that module.</td></tr>
     </tbody>
   </table>
@@ -80,6 +81,7 @@ curl http://127.0.0.1:8788/health</code></pre>
       <tr><td>The update waits for approval.</td><td>Choose <strong>Review approval in GitHub</strong> and approve the <code>production</code> deployment.</td></tr>
       <tr><td>The update stops because a module moved into a plugin.</td><td>Follow the choices on <span class="ui-path">Settings <span>›</span> Updates</span> to keep the module by adding its plugin, or to turn it off.</td></tr>
       <tr><td>The update failed before it changed anything.</td><td>Read the reason on the card, fix it, and <a href="updates.html#web-update">start the update again</a> with a new backup.</td></tr>
+      <tr><td>A re-run of the update's GitHub workflow run fails with <code>request_not_claimable</code>.</td><td>Re-running a run never retries an update, and nothing was changed. <a href="updates.html#web-update">Start the update again</a> from the dashboard, or choose <strong>Apply changes</strong> for a plugin change.</td></tr>
       <tr><td>The card says recovery is required.</td><td>Stop. Do not start another update and do not restore a backup. Open <strong>Diagnostics and manual recovery</strong> for the workflow run and contact support with what it shows.</td></tr>
       <tr><td>A notice asks you to reload.</td><td>The installation was updated. Choose <strong>Reload updated dashboard</strong>.</td></tr>
     </tbody>

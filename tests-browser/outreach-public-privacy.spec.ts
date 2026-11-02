@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { requireOutreachPlugin } from "./outreach-fixtures";
+import { chooseClock, mockSetupStatus } from "./api-fixtures";
 
 requireOutreachPlugin();
 
@@ -7,7 +8,7 @@ type Mode = "off" | "validity" | "name";
 const activity = { id: "event-1", title: "Synthetic community drive", serviceDate: "2026-09-28", location: "Library", reopened: false };
 async function publicPage(page: Page, initial: Mode, appearance = "light") {
   const state = { mode: initial, lookups: [] as Record<string, unknown>[], corrections: [] as Record<string, unknown>[], submissions: [] as Record<string, unknown>[], failSubmission: false, failCorrection: false };
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Robotics", primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance, timeZone: "America/New_York", logoBackdrop: "auto" } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Robotics", primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance, timeZone: "America/New_York", logoBackdrop: "auto" } });
   await page.route("**/public/hours/context", route => route.fulfill({ json: { organizationName: "Synthetic Robotics", timeZone: "America/New_York", today: "2026-09-28", earliestServiceDate: "2026-08-30", reportingDays: 30, memberValidation: state.mode } }));
   await page.route(/\/public\/hours\/(?:activities|correction-activities)(?:\?.*)?$/, route => route.fulfill({ json: { items: [activity], nextCursor: null } }));
   await page.route("**/public/hours/member-validation", route => {
@@ -66,11 +67,6 @@ test("name permission is cleared on editing and a server-disabled lookup returns
   expect(state.lookups).toHaveLength(2);
   expect(await page.content()).not.toContain("Synthetic Avery Member");
 });
-
-async function chooseClock(page: Page, label: string, hour: number) {
-  await page.getByRole("button", { name: new RegExp(`^${label}:`) }).click(); const dialog = page.getByRole("dialog", { name: label });
-  await dialog.getByRole("button", { name: `${hour} o'clock` }).click(); await dialog.getByRole("button", { name: "0 minutes", exact: true }).click(); await dialog.getByRole("group", { name: "Choose AM or PM" }).getByRole("button", { name: "AM", exact: true }).click();
-}
 
 test("known rejection permits a corrected submission instead of suggesting uncertain replay", async ({ page }) => {
   const state = await publicPage(page, "off"); state.failSubmission = true;

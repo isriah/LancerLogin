@@ -1,3 +1,4 @@
+// quick-check: covers .github/workflows/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -322,10 +323,10 @@ test("maintainer-only workflows are named as such and never run in an adopter re
 
 test("CI scopes ordinary changes and runs one complete exact-release gate", async () => {
   const packageDocument = JSON.parse(await readFile("package.json", "utf8"));
-  assert.equal(packageDocument.scripts["verify:migrations"], "node scripts/verify-d1-migrations.mjs && node scripts/rehearse-community-upgrade.mjs");
+  assert.equal(packageDocument.scripts["verify:migrations"], "node scripts/verify-migrations.mjs");
   assert.match(packageDocument.scripts["verify:all"], /verify:migrations.*typecheck.*test.*build/);
   assert.match(packageDocument.scripts["verify:release"], /verify:all.*audit:release:local/);
-  assert.equal(packageDocument.scripts["test:release-ci"], "npm run test:web && node --test tests/kiosk-runtime.test.mjs tests/kiosk-reassociation.test.mjs");
+  assert.equal(packageDocument.scripts["test:release-ci"], "npm run test:web && node --test tests/kiosk-runtime.test.mjs");
   assert.equal(packageDocument.scripts["verify:release-ci"], "npm run verify:migrations && npm run typecheck && npm run test:release-ci && npm run build");
   assert.doesNotMatch(packageDocument.scripts["test:release-ci"], /kiosk-artifacts/);
   assert.equal(packageDocument.scripts["audit:release"], "node scripts/audit-dependencies.mjs");

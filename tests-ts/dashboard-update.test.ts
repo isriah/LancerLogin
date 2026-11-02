@@ -239,6 +239,63 @@ test("failed discovery keeps stale metadata unconfirmed and schedules cooldown f
   await assert.rejects(reloaded.check()); assert.equal(calls, 2);
 });
 
+test("only Check for updates asks the server to read GitHub now", async () => {
+  const urls: string[] = [];
+  const fetcher = (async (url: string | URL | Request) => { urls.push(String(url)); return Response.json({ fresh: true, checkedAt: 1, release: { tag_name: "v1.0.4" } }); }) as typeof fetch;
+  await fetchLatestRelease(fetcher, 50); await fetchLatestRelease(fetcher, 50, "stable", true);
+  assert.deepEqual(urls, [latestReleaseUrl, `${latestReleaseUrl}?refresh=now`]);
+  const refreshes: boolean[] = [];
+  const cache = createReleaseCache({ now: () => 100_000, storage: () => memoryStorage(), load: async (refresh) => { refreshes.push(refresh); return { tag_name: "v1.0.4" }; } });
+  await cache.check(); await cache.check(true); await cache.check(true, true);
+  assert.deepEqual(refreshes, [false, false, true], "automatic and reconciling checks never force the server");
+  // The updates page's button is the one caller that refreshes.
+  const page = readFileSync("apps/dashboard/src/updates-page.tsx", "utf8");
+  assert.equal([...page.matchAll(/release\.check\(true, true\)/g)].length, 1);
+  assert.match(page, /onClick=\{\(\) => void release\.check\(true, true\)/);
+});
+
+test("Last successful check is when the server last read GitHub, measured as a duration", async () => {
+  const now = 1_000_000;
+  for (const [checkedAgeMs, expected] of [[40_000, 960_000], [0, now], [-5, now], [Infinity, now], [undefined, now], [10 * releaseCacheTtlMs, now - releaseCacheTtlMs]] as const) {
+    const cache = createReleaseCache({ now: () => now, storage: () => memoryStorage(), load: async () => ({ tag_name: "v1.0.4", checkedAt: 5, checkedAgeMs }) });
+    await cache.check(); assert.equal(cache.snapshot().checkedAt, expected); assert.equal(cache.snapshot().attemptedAt, now);
+  }
+  const reported = await fetchLatestRelease(async () => Response.json({ fresh: true, checkedAt: 5, checkedAgeMs: 30_000, release: { tag_name: "v1.0.4" } }), 50);
+  assert.equal(reported.checkedAgeMs, 30_000);
+  // An answer the server has held for 14 minutes stays fresh here for only the remaining minute.
+  let clock = now; let calls = 0;
+  const aged = createReleaseCache({ now: () => clock, storage: () => memoryStorage(), load: async () => { calls++; return { tag_name: "v1.0.4", checkedAgeMs: 14 * 60_000 }; } });
+  await aged.check(); clock += 60_000 - 1; await aged.check(); assert.equal(calls, 1);
+  clock++; await aged.check(); assert.equal(calls, 2);
+});
+
+test("during a failure cooldown Check for updates may ask again once the server's refresh time passes", async () => {
+  let now = 1_000_000; let calls = 0; let failing = true; const storage = memoryStorage(); const refreshes: boolean[] = [];
+  const load = async (refresh: boolean) => {
+    calls++; refreshes.push(refresh);
+    if (!failing) return { tag_name: "v1.0.5" };
+    return fetchLatestRelease(async () => Response.json({ fresh: false, code: "network", refreshAfterMs: 60_000, release: { tag_name: "v1.0.4" } }, { status: 503, headers: { "retry-after": "900" } }));
+  };
+  const cache = createReleaseCache({ now: () => now, storage: () => storage, load });
+  await assert.rejects(cache.check());
+  assert.equal(cache.snapshot().retryAt, now + 900_000); assert.equal(cache.snapshot().refreshAt, now + 60_000);
+  now += 59_999; await assert.rejects(cache.check(true, true)); await assert.rejects(cache.check(true)); assert.equal(calls, 1);
+  now++;
+  // The refresh time survives a reload; automatic checks still wait for retryAt.
+  const reloaded = createReleaseCache({ now: () => now, storage: () => storage, load });
+  assert.equal(reloaded.snapshot().refreshAt, now); await assert.rejects(reloaded.check(true)); assert.equal(calls, 1);
+  failing = false; assert.equal((await reloaded.check(true, true)).tag_name, "v1.0.5"); assert.equal(calls, 2);
+  assert.deepEqual(refreshes, [false, true]); assert.equal(reloaded.snapshot().refreshAt, undefined); assert.equal(reloaded.snapshot().retryAt, undefined);
+  // Without a server refresh time (no web-update credential, or GitHub's own cooldown) the button waits like before.
+  failing = true;
+  const plain = createReleaseCache({ now: () => now, storage: () => memoryStorage(), load: async () => { throw new ReleaseCheckError("Unavailable", new Response("{}", { status: 429, headers: { "retry-after": "600" } }), { code: "rate_limited" }); } });
+  await assert.rejects(plain.check(true, true)); assert.equal(plain.snapshot().refreshAt, undefined);
+  now += 300_000; await assert.rejects(plain.check(true, true), /Unavailable|rate limited/);
+  // A server refresh time never extends past the automatic retry.
+  const capped = createReleaseCache({ now: () => now, storage: () => memoryStorage(), load: async () => { throw new ReleaseCheckError("Unavailable", new Response("{}", { status: 503, headers: { "retry-after": "60" } }), { code: "network", refreshAfterMs: 600_000 }); } });
+  await assert.rejects(capped.check()); assert.equal(capped.snapshot().refreshAt, capped.snapshot().retryAt);
+});
+
 test("old direct-browser cooldown cannot prevent same-origin discovery", async () => {
   const storage = memoryStorage(); let calls = 0;
   storage.setItem("lancerlogin-release-cache-v1", JSON.stringify({ failures: 1, checkedAt: 90_000, attemptedAt: 95_000, retryAt: 3_700_000, release: { tag_name: "v1.0.3" } }));

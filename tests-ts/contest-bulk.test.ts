@@ -1,13 +1,14 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { readdirSync, readFileSync } from "node:fs";
 import type { D1Database, D1Statement } from "../apps/api/src/d1-usage.ts";
 import { acceptContestBatch, rejectContestBatch, submitContest } from "../apps/api/src/contest-review.ts";
+import { applyCoreMigrations } from "./fixtures/d1-database.ts";
 
 function fixture(count = 66) {
   const sqlite = new DatabaseSync(":memory:");
-  for (const name of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql")).sort()) sqlite.exec(readFileSync(`apps/api/migrations/${name}`, "utf8"));
+  applyCoreMigrations(sqlite);
   sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-10-15','local');
     INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('operator','primary','reviewer','operator','2026-10-15');
     INSERT INTO meetings(id,installation_id,title,starts_at,created_by,created_at) VALUES('meeting','primary','Synthetic meeting','2026-10-15T10:00:00Z','operator','2026-10-15');`);

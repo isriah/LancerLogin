@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
 import { pairedViews } from "./paired-views";
+import { mockSetupStatus } from "./api-fixtures";
 
 requireCarpoolPlugin();
 
@@ -11,7 +12,7 @@ function fixture() {
   return { plan, people, assignments: [{ riderId: "person-2", vehiclePersonId: "person-0", direction: "outbound", distanceMiles: .2, locked: false, manual: false }], unresolved: [{ riderId: "person-3", direction: "outbound", reason: "no-nearby-car", detail: "No eligible car is within 12 miles." }] };
 }
 async function setup(page: Page, detail: ReturnType<typeof fixture>) {
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Team", subtitle: "Review", logoData: null, primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30 } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Team", subtitle: "Review", logoData: null, primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30 } });
   await page.route("**/platform/modules", route => route.fulfill({ json: carpoolSnapshot() }));
   await page.route(/\/admin\/carpool\/context(?:\?.*)?$/, route => route.fulfill({ json: { plans: [detail.plan], members: [], importProfiles: [], geocodingConfigured: false, detail } }));
   await page.goto("/carpool"); await expect(page.getByRole("heading", { name: "Carpool Builder", exact: true })).toBeVisible();

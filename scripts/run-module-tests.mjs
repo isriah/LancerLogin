@@ -2,9 +2,11 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { prepareTestComposition, readTestSelection } from "./test-plugin-sources.mjs";
+import { officialModuleList, overrideName, prepareTestComposition, readTestSelection } from "./test-plugin-sources.mjs";
 
 const modes = new Set(["fast", "acceptance"]);
+// Names people use for a module whose manifest ID differs: the Outreach plugin's ID is hour-tracking.
+export const moduleAliases = { outreach: "hour-tracking" };
 const selectionKeys = ["javascript", "typescript", "browser", "typecheckWorkspaces", "buildWorkspaces"];
 const fileRules = {
   javascript: { directory: "tests", suffix: ".test.mjs" },
@@ -73,6 +75,25 @@ export function discoverModuleManifests(root = process.cwd()) {
   return manifests;
 }
 
+/**
+ * The LANCERLOGIN_REQUIRE_<NAME>_PLUGIN variables for every plugin a manifest's pluginSelection composes, so a plugin
+ * that can't be fetched fails the run instead of turning its tests into skips. Core's official modules are composed
+ * too unless the selection sets officialModules: false.
+ */
+export function requiredPluginVariables(manifest, root = process.cwd()) {
+  // Without a pluginSelection, the tests still compose Core's official modules (tests-ts/fixtures/outreach-plugin.ts), so
+  // Attendance's Outreach-gated wrappers fail too rather than vanish.
+  const { modules, officialModules } = manifest.pluginSelection ? readTestSelection(manifest.pluginSelection, root) : { modules: [], officialModules: true };
+  const official = officialModules && existsSync(join(root, "scripts", "official-modules.json")) ? officialModuleList(root).modules : [];
+  const ids = [...modules.map((module) => module.id), ...official.map((module) => module.id)];
+  return Object.fromEntries([...new Set(ids)].sort().map((id) => [`LANCERLOGIN_REQUIRE_${overrideName(id)}_PLUGIN`, "1"]));
+}
+
+const unknownModule = (moduleId, manifests) => new Error(`Unknown module ${moduleId ?? "(missing)"}. Available modules: ${[...manifests.values()].map((manifest) => {
+  const aliases = Object.entries(moduleAliases).filter(([, target]) => target === manifest.module).map(([alias]) => alias);
+  return `${manifest.module} (${manifest.label}${aliases.length ? `; also ${aliases.join(", ")}` : ""})`;
+}).join(", ")}.`);
+
 function printSelection(manifest, mode) {
   const selection = manifest[mode];
   console.log(`${manifest.module} - ${manifest.label} - ${mode}${manifest.pluginSelection ? ` (composed from ${manifest.pluginSelection})` : ""}`);
@@ -90,28 +111,32 @@ function run(root, label, command, args, env = process.env) {
   if (result.status !== 0) throw new Error(`${label} failed${result.signal ? ` (${result.signal})` : ""}.`);
 }
 
-function runNpm(root, label, args) {
+function runNpm(root, label, args, env) {
   const npmCli = process.env.npm_execpath;
-  if (npmCli && existsSync(npmCli)) return run(root, label, process.execPath, [npmCli, ...args]);
+  if (npmCli && existsSync(npmCli)) return run(root, label, process.execPath, [npmCli, ...args], env);
   if (process.platform === "win32") throw new Error(`${label} cannot locate npm's JavaScript entrypoint.`);
-  return run(root, label, "npm", args);
+  return run(root, label, "npm", args, env);
 }
 
 export function runModuleTests({ root = process.cwd(), mode, moduleId, execute = true } = {}) {
   const manifests = discoverModuleManifests(root);
+  if (moduleId && !manifests.has(moduleId) && manifests.has(moduleAliases[moduleId])) moduleId = moduleAliases[moduleId];
   if (mode === "list") {
-    if (moduleId && !manifests.has(moduleId)) throw new Error(`Unknown module ${moduleId}. Available modules: ${[...manifests.keys()].join(", ")}.`);
+    if (moduleId && !manifests.has(moduleId)) throw unknownModule(moduleId, manifests);
     for (const manifest of moduleId ? [manifests.get(moduleId)] : manifests.values()) for (const selectionMode of modes) printSelection(manifest, selectionMode);
     return 0;
   }
   if (!modes.has(mode)) throw new Error("Mode must be list, fast, or acceptance.");
-  if (!moduleId || !manifests.has(moduleId)) throw new Error(`Unknown module ${moduleId ?? "(missing)"}. Available modules: ${[...manifests.keys()].join(", ")}.`);
+  if (!moduleId || !manifests.has(moduleId)) throw unknownModule(moduleId, manifests);
   const manifest = manifests.get(moduleId);
   const selection = manifest[mode];
   printSelection(manifest, mode);
+  const required = requiredPluginVariables(manifest, root);
+  if (Object.keys(required).length) console.log(`Plugin tests fail instead of skipping: ${Object.keys(required).map((name) => `${name}=1`).join(", ")}`);
   if (!execute) return 0;
-  if (selection.javascript.length) run(root, `${manifest.label} JavaScript tests`, process.execPath, ["--test", "--test-concurrency=2", ...selection.javascript]);
-  if (selection.typescript.length) run(root, `${manifest.label} TypeScript tests`, process.execPath, ["--experimental-strip-types", "--test", "--test-concurrency=2", ...selection.typescript]);
+  const env = { ...process.env, ...required };
+  if (selection.javascript.length) run(root, `${manifest.label} JavaScript tests`, process.execPath, ["--test", "--test-concurrency=2", ...selection.javascript], env);
+  if (selection.typescript.length) run(root, `${manifest.label} TypeScript tests`, process.execPath, ["--experimental-strip-types", "--test", "--test-concurrency=2", ...selection.typescript], env);
   const composeScript = [`--experimental-strip-types`, "--disable-warning=ExperimentalWarning", join(root, "scripts", "compose-modules.mjs")];
   const composed = Boolean(manifest.pluginSelection) && (selection.browser.length + selection.typecheckWorkspaces.length + selection.buildWorkspaces.length) > 0;
   if (composed) {
@@ -123,9 +148,9 @@ export function runModuleTests({ root = process.cwd(), mode, moduleId, execute =
     try { run(root, `Compose ${manifest.label} plugin`, process.execPath, [...composeScript, ...prepared.args], prepared.env); } finally { prepared.cleanup(); }
   }
   try {
-    if (selection.browser.length) run(root, `${manifest.label} browser tests`, process.execPath, [join(root, "scripts", "run-browser-tests.mjs"), ...selection.browser, `--workers=${process.env.CI ? 1 : 2}`]);
-    if (selection.typecheckWorkspaces.length) runNpm(root, `${manifest.label} typechecks`, ["run", "typecheck", ...selection.typecheckWorkspaces.flatMap((workspace) => ["--workspace", workspace])]);
-    if (selection.buildWorkspaces.length) runNpm(root, `${manifest.label} builds`, ["run", "build", ...selection.buildWorkspaces.flatMap((workspace) => ["--workspace", workspace])]);
+    if (selection.browser.length) run(root, `${manifest.label} browser tests`, process.execPath, [join(root, "scripts", "run-browser-tests.mjs"), ...selection.browser, `--workers=${process.env.CI ? 1 : 2}`], env);
+    if (selection.typecheckWorkspaces.length) runNpm(root, `${manifest.label} typechecks`, ["run", "typecheck", ...selection.typecheckWorkspaces.flatMap((workspace) => ["--workspace", workspace])], env);
+    if (selection.buildWorkspaces.length) runNpm(root, `${manifest.label} builds`, ["run", "build", ...selection.buildWorkspaces.flatMap((workspace) => ["--workspace", workspace])], env);
   } finally {
     if (composed) run(root, "Restore plugin-free generated files", process.execPath, [...composeScript, "--restore"]);
   }

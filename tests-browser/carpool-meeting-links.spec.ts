@@ -3,6 +3,7 @@ import { attendanceSnapshot } from "./module-fixtures";
 import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
 import { openActiveMeetingCalendar } from "./meeting-calendar-fixture";
+import { mockSetupStatus } from "./api-fixtures";
 
 requireCarpoolPlugin();
 
@@ -12,7 +13,7 @@ async function fixtures(page: Page, appearance: "light" | "dark", attendance = t
   const plans = [plan("plan-1", "Outbound coordinator"), plan("plan-2", "Second coordinator")]; let saved: Record<string, unknown> | null = null;
   const modules = carpoolSnapshot();
   if (attendance) { modules.modules[0] = attendanceSnapshot().modules[0]!; modules.capabilities = [...modules.capabilities, ...modules.modules[0]!.effectiveCapabilities]; }
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Team", subtitle: "Review", logoData: null, primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance, logoBackdrop: "auto", lateScanMinutes: 30 } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Team", subtitle: "Review", logoData: null, primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance, logoBackdrop: "auto", lateScanMinutes: 30 } });
   await page.route("**/platform/modules", route => route.fulfill({ json: modules }));
   await page.route("**/admin/carpool/meeting-links", route => route.fulfill({ json: { available: attendance, links: attendance ? plans.filter(item => item.meetingId).map(item => ({ meetingId: item.meetingId, id: item.id, title: item.title })) : [] } }));
   const detail = (id: string) => ({ plan: plans.find(item => item.id === id)!, people: [], assignments: [], unresolved: [] });

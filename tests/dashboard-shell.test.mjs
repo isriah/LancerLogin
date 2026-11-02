@@ -105,30 +105,15 @@ test("meeting detail keeps meeting-specific attendance, Discord, and contest ope
   assert.doesNotMatch(source, /Switch meeting/);
   assert.doesNotMatch(source, /Refresh attendance/);
   assert.doesNotMatch(source, /Attendance closes/);
-  assert.match(source, /Date\.parse\(meeting\.attendanceClosesAt\)/);
+  // meeting-detail.spec.ts covers the lifecycle labels, scan times, calendar and Discord actions, contest review and
+  // the edit, duplicate and delete dialogs with Undo on the Dashboard. What it doesn't reach stays below.
   assert.match(source, /const formatScanTime = .*toLocaleString/);
   assert.match(source, /<span role="columnheader">Scan times<\/span>/);
-  assert.match(source, /<dt>Check-in<\/dt>/);
-  assert.match(source, /<dt>Check-out<\/dt>/);
-  assert.match(source, /<time dateTime=\{row\.checkedInAt\}>/);
-  assert.match(source, /Not recorded/);
   assert.ok(source.includes('role === "admin" && <button type="button" disabled={row.disposition === "not_required"}'));
   assert.doesNotMatch(source, /\/admin\/kiosks|AttendanceCalendar|Export CSV/);
   assert.doesNotMatch(source, /\/discord\/link|Email missed|Email report/);
-  assert.match(source, /\/calendars\/sync/);
-  assert.match(source, /\/discord\/missing/);
-  assert.match(source, /\/discord\/contests\?meetingId=/);
-  assert.match(source, /ContestReviewList contests=\{contests\}/);
-  assert.match(source, /Sync configured calendars/);
+  // The spec's upcoming meeting is also optional, so it doesn't isolate the start-time rule for absence notices.
   assert.match(source, /clock >= Date\.parse\(meeting\.startsAt\)/);
-  assert.match(source, /MeetingEditDialog/);
-  assert.match(source, /MeetingDuplicateDialog/);
-  assert.match(source, /MeetingDeleteDialog/);
-  assert.match(management, /\/meeting-series\/\$\{encodeURIComponent\(meeting\.seriesId\)\}/);
-  assert.match(management, /method: "DELETE"/);
-  assert.match(home, /\/restore/);
-  assert.match(management, /Delete this and future meetings/);
-  assert.match(management, /useModalFocus/);
   assert.match(meetings, /<th>Date<\/th><th>Start<\/th><th>End<\/th>/);
   assert.doesNotMatch(meetings, /Sync all to Discord/);
   assert.doesNotMatch(meetings, />Sync Discord<|calendarByMeeting/);
@@ -149,7 +134,6 @@ test("meeting detail keeps meeting-specific attendance, Discord, and contest ope
   assert.doesNotMatch(meetings, />Edit<|>Delete this meeting<|meeting-actions-cell/);
   // Row clicks go through followRowInApp, which leaves the selection label and checkbox to select.
   assert.match(meetings, /onClick=\{\(event\) => followRowInApp\(event, href, open\)\}/);
-  assert.match(home, /readMeetingDeletion/);
   assert.doesNotMatch(home, /sessionStorage|pendingMeetingDeletionLifetimeMs/);
   assert.doesNotMatch(meetings, /template/i);
   assert.doesNotMatch(meetings, /Test meeting/);
@@ -325,22 +309,13 @@ test("in-app record links are real anchors so modified and middle clicks open a 
   const home = await readFile("apps/dashboard/src/home-page.tsx", "utf8");
   const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
   const sdk = await readFile("packages/module-sdk/src/dashboard.ts", "utf8");
-  // One shared modifier check: only a plain left click is taken over by in-app navigation.
-  assert.match(router, /export function isModifiedClick\(event: ClickLike\) \{ return Boolean\(event\.button \|\| event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey\); \}/);
-  assert.match(router, /export function followInApp\(event: MouseEvent<HTMLAnchorElement>, go: \(\) => void\) \{ if \(isModifiedClick\(event\)\) return; event\.preventDefault\(\); go\(\); \}/);
-  assert.match(router, /export function RouteLink[\s\S]*onClick=\{\(event\) => followInApp\(event, \(\) => navigate\(href\)\)\}/);
-  assert.match(router, /export function AppLink[\s\S]*href=\{href\} onClick=\{\(event\) => \{ onClick\?\.\(event\); followInApp\(event, \(\) => navigate\(href\)\); \}\}/);
-  assert.match(router, /window\.open\(href, "_blank", "noopener"\)/);
-  assert.match(router, /closest\("a, button, input, select, textarea, label, summary"\)\) return;/);
+  // The browser specs check the behaviour: meeting-calendar-day-open (day links, Open meeting and table rows on Ctrl,
+  // Shift and middle clicks), member-detail (RouteLink) and contest-bulk. What they don't click is kept here: Alt also
+  // counts as a modified click, and no page keeps its own copy of the modifier check.
+  assert.match(router, /export function isModifiedClick\(event: ClickLike\) \{[^\n]*event\.altKey/);
   assert.doesNotMatch([router, calendar, home, meetings].join("\n"), /event\.button \|\| event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey\) return; event\.preventDefault\(\)/);
-  // The desktop day that opens its one meeting, and the selected day's Open meeting, are links with the meeting's href.
-  assert.match(calendar, /if \(dayOpen\?\.href\) return <a className=\{className\} key=\{key\} href=\{dayOpen\.href\}[^>]*data-selected=\{selected === key \? "true" : undefined\} onClick=\{\(event\) => followInApp\(event, choose\)\}/);
-  assert.match(home, /desktopDayOpen=\{active \? undefined : meeting => \(\{ label: `opens meeting \$\{meeting\.title\}`, href: meetingPath\(meeting\.id\), open: \(\) => openMeeting\(meetingPath\(meeting\.id\)\) \}\)\}/);
-  assert.match(home, /<AppLink className="ui-button" data-walkthrough="calendar-entry" href=\{meetingPath\(meeting\.id\)\} navigate=\{openMeeting\}>Open meeting/);
   assert.doesNotMatch(home, /<button[^>]*onClick=\{\(\) => openMeeting\(/);
-  // Table rows contain the title link and follow modified and middle clicks like it.
-  assert.match(meetings, /onClick=\{\(event\) => followRowInApp\(event, href, open\)\} onAuxClick=\{\(event\) => followRowInApp\(event, href, open\)\}/);
-  assert.match(meetings, /<a href=\{href\} onClick=\{event => \{ event\.stopPropagation\(\); followInApp\(event, open\); \}\}>/);
+  // Plugins import the link helpers from the SDK.
   assert.match(sdk, /export \{ AppLink, followInApp, followRowInApp, isModifiedClick, RouteLink, routeWillChangeEvent, usePath \}/);
 });
 
@@ -755,25 +730,14 @@ test("wide operational routes use the workspace width while text-heavy routes st
 
 test("Settings routes share semantic page, form, status, and destructive-action contracts", async () => {
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
-  const shell = await readFile("apps/dashboard/src/app-shell.tsx", "utf8");
-  const organization = await readFile("apps/dashboard/src/organization-settings.tsx", "utf8");
-  const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
-  const access = await readFile("apps/dashboard/src/user-settings.tsx", "utf8");
   const integrations = await readFile("apps/dashboard/src/integration-settings.tsx", "utf8");
   const data = await readFile("apps/dashboard/src/data-settings.tsx", "utf8");
-  const updates = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
-
-  for (const route of ["organization", "configuration", "access", "integrations", "data", "guided-setup", "updates"]) {
-    assert.match(shell, new RegExp(`/settings/${route}`));
-  }
-  for (const source of [organization, configuration, shell, integrations, data, updates]) assert.match(source, /<h1/);
-  assert.match(access, /aria-invalid=\{confirmation !== "" && password !== confirmation\}/);
-  assert.match(access, /aria-describedby=\{confirmation !== "" && password !== confirmation \? "password-confirmation-error"/);
-  assert.match(data, /aria-describedby="data-action-description"/);
+  // settings-conformance.spec.ts opens every Settings route and checks its one h1, the Access password-confirmation
+  // error, the integration status tones and the data dialog's description; updates-page.spec.ts checks the Updates
+  // status tone. What they don't reach stays below.
   assert.match(data, /aria-invalid=\{Boolean\(error\)\}/);
   assert.match(integrations, /integration-state ui-status/);
   assert.match(integrations, /className="danger-button"[\s\S]*?Remove integration/);
-  assert.match(updates, /data-tone=\{updateTone\}/);
   assert.match(styles, /\/\* Settings workspace conformance\. \*\//);
   assert.match(styles, /\.settings-page select,.settings-integrations select \{ appearance: none; padding-right: var\(--space-12\)/);
   assert.match(styles, /\.settings-page \.danger-button,.settings-integrations \.danger-button/);

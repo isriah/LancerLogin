@@ -1,3 +1,4 @@
+// quick-check: covers apps/dashboard/src/*.css
 // Carpool's place in the module platform once composed: registry ownership, scoped stylesheet and reviewed controls,
 // lifecycle and cleanup with unrelated modules disabled, and historical backups that predate its plugin section.
 import test from "node:test";

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { pairedViews } from "./paired-views";
 import { requireOutreachPlugin } from "./outreach-fixtures";
+import { chooseClock, mockSetupStatus } from "./api-fixtures";
 
 requireOutreachPlugin();
 
@@ -8,7 +9,7 @@ const activity = { id: "activity-1", categoryId: "other-service", categoryName: 
 
 async function routePublicForm(page: Page) {
   const submissions: Record<string, unknown>[] = [];
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Robotics", subtitle: "Member services", logoData: "", primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Robotics", subtitle: "Member services", logoData: "", primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } });
   await page.route("**/public/hours/context", (route) => route.fulfill({ json: { organizationName: "Synthetic Robotics", timeZone: "America/New_York", today: "2026-09-28", earliestServiceDate: "2026-08-30", reportingDays: 30 } }));
   await page.route(/\/public\/hours\/activities(?:\?.*)?$/, (route) => route.fulfill({ json: { items: [activity], nextCursor: null } }));
   await page.route("**/public/hours/entries", async (route) => {
@@ -18,12 +19,8 @@ async function routePublicForm(page: Page) {
   return submissions;
 }
 
-async function chooseClock(page: Page, label: string, hour: number, minute: number, period: "AM" | "PM") {
-  await page.getByRole("button", { name: new RegExp(`^${label}:`) }).click();
-  const dialog = page.getByRole("dialog", { name: label });
-  await dialog.getByRole("button", { name: `${hour} o'clock` }).click();
-  await dialog.getByRole("button", { name: `${minute} minutes`, exact: true }).click();
-  await dialog.getByRole("group", { name: "Choose AM or PM" }).getByRole("button", { name: period, exact: true }).click();
+async function chooseTime(page: Page, label: string, hour: number, minute: number, period: "AM" | "PM") {
+  await chooseClock(page, label, hour, minute, period);
   await expect(page.getByRole("button", { name: new RegExp(`^${label}:`) })).toBeFocused();
 }
 
@@ -44,7 +41,7 @@ test.describe("clock outside dismissal", () => {
     await expect(picker).toHaveCount(0);
     await expect(start).toHaveText("Choose time");
 
-    await chooseClock(page, "Start time", 9, 0, "AM");
+    await chooseTime(page, "Start time", 9, 0, "AM");
     await start.click();
     await picker.getByRole("button", { name: "11 o'clock" }).click();
     const member = page.getByLabel("Roster member ID");
@@ -70,8 +67,8 @@ test("moving Start time past End time adjusts a previously selected End time", a
   await expect(page.getByText(/LancerLogin rejects overlapping time/)).toHaveCount(0);
 
   await page.getByLabel("Dated activity").selectOption(activity.id);
-  await chooseClock(page, "Start time", 9, 0, "AM"); await chooseClock(page, "End time", 10, 0, "AM");
-  await chooseClock(page, "Start time", 11, 0, "AM");
+  await chooseTime(page, "Start time", 9, 0, "AM"); await chooseTime(page, "End time", 10, 0, "AM");
+  await chooseTime(page, "Start time", 11, 0, "AM");
 
   await expect(page.getByRole("button", { name: "Start time: 11:00 AM" })).toBeVisible();
   await expect(page.getByRole("button", { name: "End time: 12:00 PM" })).toBeVisible();
@@ -89,7 +86,7 @@ test("keyboard clock selection also moves End time after Start time", async ({ p
   await page.goto("/submit-hours");
 
   await page.getByLabel("Dated activity").selectOption(activity.id);
-  await chooseClock(page, "Start time", 9, 0, "AM"); await chooseClock(page, "End time", 10, 0, "AM");
+  await chooseTime(page, "Start time", 9, 0, "AM"); await chooseTime(page, "End time", 10, 0, "AM");
   await page.getByRole("button", { name: /^Start time:/ }).focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog", { name: "Start time" }).locator(".outreach-clock-readout").getByRole("button", { name: "9", exact: true })).toBeFocused();
@@ -107,7 +104,7 @@ for (const dismissal of ["finish", "cancel"] as const) test(`clock ${dismissal} 
   await routePublicForm(page);
   await page.goto("/submit-hours");
   await page.getByLabel("Dated activity").selectOption(activity.id);
-  await chooseClock(page, "Start time", 9, 0, "AM");
+  await chooseTime(page, "Start time", 9, 0, "AM");
   const end = page.getByRole("button", { name: /^End time:/ });
   await end.click();
   const dialog = page.getByRole("dialog", { name: "End time", exact: true });
@@ -146,8 +143,8 @@ test("an End time before Start time shows a specific client error without submit
   await page.getByLabel("Roster member ID").fill("M-001");
   await page.getByLabel("Dated activity").selectOption(activity.id);
 
-  await chooseClock(page, "Start time", 9, 0, "AM");
-  await chooseClock(page, "End time", 8, 0, "AM");
+  await chooseTime(page, "Start time", 9, 0, "AM");
+  await chooseTime(page, "End time", 8, 0, "AM");
 
   await expect(page.getByRole("alert")).toHaveText("End time must be after start time. Choose a later end time.");
   await expect(page.getByRole("button", { name: "Record completed participation" })).toBeDisabled();

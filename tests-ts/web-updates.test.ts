@@ -1,3 +1,4 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -11,7 +12,7 @@ import { officialWebRelease, newerRelease, prepareWebUpdate, startWebUpdate, rec
 import { expirationHeader, parseGitHubExpiration, resetCredentialObservations } from "../apps/api/src/github-credential.ts";
 import { sendAttendance } from "../apps/kiosk/src/cloud-client.mjs";
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
-import { createReleaseDiscovery, discoveryTtlMs, officialReleaseUrl, releaseRequestHeaders } from "../apps/api/src/release-discovery.ts";
+import { createReleaseDiscovery, releaseDiscovery, discoveryForcedFloorMs, discoveryTtlMs, officialReleaseUrl, releaseRequestHeaders } from "../apps/api/src/release-discovery.ts";
 
 class D1 {
   sqlite = new DatabaseSync(":memory:");
@@ -143,6 +144,67 @@ test("discovery honors provider seconds/date/reset cooldowns and distinguishes u
   }
 });
 
+test("a forced check with the web-update credential reads GitHub at most once a minute; automatic and anonymous checks keep the 15-minute cache", async () => {
+  let now = 100_000; let calls = 0; let tag = "v1.0.4";
+  const credential = { WEB_UPDATE_TOKEN: "synthetic-token", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(now + 86_400_000).toISOString() };
+  const fetcher = async (_url: unknown, init?: RequestInit) => { calls++; return Response.json({ ...release(tag), seen: new Headers(init?.headers).get("authorization") }); };
+  const discovery = createReleaseDiscovery({ now: () => now, fetcher });
+  assert.equal((await discovery.check(credential)).release?.tag_name, "v1.0.4"); assert.equal(calls, 1);
+  tag = "v1.0.5"; now += 5 * 60_000;
+  // Automatic checks are unchanged: the answer stays cached for 15 minutes.
+  assert.equal((await discovery.check(credential)).release?.tag_name, "v1.0.4"); assert.equal(calls, 1);
+  assert.equal(discovery.forcedRefreshAt(credential), 100_000 + discoveryForcedFloorMs);
+  const forced = await discovery.check(credential, { force: true });
+  assert.equal(calls, 2); assert.equal(forced.release?.tag_name, "v1.0.5"); assert.equal(forced.checkedAt, now); assert.equal(forced.checkedAgeMs, 0);
+  // A second forced check within the minute reuses that answer and reports when GitHub was read.
+  now += discoveryForcedFloorMs - 1; tag = "v1.0.6";
+  const reused = await discovery.check(credential, { force: true });
+  assert.equal(calls, 2); assert.equal(reused.release?.tag_name, "v1.0.5"); assert.equal(reused.checkedAgeMs, discoveryForcedFloorMs - 1); assert.equal(reused.fresh, true);
+  now++; assert.equal((await discovery.check(credential, { force: true })).release?.tag_name, "v1.0.6"); assert.equal(calls, 3);
+  // Without a usable credential (missing, expired) a forced check is an ordinary one: anonymous reads share the egress IP's limit.
+  for (const anonymous of [undefined, { WEB_UPDATE_TOKEN: "synthetic-token", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(now - 1).toISOString() }]) {
+    const plain = createReleaseDiscovery({ now: () => now, fetcher }); const before = calls;
+    await plain.check(anonymous); now += 5 * 60_000;
+    assert.equal(plain.forcedRefreshAt(anonymous), undefined);
+    await plain.check(anonymous, { force: true }); assert.equal(calls, before + 1);
+    now += discoveryTtlMs; await plain.check(anonymous, { force: true }); assert.equal(calls, before + 2);
+  }
+});
+
+test("a forced check skips local failure backoff after a minute but never GitHub's Retry-After or rate-limit reset", async () => {
+  const credential = { WEB_UPDATE_TOKEN: "synthetic-token" };
+  for (const [failure, providerDelay] of [
+    [() => { throw new TypeError("offline"); }, 0],
+    [() => new Response("{}", { status: 503 }), 0],
+    [() => new Response("{}", { status: 429, headers: { "retry-after": "600" } }), 600_000],
+    [() => new Response("{}", { status: 503, headers: { "retry-after": "120" } }), 120_000],
+    [(at: number) => new Response("{}", { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((at + 1_800_000) / 1000) } }), 1_800_000],
+  ] as const) {
+    let now = 100_000; let calls = 0; let failing = true;
+    const discovery = createReleaseDiscovery({ now: () => now, fetcher: async () => { calls++; return failing ? failure(now) : Response.json(release("v1.0.4")); } });
+    // Build up automatic backoff well beyond the one-minute floor.
+    for (let attempt = 0; attempt < 5; attempt++) { const failed = await discovery.check(credential); now = failed.retryAt!; }
+    const failed = await discovery.check(credential); assert.equal(calls, 6);
+    assert.ok(failed.retryAt! - now >= 15 * 60_000 || providerDelay, "automatic backoff exceeds the floor");
+    const wait = Math.max(discoveryForcedFloorMs, providerDelay);
+    assert.equal(discovery.forcedRefreshAt(credential), now + wait);
+    now += discoveryForcedFloorMs - 1; await discovery.check(credential, { force: true }); assert.equal(calls, 6);
+    now = failed.attemptedAt! + wait - 1; await discovery.check(credential, { force: true }); assert.equal(calls, 6, "provider cooldown is honored");
+    await discovery.check(credential); assert.equal(calls, 6, "automatic checks keep their backoff");
+    now++; failing = false;
+    if (now < failed.retryAt!) { await discovery.check(credential); assert.equal(calls, 6); }
+    const recovered = await discovery.check(credential, { force: true });
+    assert.equal(calls, 7); assert.equal(recovered.fresh, true); assert.equal(recovered.error, undefined);
+  }
+  // Anonymous forced checks still wait out the full backoff.
+  let now = 100_000; let calls = 0;
+  const anonymous = createReleaseDiscovery({ now: () => now, fetcher: async () => { calls++; return new Response("{}", { status: 503 }); } });
+  for (let attempt = 0; attempt < 3; attempt++) now = (await anonymous.check()).retryAt!;
+  const last = await anonymous.check(); assert.equal(calls, 4); assert.equal(last.retryAt, now + 240_000);
+  now += discoveryForcedFloorMs; await anonymous.check(undefined, { force: true }); assert.equal(calls, 4);
+  now = last.retryAt!; await anonymous.check(undefined, { force: true }); assert.equal(calls, 5);
+});
+
 test("discovery retains successful metadata as stale during bounded transient backoff", async () => {
   let now = 100_000; let failing = false; let calls = 0;
   const discovery = createReleaseDiscovery({ now: () => now, fetcher: async () => { calls++; if (failing) throw new TypeError("sensitive network details"); return Response.json(release("v1.0.4")); } });
@@ -187,6 +249,32 @@ test("release discovery route authenticates before provider access and cannot au
     assert.equal(calls.filter((call) => call.url === officialReleaseUrl).length, 2);
     assert.equal(await latestUpdate(env), null);
   });
+});
+
+test("release discovery route forces a GitHub read only for an Admin's Check for updates", async () => {
+  const env = environment(); env.RELEASE_VERSION = "1.0.3";
+  const seen: Array<{ force?: boolean } | undefined> = []; const original = releaseDiscovery.check;
+  releaseDiscovery.check = (credential, options) => { seen.push(options); return original(credential, options); };
+  try {
+    await withGitHub(async () => {
+      const codec = createSessionCodec(secret);
+      const admin = `lancerlogin_session=${await codec.issue({ userId: "admin", role: "admin" })}`;
+      const operator = `lancerlogin_session=${await codec.issue({ userId: "operator", role: "operator" })}`;
+      const get = (query: string, cookie?: string, target = env) => worker.fetch(new Request(`https://api.test/admin/releases/latest${query}`, { headers: cookie ? { cookie } : {} }), target);
+      assert.equal((await get("?refresh=now")).status, 401);
+      assert.equal((await get("?refresh=now", operator)).status, 403);
+      assert.deepEqual(seen, [], "the flag is read only after Admin authentication");
+      const forced = await get("?refresh=now", admin); assert.equal(forced.status, 200);
+      const body = await forced.json() as { refreshAfterMs?: number; checkedAgeMs?: number };
+      assert.ok(typeof body.refreshAfterMs === "number" && body.refreshAfterMs >= 0 && body.refreshAfterMs <= discoveryForcedFloorMs);
+      assert.ok(typeof body.checkedAgeMs === "number" && body.checkedAgeMs >= 0);
+      for (const query of ["", "?refresh=1", "?refresh=later"]) assert.equal((await get(query, admin)).status, 200);
+      assert.deepEqual(seen, [{ force: true }, { force: false }, { force: false }, { force: false }]);
+      // Without the web-update credential the dashboard learns no early refresh time.
+      const anonymous = { ...env, WEB_UPDATE_TOKEN: undefined } as unknown as Env;
+      assert.equal(Object.hasOwn(await (await get("?refresh=now", admin, anonymous)).json() as object, "refreshAfterMs"), false);
+    });
+  } finally { releaseDiscovery.check = original; }
 });
 
 test("v1.0.4 preparation still pins a commit, requires its backup and dispatches exactly once", async () => {

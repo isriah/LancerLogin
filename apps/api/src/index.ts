@@ -369,8 +369,14 @@ async function updateInfo(request: Request, env: Env): Promise<Response> {
 async function discoverRelease(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
   const { channel } = await readUpdateChannel(env);
-  const result = await discoveryForChannel(channel).check(env);
-  return response({ ...result, channel }, result.fresh ? 200 : result.code === "rate_limited" ? 429 : 503,
+  // Settings > Updates > Check for updates asks for a GitHub read now; the discovery decides whether it may (see check).
+  const force = new URL(request.url).searchParams.get("refresh") === "now";
+  const discovery = discoveryForChannel(channel);
+  const result = await discovery.check(env, { force });
+  const refreshAt = discovery.forcedRefreshAt(env);
+  // A duration, like Retry-After, telling the dashboard when its button can reach GitHub again despite automatic backoff.
+  const refreshAfterMs = refreshAt === undefined ? undefined : Math.max(0, refreshAt - Date.now());
+  return response({ ...result, channel, ...(refreshAfterMs === undefined ? {} : { refreshAfterMs }) }, result.fresh ? 200 : result.code === "rate_limited" ? 429 : 503,
     result.retryAt ? { "retry-after": String(Math.max(1, Math.ceil((result.retryAt - Date.now()) / 1000))) } : undefined);
 }
 async function updateChannel(request: Request, env: Env): Promise<Response> {
@@ -4318,7 +4324,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   const usage = env.DB ? measureD1(env.DB) : undefined;
   if (usage) env = { ...env, DB: usage.database };
   try {
-    if (binding && usage && request.method !== "OPTIONS") { const current = env; await ensureModulesReconciled(usage.database, binding, () => webUpdateMaintenance(current)); }
+    if (binding && usage && request.method !== "OPTIONS") { const current = env; await ensureModulesReconciled(usage.database, binding, () => webUpdateMaintenance(current), undefined, undefined, context ? (promise) => context.waitUntil(promise) : undefined); }
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !["/auth/local", "/auth/logout", "/auth/google/callback"].includes(url.pathname) && await webUpdateMaintenance(env)) return withCors(response({ error: "An installation update requires temporary write suspension. Retry after recovery or completion.", code: "update_maintenance" }, 503, { "retry-after": "30" }), request, env);
     if (request.method === "POST" && Object.hasOwn(authRateLimits, url.pathname) && env.DB) {
       const retryAfter = await consumeAuthRateLimit(env.DB, request, url.pathname, env.SESSION_KEY ?? env.BOOTSTRAP_CODE_HASH ?? "");

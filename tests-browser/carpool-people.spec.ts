@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
 import { pairedViews } from "./paired-views";
+import { mockSetupStatus } from "./api-fixtures";
 
 requireCarpoolPlugin();
 
@@ -10,7 +11,7 @@ async function setup(page: Page, scope = "both", count = 30) {
   let people = Array.from({ length: count }, (_, index) => ({ id: "person-" + index, memberId: null, memberActive: null, displayName: "Participant " + index, contact: "person" + index + "@example.invalid", outboundStatus: index === 0 ? "offer" : "needs-ride", outboundSourceStatus: null, outboundAddress: index + " Synthetic St", outboundLatitude: 40, outboundLongitude: -74, outboundSeats: index === 0 ? 3 : null, outboundLocationSource: "lookup", outboundLocationLabel: index + " Synthetic St, Example City", returnStatus: "transit", returnSourceStatus: null, returnAddress: "", returnLatitude: null, returnLongitude: null, returnSeats: null, returnLocationSource: null, returnLocationLabel: null, returnSameAsOutbound: false, notes: "", revision: 0 }));
   const assignments = count ? [{ direction: "outbound", riderId: "person-1", vehiclePersonId: "person-0", distanceMiles: 1, locked: false, manual: false }] : [];
   const detail = () => ({ plan, people, assignments, unresolved: [] }); let saved: Record<string, any> | undefined;
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Team", subtitle: "Review", logoData: null, primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30 } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Team", subtitle: "Review", logoData: null, primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30 } });
   await page.route("**/platform/modules", route => route.fulfill({ json: carpoolSnapshot() }));
   await page.route(/\/admin\/carpool\/context(?:\?.*)?$/, route => route.fulfill({ json: { plans: [plan], members: [{ id: "member", externalId: "TEST-1", firstName: "Synthetic", lastName: "Member", email: "member@example.invalid" }], importProfiles: [], geocodingConfigured: true, detail: detail() } }));
   await page.route(/\/admin\/carpool\/plans\/people\/people(?:\/[^/?]+)?$/, async route => { saved = route.request().postDataJSON(); const id = new URL(route.request().url()).pathname.split("/").at(-1); if (route.request().method() === "POST") people.push({ ...people[0], ...saved, id: "added", revision: 0 }); else people = people.map(person => person.id === id ? { ...person, ...saved, revision: person.revision + 1 } : person); plan.revision++; await route.fulfill({ json: detail() }); });

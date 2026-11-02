@@ -1,5 +1,6 @@
 import { setDashboardTheme } from "./dashboard-theme";
 import { expect, test, type Locator } from "@playwright/test";
+import { mockSetupStatus } from "./api-fixtures";
 
 async function expectControl(control: Locator, select = false) {
   await expect(control).toBeVisible();
@@ -52,10 +53,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     for (const brand of [{ primaryColor: "#8b2f72", secondaryColor: "#e9b949" }, { primaryColor: "#146c5b", secondaryColor: "#dba72d" }]) {
       test(`meeting controls preserve styling and editing at ${viewport.width} ${appearance} ${brand.primaryColor}`, async ({ page }) => {
         await page.setViewportSize(viewport);
-        await page.route("**/setup/status", (route) => route.fulfill({ json: {
-          configured: true, installation: { authMode: "local" },
-          settings: { organizationName: "Reference Arts Collective", subtitle: "Shared operations", logoData: "", ...brand, appearance, logoBackdrop: "auto", lateScanMinutes: 30 },
-        } }));
+        await mockSetupStatus(page, { settings: { organizationName: "Reference Arts Collective", subtitle: "Shared operations", logoData: "", ...brand, appearance, logoBackdrop: "auto", lateScanMinutes: 30 } });
         const now = new Date().setHours(12, 0, 0, 0);
         const meeting = { id: "active-meeting", title: "Build session", startsAt: new Date(now - 30 * 60_000).toISOString(), endsAt: new Date(now + 120 * 60_000).toISOString(), attendanceClosesAt: new Date(now + 150 * 60_000).toISOString(), required: 1, notes: "Original notes", weightCategoryId: "retired", weightCategoryName: "Saved category", attendanceWeight: 2 };
         const submitted: Record<string, unknown>[] = [];

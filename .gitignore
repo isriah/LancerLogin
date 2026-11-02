@@ -13,6 +13,7 @@ test-results/
 .provision/
 .collector/
 .d1-migration-verify-*/
+.community-upgrade-rehearsal-*/
 # An installation's plugin selection belongs in its private deployment repository
 /lancerlogin.modules.json
 

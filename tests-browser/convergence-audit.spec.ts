@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { pairedViews } from "./paired-views";
+import { expectResponsiveFit, mockSetupStatus } from "./api-fixtures";
 
 const governedRoutes = [
   ["/dashboard", "Dashboard"],
@@ -20,27 +21,41 @@ const governedRoutes = [
 
 const wideRoutes = new Set(["/dashboard", "/meetings/active-meeting", "/reports", "/roster", "/roster/A-101", "/kiosks"]);
 const auditedViewports = [{ width: 2560, height: 1440 }, ...dashboardConformanceReferences.viewports] as const;
+// Every governed route fits, with no control cut off outside the data tables that scroll sideways on purpose.
+const governedFit = {
+  controls: "main button, main a[href], main input, main select, main textarea, main summary, main [role='status'], main [role='alert']",
+  scrollers: ".report-tabs,.responsive-table,.table-scroll,.roster-table-scroll,.member-history-scroll,.report-table-scroll",
+};
+// Phone routes with the default fixture data, including the legacy /meetings (the Dashboard's table view),
+// /attendance and /settings/privacy addresses.
+const phoneRoutes = [
+  "/dashboard",
+  "/meetings",
+  "/attendance",
+  "/reports",
+  "/roster",
+  "/kiosks",
+  "/settings/organization",
+  "/settings/configuration",
+  "/settings/access",
+  "/settings/integrations",
+  "/settings/privacy",
+  "/settings/data",
+  "/settings/updates",
+];
 
 async function useReferenceContext(page: Page) {
-  await page.route("**/setup/status", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      configured: true,
-      installation: { authMode: "local" },
-      settings: {
-        organizationName: "Reference Arts Collective",
-        subtitle: "Shared operations",
-        logoData: "",
-        primaryColor: dashboardConformanceReferences.brand.primary,
-        secondaryColor: dashboardConformanceReferences.brand.secondary,
-        appearance: "dark",
-        logoBackdrop: "auto",
-        lateScanMinutes: 30,
-        discordContestWindowHours: 24,
-      },
-    }),
-  }));
+  await mockSetupStatus(page, { settings: {
+    organizationName: "Reference Arts Collective",
+    subtitle: "Shared operations",
+    logoData: "",
+    primaryColor: dashboardConformanceReferences.brand.primary,
+    secondaryColor: dashboardConformanceReferences.brand.secondary,
+    appearance: "dark",
+    logoBackdrop: "auto",
+    lateScanMinutes: 30,
+    discordContestWindowHours: 24,
+  } });
 }
 
 async function expectGovernedSurface(page: Page, heading: string, route: string) {
@@ -56,7 +71,6 @@ async function expectGovernedSurface(page: Page, heading: string, route: string)
       return style.display !== "none" && style.visibility !== "hidden" && bounds.width > 0 && bounds.height > 0;
     };
     const name = (element: HTMLElement) => element.getAttribute("aria-label") || element.textContent?.trim().slice(0, 80) || element.tagName;
-    const containedScroller = (element: HTMLElement) => element.closest(".report-tabs,.responsive-table,.table-scroll,.roster-table-scroll,.member-history-scroll,.report-table-scroll");
     const main = document.querySelector("main")!;
     const headings = Array.from(main.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")).filter(visible);
     const headingLevels = headings.map((element) => Number(element.tagName.slice(1)));
@@ -73,25 +87,13 @@ async function expectGovernedSurface(page: Page, heading: string, route: string)
     });
     const targetSelector = "button,input:not([type='radio']):not([type='checkbox']),select,textarea,summary,a.primary-button,label:has(input[type='radio']),label:has(input[type='checkbox'])";
     const shortTargets = Array.from(main.querySelectorAll<HTMLElement>(targetSelector)).filter(visible).flatMap((element) => element.getBoundingClientRect().height < 43.5 ? [`${name(element)} (${element.getBoundingClientRect().height.toFixed(1)}px)`] : []);
-    const clipped = Array.from(main.querySelectorAll<HTMLElement>("button,a[href],input,select,textarea,summary,[role='status'],[role='alert']")).filter(visible).flatMap((element) => {
-      if (containedScroller(element)) return [];
-      const bounds = element.getBoundingClientRect();
-      return bounds.left < -1 || bounds.right > innerWidth + 1 ? [name(element)] : [];
-    });
-    return {
-      pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      headingSkips,
-      unlabeled,
-      shortTargets,
-      clipped,
-    };
+    return { headingSkips, unlabeled, shortTargets };
   });
 
-  expect(audit.pageOverflow).toBeLessThanOrEqual(0);
   expect(audit.headingSkips).toEqual([]);
   expect(audit.unlabeled).toEqual([]);
   expect(audit.shortTargets).toEqual([]);
-  expect(audit.clipped).toEqual([]);
+  await expectResponsiveFit(page, governedFit);
 
   const shell = page.locator(".dashboard-shell");
   await expect(shell).toHaveAttribute("data-layout", wideRoutes.has(route) ? "wide" : "readable");
@@ -117,3 +119,33 @@ for (const { viewport, theme } of [{ viewport: auditedViewports[0], theme: "dark
       }
     });
   }
+
+// The 390px phone is audited above; the smaller compact phone only has to fit.
+test("phone routes fit a 375x667 compact phone", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  for (const route of phoneRoutes) {
+    await page.goto(route);
+    await expect(page.locator("main h1")).toBeVisible();
+    await test.step(route, () => expectResponsiveFit(page, governedFit));
+  }
+});
+
+test("expanded phone routes scroll only where data requires it and keep controls within reach", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const allowedScrollerSelectors = [".responsive-table", ".table-scroll", ".report-table-scroll"];
+
+  for (const route of phoneRoutes) {
+    await page.goto(route);
+    await expect(page.locator("main h1")).toBeVisible();
+    await expect(page.locator(".dashboard-loading-overlay")).toHaveCount(0);
+    while (await page.locator("details:not([open]) > summary").count()) await page.locator("details:not([open]) > summary").first().click();
+    const unexpectedScrollers = await page.evaluate((allowed) => Array.from(document.querySelectorAll<HTMLElement>("*")).flatMap((element) => {
+      const style = getComputedStyle(element);
+      const isScrollable = element.scrollWidth > element.clientWidth + 1 && ["auto", "scroll"].includes(style.overflowX);
+      const isAllowed = allowed.some((selector) => element.matches(selector));
+      return isScrollable && !isAllowed ? [{ tag: element.tagName, className: element.className }] : [];
+    }), allowedScrollerSelectors);
+    expect(unexpectedScrollers, route).toEqual([]);
+    await test.step(route, () => expectResponsiveFit(page, { controls: "button, input, select, textarea, summary, [role='dialog']", scrollers: ".responsive-table, .table-scroll" }));
+  }
+});

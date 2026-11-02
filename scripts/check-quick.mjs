@@ -1,10 +1,13 @@
 // Quick development check: typecheck the workspaces a change touches and run the fast Node tests that reference the
-// changed files. It is an edit-loop aid, not verification: `npm run verify:all`, the unfiltered browser suite and the
-// complete Verify workflow remain the gates for publication and release.
+// changed files, reach them through their static import closure, or declare them with a `quick-check: covers` header.
+// It is an edit-loop aid, not verification: `npm run verify:all`, the unfiltered browser suite and the complete Verify
+// workflow remain the gates for publication and release.
 //
 //   npm run check:quick                     changes since the merge base with the default base, plus uncommitted work
 //   npm run check:quick -- --base REF       compare with REF instead
 //   npm run check:quick -- --list           print the selection and the reasons without running it
+//   npm run check:quick -- --list --why P   also print how each selecting test reaches path P
+//   npm run check:quick -- --selection text text matching only, as private CI runs it to keep its minutes flat
 //   npm run check:quick -- --all-typecheck  typecheck every workspace regardless of the change
 //   npm run check:quick -- --all            every workspace typecheck and every fast test (the private CI quick check)
 //
@@ -49,12 +52,28 @@ export const slowTests = new Set([
   "tests-ts/fingerprint-vault.test.ts",
 ]);
 export const deviceTests = new Set(kioskOnlyTests);
+// Plugin pins and composition: a change here also runs `verify:module -- fast <id>` for each affected plugin (which
+// requires the plugin, failing instead of skipping when it can't be fetched) and runs the composition suite.
+const compositionTest = "tests-ts/module-composition.test.ts";
+const compositionFiles = [/^scripts\/(?:official|known)-modules\.json$/, /^tests\/fixtures\/[^/]+\.modules\.json$/, /^module-tests\/[^/]+\.json$/, /^scripts\/(?:compose-modules|test-plugin-sources)\.mjs$/];
+export const isCompositionFile = (path) => compositionFiles.some((pattern) => pattern.test(path));
+// Plugin module IDs with the selection each composes (module-tests/<id>.json pluginSelection); main reads the manifests.
+export const pluginModules = { "hour-tracking": "tests/fixtures/official.modules.json", carpool: "tests/fixtures/carpool.modules.json" };
+/** The plugin modules whose fast gate a changed path affects. */
+export function affectedPlugins(path, plugins = pluginModules) {
+  if (!isCompositionFile(path)) return [];
+  const ids = Object.keys(plugins).sort();
+  if (/^tests\/fixtures\/[^/]+\.modules\.json$/.test(path)) return ids.filter((id) => plugins[id] === path);
+  const manifest = /^module-tests\/([^/]+)\.json$/.exec(path)?.[1];
+  return manifest ? ids.filter((id) => id === manifest) : ids;
+}
 // Run when a change maps to no test, or touches root build files. Kept small: these cover the module platform,
 // dashboard conformance and the test runners themselves in well under a minute.
 export const defaultTests = [
   "tests/web-test-runner.test.mjs",
   "tests/check-quick.test.mjs",
   "tests-ts/module-platform.test.ts",
+  "tests-ts/outreach-module-platform.test.ts",
   "tests-ts/dashboard-conformance.test.ts",
 ];
 
@@ -73,23 +92,202 @@ export function referenceKeys(path) {
   return keys;
 }
 
+// Static closures. A test also covers every file it reaches through `import`, `export ... from` and literal `import()`
+// (JSON imports included), and, from test-side code, string literals naming a repository file: scripts under scripts/
+// are walked as spawned, anything else it names (fixtures, data, source read as text) is a leaf. Directories never become
+// edges and computed paths are invisible, so a test or helper declares what it reads that way with a header that every
+// test whose closure includes it inherits:
+//   // quick-check: covers apps/api/migrations/**
+const testSideCode = /^(?:tests|tests-ts|scripts|private)\//;
+const parsedExtensions = new Set([".ts", ".tsx", ".mts", ".mjs", ".js", ".cjs"]);
+const importPattern = /\b(?:import|export)\s*(?:type\s+)?(?:[\w*{}\s,$]+?\s*from\s*)?["']([^"'\n]+)["']|\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
+const literalPattern = /(["'`])([^"'`$\s\\]+)\1/g;
+const joinedPattern = /\b(?:join|resolve)\(([^()]*)\)/g;
+const coverPattern = /^[ \t]*\/\/[ \t]*quick-check:[ \t]*covers[ \t]+(.+)$/gm;
+const directoryReadPattern = /\b(readdir|readdirSync|cpSync|glob|globSync)\s*\(/g;
+
+function normalize(path) {
+  const parts = [];
+  for (const part of path.replaceAll("\\", "/").split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") { if (!parts.length) return undefined; parts.pop(); } else parts.push(part);
+  }
+  return parts.join("/");
+}
+const directoryOf = (path) => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+const literalCandidates = (from, literal) => (/^\.\.?\//.test(literal) ? [normalize(`${directoryOf(from)}/${literal}`)] : [normalize(literal), normalize(`${directoryOf(from)}/${literal}`)]).filter(Boolean);
+
+/** A glob as a RegExp: `**` spans folders, `*` and `?` stay within one. */
+export function globPattern(glob) {
+  let source = "";
+  for (let index = 0; index < glob.length; index++) {
+    const char = glob[index];
+    if (char === "*" && glob[index + 1] === "*") {
+      const folder = glob[index + 2] === "/";
+      source += folder ? "(?:.*/)?" : ".*";
+      index += folder ? 2 : 1;
+    } else if (char === "*") source += "[^/]*";
+    else if (char === "?") source += "[^/]";
+    else source += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${source}$`);
+}
+
+/** The globs a source text declares with `// quick-check: covers <glob> [<glob> ...]`. */
+export const coverHeaders = (source) => [...source.matchAll(coverPattern)].flatMap((match) => match[1].trim().split(/\s+/));
+
+function workspaceExports(files, readFile) {
+  const exports = new Map();
+  for (const file of files) if (/^(?:apps|packages)\/[^/]+\/package\.json$/.test(file)) {
+    let value;
+    try { value = JSON.parse(readFile(file) ?? ""); } catch { continue; }
+    const entries = typeof value.exports === "string" ? { ".": value.exports } : value.exports ?? {};
+    for (const [key, target] of Object.entries(entries)) if (typeof target === "string") exports.set(`${value.name}${key === "." ? "" : key.slice(1)}`, normalize(`${directoryOf(file)}/${target}`));
+  }
+  return exports;
+}
+
+/**
+ * Build every test's static closure and inherited `covers` globs, for selectQuickChecks.
+ * @param {(path: string) => string | undefined} readFile source text of a repository-relative path
+ * @param {() => string[]} listFiles every repository file, tracked and untracked, with forward slashes
+ */
+export function buildTestClosures(readFile, listFiles) {
+  const files = new Set(listFiles());
+  const packages = workspaceExports(files, readFile);
+  const sources = new Map();
+  const source = (file) => {
+    if (!sources.has(file)) sources.set(file, parsedExtensions.has(extname(file)) ? readFile(file) ?? "" : "");
+    return sources.get(file);
+  };
+  const resolveImport = (from, specifier) => {
+    if (packages.has(specifier)) return packages.get(specifier);
+    if (!/^\.\.?\//.test(specifier)) return undefined;
+    const base = normalize(`${directoryOf(from)}/${specifier}`);
+    if (!base) return undefined;
+    const stem = base.replace(/\.(?:m?js|jsx)$/, "");
+    return [base, `${stem}.ts`, `${stem}.tsx`, `${base}.ts`, `${base}.tsx`, `${base}.mjs`, `${base}.js`, `${base}/index.ts`, `${base}/index.tsx`, `${base}/index.mjs`].find((candidate) => files.has(candidate));
+  };
+  const edgeCache = new Map();
+  const edges = (file) => {
+    if (edgeCache.has(file)) return edgeCache.get(file);
+    const text = source(file); const found = new Map();
+    for (const match of text.matchAll(importPattern)) {
+      const target = resolveImport(file, match[1] ?? match[2]);
+      if (target && target !== file) found.set(target, "imports");
+    }
+    if (testSideCode.test(file)) {
+      const literals = [...text.matchAll(literalPattern)].map((match) => match[2]);
+      for (const match of text.matchAll(joinedPattern)) {
+        const parts = [...match[1].matchAll(literalPattern)].map((part) => part[2]);
+        if (parts.length > 1) literals.push(parts.join("/"));
+      }
+      for (const literal of literals) {
+        if (!literal.includes("/") && !literal.includes(".")) continue;
+        const target = literalCandidates(file, literal).find((candidate) => files.has(candidate));
+        if (!target || target === file || found.has(target)) continue;
+        found.set(target, parsedExtensions.has(extname(target)) && target.startsWith("scripts/") ? "runs" : "reads");
+      }
+    }
+    const list = [...found].map(([target, kind]) => ({ target, kind }));
+    edgeCache.set(file, list);
+    return list;
+  };
+  const headers = new Map();
+  const headersOf = (file) => {
+    if (!headers.has(file)) headers.set(file, coverHeaders(source(file)));
+    return headers.get(file);
+  };
+  const closureCache = new Map();
+  /** Every file `start` reaches, each mapped to the step that reached it (null for `start`). */
+  const closureOf = (start) => {
+    if (closureCache.has(start)) return closureCache.get(start);
+    const reached = new Map([[start, null]]); const queue = [start];
+    for (let index = 0; index < queue.length; index++) for (const { target, kind } of edges(queue[index])) {
+      if (reached.has(target)) continue;
+      reached.set(target, { from: queue[index], kind });
+      if (kind !== "reads") queue.push(target);
+    }
+    closureCache.set(start, reached);
+    return reached;
+  };
+  const closures = new Map(); const covers = new Map();
+  for (const file of [...files].filter(isTestFile).sort()) {
+    const closure = closureOf(file);
+    closures.set(file, closure);
+    covers.set(file, [...new Set(executedFiles(closure).flatMap(headersOf))]);
+  }
+  return { closures, covers, headers: new Map([...headers].filter(([, globs]) => globs.length)), closureOf, files };
+}
+
+/** The files of a closure that run (the start and what it imports or spawns), not those it only reads; headers come from these. */
+export const executedFiles = (closure) => [...closure].filter(([, step]) => step?.kind !== "reads").map(([file]) => file);
+
+/** The files by which a closure reaches `file`, starting with the closure's own start, or undefined. */
+export function closureChain(closure, file) {
+  if (!closure?.has?.(file) || !(closure instanceof Map)) return undefined;
+  const chain = [file];
+  for (let step = closure.get(file); step; step = closure.get(step.from)) chain.unshift(step.from);
+  return chain;
+}
+
+/**
+ * Directories a source reads with a literal readdir, readdirSync, cpSync or glob argument: a string, a template
+ * literal's leading folders, or the literal segments of join, resolve or new URL. Only folders holding repository files
+ * count; anything else is temporary or computed.
+ */
+export function literalDirectoryReads(file, text, files) {
+  const directories = new Set();
+  for (const path of files) for (let index = path.indexOf("/"); index > 0; index = path.indexOf("/", index + 1)) directories.add(path.slice(0, index));
+  const reads = [];
+  for (const match of text.matchAll(directoryReadPattern)) {
+    const start = match.index + match[0].length; let depth = 0; let end = start;
+    for (; end < text.length; end++) {
+      const char = text[end];
+      if ("([{".includes(char)) depth++;
+      else if (")]}".includes(char)) { if (!depth) break; depth--; } else if (char === "," && !depth) break;
+    }
+    const argument = text.slice(start, end).trim();
+    const template = /^`([^`]*?)\$\{/.exec(argument);
+    let literal;
+    if (/^(["'`])[^"'`$]*\1$/.test(argument)) literal = argument.slice(1, -1);
+    else if (template) literal = template[1].slice(0, Math.max(template[1].lastIndexOf("/"), 0));
+    else if (/^(?:join|resolve|new URL)\(/.test(argument)) literal = [...argument.matchAll(literalPattern)].map((part) => part[2]).join("/");
+    const directory = literal ? literalCandidates(file, literal).find((candidate) => directories.has(candidate)) : undefined;
+    if (directory) reads.push({ call: match[1], directory, line: text.slice(0, match.index).split("\n").length });
+  }
+  return reads;
+}
+
 /**
  * Select the quick checks for a set of changed repository paths.
  * @param {object} input
  * @param {string[]} input.changes repository-relative paths with forward slashes (deleted files included)
  * @param {Map<string, string>} input.tests every fast-candidate test file and its source text
  * @param {(path: string) => boolean} [input.exists] whether a changed path still exists
+ * @param {Map<string, { has(path: string): boolean }>} [input.closures] each test's static closure (buildTestClosures)
+ * @param {Map<string, string[]>} [input.covers] each test's declared and inherited `covers` globs (buildTestClosures)
+ * @param {Record<string, string>} [input.plugins] plugin module IDs and the test selection each composes
+ * @param {(path: string) => boolean} [input.exists] whether a changed path still exists
  * @param {boolean} [input.allTypecheck]
  * @param {boolean} [input.all] select every workspace and every fast test
+ * @param {"full" | "text"} [input.selection] "text" uses text matching only: no closures, headers or module gates
  */
-export function selectQuickChecks({ changes, tests, exists = () => true, allTypecheck = false, all = false }) {
-  const typecheck = new Map(); const selected = new Map(); const skipped = new Map(); const notes = [];
+export function selectQuickChecks({ changes, tests, closures = new Map(), covers = new Map(), plugins = pluginModules, exists = () => true, allTypecheck = false, all = false, selection = "full" }) {
+  if (selection === "text") { closures = new Map(); covers = new Map(); plugins = {}; }
+  const typecheck = new Map(); const selected = new Map(); const skipped = new Map(); const modules = new Map(); const notes = [];
   const add = (map, key, reason) => { if (!map.has(key)) map.set(key, []); if (!map.get(key).includes(reason)) map.get(key).push(reason); };
-  const select = (file, reason, changed = false) => deviceTests.has(file) || slowTests.has(file) && !changed ? add(skipped, file, reason) : add(selected, file, reason);
+  const uniqueChanges = [...new Set(changes)].sort();
+  // A pin or composition change runs the composition suite here, beside each affected plugin's fast module gate.
+  const compositionChange = selection !== "text" && uniqueChanges.some(isCompositionFile);
+  const slow = (file) => slowTests.has(file) && !(compositionChange && file === compositionTest);
+  const select = (file, reason, changed = false) => deviceTests.has(file) || slow(file) && !changed ? add(skipped, file, reason) : add(selected, file, reason);
   if (allTypecheck || all) for (const workspace of allWorkspaces) add(typecheck, workspace, all ? "--all" : "--all-typecheck");
   if (all) for (const file of tests.keys()) select(file, "--all");
+  const coverPatterns = new Map([...covers].map(([file, globs]) => [file, globs.map((glob) => [glob, globPattern(glob)])]));
   let rootBuildChange = false;
-  for (const path of [...new Set(changes)].sort()) {
+  for (const path of uniqueChanges) {
+    for (const id of affectedPlugins(path, plugins)) add(modules, id, `${path} changed`);
     if (rootBuildFiles.has(path)) {
       rootBuildChange = true;
       for (const workspace of allWorkspaces) add(typecheck, workspace, `${path} changed`);
@@ -102,16 +300,25 @@ export function selectQuickChecks({ changes, tests, exists = () => true, allType
       if (exists(path)) select(path, "changed test", true);
       continue;
     }
-    if (!codeExtensions.has(extname(path)) && !path.endsWith(".md")) continue;
-    if (!path.includes("/")) continue; // other root files have no reliable reference text
-    const keys = referenceKeys(path);
+    // Text matching needs a known file type and a folder; root files have no reliable reference text.
+    const textual = (codeExtensions.has(extname(path)) || path.endsWith(".md")) && path.includes("/");
+    const keys = textual ? referenceKeys(path) : [];
     let matched = false;
     // Browser specs are not run here, but adding, removing or changing one must keep the release-gate group manifest
     // (tests-browser/groups.json) complete and correct.
     if (browserSpec.test(path) && tests.has(browserGroupsTest)) { select(browserGroupsTest, `${path} must keep its browser group`); matched = true; }
-    for (const [file, source] of tests) if (keys.some((key) => source.includes(key))) { select(file, `references ${path}`); matched = true; }
-    if (!matched && !path.endsWith(".md")) notes.push(`No fast test references ${path}`);
+    for (const [file, source] of tests) {
+      if (keys.some((key) => source.includes(key))) { select(file, `references ${path}`); matched = true; }
+      if (closures.get(file)?.has(path)) { select(file, `imports or reads ${path}`); matched = true; }
+      for (const [glob, pattern] of coverPatterns.get(file) ?? []) if (pattern.test(path)) { select(file, `covers ${glob}`); matched = true; }
+    }
+    if (matched || path.endsWith(".md")) continue;
+    if (!path.includes("/")) notes.push(`No fast test imports, reads or declares the root file ${path}`);
+    else if (!textual) notes.push(`No fast test imports, reads or declares ${path} (${extname(path) || "extensionless"} files are not matched by text)`);
+    else notes.push(`No fast test references ${path}`);
   }
+  // A changed slow suite runs; it is not also reported as left out.
+  for (const file of selected.keys()) skipped.delete(file);
   let fallback = false;
   if (!all && (!selected.size || rootBuildChange)) {
     fallback = !selected.size;
@@ -124,9 +331,28 @@ export function selectQuickChecks({ changes, tests, exists = () => true, allType
     javascript: chosen.filter(({ name }) => name.endsWith(".mjs")),
     typescript: chosen.filter(({ name }) => name.endsWith(".ts")),
     skipped: sortedEntries(skipped),
+    modules: sortedEntries(modules),
     fallback,
     notes,
   };
+}
+
+/**
+ * Why tests select `path`: for each test, the chain its closure follows to the file, the header whose glob matches it,
+ * or its own text reference.
+ */
+export function explainPath(path, { tests, closures, headers }) {
+  const lines = [];
+  const describe = (closure, file) => closureChain(closure, file).map((step, index) => index ? `${closure.get(step).kind} ${step}` : step).join(" -> ");
+  for (const [file, closure] of closures) {
+    const reasons = [];
+    if (closureChain(closure, path)) reasons.push(describe(closure, path));
+    for (const reached of executedFiles(closure)) for (const glob of headers.get(reached) ?? []) if (globPattern(glob).test(path)) reasons.push(`${describe(closure, reached)} declares covers ${glob}`);
+    const keys = path.includes("/") && (codeExtensions.has(extname(path)) || path.endsWith(".md")) ? referenceKeys(path) : [];
+    if (keys.some((key) => tests.get(file)?.includes(key))) reasons.push(`its text references ${keys.find((key) => tests.get(file).includes(key))}`);
+    if (reasons.length) lines.push(`  ${file}`, ...reasons.map((reason) => `      ${reason}`));
+  }
+  return lines;
 }
 
 export function discoverFastTests(root = rootDirectory) {
@@ -140,6 +366,17 @@ export function discoverFastTests(root = rootDirectory) {
     }
   }
   return tests;
+}
+
+/** Plugin module IDs and their pluginSelection, from module-tests/*.json. */
+function pluginManifests(root) {
+  const directory = join(root, "module-tests");
+  if (!existsSync(directory)) return {};
+  const plugins = {};
+  for (const name of readdirSync(directory).filter((file) => file.endsWith(".json"))) {
+    try { const manifest = JSON.parse(readFileSync(join(directory, name), "utf8")); if (manifest.pluginSelection) plugins[manifest.module] = manifest.pluginSelection; } catch { /* run-module-tests reports invalid manifests */ }
+  }
+  return plugins;
 }
 
 const git = (root, args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -203,6 +440,7 @@ function printPlan(plan, base, changes) {
   section("Typecheck", plan.typecheck);
   section("Node tests", plan.javascript);
   section("TypeScript tests", plan.typescript);
+  if (plan.modules?.length) section("Module gates: verify:module -- fast <id>, plugins required", plan.modules);
   if (plan.skipped.length) section("Not run here: slow or physical-kiosk suites (npm test and verify:kiosk run them)", plan.skipped);
   if (plan.notes.length) console.log(`\n${plan.notes.map((note) => `Note: ${note}`).join("\n")}`);
   if (plan.fallback) console.log("\nNo changed file mapped to a fast test, so the default set runs.");
@@ -214,18 +452,20 @@ export class StartupError extends Error {}
 export const exitCodeFor = (error) => error instanceof StartupError ? 2 : 1;
 
 export async function main(args, root = rootDirectory) {
-  const options = { list: false, all: false, allTypecheck: false, concurrency: 2 };
+  const options = { list: false, all: false, allTypecheck: false, concurrency: 2, selection: "full" };
   for (let index = 0; index < args.length; index++) {
     const key = args[index];
     if (key === "--list") options.list = true;
     else if (key === "--all-typecheck") options.allTypecheck = true;
     else if (key === "--all") options.all = true;
-    else if (key === "--base" || key === "--concurrency") {
+    else if (key === "--base" || key === "--concurrency" || key === "--why" || key === "--selection") {
       const value = args[++index];
       if (!value || value.startsWith("--")) throw new StartupError(`Missing value for ${key}`);
       if (key === "--base") options.base = value;
+      else if (key === "--why") { options.why = value.replaceAll("\\", "/").replace(/^\.\//, ""); options.list = true; }
+      else if (key === "--selection") { if (value !== "full" && value !== "text") throw new StartupError("--selection must be full or text"); options.selection = value; }
       else { options.concurrency = Number(value); if (!Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 8) throw new StartupError("--concurrency must be 1 to 8"); }
-    } else throw new StartupError("Usage: node scripts/check-quick.mjs [--base REF] [--list] [--all | --all-typecheck] [--concurrency N]");
+    } else throw new StartupError("Usage: node scripts/check-quick.mjs [--base REF] [--list [--why PATH]] [--all | --all-typecheck] [--selection full|text] [--concurrency N]");
   }
   const started = Date.now();
   let base, changes;
@@ -233,8 +473,21 @@ export async function main(args, root = rootDirectory) {
     base = options.base ? { ref: options.base, source: "--base" } : defaultBase(root);
     changes = changedPaths(root, base.ref);
   } catch (error) { throw new StartupError(error instanceof Error ? error.message : String(error), { cause: error }); }
-  const plan = selectQuickChecks({ changes: changes.paths, tests: discoverFastTests(root), exists: (path) => existsSync(join(root, path)), allTypecheck: options.allTypecheck, all: options.all });
+  const tests = discoverFastTests(root);
+  // The text selection (private CI, to keep its Actions minutes flat) skips the walk unless --why needs it.
+  const walk = options.selection === "full" || options.why;
+  const walkStarted = Date.now();
+  const graph = walk ? buildTestClosures((path) => { try { return readFileSync(join(root, path), "utf8"); } catch { return undefined; } },
+    () => git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean)) : undefined;
+  const walkSeconds = (Date.now() - walkStarted) / 1000;
+  const plan = selectQuickChecks({ changes: changes.paths, tests, closures: graph?.closures, covers: graph?.covers, plugins: pluginManifests(root), exists: (path) => existsSync(join(root, path)), allTypecheck: options.allTypecheck, all: options.all, selection: options.selection });
   printPlan(plan, base, changes);
+  if (options.selection === "text") console.log("\nText-match selection: no import closures, covers headers or module gates (the local check and pre-push hook use them).");
+  else console.log(`\nImport closures of ${graph.closures.size} tests over ${graph.files.size} files took ${walkSeconds.toFixed(2)}s.`);
+  if (options.why) {
+    const lines = explainPath(options.why, { tests, ...graph });
+    console.log(`\nWhy tests select ${options.why}:\n${lines.length ? lines.join("\n") : "  no test imports, reads, declares or references it"}`);
+  }
   if (options.list) return 0;
 
   const failures = [];
@@ -247,6 +500,7 @@ export async function main(args, root = rootDirectory) {
   const concurrency = `--test-concurrency=${options.concurrency}`;
   if (plan.javascript.length) testRuns.push(["Node tests", [ "--test", concurrency, ...plan.javascript.map(({ name }) => name)]]);
   if (plan.typescript.length) testRuns.push(["TypeScript tests", ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", "--test", concurrency, ...plan.typescript.map(({ name }) => name)]]);
+  for (const { name } of plan.modules) testRuns.push([`Module gate ${name}`, [join(root, "scripts", "run-module-tests.mjs"), "fast", name]]);
   for (const [label, testArgs] of testRuns) {
     console.log(`\n${label}:`);
     const result = await run(process.execPath, testArgs, { cwd: root });

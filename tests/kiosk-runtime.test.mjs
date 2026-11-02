@@ -1601,13 +1601,13 @@ test("legacy fingerprint import prepares roster and slot mappings without templa
     const rosterPath = join(directory, "old-roster.csv");
     const mappingsPath = join(directory, "old-mappings.json");
     const outDir = join(directory, "out");
-    await writeFile(rosterPath, "student id,first,last,email\n321,Ada,Lovelace,ada@example.test\n322,Grace,Hopper,\n", "utf8");
+    await writeFile(rosterPath, "student id,first,last,email\n321,Test Student,A,test-student-a@example.test\n322,Test Student,B,\n", "utf8");
     await writeFile(mappingsPath, JSON.stringify([{ slot: 12, memberId: "321", finger: "right index", template: "must-not-copy" }, { slot: 13, memberId: "missing", finger: "left thumb" }]), "utf8");
     const result = await prepareLegacyFingerprintImport({ rosterPath, mappingsPath, outDir });
     assert.equal(result.rosterCount, 2);
     assert.equal(result.mappingCount, 2);
     assert.deepEqual(result.unmapped, [{ slot: "13", memberId: "missing" }]);
-    assert.match(await readFile(result.rosterOut, "utf8"), /memberId,firstName,lastName,email,discordUserId\n321,Ada,Lovelace,ada@example.test,/);
+    assert.match(await readFile(result.rosterOut, "utf8"), /memberId,firstName,lastName,email,discordUserId\n321,Test Student,A,test-student-a@example.test,/);
     assert.deepEqual(JSON.parse(await readFile(result.mappingsOut, "utf8")), { "12": { memberId: "321", finger: "right index" }, "13": { memberId: "missing", finger: "left thumb" } });
     assert.doesNotMatch(await readFile(result.mappingsOut, "utf8"), /must-not-copy/);
   } finally {
@@ -1780,14 +1780,14 @@ test("continuous scanner records a mapped match without a meeting ID", async () 
   const scanner = createScanner({
     scanSensor: async () => ({ status: "match", slot: 12, score: 80 }), setLed: async (state) => led.push(state), mappings: { memberForSlot: async () => "ROSTER-001" },
     queue: { pending: async () => [...queued], enqueue: async (event) => { queued.push(event); return true; } }, loadPairing: async () => ({ kioskToken: "secret", pairingId: "pairing-1" }),
-    flushAttendance: async () => ({ acknowledgements: [{ eventId: "scan-1", action: "check_in", member: { displayName: "Avery Stone" }, meeting: { title: "Build" } }] }),
+    flushAttendance: async () => ({ acknowledgements: [{ eventId: "scan-1", action: "check_in", member: { displayName: "Test Student A" }, meeting: { title: "Build" } }] }),
     onDisplay: async (state, values) => displays.push({ state, ...values }), onReader: () => undefined, onCloud: () => undefined,
     now: () => Date.parse("2026-09-01T20:00:00.000Z"), delay: async () => undefined, eventId: () => "scan-1",
   });
   await scanner.tick();
   assert.deepEqual(queued, [{ eventId: "scan-1", memberId: "ROSTER-001", occurredAt: "2026-09-01T20:00:00.000Z", pairingId: "pairing-1" }]);
   assert.deepEqual(displays.map((item) => item.state), ["processing", "welcome"]);
-  assert.equal(displays.at(-1).name, "Avery Stone");
+  assert.equal(displays.at(-1).name, "Test Student A");
   assert.deepEqual(led, ["processing", "welcome"]);
 });
 

@@ -1,49 +1,25 @@
+// quick-check: covers apps/api/migrations/**
 // Authentication hardening through the real Worker and real SQLite: the Google Calendar OAuth callback, purpose-bound
 // OAuth state, atomic login lockout, public route throttling, one-time setup codes, session revocation and error hygiene.
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec, createSignedStateCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
-import type { D1Database, D1Result, D1Statement } from "../apps/api/src/d1-usage.ts";
+import type { D1Database } from "../apps/api/src/d1-usage.ts";
+import { TestD1Database } from "./fixtures/d1-database.ts";
 
-class Statement implements D1Statement {
-  readonly db: Database; readonly sql: string; readonly values: unknown[];
-  constructor(db: Database, sql: string, values: unknown[] = []) { this.db = db; this.sql = sql; this.values = values; }
-  bind(...values: unknown[]) { return new Statement(this.db, this.sql, values); }
-  result(): D1Result {
-    const native = this.db.sqlite.prepare(this.sql);
-    return /^\s*SELECT\b/i.test(this.sql) || /\bRETURNING\b/i.test(this.sql)
-      ? { results: native.all(...this.values as []), meta: { changes: 0 } }
-      : { success: true, meta: { changes: Number(native.run(...this.values as []).changes) } };
-  }
-  async first<T>() { return (this.result().results?.[0] as T | undefined) ?? null; }
-  async all<T>() { return this.result() as D1Result<T>; }
-  async run() { return this.result(); }
-}
-class Database implements D1Database {
-  readonly sqlite = new DatabaseSync(":memory:");
+class Database extends TestD1Database {
   constructor(installation = true) {
-    for (const file of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql")).sort()) this.sqlite.exec(readFileSync(`apps/api/migrations/${file}`, "utf8"));
-    if (!installation) return;
-    this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode,google_calendar_enabled) VALUES('primary','2026-10-18','local',1);
+    super({ seed: installation ? `INSERT INTO installations(id,created_at,auth_mode,google_calendar_enabled) VALUES('primary','2026-10-18','local',1);
       INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-10-18'),('operator','primary','operator','operator','2026-10-18');
       INSERT INTO platform_module_administration VALUES('primary',0,1); INSERT INTO platform_module_administration_epochs VALUES('primary',0);
       INSERT INTO platform_module_epochs VALUES('primary','attendance',1);
       INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete,deletion_cursor) VALUES('primary','attendance',1,1,'enabled',2,1,0);
       INSERT INTO platform_module_assignment_epochs VALUES('primary','operator',0); INSERT INTO platform_module_assignment_revisions VALUES('primary','operator',0);
-      INSERT INTO platform_module_assignments VALUES('primary','operator','attendance','["attendance.manage"]');`);
-  }
-  prepare(sql: string) { return new Statement(this, sql); }
-  async batch(input: D1Statement[]) {
-    const statements = input as Statement[];
-    this.sqlite.exec("BEGIN IMMEDIATE");
-    try { const results = statements.map(item => item.result()); this.sqlite.exec("COMMIT"); return results; }
-    catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
+      INSERT INTO platform_module_assignments VALUES('primary','operator','attendance','["attendance.manage"]');` : undefined });
   }
   value<T>(sql: string, ...values: unknown[]) { return this.sqlite.prepare(sql).get(...values as []) as T | undefined; }
 }

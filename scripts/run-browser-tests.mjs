@@ -41,7 +41,11 @@ const groupSpecs = () => {
   const { part, parts } = parsePart(partOption.value);
   return partitionGroup(group, parts, workspace)[part - 1].files;
 };
-const playwrightArgs = group ? [...partOption.args, ...groupSpecs()] : partOption.args;
+// --server <build|dev> chooses how playwright.config.ts serves the dashboard: a production build (the CI default) or the
+// Vite dev server (the local default).
+const serverOption = takeOption(partOption.args, "--server");
+if (serverOption.value && !["build", "dev"].includes(serverOption.value)) throw new Error("--server needs build or dev");
+const playwrightArgs = group ? [...serverOption.args, ...groupSpecs()] : serverOption.args;
 const compose = (extra, env = process.env) => spawnSync(process.execPath, ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", join(workspace, "scripts", "compose-modules.mjs"), ...extra], { stdio: "inherit", env });
 if (selection) {
   const { modules, officialModules } = readTestSelection(selection, workspace);
@@ -64,6 +68,7 @@ const child = spawn(process.execPath, [playwrightCli, "test", ...playwrightArgs]
   env: {
     ...process.env,
     LANCERLOGIN_BROWSER_PORT_BASE: process.env.LANCERLOGIN_BROWSER_PORT_BASE ?? String(portBase),
+    ...(serverOption.value ? { LANCERLOGIN_BROWSER_SERVER: serverOption.value } : {}),
     PWTEST_CACHE_DIR: process.env.PWTEST_CACHE_DIR ?? join(workspace, "node_modules", ".cache", "playwright-transform"),
   },
 });

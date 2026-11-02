@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { mockCarpoolShare } from "./carpool-share-fixture";
 import { setDashboardTheme } from "./dashboard-theme";
+import { mockSetupStatus } from "./api-fixtures";
 
 requireCarpoolPlugin();
 
@@ -12,7 +13,7 @@ async function setup(page: Page) {
   const people = [person("driver-1", "Driver One", "offer", "Blue car"), person("driver-2", "Other Driver", "offer"), person("rider", "Rider One", "needs-ride", "Call on arrival"), person("exception", "Needs review person", "unknown", "Confirm transportation"), person("independent", "Independent person", "transit")];
   const assignments = ["outbound", "return"].map(direction => ({ direction, riderId: "rider", vehiclePersonId: "driver-1", distanceMiles: 1, locked: false, manual: true })); const detail = () => ({ plan, people, assignments, unresolved: [] }); let lastPlan: any;
   await page.addInitScript(() => { (window as any).carpoolPrinted = 0; window.print = () => { (window as any).carpoolPrinted++; }; });
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Team", subtitle: "Review", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "light", logoData: null, logoBackdrop: "auto", lateScanMinutes: 30 } } })); await page.route("**/platform/modules", route => route.fulfill({ json: carpoolSnapshot() }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Team", subtitle: "Review", primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "light", logoData: null, logoBackdrop: "auto", lateScanMinutes: 30 } }); await page.route("**/platform/modules", route => route.fulfill({ json: carpoolSnapshot() }));
   await page.route(/\/admin\/carpool\/context(?:\?.*)?$/, route => { const query = new URL(route.request().url()).searchParams; const filter = query.get("archive") ?? "active"; const plans = filter === "all" || plan.archived === (filter === "archived") ? [plan] : []; return route.fulfill({ json: { plans, members: [], importProfiles: [], geocodingConfigured: false, detail: query.get("planId") ? detail() : null } }); });
   await page.route("**/admin/carpool/plans/share", async route => { const body = route.request().postDataJSON(); lastPlan = body; if (body.revision !== plan.revision) return route.fulfill({ status: 409, json: { error: "Record changed; reload before saving" } }); Object.assign(plan, body); plan.revision++; return route.fulfill({ json: detail() }); });
   await mockCarpoolShare(page, detail); await page.goto("/carpool/plans/share?area=share&direction=outbound"); await expect(page.getByRole("article", { name: "Coordinator saved preview" })).toBeVisible(); return { plan, detail, touch: () => plan.revision++, lastPlan: () => lastPlan };

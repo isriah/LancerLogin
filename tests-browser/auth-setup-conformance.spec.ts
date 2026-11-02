@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { attendanceSetupState, attendanceSnapshot } from "./module-fixtures";
 import { pairedViews } from "./paired-views";
+import { expectResponsiveFit, mockSetupStatus } from "./api-fixtures";
 
 test.use({ timezoneId: "UTC" });
 
@@ -18,23 +19,11 @@ const referenceSettings = {
 };
 
 async function configureSignIn(page: Page, authMode: "local" | "google" | "both") {
-  await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: true, installation: { authMode }, settings: referenceSettings }) }));
+  await mockSetupStatus(page, { installation: { authMode }, settings: referenceSettings });
   await page.route("**/auth/session", (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Authentication required" }) }));
 }
 
-async function expectResponsiveFit(page: Page) {
-  const geometry = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-    clipped: Array.from(document.querySelectorAll<HTMLElement>("button, a[href], input, select, textarea")).flatMap((element) => {
-      const style = getComputedStyle(element); const bounds = element.getBoundingClientRect();
-      if (style.display === "none" || style.visibility === "hidden" || bounds.width === 0 || element.closest(".table-scroll")) return [];
-      return bounds.left < -1 || bounds.right > innerWidth + 1 ? [element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName] : [];
-    }),
-  }));
-  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
-  expect(geometry.clipped).toEqual([]);
-}
+const responsiveFit = { controls: "button, a[href], input, select, textarea", scrollers: ".table-scroll" };
 
 for (const { viewport, theme } of pairedViews) {
     test(`Attendance setup shows one validated card at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
@@ -43,7 +32,7 @@ for (const { viewport, theme } of pairedViews) {
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
       await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
       let state = attendanceSetupState({}, ["rules"]); let saved: unknown;
-      await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: referenceSettings } }));
+      await mockSetupStatus(page, { settings: referenceSettings });
       await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot({ setupReady: false }) }));
       await page.route("**/admin/modules/attendance/setup", async (route) => {
         if (route.request().method() === "PUT") { saved = route.request().postDataJSON(); state = attendanceSetupState({ rules: "completed" }, ["rules"]); }
@@ -66,7 +55,7 @@ for (const { viewport, theme } of pairedViews) {
       expect(starts.slice(0, 10)).toBe(ends.slice(0, 10));
       await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
       await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
     });
   }
 
@@ -84,7 +73,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
       await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
       await expect(page.getByRole("link", { name: "Continue with Google" })).toBeVisible();
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
 
       const username = page.getByLabel("Username");
       await username.focus();
@@ -99,7 +88,7 @@ for (const { viewport, theme } of pairedViews) {
       await page.setViewportSize(viewport);
       await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
       await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
-      await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: false }) }));
+      await mockSetupStatus(page, { configured: false });
       await page.goto("/dashboard");
       await page.getByLabel("Google OAuth").check();
 
@@ -110,7 +99,7 @@ for (const { viewport, theme } of pairedViews) {
       expect((await guideLink.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await expect(page.getByText(`${new URL(page.url()).origin}/api/auth/google/callback`, { exact: true })).toBeVisible();
       expect((await page.locator(".oauth-walkthrough").getByRole("button", { name: "Copy" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
     });
   }
 
@@ -121,7 +110,7 @@ test("first-Admin modes expose associated validation and a pending state", async
     localStorage.setItem("lancerlogin-theme", "dark");
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => undefined } });
   });
-  await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: false }) }));
+  await mockSetupStatus(page, { configured: false });
   await page.route("**/setup/bootstrap", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 250));
     await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "The one-time setup code is invalid" }) });
@@ -159,7 +148,7 @@ test("first-Admin modes expose associated validation and a pending state", async
   const error = page.getByRole("alert");
   await expect(error).toContainText("one-time setup code is invalid");
   await expect(page.getByLabel("One-time setup code")).toHaveAttribute("aria-describedby", /first-admin-error/);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 for (const { viewport, theme } of pairedViews) {
@@ -167,7 +156,7 @@ for (const { viewport, theme } of pairedViews) {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
     await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
-    await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+    await mockSetupStatus(page, { configured: false });
     await page.goto("/dashboard");
     await expect(page.getByRole("heading", { level: 1, name: "Create your installation" })).toBeVisible();
     await expect(page.locator(".setup-header")).not.toContainText("Community Edition");
@@ -204,14 +193,14 @@ for (const { viewport, theme } of pairedViews) {
     await page.keyboard.press("ArrowRight");
     await expect(methods.getByRole("radio", { name: "Both methods", exact: true })).toBeChecked();
     await expect(page.getByRole("textbox", { name: "Admin username", exact: true })).toBeVisible();
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
   });
 }
 
 test("first-Admin setup with a password signs the new Admin straight in", async ({ page }) => {
   let signedIn = false;
   let payload: Record<string, unknown> | undefined;
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+  await mockSetupStatus(page, { configured: false });
   await page.route("**/setup/bootstrap", (route) => {
     payload = route.request().postDataJSON() as Record<string, unknown>;
     signedIn = true;
@@ -242,7 +231,7 @@ test("first-Admin setup with a password signs the new Admin straight in", async 
 
 test("first-Admin setup on a development Worker shows the development colors it reports", async ({ page }) => {
   let signedIn = false;
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false, defaultTheme: { primary: "#7c3aed", secondary: "#0f766e" } } }));
+  await mockSetupStatus(page, { configured: false, defaultTheme: { primary: "#7c3aed", secondary: "#0f766e" } });
   await page.route("**/setup/bootstrap", (route) => { signedIn = true; return route.fulfill({ status: 201, json: { configured: true, signedIn: true, user: { id: "admin-1", role: "admin", debugMode: false } } }); });
   await page.route("**/auth/session", (route) => signedIn ? route.fulfill({ json: { user: { id: "admin-1", role: "admin", debugMode: false } } }) : route.fulfill({ status: 401, json: { error: "Authentication required" } }));
   await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot() }));
@@ -259,7 +248,7 @@ test("first-Admin setup on a development Worker shows the development colors it 
 });
 
 test("Google-only first-Admin setup asks the new Admin to sign in with Google to finish setup", async ({ page }) => {
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+  await mockSetupStatus(page, { configured: false });
   await page.route("**/setup/bootstrap", (route) => route.fulfill({ status: 201, json: { configured: true, signedIn: false } }));
   await page.route("**/auth/session", (route) => route.fulfill({ status: 401, json: { error: "Authentication required" } }));
   await page.goto("/dashboard");
@@ -278,7 +267,7 @@ test("Google-only first-Admin setup asks the new Admin to sign in with Google to
 });
 
 test("a first sign-in after setup without a session does not say Welcome back", async ({ page }) => {
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+  await mockSetupStatus(page, { configured: false });
   await page.route("**/setup/bootstrap", (route) => route.fulfill({ status: 201, json: { configured: true, signedIn: false } }));
   await page.route("**/auth/session", (route) => route.fulfill({ status: 401, json: { error: "Authentication required" } }));
   await page.goto("/dashboard");
@@ -292,7 +281,7 @@ test("a first sign-in after setup without a session does not say Welcome back", 
   await expect(page.getByText("Your installation is ready. Sign in with the Admin account you just created to finish setup.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
   await page.unroute("**/setup/status");
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: referenceSettings } }));
+  await mockSetupStatus(page, { settings: referenceSettings });
   await page.reload();
   await expect(page.getByRole("heading", { level: 1, name: "Sign in", exact: true })).toBeVisible();
   await expect(page.getByText("Sign in to manage attendance.")).toBeVisible();
@@ -357,5 +346,5 @@ test("Admin can move back, skip optional integrations, and finish Attendance set
     { generation: 1, stepId: "calendar", outcome: "skipped" },
     { generation: 1, stepId: "discord", outcome: "skipped" },
   ]);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });

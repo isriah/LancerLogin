@@ -154,6 +154,8 @@ export async function readModuleUpdateFailures(db: D1Database): Promise<ModuleUp
 
 const isolateReconciliation = new WeakMap<object, { done: boolean; pending?: Promise<void>; retryAt: number }>();
 const reconciliationRetryMs = 60_000;
+const reconciliationWaitMs = 5_000;
+const abandonedReconciliationRetryMs = 10_000;
 
 /**
  * Reconcile once per Worker isolate and database binding, before the first request is served. A deployment starts new
@@ -162,25 +164,38 @@ const reconciliationRetryMs = 60_000;
  * migrations failed and that module was left unrecorded, retries after a minute. Before
  * first-Admin setup there is nothing to record, so the isolate keeps checking on later requests instead of waiting for
  * the scheduled pass once the installation exists.
+ *
+ * Concurrent requests share the attempt, but a Worker cancels I/O started by a request that disconnects, which can leave
+ * that shared promise unsettled forever. So the starting request hands the attempt to `waitUntil`, and no request waits on
+ * it longer than `waitMs`: after that the attempt is abandoned, the request is served anyway, and a request after a short
+ * backoff starts a fresh attempt in its own context (the scheduled pass also reconciles).
  */
-export function ensureModulesReconciled(db: D1Database, key: object, suspended: () => Promise<boolean>, now = () => Date.now(), reconcile: (db: D1Database) => Promise<ModuleReconciliation> = reconcileInstalledModules): Promise<void> {
+export function ensureModulesReconciled(db: D1Database, key: object, suspended: () => Promise<boolean>, now = () => Date.now(), reconcile: (db: D1Database) => Promise<ModuleReconciliation> = reconcileInstalledModules, waitUntil?: (promise: Promise<unknown>) => void, waitMs = reconciliationWaitMs): Promise<void> {
   let state = isolateReconciliation.get(key);
   if (!state) isolateReconciliation.set(key, state = { done: false, retryAt: 0 });
   if (state.done) return Promise.resolve();
-  if (state.pending) return state.pending;
-  if (now() < state.retryAt) return Promise.resolve();
   const current = state;
-  current.pending = (async () => {
-    try {
-      if (await suspended()) return;
-      const result = await reconcile(db);
-      if (result.failures.length) current.retryAt = now() + reconciliationRetryMs;
-      else if (!result.unconfigured) current.done = true;
-    }
-    catch { current.retryAt = now() + reconciliationRetryMs; }
-    finally { current.pending = undefined; }
-  })();
-  return current.pending;
+  if (!current.pending) {
+    if (now() < current.retryAt) return Promise.resolve();
+    const attempt: Promise<void> = (async () => {
+      try {
+        if (await suspended()) return;
+        const result = await reconcile(db);
+        if (result.failures.length) current.retryAt = now() + reconciliationRetryMs;
+        else if (!result.unconfigured) current.done = true;
+      }
+      catch { current.retryAt = now() + reconciliationRetryMs; }
+    })().finally(() => { if (current.pending === attempt) current.pending = undefined; });
+    current.pending = attempt;
+    waitUntil?.(attempt);
+  }
+  const pending = current.pending;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const abandoned = new Promise<void>((resolve) => { timer = setTimeout(() => {
+    if (current.pending === pending) { current.pending = undefined; current.retryAt = now() + abandonedReconciliationRetryMs; }
+    resolve();
+  }, waitMs); });
+  return Promise.race([pending, abandoned]).finally(() => clearTimeout(timer));
 }
 
 function parseDefinition(value: string): CatalogDefinition {

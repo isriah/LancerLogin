@@ -7,7 +7,7 @@ import { completeKioskCommand, createDeliveryBackoff, kioskApiRequest, KioskApiE
 import { createEnrollmentReports } from "./enrollment-reports.mjs";
 import { createDashboardEnrollment } from "./dashboard-enrollment.mjs";
 import { dashboardEnrollmentApp } from "./dashboard-enrollment-ui.mjs";
-import { createKioskPollClient, createKioskPollScheduler } from "./kiosk-poll.mjs";
+import { createKioskPollClient, createKioskPollScheduler, pollIntervals } from "./kiosk-poll.mjs";
 import { createFileQueue } from "./file-queue.mjs";
 import { createAttendanceClock } from "./attendance-clock.mjs";
 import { createScanReviewSync } from "./scan-review-sync.mjs";
@@ -343,7 +343,7 @@ async function pollCloud(options) {
     if (!cloudPolling || ["apiUrl", "kioskId", "pairingId", "kioskToken"].some(key => cloudPolling.config[key] !== config[key])) {
       cloudPolling?.client.invalidate();
       const client = createKioskPollClient(config, { enrollment: true });
-      const scheduler = createKioskPollScheduler({ client,
+      const scheduler = createKioskPollScheduler({ client, intervals: pollIntervals,
         commands: command => installationActivities.run(() => pollCommandsNow(command, config)),
         enrollment: session => installationActivities.run(() => dashboardEnrollment.update(session, config)),
         configuration: remote => installationActivities.run(() => applyRemoteConfiguration(config, remote)),
@@ -932,7 +932,7 @@ if (process.env.NODE_ENV !== "test") {
     })().catch(() => process.exit(1));
   });
   server.listen(port, process.env.LANCERLOGIN_KIOSK_HOST ?? "0.0.0.0", () => console.log(`LancerLogin kiosk service listening on port ${port}`));
-  void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod(), loadFingerprintMatch(), attendanceClock.refresh().catch(() => undefined)]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); purgeExpiredArchives(); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, 60_000).unref(); setInterval(pollCloud, 5_000).unref();
+  void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod(), loadFingerprintMatch(), attendanceClock.refresh().catch(() => undefined)]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); purgeExpiredArchives(); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, pollIntervals.heartbeatMs).unref(); setInterval(pollCloud, pollIntervals.commandsMs).unref();
   setInterval(() => { void dashboardEnrollment.expire(); void refreshCapturePermission(); void checkFingerRemoval(); }, 250).unref();
   // Apply attendance retention and keep the journal short even on a quiet kiosk.
   setInterval(() => { void installationActivities.run(() => queue.compact()).catch(() => undefined); void installationActivities.run(() => enrollmentReports.compact()).catch(() => undefined); purgeExpiredArchives(); }, 6 * 60 * 60_000).unref();

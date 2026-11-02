@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
+import { expectOpensRealTab } from "./new-tab";
+import { mockSession, mockSetupStatus } from "./api-fixtures";
 
 async function memberFixture(page: Page, role: "admin" | "operator" = "admin") {
   const member = { id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", email: "avery@example.test", active: 1, attendanceRequiredFrom: "2026-01-01" };
@@ -11,8 +13,8 @@ async function memberFixture(page: Page, role: "admin" | "operator" = "admin") {
       { meetingId: "meeting-two", title: "Another completed meeting", startsAt: "2026-09-02T18:00:00Z", endsAt: "2026-09-02T20:00:00Z", checkedInAt: "2026-09-02T18:00:00Z" as string | undefined, checkedOutAt: "2026-09-02T20:00:00Z" as string | undefined, disposition: "present", reason: "", audience: "All", eligibility: "required", policy: "standard" },
     ],
   };
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Reference Arts Collective", subtitle: "Shared operations", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } } }));
-  await page.route("**/auth/session", route => route.fulfill({ json: { user: { role, debugMode: false } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Reference Arts Collective", subtitle: "Shared operations", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } });
+  await mockSession(page, role, { debugMode: false });
   await page.route("**/labels", route => route.fulfill({ json: { labels: [], history: [], periods: [], today: "2026-09-25" } }));
   await page.route("**/admin/members/A-101/history", route => {
     state.reads += 1;
@@ -91,7 +93,7 @@ test("member history applies meeting status actions and refreshes outcomes and p
   expect(state.reads).toBe(initialReads + 4);
 });
 
-test("meeting titles on the member page link to their meeting pages", async ({ page, context }) => {
+test("meeting titles on the member page link to their meeting pages", async ({ page }) => {
   const state = await memberFixture(page, "operator");
   state.history.push({ meetingId: "", title: "Meeting without an id", startsAt: "2026-09-03T18:00:00Z", endsAt: "2026-09-03T20:00:00Z", checkedInAt: undefined, checkedOutAt: undefined, disposition: "absent", reason: "", audience: "All", eligibility: "required", policy: "standard" });
   const meetingReads: string[] = [];
@@ -111,10 +113,7 @@ test("meeting titles on the member page link to their meeting pages", async ({ p
   expect(styles.color).toBe(styles.expected);
   expect(styles.decoration).toBe("underline");
 
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
-  const [opened] = await Promise.all([context.waitForEvent("page"), link.click({ modifiers: [modifier] })]);
-  await expect.poll(() => new URL(opened.url()).pathname).toBe("/meetings/meeting-one");
-  await opened.close();
+  await expectOpensRealTab(page, link, /\/meetings\/meeting-one$/, { modifiers: ["ControlOrMeta"] });
   await expect(page).toHaveURL(/\/roster\/A-101$/);
 
   await link.click();

@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { openActiveMeetingCalendar, selectedCalendarDays } from "./meeting-calendar-fixture";
 
+// Some route handlers fetch the real response with route.fetch(). Wait for any still running before the context
+// closes; otherwise a poll that started late has its fetched response disposed mid-handler and fails the test.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: "wait" }); });
+
 for (const timeZone of ["UTC", "America/New_York"]) test.describe(`calendar fixture in ${timeZone}`, () => {
   test.use({ timezoneId: timeZone });
   for (const date of ["2026-10-26", "2026-11-01"]) test(`selects yesterday's active meeting after midnight on ${date}`, async ({ page }) => {

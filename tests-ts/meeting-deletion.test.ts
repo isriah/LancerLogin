@@ -1,39 +1,24 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { meetingDeletion, restoreMeetingDeletion, type MeetingDeletion } from "../apps/api/src/meeting-deletion.ts";
 import { overlappingMeetingWindows } from "../apps/api/src/attendance-lifecycle.ts";
-import type { D1Database, D1Result, D1Statement } from "../apps/api/src/d1-usage.ts";
+import type { D1Statement } from "../apps/api/src/d1-usage.ts";
+import { Statement, TestD1Database } from "./fixtures/d1-database.ts";
 
-class Statement implements D1Statement {
-  readonly db: Database; readonly sql: string; readonly values: unknown[];
-  constructor(db: Database, sql: string, values: unknown[] = []) { this.db = db; this.sql = sql; this.values = values; }
-  bind(...values: unknown[]) { return new Statement(this.db, this.sql, values); }
-  result(): D1Result {
-    const native = this.db.sqlite.prepare(this.sql);
-    return /^\s*SELECT\b/i.test(this.sql) || /\bRETURNING\b/i.test(this.sql)
-      ? { results: native.all(...this.values as []), meta: { changes: 0 } }
-      : { success: true, meta: { changes: Number(native.run(...this.values as []).changes) } };
-  }
-  async first<T>() { return (this.result().results?.[0] as T | undefined) ?? null; }
-  async all<T>() { return this.result() as D1Result<T>; }
-  async run() { return this.result(); }
-}
-class Database implements D1Database {
-  readonly sqlite = new DatabaseSync(":memory:"); beforeRestore?: () => void;
+class Database extends TestD1Database {
+  beforeRestore?: () => void;
   constructor() {
-    for (const file of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql")).sort()) this.sqlite.exec(readFileSync(`apps/api/migrations/${file}`, "utf8"));
-    this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-10-18','local'),('other','2026-10-18','local');
+    super({ seed: `INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-10-18','local'),('other','2026-10-18','local');
       INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-10-18'),('operator','primary','operator','operator','2026-10-18');
       INSERT INTO platform_module_administration VALUES('primary',0,1); INSERT INTO platform_module_administration_epochs VALUES('primary',0);
       INSERT INTO platform_module_epochs VALUES('primary','attendance',1);
       INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete,deletion_cursor) VALUES('primary','attendance',1,1,'enabled',2,1,0);
       INSERT INTO platform_module_assignment_epochs VALUES('primary','operator',0); INSERT INTO platform_module_assignment_revisions VALUES('primary','operator',0);
-      INSERT INTO platform_module_assignments VALUES('primary','operator','attendance','["attendance.manage"]');`);
+      INSERT INTO platform_module_assignments VALUES('primary','operator','attendance','["attendance.manage"]');` });
     this.addMeeting("meeting-1", "2026-10-20T15:00:00.000Z", "2026-10-20T17:00:00.000Z");
     this.addMeeting("meeting-2", "2026-10-27T15:00:00.000Z", "2026-10-27T17:00:00.000Z");
     this.sqlite.exec("UPDATE meetings SET series_id='series-1', notes='Saved notes', attendance_weight=2 WHERE installation_id='primary'");
@@ -41,16 +26,11 @@ class Database implements D1Database {
   addMeeting(id: string, start: string, end: string, installation = "primary") {
     this.sqlite.prepare("INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,required,created_by,created_at) VALUES(?,?,?,?,?,1,'admin','2026-10-18')").run(id, installation, id, start, end);
   }
-  prepare(sql: string) { return new Statement(this, sql); }
-  async batch(input: D1Statement[]) {
-    const statements = input as Statement[];
-    if (this.beforeRestore && statements.some(item => item.sql.includes("AS meeting_undo_available"))) { const before = this.beforeRestore; this.beforeRestore = undefined; before(); }
-    this.sqlite.exec("BEGIN IMMEDIATE");
-    try { const results = statements.map(item => item.result()); this.sqlite.exec("COMMIT"); return results; }
-    catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
+  override async batch(input: D1Statement[]) {
+    if (this.beforeRestore && (input as Statement[]).some(item => item.sql.includes("AS meeting_undo_available"))) { const before = this.beforeRestore; this.beforeRestore = undefined; before(); }
+    return super.batch(input);
   }
   rows(table: string) { return this.sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(); }
-  close() { this.sqlite.close(); }
 }
 const secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 async function call(db: Database, path: string, method: string, body?: unknown, role: "admin" | "operator" | null = "operator") {

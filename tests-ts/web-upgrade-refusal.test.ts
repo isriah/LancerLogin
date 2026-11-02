@@ -1,10 +1,10 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
 import { preflightModules, refuseUnclaimedRequest } from "../scripts/run-web-upgrade.mjs";
 import { webUpdateStatus } from "../apps/api/src/web-updates.ts";
+import { applyCoreMigrations } from "./fixtures/d1-database.ts";
 
 const id = "55555555-5555-4555-8555-555555555555";
 const releaseSha = "b".repeat(40);
@@ -14,7 +14,7 @@ const beta11FailedRunSql = "UPDATE web_update_requests SET state = ?, error_code
 
 function database() {
   const sqlite = new DatabaseSync(":memory:");
-  for (const file of readdirSync("apps/api/migrations").sort()) sqlite.exec(readFileSync(join("apps/api/migrations", file), "utf8"));
+  applyCoreMigrations(sqlite);
   sqlite.exec("INSERT INTO installations (id,created_at,auth_mode) VALUES ('primary','2026-01-01','local'); INSERT INTO platform_modules (installation_id,module_id,contract_version,generation,phase,setup_version) VALUES ('primary','carpool',1,1,'enabled',1)");
   return sqlite;
 }

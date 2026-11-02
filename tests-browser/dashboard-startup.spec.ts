@@ -1,6 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { attendanceSnapshot } from "./module-fixtures";
 import { outreachComposed, outreachSkipReason } from "./outreach-fixtures";
+import { mockSetupStatus } from "./api-fixtures";
+
+// Some route handlers fetch the real response with route.fetch(). Unroute them before the context closes and ignore
+// their errors, so a poll that started late can't fail the test with a response disposed mid-handler. Not "wait":
+// the never-answering setup and session routes below never finish, so waiting for them would time out.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: "ignoreErrors" }); });
 
 const delayedPaths = new Set(["/setup/status", "/auth/session", "/platform/modules", "/admin/members", "/labels", "/admin/attendance/members", "/reports/attendance", "/reports/catalog", "/reports/views", "/reports/leaderboard"]);
 
@@ -57,6 +63,34 @@ test("setup and session both gate protected page requests even if modules resolv
   await expect(page.getByRole("heading", { name: "Checking your session…" })).toBeVisible();
   expect(memberReads).toBe(0);
   releaseSession();
+  await expect(page.getByRole("table", { name: "Roster members" })).toContainText("Avery Stone");
+});
+
+test("a setup check that never answers ends on the unavailable state and Try again recovers", async ({ page }) => {
+  let hang = true;
+  // A hung route is never fulfilled, like the stuck Worker isolate: no error, no response.
+  await page.route("**/setup/status", (route) => hang ? new Promise<void>(() => undefined) : route.continue());
+  await page.clock.install();
+  await page.goto("/roster");
+  await expect(page.getByRole("heading", { name: "Checking your installation…" })).toBeVisible();
+  await page.clock.fastForward(15_000);
+  await expect(page.getByRole("heading", { name: "Setup service unavailable" })).toBeVisible();
+  await expect(page.getByText("LancerLogin could not reach its setup service, or it took too long to answer. Check your connection and try again.")).toBeVisible();
+  hang = false;
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("table", { name: "Roster members" })).toContainText("Avery Stone");
+});
+
+test("a session check that never answers offers Try again instead of waiting forever", async ({ page }) => {
+  let hang = true;
+  await page.route("**/auth/session", (route) => hang ? new Promise<void>(() => undefined) : route.continue());
+  await page.clock.install();
+  await page.goto("/roster");
+  await expect(page.getByRole("heading", { name: "Checking your session…" })).toBeVisible();
+  await page.clock.fastForward(15_000);
+  await expect(page.getByRole("heading", { name: "Session check unavailable" })).toBeVisible();
+  hang = false;
+  await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByRole("table", { name: "Roster members" })).toContainText("Avery Stone");
 });
 
@@ -126,7 +160,7 @@ test("a public page follows in-place navigation below its base and reloads when 
 });
 
 test("first setup cannot consume preloaded protected access", async ({ page }) => {
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+  await mockSetupStatus(page, { configured: false });
   await page.goto("/roster");
   await expect(page.getByRole("heading", { name: "Create your installation" })).toBeVisible();
   await expect(page.getByRole("table", { name: "Roster members" })).toHaveCount(0);
@@ -155,7 +189,7 @@ test("refresh verifies an expired session and successful first setup reads a new
   await page.reload();
   await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
   await expect(page.getByRole("table", { name: "Roster members" })).toHaveCount(0);
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: false } }));
+  await mockSetupStatus(page, { configured: false });
   await page.route("**/setup/bootstrap", (route) => { configured = true; return route.fulfill({ json: {} }); });
   await page.reload();
   await page.getByLabel("One-time setup code").fill("synthetic-setup-code");

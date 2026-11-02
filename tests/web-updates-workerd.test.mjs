@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
+import { applyMigration } from "./fixtures/miniflare-d1.mjs";
 
 const requestId = "11111111-1111-1111-1111-111111111111";
 const sha = "b".repeat(40);
@@ -40,10 +40,10 @@ async function runtime({ redirectPath, redirectStatus = 302, statusRunId = "123"
   try {
     const database = await worker.getD1Database("DB");
     await database.exec("CREATE TABLE audit_log (id TEXT PRIMARY KEY, installation_id TEXT, actor_user_id TEXT, action TEXT, target_type TEXT, target_id TEXT, metadata_json TEXT, created_at TEXT)");
-    await database.exec((await readFile("apps/api/migrations/0029_web_updates.sql", "utf8")).replace(/^--.*$/gm, "").replaceAll("\n", " "));
+    await applyMigration(database, "0029_web_updates.sql");
     await database.exec("CREATE TABLE kiosk_commands(id TEXT, installation_id TEXT, command_type TEXT, completed_at TEXT, created_at TEXT, success INTEGER, resolution_status TEXT); CREATE TABLE kiosks(id TEXT)");
-    await database.exec((await readFile("apps/api/migrations/0061_update_channels.sql", "utf8")).replace(/^--.*$/gm, "").replaceAll("\n", " "));
-    await database.exec((await readFile("apps/api/migrations/0080_plugin_selection_updates.sql", "utf8")).replace(/^--.*$/gm, "").replaceAll("\n", " "));
+    await applyMigration(database, "0061_update_channels.sql");
+    await applyMigration(database, "0080_plugin_selection_updates.sql");
     const fetch = (path, body) => worker.dispatchFetch(`http://localhost${path}`, body ? { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {});
     const seed = async ({ state = "prepared", runId = null } = {}) => database.prepare("INSERT INTO web_update_requests (id, installation_id, release_tag, release_sha, release_notes, previous_version, state, created_at, expires_at, updated_at, backup_exported_at, started_at, run_id) VALUES (?, 'primary', 'v1.0.0', ?, '', '0.24.0', ?, ?, ?, ?, ?, ?, ?)").bind(requestId, sha, state, new Date().toISOString(), new Date(Date.now() + 3_600_000).toISOString(), new Date().toISOString(), new Date().toISOString(), state === "prepared" ? null : new Date().toISOString(), runId).run();
     return { worker, database, fetch, seed, calls };
@@ -72,7 +72,10 @@ test("actual workerd discovery caches success and provider cooldown with fixed c
       assert.ok(result.attemptedAt);
       if (discoveryStatus === 200) assert.equal(result.release.tag_name, "v1.0.0");
       else assert.ok(result.retryAt >= result.attemptedAt + 120_000);
-      assert.deepEqual(await (await instance.fetch("/discover")).json(), result);
+      // The cached answer is unchanged apart from its age, which counts up from the GitHub read.
+      const { checkedAgeMs, ...cached } = await (await instance.fetch("/discover")).json(); const { checkedAgeMs: firstAge, ...first } = result;
+      assert.deepEqual(cached, first);
+      if (discoveryStatus === 200) assert.ok(checkedAgeMs >= firstAge); else assert.equal(checkedAgeMs, undefined);
       assert.equal(instance.calls.length, 1); assert.equal(instance.calls[0].authorization, "Bearer synthetic-runtime-token");
       assert.equal(instance.calls[0].path, "/repos/isriah/LancerLogin/releases/latest");
     } finally { await instance.worker.dispose(); }

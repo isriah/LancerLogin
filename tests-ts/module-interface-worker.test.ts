@@ -1,3 +1,4 @@
+// quick-check: covers tests/fixtures/module-plugins/**
 // End to end: compose the unshipped Example plugin, which provides `example.items`, and the unshipped Consumer plugin, which
 // optionally uses it, from local git commits, then run their calls through the real Worker. Composition runs in a child
 // process, and this process redirects Core's generated plugin files to its output before importing any application module.

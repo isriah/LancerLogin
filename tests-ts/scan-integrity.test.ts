@@ -1,11 +1,11 @@
+// quick-check: covers apps/api/migrations/**
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { reenrollThreshold } from "../apps/api/src/scan-integrity.ts";
+import { applyCoreMigrations } from "./fixtures/d1-database.ts";
 
 const secret = "A".repeat(43);
 
@@ -221,7 +221,7 @@ async function fixture(context: TestContext) {
 class Database {
   sqlite = new DatabaseSync(":memory:");
   constructor() {
-    for (const name of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql")).sort()) this.sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
+    applyCoreMigrations(this.sqlite);
     this.sqlite.exec(`
       INSERT INTO installations(id,created_at,auth_mode) VALUES ('primary','2026-01-01','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('admin','primary','admin','admin','2026-01-01');

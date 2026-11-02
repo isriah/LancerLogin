@@ -6,6 +6,7 @@ import { attendanceSnapshot, combinedSnapshot, outreachSnapshot } from "./module
 import { carpoolComposed, carpoolSnapshot } from "./carpool-fixtures";
 import { requireOutreachPlugin } from "./outreach-fixtures";
 import { pairedViews } from "./paired-views";
+import { expectResponsiveFit, mockSession, mockSetupStatus } from "./api-fixtures";
 
 const settings = {
   organizationName: "Reference Arts Collective",
@@ -38,8 +39,8 @@ async function openSettingsNavigation(page: Page) { await expect(page.locator(".
 
 async function useSettingsContext(page: Page, role: "admin" | "operator" = "admin") {
   await page.route("**/platform/modules", (route) => route.fulfill({ json: attendanceSnapshot() }));
-  await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: true, installation: { authMode: "local" }, settings }) }));
-  await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { id: `${role}-1`, role, debugMode: false } }) }));
+  await mockSetupStatus(page, { settings });
+  await mockSession(page, role, { id: `${role}-1`, debugMode: false });
   await page.route("**/admin/setup/progress", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }) }));
   await page.route("**/integrations/capabilities", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: false, configured: false } } }) }));
   await page.route("**/admin/branding", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ settings }) }));
@@ -90,7 +91,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await anomalyReports.getByRole("button", { name: "Save anomaly reports" }).click();
     await expect(card.getByText("Private anomaly report settings saved.")).toBeVisible();
     expect(anomalySettings).toEqual({ enabled: true, channelId: "423456789012345678" });
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
   });
 }
 
@@ -229,7 +230,7 @@ for (const { theme, width } of pairedViews) test(`Attendance sections preserve d
   await expect(page.getByRole("heading", { level: 1, name: "Fingerprint recovery" })).toBeVisible();
   await page.goBack(); await expect(page).toHaveURL(/\/settings\/configuration$/);
   await page.goBack(); await expect(page).toHaveURL(/\/settings\/attendance$/);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("disabled modules and Operator-only sections retain their visibility rules", async ({ page }) => {
@@ -393,19 +394,7 @@ test(`Admin can add, edit, reorder, retire, and restore meeting-weight categorie
 });
   }
 
-async function expectResponsiveFit(page: Page) {
-  const geometry = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-    clipped: Array.from(document.querySelectorAll<HTMLElement>("main button, main a[href], main input, main select, main [role='status'], main [role='alert']")).flatMap((element) => {
-      const style = getComputedStyle(element); const bounds = element.getBoundingClientRect();
-      if (style.display === "none" || style.visibility === "hidden" || bounds.width === 0) return [];
-      return bounds.left < -1 || bounds.right > innerWidth + 1 ? [element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName] : [];
-    }),
-  }));
-  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
-  expect(geometry.clipped).toEqual([]);
-}
+const responsiveFit = { controls: "main button, main a[href], main input, main select, main [role='status'], main [role='alert']" };
 
 for (const { viewport, theme } of pairedViews) {
     test(`all Settings routes conform at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
@@ -440,7 +429,7 @@ for (const { viewport, theme } of pairedViews) {
         if (["/settings/configuration", "/settings/guided-setup"].includes(path)) await openSettingsNavigation(page); await page.getByRole("button", { name: "Modules", exact: true }).click();
         const controls = page.locator("main button:visible, main a.primary-button:visible, main input:not([type='radio']):not([type='checkbox']):visible, main select:visible, main label:has(input[type='radio']:visible), main label:has(input[type='checkbox']:visible)");
         for (const height of await controls.evaluateAll((items) => items.map((item) => item.getBoundingClientRect().height))) expect(height).toBeGreaterThanOrEqual(44);
-        await expectResponsiveFit(page);
+        await expectResponsiveFit(page, responsiveFit);
       }
     });
   }
@@ -483,7 +472,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await discordCard.getByRole("button", { name: "Sync all meetings" }).click();
     await expect(discordCard.getByText(/Discord: 4 updated, 1 queued.*5 active meetings checked/)).toBeVisible();
     expect(discordSyncPage).toBe(3);
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
   });
 }
 
@@ -545,7 +534,7 @@ test("Settings validation, integration states and data dialogs remain explicit a
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(opener).toBeFocused();
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 for (const { viewport, theme } of pairedViews) {
@@ -575,7 +564,7 @@ for (const { viewport, theme } of pairedViews) {
       expect((await copyCallback.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await copyCallback.click();
       await expect(googleCard.getByRole("button", { name: "Copied" })).toBeVisible();
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
     });
   }
 
@@ -605,7 +594,7 @@ for (const { viewport, theme } of pairedViews) {
       await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
       await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
       await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
     });
   }
 
@@ -654,7 +643,7 @@ for (const { viewport, theme } of pairedViews) {
       await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);
       await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
       await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
     });
   }
 
@@ -714,7 +703,7 @@ test("mobile Settings navigation collapses with keyboard access to every categor
   await page.keyboard.press("Escape"); await expect(nav).toBeHidden(); await expect(toggle).toBeFocused();
   await toggle.click(); await nav.getByRole("link", { name: "Access", exact: true }).click();
   await expect(page).toHaveURL(/\/settings\/access$/); await expect(nav).toBeHidden();
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("mobile access edit panel saves once and keeps password validation without writes on open", async ({ page }) => {
@@ -736,7 +725,7 @@ test("mobile access edit panel saves once and keeps password validation without 
   await page.getByLabel("Temporary password", { exact: true }).fill("long-enough-password");
   await page.getByLabel("Confirm temporary password", { exact: true }).fill("different-password");
   await expect(page.locator("#password-confirmation-error")).toContainText("Passwords do not match");
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("Data disclosures retain category-specific destructive confirmation and focus return", async ({ page }) => {
@@ -821,7 +810,7 @@ test("scheduler job disclosures retain complete timestamps and provider-delivery
   await expect(page.getByText(/Job outcomes describe one pass, not delivery to a provider/)).toBeVisible();
   const job = page.locator(".scheduler-job").first(); await expect(job.getByText("Last attempt", { exact: true })).toBeHidden();
   await job.locator("summary").click(); await expect(job.getByText("Last attempt", { exact: true })).toBeVisible();
-  await expect(job.locator("dd")).toHaveCount(2); await expectResponsiveFit(page);
+  await expect(job.locator("dd")).toHaveCount(2); await expectResponsiveFit(page, responsiveFit);
 });
 
 for (const theme of ["light", "dark"] as const) test(`Settings keeps approved compact pages within 320px in ${theme}`, async ({ page }) => {
@@ -832,7 +821,7 @@ for (const theme of ["light", "dark"] as const) test(`Settings keeps approved co
   await page.route("**/admin/kiosks/fingerprint-reset", route => route.fulfill({ json: { resetCommands: [] } }));
   for (const [path] of [...routes, ["/settings/modules"], ["/settings/attendance"], ["/settings/fingerprint-recovery"]]) {
     await page.goto(path); await expect(page.locator("main h1")).toBeVisible();
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
     if (path === "/settings/modules") {
       const row = page.locator(".module-setting-choice").first();
       // Measure both boxes in one layout pass: content above the list can still settle, moving the whole row between
@@ -878,7 +867,7 @@ for (const { viewport, theme } of pairedViews) {
     const label = await dialog.locator(".module-restore-refusal .checkbox-field").boundingBox(); expect(label!.height).toBeGreaterThanOrEqual(44);
     const unchecked = await discard.evaluate((element) => { const style = getComputedStyle(element); return { appearance: style.appearance, width: style.width, height: style.height, radius: style.borderRadius, background: style.backgroundColor }; });
     expect(unchecked.appearance).toBe("none"); expect(parseFloat(unchecked.width)).toBeGreaterThanOrEqual(20); expect(unchecked.width).toBe(unchecked.height); expect(unchecked.radius).not.toBe("0px"); expect(unchecked.background).not.toBe("rgba(0, 0, 0, 0)");
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
     await discard.focus(); await page.keyboard.press("Space"); await expect(discard).toBeChecked();
     const checked = await discard.evaluate((element) => { const probe = document.createElement("span"); probe.style.color = "var(--primary)"; element.parentElement!.append(probe); const primary = getComputedStyle(probe).color; probe.remove(); return { background: getComputedStyle(element).backgroundColor, primary }; });
     expect(checked.background).toBe(checked.primary);
@@ -902,7 +891,7 @@ test("installation restore offers no discard while an included module depends on
   await dialog.locator("input[type='file']").setInputFiles({ name: "other.json", mimeType: "application/json", buffer: Buffer.from("{}") });
   await expect(notice).toHaveCount(0); await expect(dialog.getByRole("button", { name: "Validate and restore", exact: true })).toBeEnabled();
   expect(requests).toHaveLength(1);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("Admin can add a Google email from Access and sees API errors inline", async ({ page }) => {
@@ -925,7 +914,7 @@ test("Admin can add a Google email from Access and sees API errors inline", asyn
   await expect(email).toHaveAttribute("aria-invalid", "true");
   await email.fill(""); await email.press("Enter");
   await expect.poll(() => writes.at(-1)).toEqual({ email: null });
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 const accessUsers = [
@@ -992,7 +981,7 @@ for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, 
   await panel.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => writes.map(({ method, body }) => ({ method, body }))).toEqual([{ method: "PATCH", body: { email: "test.student.b@example.test" } }, { method: "PUT", body: { capabilities: [], revision: 2 } }]);
   await expect(panel.getByRole("status").filter({ hasText: /^Saved$/ })).toBeVisible();
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
   await page.screenshot({ path: test.info().outputPath(`access-edit-${view.width}-${view.theme}.png`), fullPage: true });
 
   // Deactivation asks inline before it writes.
@@ -1002,7 +991,7 @@ for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, 
   await panel.getByRole("button", { name: "Deactivate account", exact: true }).click(); await confirm.click();
   await expect.poll(() => writes.at(-1)?.body).toEqual({ active: false });
   await expect(card.getByRole("status").filter({ hasText: "Test Student B was deactivated and signed out." })).toBeVisible();
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
   await page.screenshot({ path: test.info().outputPath(`access-${view.width}-${view.theme}.png`), fullPage: true });
 });
 
@@ -1031,7 +1020,7 @@ test("integration setup uses status URLs and guidance when the API provides them
   await expect(discord.getByText("Server Members Intent", { exact: true })).toBeVisible();
   await expect(discord.getByText(/Guild Members/)).toHaveCount(0);
   await expect(discord.getByText(/plus the private anomaly report channel if you use one/)).toBeVisible();
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("integration credential fields opt out of sign-in autofill and password managers", async ({ page }) => {
@@ -1100,7 +1089,7 @@ test("configured Google Calendar offers re-authorization and warns when it is re
   await card.getByText("Manage configuration", { exact: true }).click();
   await expect(card.getByRole("status").filter({ hasText: "Google Calendar authorization needs renewing." })).toHaveAttribute("data-tone", "warning");
   await expect(reauthorize).toHaveClass(/primary-button/);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("Edit roster member renders the Active roster member checkbox as a checkbox", async ({ page }) => {
@@ -1159,5 +1148,5 @@ test("saved integration credentials show a saved date and open the form only to 
   await replace.click();
   await expect(resend.getByLabel("Sending API key")).toHaveValue("");
   expect(writes).toEqual([]);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });

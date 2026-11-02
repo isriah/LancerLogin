@@ -48,9 +48,9 @@ export function useReleaseCheck(enabled = true) {
     const stop = visiblePoll(refresh, 30_000, undefined, true);
     return () => { active = false; unsubscribe.forEach((leave) => leave()); window.removeEventListener("storage", onStorage); window.removeEventListener(channelNoticeEvent, changed); stop(); };
   }, [enabled]);
-  return { ...state, channel, check: async (force = false) => {
+  return { ...state, channel, check: async (force = false, refresh = false) => {
     const setting = await readUpdateChannelSetting();
     if (current.current !== setting.channel) { setState({ checking: true, fresh: false }); select(setting.channel); }
-    return releaseCacheForChannel(setting.channel).check(force);
+    return releaseCacheForChannel(setting.channel).check(force, refresh);
   } };
 }

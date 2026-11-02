@@ -1,8 +1,8 @@
+// quick-check: covers apps/api/migrations/**
 import { createServer } from "node:http";
-import { readFile, readdir } from "node:fs/promises";
 import { createHash, createHmac } from "node:crypto";
 import { build } from "esbuild";
-import { Miniflare, convertV4MiniflareOptions } from "miniflare";
+import { createMiniflareD1 } from "./miniflare-d1.mjs";
 
 // A real Worker and D1 behind loopback HTTP lets independent production kiosk
 // processes exercise their ordinary network client without live providers.
@@ -18,10 +18,8 @@ export async function createKioskPollCloud() {
       response.headers.set('x-test-reads',String(reads));response.headers.set('x-test-writes',String(writes));return response;
     }};`, resolveDir: process.cwd() }, bundle: true, write: false, format: "esm", platform: "browser" });
   const secret = "A".repeat(43);
-  const runtime = new Miniflare(convertV4MiniflareOptions({ modules: true, script: bundled.outputFiles[0].text, compatibilityDate: "2026-08-01", d1Databases: ["DB"], bindings: { APP_MODE: "configured", ALLOWED_ORIGIN: "https://example.test", SESSION_KEY: secret, UPDATE_REPOSITORY: "example/installation", FINGERPRINT_VAULT_KEY: Buffer.alloc(32, 7).toString("base64url") } }));
+  const { runtime, database: db } = await createMiniflareD1({ script: bundled.outputFiles[0].text, bindings: { APP_MODE: "configured", ALLOWED_ORIGIN: "https://example.test", SESSION_KEY: secret, UPDATE_REPOSITORY: "example/installation", FINGERPRINT_VAULT_KEY: Buffer.alloc(32, 7).toString("base64url") } });
   try {
-    const db = await runtime.getD1Database("DB");
-    for (const name of (await readdir("apps/api/migrations")).filter(name => name.endsWith(".sql")).sort()) await db.exec((await readFile(`apps/api/migrations/${name}`, "utf8")).replace(/^\s*--.*$/gm, "").replace(/\r?\n/g, " "));
     await db.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-01-01','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-01-01');
       INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');

@@ -3,6 +3,7 @@ import { outreachSnapshot } from "./module-fixtures";
 import { pairedViews } from "./paired-views";
 import { requireOutreachPlugin } from "./outreach-fixtures";
 import { calendarDay, expectCalendarDaySelected, selectCalendarDay } from "./meeting-calendar-fixture";
+import { mockSetupStatus } from "./api-fixtures";
 
 const meeting = { id: "active-meeting", title: "Synthetic planning", startsAt: "2026-09-28T14:00:00Z", endsAt: "2026-09-28T16:30:00Z", attendanceClosesAt: "2026-09-28T17:00:00Z", required: true, notes: "Bring the synthetic project plan.", audienceMode: "all", audienceLabelIds: [] };
 const activity = { id: "synthetic-service", mode: "event", labelIds: [], labels: [], serviceDate: "2026-09-28", teamId: null, title: "Synthetic service day", description: "Sort practice materials", location: "Synthetic library", impactRelevant: true, archived: false, revision: 0, eventStartLocal: null, eventEndLocal: null, eventStartOccurrence: null, eventEndOccurrence: null };
@@ -11,7 +12,7 @@ async function appearance(page: Page, theme: string) {
   await page.clock.install({ time: new Date("2026-09-28T18:00:00Z") });
   await page.addInitScript(value => localStorage.setItem("lancerlogin-theme", value), theme);
   await page.route("**/auth/walkthroughs/*", route => route.fulfill({ json: { progress: { pageId: "dashboard", version: 1, status: "completed", stepId: null } } }));
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Arts Collective", subtitle: "Practice workspace", logoData: "", primaryColor: "#8b2f72", secondaryColor: "#e9b949", appearance: theme, logoBackdrop: "auto", lateScanMinutes: 30 } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Arts Collective", subtitle: "Practice workspace", logoData: "", primaryColor: "#8b2f72", secondaryColor: "#e9b949", appearance: theme, logoBackdrop: "auto", lateScanMinutes: 30 } });
 }
 async function contained(page: Page) { expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); }
 async function sideBySide(left: Locator, right: Locator) { const a = (await left.boundingBox())!; const b = (await right.boundingBox())!; expect(Math.abs(a.y - b.y)).toBeLessThanOrEqual(1); expect(a.x + a.width).toBeLessThanOrEqual(b.x); expect(a.height).toBeGreaterThanOrEqual(44); }

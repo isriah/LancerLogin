@@ -1,25 +1,18 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
+import { expectResponsiveFit, mockSetupStatus } from "./api-fixtures";
 
 async function useReferenceBrand(page: Page) {
-  await page.route("**/setup/status", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      configured: true,
-      installation: { authMode: "local" },
-      settings: {
-        organizationName: "Reference Arts Collective",
-        subtitle: "Shared operations",
-        logoData: "",
-        primaryColor: dashboardConformanceReferences.brand.primary,
-        secondaryColor: dashboardConformanceReferences.brand.secondary,
-        appearance: "dark",
-        logoBackdrop: "auto",
-        lateScanMinutes: 30,
-      },
-    }),
-  }));
+  await mockSetupStatus(page, { settings: {
+    organizationName: "Reference Arts Collective",
+    subtitle: "Shared operations",
+    logoData: "",
+    primaryColor: dashboardConformanceReferences.brand.primary,
+    secondaryColor: dashboardConformanceReferences.brand.secondary,
+    appearance: "dark",
+    logoBackdrop: "auto",
+    lateScanMinutes: 30,
+  } });
 }
 
 for (const viewport of dashboardConformanceReferences.viewports) {
@@ -35,17 +28,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.locator(".app")).toHaveCSS("--primary", dashboardConformanceReferences.brand.primary);
       await expect(page.locator(".app")).toHaveCSS("--secondary", dashboardConformanceReferences.brand.secondary);
 
-      const geometry = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-        clipped: Array.from(document.querySelectorAll<HTMLElement>("button, a[href], input, select, textarea")).flatMap((element) => {
-          const style = getComputedStyle(element); const bounds = element.getBoundingClientRect();
-          if (style.display === "none" || style.visibility === "hidden" || bounds.width === 0 || element.closest(".responsive-table,.table-scroll")) return [];
-          return bounds.left < -1 || bounds.right > innerWidth + 1 ? [element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName] : [];
-        }),
-      }));
-      expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
-      expect(geometry.clipped).toEqual([]);
+      await expectResponsiveFit(page, { controls: "button, a[href], input, select, textarea", scrollers: ".responsive-table,.table-scroll" });
 
       await expect(page.getByRole("switch", { name: "Light mode" })).toHaveCount(0);
       await page.goto("/settings/session");

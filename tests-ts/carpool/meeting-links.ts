@@ -1,7 +1,6 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
 import { createMeetingReferenceAccess } from "../../apps/api/src/attendance-meeting-reference.ts";
 import { carpoolMeetingId } from "@lancerlogin-test/carpool/src/api/carpool-meeting-links.ts";
 import { carpoolRoute, createCarpoolPlan } from "@lancerlogin-test/carpool/src/api/carpool-api.ts";
@@ -9,22 +8,13 @@ import { captureModuleWorkspaceDatabase } from "../../apps/api/src/module-databa
 import { requireModuleWorkspace } from "../../apps/api/src/module-platform.ts";
 import { validateCarpoolBackupTables } from "@lancerlogin-test/carpool/src/api/carpool-backup.ts";
 import { HttpError } from "../../apps/api/src/http-error.ts";
-import type { D1Database, D1Result, D1Statement } from "../../apps/api/src/d1-usage.ts";
+import type { D1Statement } from "../../apps/api/src/d1-usage.ts";
+import { Statement, TestD1Database } from "../fixtures/d1-database.ts";
 
-class Statement implements D1Statement {
-  readonly db: Database; readonly sql: string; readonly values: unknown[];
-  constructor(db: Database, sql: string, values: unknown[] = []) { this.db = db; this.sql = sql; this.values = values; }
-  bind(...values: unknown[]) { return new Statement(this.db, this.sql, values); }
-  result(): D1Result { const native = this.db.sqlite.prepare(this.sql); return /^\s*SELECT\b/i.test(this.sql) ? { results: native.all(...this.values as []), meta: { changes: 0 } } : { success: true, meta: { changes: Number(native.run(...this.values as []).changes) } }; }
-  async first<T>() { return (this.db.sqlite.prepare(this.sql).get(...this.values as []) as T | undefined) ?? null; }
-  async all<T>() { return this.result() as D1Result<T>; }
-  async run() { return this.result(); }
-}
-class Database implements D1Database {
-  readonly sqlite = new DatabaseSync(":memory:"); beforeMutation?: () => void;
+class Database extends TestD1Database {
+  beforeMutation?: () => void;
   constructor() {
-    for (const file of readdirSync("apps/api/migrations").filter((name) => name.endsWith(".sql")).sort()) this.sqlite.exec(readFileSync(`apps/api/migrations/${file}`, "utf8"));
-    this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-10-10','local'),('other','2026-10-10','local');
+    super({ seed: `INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-10-10','local'),('other','2026-10-10','local');
       INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-10-10'),('operator','primary','operator','operator','2026-10-10');
       INSERT INTO platform_module_administration VALUES('primary',0,1); INSERT INTO platform_module_administration_epochs VALUES('primary',0);
@@ -32,11 +22,9 @@ class Database implements D1Database {
       INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete,deletion_cursor) VALUES('primary','attendance',1,1,'enabled',2,1,0),('primary','carpool',1,1,'enabled',1,1,0);
       INSERT INTO platform_module_assignment_epochs VALUES('primary','operator',0); INSERT INTO platform_module_assignment_revisions VALUES('primary','operator',0);
       INSERT INTO platform_module_assignments VALUES('primary','operator','carpool','["carpool.manage"]');
-      INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,required,created_by,created_at) VALUES('meeting-1','primary','Build session','2026-10-10T15:00:00Z','2026-10-10T17:00:00Z',1,'admin','2026-10-10'),('foreign-meeting','other','Protected foreign title','2026-10-10T15:00:00Z','2026-10-10T17:00:00Z',1,'admin','2026-10-10');`);
+      INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,required,created_by,created_at) VALUES('meeting-1','primary','Build session','2026-10-10T15:00:00Z','2026-10-10T17:00:00Z',1,'admin','2026-10-10'),('foreign-meeting','other','Protected foreign title','2026-10-10T15:00:00Z','2026-10-10T17:00:00Z',1,'admin','2026-10-10');` });
   }
-  prepare(sql: string) { return new Statement(this, sql); }
-  async batch(input: D1Statement[]) { const statements = input as Statement[]; if (this.beforeMutation && statements.some((item) => /^(?:UPDATE|INSERT INTO) carpool_plans/.test(item.sql))) { const before = this.beforeMutation; this.beforeMutation = undefined; before(); } this.sqlite.exec("BEGIN IMMEDIATE"); try { const results = statements.map((item) => item.result()); this.sqlite.exec("COMMIT"); return results; } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; } }
-  close() { this.sqlite.close(); }
+  override async batch(input: D1Statement[]) { if (this.beforeMutation && (input as Statement[]).some((item) => /^(?:UPDATE|INSERT INTO) carpool_plans/.test(item.sql))) { const before = this.beforeMutation; this.beforeMutation = undefined; before(); } return super.batch(input); }
 }
 const request = (path: string, method = "GET") => new Request(`https://synthetic.test${path}`, { method });
 const denied = (status: number) => (error: unknown) => error instanceof HttpError && error.status === status;

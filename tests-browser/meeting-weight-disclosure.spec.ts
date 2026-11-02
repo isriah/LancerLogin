@@ -1,10 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences as references } from "../apps/dashboard/src/design-conformance";
 import { discovered } from "./release-discovery";
+import { mockSetupStatus } from "./api-fixtures";
 
 async function context(page: Page) {
   const settings = { organizationName: "Reference Arts Collective", subtitle: "Shared operations", logoData: "", primaryColor: references.brand.primary, secondaryColor: references.brand.secondary, logoBackdrop: "auto", lateScanMinutes: 30 };
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings } }));
+  await mockSetupStatus(page, { settings });
   await page.route("**/admin/branding", (route) => route.fulfill({ json: { settings } }));
   await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "0.19.0" } }));
   await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: "v0.19.0" }) }));

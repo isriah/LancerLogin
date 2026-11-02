@@ -1,13 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
 import { requireOutreachPlugin } from "./outreach-fixtures";
+import { mockSession } from "./api-fixtures";
 
 requireOutreachPlugin();
 
 async function settingsFixture(page: Page, role: "admin" | "operator" = "admin") {
   let settings = { memberValidation: "off", revision: 0 }; const writes: unknown[] = []; let reads = 0;
   await page.route("**/platform/modules", route => route.fulfill({ json: outreachSnapshot() }));
-  await page.route("**/auth/session", route => route.fulfill({ json: { user: { id: "synthetic-staff", role, debugMode: false } } }));
+  await mockSession(page, role, { id: "synthetic-staff", debugMode: false });
   await page.route("**/admin/hours/public-form-settings", route => {
     reads++;
     if (route.request().method() === "PUT") { const value = route.request().postDataJSON(); writes.push(value); settings = { memberValidation: value.memberValidation, revision: settings.revision + 1 }; }

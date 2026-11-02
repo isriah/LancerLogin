@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "modules": [
+    {
+      "id": "visits",
+      "source": "https://github.com/isriah/lancerlogin-visits.git",
+      "commit": "c4412954c49ca4d6244562c8e7cfcad403b24abd"
+    }
+  ]
+}

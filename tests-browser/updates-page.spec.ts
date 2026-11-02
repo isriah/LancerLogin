@@ -1,6 +1,7 @@
 import { expect, test, type Route } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { discovered } from "./release-discovery";
+import { mockSetupStatus } from "./api-fixtures";
 
 test("Updates shows local information while the release feed stalls, then degrades and recovers", async ({ page }) => {
   await page.route("**/admin/update-info", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ releaseVersion: "0.15.0", workflowUrl: "https://github.example.test/actions/workflows/deploy.yml" }) }));
@@ -56,7 +57,7 @@ test("Updates keeps dashboard versions visible across responsive branded themes"
   let installed = "0.21.0";
   await page.route("**/admin/update-info", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ releaseVersion: installed, workflowUrl: "https://github.example.test/actions/workflows/deploy.yml" }) }));
   await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: installed } }));
-  await page.route("**/setup/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: true, installation: { authMode: "local" }, settings: { organizationName: "Reference Arts Collective", subtitle: "Shared operations", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } }) }));
+  await mockSetupStatus(page, { settings: { organizationName: "Reference Arts Collective", subtitle: "Shared operations", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } });
   await page.route("**/admin/kiosks", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, lastSeenAt: new Date().toISOString(), releaseVersion: "0.22.0" }] }) }));
   await page.route("**/admin/kiosks/kiosk-1/commands", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ commands: [{ id: "update-1", type: "install_latest", createdAt: "2026-09-05T12:00:00.000Z", completedAt: "2026-09-05T12:01:00.000Z", success: 1, requestedReleaseVersion: "v0.22.0", releaseVersionBefore: "0.21.0", resolutionStatus: "succeeded", resolvedReleaseVersion: "0.22.0", resolvedAt: "2026-09-05T12:02:00.000Z" }] }) }));
   await page.route("**/admin/releases/latest", (route) => route.fulfill({ json: discovered({ tag_name: "v0.23.0", html_url: "https://github.example.test/releases/v0.23.0" }) }));
@@ -156,6 +157,29 @@ test("release checks share15-minute cache across reloads while local status poll
   await page.clock.runFor(14 * 60_000); expect(releaseReads).toBe(2);
   stall = false; await page.clock.runFor(91_000); await expect.poll(() => releaseReads).toBe(3);
 });
+test("Check for updates asks the server to read GitHub now and shows when GitHub was read", async ({ page }) => {
+  const queries: string[] = [];
+  await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "0.22.0", workflowUrl: "https://github.example.test/deploy" } }));
+  await page.route("**/__lancerlogin-release", (route) => route.fulfill({ json: { releaseVersion: "0.22.0" } }));
+  await page.route("**/admin/kiosks", (route) => route.fulfill({ json: { kiosks: [] } }));
+  await page.route(/\/admin\/releases\/latest(\?.*)?$/, async (route) => {
+    const url = new URL(route.request().url()); queries.push(url.search);
+    const now = await page.evaluate(() => Date.now());
+    // The server answers a forced check within its one-minute floor with the answer it read 20 seconds ago.
+    return route.fulfill({ json: { ...discovered({ tag_name: "v0.23.0" }, now), ...(url.search ? { checkedAgeMs: 20_000 } : {}) } });
+  });
+  await page.goto("/settings/updates");
+  await expect(page.locator(".settings-notice")).toContainText("newer release on this update track");
+  expect(queries).toEqual([""]);
+  await page.getByRole("button", { name: "Check for updates", exact: true }).click();
+  await expect.poll(() => queries).toEqual(["", "?refresh=now"]);
+  const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem("lancerlogin-release-cache-v3:stable") ?? "{}") as { checkedAt?: number; attemptedAt?: number });
+  await expect.poll(async () => { const value = await saved(); return (value.attemptedAt ?? 0) - (value.checkedAt ?? 0); }).toBe(20_000);
+  const { checkedAt } = await saved();
+  const read = await page.evaluate((at) => new Date(at).toLocaleString(), checkedAt!);
+  await expect(page.locator("#release-check-status")).toContainText(`Last successful check ${read}.`);
+});
+
 test("rate-limit cooldown persists on reload and stale data cannot queue an update", async ({ page }) => {
   let limited = false; let releases = 0; let commands = 0;
   await page.route("**/admin/update-info", (route) => route.fulfill({ json: { releaseVersion: "0.22.0", workflowUrl: "https://github.example.test/deploy" } }));

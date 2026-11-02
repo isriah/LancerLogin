@@ -1,7 +1,7 @@
+// quick-check: covers apps/api/migrations/**
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
@@ -18,6 +18,7 @@ import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { bundledModuleRegistry } from "../packages/shared/src/module-platform.ts";
 import { fingerprintVaultBase64, fingerprintVaultEnrollmentId, fingerprintVaultKeyId, sealFingerprintVault, openFingerprintVault } from "../apps/api/src/fingerprint-vault-crypto.ts";
+import { applyCoreMigrations } from "./fixtures/d1-database.ts";
 
 const sessionSecret = "A".repeat(43), vaultSecret = Buffer.alloc(32, 7).toString("base64url");
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("base64url");
@@ -27,7 +28,7 @@ class Database {
   beforeRun?: (sql: string) => void;
   beforeRead?: (sql: string) => void;
   constructor() {
-    for (const file of readdirSync("apps/api/migrations").filter(file => file.endsWith(".sql")).sort()) this.sqlite.exec(readFileSync(join("apps/api/migrations", file), "utf8"));
+    applyCoreMigrations(this.sqlite);
     this.sqlite.exec(`
       INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-01-01','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-01-01'),('operator','primary','operator','operator','2026-01-01');

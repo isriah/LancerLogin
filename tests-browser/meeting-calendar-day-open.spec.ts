@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+import { expectLinkLeftToBrowser, expectOpensRealTab, recordWindowOpen, type NewTabClick } from "./new-tab";
 
 // Synthetic meetings: one alone on September 9, two sharing September 16 and nothing on September 23.
 const meeting = (id: string, title: string, startsAt: string, endsAt: string) => ({ id, title, startsAt, endsAt, attendanceClosesAt: endsAt, required: true, notes: "", audienceMode: "all", audienceLabelIds: [] });
@@ -27,45 +28,23 @@ const openLink = (page: Page, title: string) => page.getByRole("link", { name: `
 const panel = (page: Page) => page.locator(".calendar-selected-day");
 const soloName = "September 9, 2026, 1 meeting, opens meeting Test solo planning";
 
-// A modified or middle click opens the meeting in a new tab or window and leaves the Dashboard where it was.
-// Headless Chromium on Linux now and then drops the tab a trusted modified click asks for, after the page has left the
-// click to the browser (it logs "Message 0 rejected by interface blink.mojom.WidgetHost"). Only when no tab appeared,
-// none was created and the Dashboard stayed put is the same click repeated, up to twice; it must still open exactly
-// one tab at the meeting. The tab only has to reach the meeting's address: loading the whole dev-server app in a
-// background tab is not what this checks, and stalls on a busy runner.
-async function opensElsewhere(page: Page, target: Locator, path: RegExp, options: Parameters<Locator["click"]>[0]) {
-  const context = page.context();
-  const before = context.pages().length;
-  let tab: Page | undefined;
-  for (let attempt = 1; attempt <= 3 && !tab; attempt++) {
-    const opened = context.waitForEvent("page", { timeout: 5_000 }).catch(() => undefined);
-    await target.click(options);
-    tab = await opened;
-    if (!tab) {
-      expect(context.pages(), "a click that opened no tab created no page either").toHaveLength(before);
-      await expect(page).toHaveURL(/\/dashboard$/);
-    }
-  }
-  expect(tab, `${JSON.stringify(options)} opens a new tab`).toBeDefined();
-  expect(context.pages()).toHaveLength(before + 1);
-  await tab!.waitForURL(path, { waitUntil: "commit" });
-  await tab!.close();
-  await expect(page).toHaveURL(/\/dashboard$/);
-}
-const modifiedClicks: Parameters<Locator["click"]>[0][] = [{ modifiers: ["ControlOrMeta"] }, { modifiers: ["Shift"] }, { button: "middle" }];
+// A modified or middle click opens the meeting in a new tab or window and leaves the Dashboard where it was. Each kind
+// of target (a link, a table row) opens one real tab; the other clicks check the app's side without one.
+const modifiedClicks: NewTabClick[] = [{ modifiers: ["ControlOrMeta"] }, { modifiers: ["Shift"] }, { button: "middle" }];
 
 test("desktop one-meeting days and Open meeting are links that open a new tab on modified or middle click", async ({ page }) => {
   await prepare(page, 1280);
   const solo = dayLink(page, soloName);
   await expect(solo).toHaveAttribute("href", "/meetings/synthetic-solo");
-  for (const options of modifiedClicks) await opensElsewhere(page, solo, /\/meetings\/synthetic-solo$/, options);
+  await expectOpensRealTab(page, solo, /\/meetings\/synthetic-solo$/, modifiedClicks[0]);
+  for (const options of modifiedClicks) await expectLinkLeftToBrowser(page, solo, "/meetings/synthetic-solo", options);
   // The day was not chosen by those clicks: today stays the selected day.
   await expect(day(page, "September 2, 2026, 0 meetings")).toHaveAttribute("aria-pressed", "true");
   await expect(solo).not.toHaveAttribute("data-selected", "true");
   await day(page, "September 16, 2026, 2 meetings").click();
   const second = openLink(page, "Test second workshop");
   await expect(second).toHaveAttribute("href", "/meetings/synthetic-second");
-  for (const options of modifiedClicks) await opensElsewhere(page, second, /\/meetings\/synthetic-second$/, options);
+  for (const options of modifiedClicks) await expectLinkLeftToBrowser(page, second, "/meetings/synthetic-second", options);
   await expect(panel(page)).toContainText("Test second workshop");
   // A plain click still navigates in place, without a page load.
   await page.evaluate(() => { (window as Window & { inPlace?: boolean }).inPlace = true; });
@@ -80,8 +59,10 @@ test("meeting table rows open a new tab on Ctrl/Cmd or middle click and in place
   const row = page.getByRole("row", { name: "Open Test solo planning", exact: true });
   await expect(row.getByRole("link", { name: "Test solo planning", exact: true })).toHaveAttribute("href", "/meetings/synthetic-solo");
   const dateCell = row.getByRole("cell").nth(2);
-  for (const options of [{ modifiers: ["ControlOrMeta"] }, { button: "middle" }] as Parameters<Locator["click"]>[0][]) await opensElsewhere(page, dateCell, /\/meetings\/synthetic-solo$/, options);
-  for (const options of modifiedClicks) await opensElsewhere(page, row.getByRole("link", { name: "Test solo planning", exact: true }), /\/meetings\/synthetic-solo$/, options);
+  await expectOpensRealTab(page, dateCell, /\/meetings\/synthetic-solo$/, { button: "middle" });
+  for (const options of [{ modifiers: ["ControlOrMeta"] }, { button: "middle" }] as NewTabClick[]) expect(await recordWindowOpen(page, dateCell, options)).toEqual([["/meetings/synthetic-solo", "_blank", "noopener"]]);
+  // The title link inside the row is left to the browser; the row does not open a second tab for it.
+  for (const options of modifiedClicks) await expectLinkLeftToBrowser(page, row.getByRole("link", { name: "Test solo planning", exact: true }), "/meetings/synthetic-solo", options);
   // The selection checkbox still only selects.
   await row.getByRole("checkbox", { name: "Select Test solo planning" }).click({ modifiers: ["ControlOrMeta"] });
   await expect(page).toHaveURL(/\/dashboard$/);

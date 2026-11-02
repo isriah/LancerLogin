@@ -1,14 +1,14 @@
+// quick-check: covers apps/api/migrations/**
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
 import { createHash } from "node:crypto";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { fingerprintResetGuard } from "../apps/api/src/fingerprint-reset.ts";
 import { fingerprintVaultDigest, fingerprintVaultId, fingerprintVaultKeyId, sealFingerprintVault } from "../apps/api/src/fingerprint-vault-crypto.ts";
 import { bundledModuleRegistry } from "../packages/shared/src/module-platform.ts";
+import { applyCoreMigrations, readCoreMigrations } from "./fixtures/d1-database.ts";
 
 const sessionSecret = "A".repeat(43), vaultSecret = Buffer.alloc(32, 7).toString("base64url");
 const retirement = "0060_retire_fingerprint_review.sql";
@@ -18,7 +18,7 @@ class Database {
   constructor(deferRetirement = false) {
     // A historical fixture must stop at its original schema. Later migrations
     // can depend on retirement's tables or extend the rows seeded below.
-    for (const file of readdirSync("apps/api/migrations").filter(file => file.endsWith(".sql") && (!deferRetirement || file < retirement)).sort()) this.sqlite.exec(readFileSync(join("apps/api/migrations", file), "utf8"));
+    applyCoreMigrations(this.sqlite, readCoreMigrations().filter((file) => !deferRetirement || file.name < retirement));
     this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-01-01','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-01-01'),('operator','primary','operator','operator','2026-01-01');
       INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');
@@ -85,7 +85,7 @@ test("retirement revokes reviewed ciphertext and stripped grants while preservin
     db.sqlite.prepare("INSERT INTO kiosk_fingerprint_vault_templates VALUES(?,'primary',?,?,?,?,?,?,?,?,?,?)").run(binding.fingerprintId, vault, "member", binding.templateDigest, encrypted.ciphertext, encrypted.nonce, "r503-model-1536", "source", "pair-a", enrollmentId, 1); template.fill(0);
   }
   db.sqlite.exec("INSERT INTO kiosk_fingerprint_reset_batches VALUES('old-reset','primary','admin',1,1); INSERT INTO kiosk_fingerprint_reset_commands VALUES('old-command','old-reset','primary','destination','pair-b',1,NULL)");
-  for (const file of readdirSync("apps/api/migrations").filter(file => file.endsWith(".sql") && file >= retirement).sort()) db.sqlite.exec(readFileSync(join("apps/api/migrations", file), "utf8"));
+  applyCoreMigrations(db.sqlite, readCoreMigrations().filter((file) => file.name >= retirement));
   assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_templates").get()?.n, 1);
   assert.equal(db.sqlite.prepare("SELECT enrollment_id FROM kiosk_fingerprint_vault_templates").get()?.enrollment_id, "fresh-enrollment");
   assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_review_manifests").get()?.n, 0);

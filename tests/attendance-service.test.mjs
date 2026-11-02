@@ -8,14 +8,14 @@ const fixedNow = () => "2026-08-30T12:00:00.000Z";
 
 function ready() {
   const service = createAttendanceService({ now: fixedNow });
-  service.addMember(admin, { id: "m-1", externalId: "42", firstName: "Ada", lastName: "Lovelace" });
+  service.addMember(admin, { id: "m-1", externalId: "42", firstName: "Test Student", lastName: "A" });
   service.createMeeting(operator, { id: "meeting-1", title: "Practice", startsAt: "2026-08-30T10:00:00.000Z", endsAt: "2026-08-30T13:00:00.000Z" });
   return service;
 }
 
 test("operator can run attendance but cannot manage roster", () => {
   const service = ready();
-  assert.throws(() => service.addMember(operator, { id: "m-2", externalId: "43", firstName: "Grace", lastName: "Hopper" }), /Forbidden/);
+  assert.throws(() => service.addMember(operator, { id: "m-2", externalId: "43", firstName: "Test Student", lastName: "B" }), /Forbidden/);
   assert.deepEqual(service.recordAttendance(operator, { memberId: "m-1", meetingId: "meeting-1", kioskEventId: "scan-1" }), { duplicate: false, action: "check_in" });
 });
 
@@ -36,7 +36,7 @@ test("corrections and excuses are reasoned and reflected in export", () => {
 
 test("participation start dates omit earlier meetings without deleting their history", () => {
   const service = createAttendanceService({ now: fixedNow });
-  service.addMember(admin, { id: "m-1", externalId: "42", firstName: "Ada", lastName: "Lovelace", attendanceRequiredFrom: "2026-09-01" });
+  service.addMember(admin, { id: "m-1", externalId: "42", firstName: "Test Student", lastName: "A", attendanceRequiredFrom: "2026-09-01" });
   service.createMeeting(operator, { id: "meeting-1", title: "Archived practice", startsAt: "2026-08-30T10:00:00.000Z", endsAt: "2026-08-30T13:00:00.000Z" });
   assert.equal(service.attendanceFor("meeting-1")[0].disposition, "not_required");
   assert.doesNotMatch(service.exportCsv(operator), /Archived practice/);

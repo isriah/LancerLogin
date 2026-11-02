@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
+import { mockSetupStatus } from "./api-fixtures";
 
 requireCarpoolPlugin();
 
@@ -11,7 +12,7 @@ async function setup(page: Page, fail = false, configured = true, running = fals
   let lookup: any = { inputKey: "initial", state: configured ? running ? "running" : "queued" : "unconfigured", remaining: 10 }; let calls = 0; let contextReads = 0; let release!: () => void; const pending = new Promise<void>(resolve => { release = resolve; });
   let releaseRetry!: () => void; const retryPending = new Promise<void>(resolve => { releaseRetry = resolve; });
   const detail = () => ({ plan, people, assignments: [], unresolved: [] });
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Team", subtitle: "Review", logoData: null, primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30 } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Team", subtitle: "Review", logoData: null, primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30 } });
   await page.route("**/platform/modules", route => route.fulfill({ json: carpoolSnapshot() }));
   await page.route(/\/admin\/carpool\/context(?:\?.*)?$/, route => { contextReads++; if (running && contextReads === 3) lookup = { ...lookup, state: "queued" }; return route.fulfill({ json: { plans: [plan], members: [], importProfiles: [], geocodingConfigured: configured, locationLookup: lookup, detail: detail() } }); });
   await page.route("**/admin/carpool/plans/locations/locations/resolve", async route => {

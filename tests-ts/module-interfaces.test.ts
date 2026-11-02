@@ -1,3 +1,4 @@
+// quick-check: covers tests/fixtures/module-plugins/**
 // Cross-module interfaces: manifest validation, required uses at composition and enablement, handler binding and call bounds.
 // The Worker path, grants and lifecycle run end to end in module-interface-worker.test.ts.
 import test from "node:test";

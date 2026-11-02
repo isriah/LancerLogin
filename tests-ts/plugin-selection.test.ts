@@ -1,8 +1,9 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
@@ -10,11 +11,12 @@ import { latestUpdate, recordUpdateBackup, startWebUpdate } from "../apps/api/sr
 import { clearPluginReleaseCache, commitPluginChange, freshUntil, lookupPluginRelease, newestTrackRelease, parseAllowlist, pendingChanges, pluginManagementState, pluginVersionInfo, releaseIndexTtlMs, reauthenticationWindowMs, reviewPluginChange, selectionCredentialState, sourceAllowed, type InstalledPlugins } from "../apps/api/src/plugin-selection.ts";
 import { resetCredentialObservations } from "../apps/api/src/github-credential.ts";
 import { parseSelectionFile, serializeSelection } from "../packages/shared/src/module-selection.ts";
+import { applyCoreMigrations } from "./fixtures/d1-database.ts";
 
 class D1 {
   sqlite = new DatabaseSync(":memory:");
   constructor() {
-    for (const file of readdirSync("apps/api/migrations").sort()) this.sqlite.exec(readFileSync(join("apps/api/migrations", file), "utf8"));
+    applyCoreMigrations(this.sqlite);
     this.sqlite.exec("INSERT INTO installations (id,created_at,auth_mode) VALUES ('primary','2026-01-01','local'); INSERT INTO users (id,installation_id,local_username,role,created_at) VALUES ('admin','primary','admin','admin','2026-01-01'), ('operator','primary','operator','operator','2026-01-01'); INSERT INTO organization_settings (installation_id,time_zone) VALUES ('primary','UTC');");
   }
   prepare(sql: string) {

@@ -1,3 +1,4 @@
+// quick-check: covers apps/kiosk/src/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -8,6 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { checkKioskArchiveModes, kioskArchitectures, packageKioskArtifacts, smokeKioskDirectory, verifyKioskArtifacts, writeKioskArchive } from "../scripts/package-kiosk.mjs";
+import { testJobs } from "../scripts/run-tests.mjs";
 import { findTar, requireTool, toolSkip } from "./fixtures/host-tools.mjs";
 
 // The test's own tar calls use a tar that handles absolute host paths; scripts/package-kiosk.mjs picks its own (tarCommand).
@@ -357,7 +359,8 @@ test("release publication requires shared artifact validation after exact-commit
   assert.match(publisher, /linux_verified_artifacts_required/);
   const manifest = JSON.parse(await readFile("package.json", "utf8"));
   assert.match(manifest.scripts["test:kiosk"], /tests\/kiosk-artifacts\.test\.mjs/);
-  assert.match(manifest.scripts.test, /tests\/\*\*\/\*\.test\.mjs/);
+  assert.equal(manifest.scripts.test, "node scripts/run-tests.mjs");
+  assert.ok(testJobs().some(({ args }) => args.includes("tests/**/*.test.mjs")));
 });
 
 

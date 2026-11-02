@@ -136,10 +136,15 @@
       "area": "Kiosks and fingerprints",
       "seconds": 1
     },
+    "kiosk-maintenance-touch-workflow.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 77
+    },
     "kiosk-maintenance-touch.spec.ts": {
       "group": "core",
       "area": "Kiosks and fingerprints",
-      "seconds": 391
+      "seconds": 77
     },
     "kiosk-operator-presence.spec.ts": {
       "group": "core",

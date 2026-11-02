@@ -2,6 +2,7 @@ import { expect,test,type Locator, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { attendanceSnapshot } from "./module-fixtures";
 import { pairedViews } from "./paired-views";
+import { expectResponsiveFit, mockSession, mockSetupStatus } from "./api-fixtures";
 
 type Role="admin"|"operator";
 
@@ -70,8 +71,8 @@ async function useReferenceContext(page: Page,role: Role="admin",debugMode=false
     { id: "class-report",ownerUserId: "admin-1",scope: "shared",name: "Class attendance",definition: structuredClone(defaultReportDefinition),revision: 1,createdAt: "2026-09-01T00:00:00Z",updatedAt: "2026-09-01T00:00:00Z",warnings: [],errors: [] },
     { id: "dates-report",ownerUserId: "admin-1",scope: "personal",name: "Attendance dates",definition: { ...structuredClone(defaultReportDefinition),columns: [{ key: "core.member.name" },{ key: "attendance.detail.absent-dates" }],sort: { column: { key: "core.member.name" },direction: "asc" as const } },revision: 1,createdAt: "2026-09-02T00:00:00Z",updatedAt: "2026-09-02T00:00:00Z",warnings: [],errors: [] },
   ];
-  await page.route("**/setup/status",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ configured: true,installation: { authMode: "local" },settings: referenceSettings }) }));
-  await page.route("**/auth/session",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ user: { role } }) }));
+  await mockSetupStatus(page, { settings: referenceSettings });
+  await mockSession(page, role);
   if(debugMode) await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode","true"));
   await page.route("**/platform/modules",(route) => route.fulfill({ json: attendanceSnapshot() }));
   await page.route("**/integrations/capabilities",(route) => route.fulfill({ status: 200,contentType: "application/json",body: JSON.stringify({ integrations: { google: { enabled: true,configured: true },resend: { enabled: false,configured: false },discord: { enabled: true,configured: true } } }) }));
@@ -108,19 +109,7 @@ async function useReferenceContext(page: Page,role: Role="admin",debugMode=false
   for(const path of ["report.csv","report-detail.csv"]) await page.route(`**/exports/${path}`,async (route) => route.fulfill({ status: 200,headers: { "content-type": "text/csv","content-disposition": `attachment; filename=${path}` },body: "Member,Absent dates\nAvery Stone,2026-09-01\n" }));
 }
 
-async function expectResponsiveFit(page: Page) {
-  const geometry=await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-    clipped: Array.from(document.querySelectorAll<HTMLElement>("main button, main a[href], main input, main select, main textarea, main [role='status']")).flatMap((element) => {
-      const style=getComputedStyle(element); const bounds=element.getBoundingClientRect();
-      if(style.display==="none"||style.visibility==="hidden"||bounds.width===0||element.closest(".report-tabs,.report-table,.report-table-data,.roster-table-scroll,.member-history-scroll,.table-scroll")) return [];
-      return bounds.left<-1||bounds.right>innerWidth+1? [element.getAttribute("aria-label")||element.textContent?.trim()||element.tagName]:[];
-    }),
-  }));
-  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
-  expect(geometry.clipped).toEqual([]);
-}
+const responsiveFit = { controls: "main button, main a[href], main input, main select, main textarea, main [role='status']", scrollers: ".report-tabs,.report-table,.report-table-data,.roster-table-scroll,.member-history-scroll,.table-scroll" };
 
 test("roster filters share one desktop row and the Show pill has its filter icon", async ({ page }) => {
   await useReferenceContext(page);
@@ -130,7 +119,7 @@ test("roster filters share one desktop row and the Show pill has its filter icon
     await expect(page.locator(".roster-filter-icon")).toBeVisible();
     const fields = await Promise.all(["Search roster", "Show", "Label"].map(name => (name === "Search roster" ? page.getByRole("searchbox", { name, exact: true }) : page.getByRole("combobox", { name, exact: true })).boundingBox()));
     if (width >= 960) { expect(fields[0]!.y).toBe(fields[1]!.y); expect(fields[0]!.y).toBe(fields[2]!.y); }
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
     await page.screenshot({ path: test.info().outputPath(`roster-filters-${width}.png`), fullPage: false });
   }
 });
@@ -154,7 +143,7 @@ test("Show Re-enroll suggested lists only members whose fingerprint should be re
   await expect(page.locator(".roster-directory .panel-heading p")).toHaveText("1 shown");
   await show.selectOption("active");
   await expect(show).toHaveValue("active");
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("attendance trend dates and values remain readable in contained scrollers", async ({ page }) => {
@@ -265,7 +254,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       failAttendance=false;
       await retry.click();
       await expect(retry).toHaveCount(0);
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
     });
   }
 }
@@ -322,7 +311,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       expect((await reportingPeriod.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await reportingPeriod.focus();
       expect(await reportingPeriod.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
       {
         await page.screenshot({ path: testInfo.outputPath("reports-dark-mobile.png"),fullPage: true });
         await testInfo.attach("Reports dark mobile",{ path: testInfo.outputPath("reports-dark-mobile.png"),contentType: "image/png" });
@@ -334,7 +323,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.getByLabel("Report name")).toHaveCount(0);
       await expect(page.getByRole("button",{ name: "Add column",exact: true })).toBeVisible();
       await expect(page.getByRole("table", { name: /Report results/ })).toContainText("Avery Stone");
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
       {
         await page.screenshot({ path: testInfo.outputPath("saved-report-read-only-dark-mobile.png"),fullPage: true });
         await testInfo.attach("Saved report read-only dark mobile",{ path: testInfo.outputPath("saved-report-read-only-dark-mobile.png"),contentType: "image/png" });
@@ -354,7 +343,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       expect(checkboxStyle.width).toBeGreaterThanOrEqual(20);
       expect(checkboxStyle.height).toBeGreaterThanOrEqual(20);
       expect(checkboxStyle.border).toBe("solid");
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
       {
         await page.screenshot({ path: testInfo.outputPath("report-builder-dark-mobile.png"),fullPage: true });
         await testInfo.attach("Report builder dark mobile",{ path: testInfo.outputPath("report-builder-dark-mobile.png"),contentType: "image/png" });
@@ -378,7 +367,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await expect(page.getByText("Inactive",{ exact: true })).toBeVisible();
       await expect(page.getByText("Not linked",{ exact: true })).toBeVisible();
       await expect(page.getByRole("button",{ name: "Add member" })).toBeVisible();
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
     });
   }
 }
@@ -401,7 +390,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await page.getByRole("button",{ name: "Preview removal" }).click();
       await expectLabelButtonTheme(page,"Apply attendance policy","primary");
       await expectLabelButtonTheme(page,"Back","secondary");
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
       if(viewport.width===390&&theme==="dark") await page.screenshot({ path: testInfo.outputPath("attendance-settings-dark-mobile.png"),fullPage: true });
       await page.goto("/roster");
       await openLabelImport(page);
@@ -420,7 +409,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await page.getByRole("button",{ name: "Preview CSV import" }).click();
       await expectLabelButtonTheme(page,"Apply label changes","primary");
       await expectLabelButtonTheme(page,"Back","secondary");
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
       if(viewport.width===390&&theme==="dark") await page.screenshot({ path: testInfo.outputPath("attendance-label-actions-dark-mobile.png"),fullPage: true });
     });
   }
@@ -435,7 +424,7 @@ for (const { viewport, theme } of pairedViews) {
       await page.goto("/roster/A-101");
       await expect(page.getByText("Mean anomalous time",{ exact: true })).toBeVisible();
       await expect(page.getByText("15 minutes",{ exact: true })).toBeVisible();
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
     });
   }
 
@@ -470,7 +459,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       expect(popupTheme.border).toBe(popupTheme.expectedBorder);
       expect(popupTheme.color).toBe(popupTheme.expectedColor);
       expect(popupTheme.background).not.toBe("rgba(0, 0, 0, 0)");
-      await expectResponsiveFit(page);
+      await expectResponsiveFit(page, responsiveFit);
     });
   }
 }
@@ -578,7 +567,7 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await expect(page.getByRole("button",{ name: "Absent dates column options" })).toBeVisible();
   await expect(page.getByRole("button",{ name: "Add column",exact: true })).toBeVisible();
   await expect(page.locator(".report-settings-summary")).toContainText("Member, Absent dates");
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
   await page.getByRole("button",{ name: "Edit",exact: true }).click();
   await expect(page.getByLabel("Report name")).toHaveValue("Attendance dates");
   await expect(page.getByRole("button",{ name: "Add column",exact: true })).toBeVisible();
@@ -662,7 +651,7 @@ test(`attendance requirement alerts use readable warning pills at ${viewport.wid
   await member.focus();
   await expect(member).toBeFocused();
   expect(await member.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe("none");
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
   await alerts.screenshot({ path: testInfo.outputPath(`requirement-pill-${viewport.width}-${theme}.png`) });
   expect(reportRequests).toBeGreaterThan(0);
 });
@@ -693,7 +682,7 @@ test("Admin member and import dialogs contain focus, report errors, and return f
   await page.keyboard.press("Escape");
   await expect(addDialog).toHaveCount(0);
   await expect(page.getByRole("button",{ name: "Import",exact: true })).toBeFocused();
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 
   await page.getByRole("button",{ name: "Edit Avery Stone",exact: true }).first().click();
   const editDialog=page.getByRole("dialog",{ name: "Edit roster member" });
@@ -782,7 +771,7 @@ test("roster import loads CSV files and previews tab-separated spreadsheet rows"
   await dialog.getByRole("button",{ name: "Preview roster" }).click();
   await expect(dialog.getByRole("table",{ name: "Processed roster import" })).toContainText('Grace, "Amazing" Hopper');
   await expect(dialog.getByRole("button",{ name: "Back to one member" })).toHaveCount(0);
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
   await dialog.getByRole("button",{ name: "Close roster import" }).click();
   await openRosterImport(page);
   const paste=dialog.getByLabel("Roster CSV or spreadsheet rows");
@@ -841,7 +830,7 @@ test("roster import explains the CSV format, downloads a template, and maps frie
   await expect(preview).toContainText("Test Student B");
   await expect(dialog.getByText("Recognised columns: Member ID, First name, Last name",{ exact: true })).toBeVisible();
   await expect(dialog.getByRole("status")).toContainText("Ignored columns: Grade");
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("roster import back action follows the secondary theme at desktop and mobile sizes",async ({ page },testInfo) => {
@@ -860,7 +849,7 @@ test("roster import back action follows the secondary theme at desktop and mobil
     const chooseFile=dialog.getByRole("button",{ name: "Choose CSV file" });
     expect((await chooseFile.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await page.screenshot({ path: testInfo.outputPath(`roster-import-${width}-${theme}.png`),fullPage: true });
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
     await dialog.getByRole("button",{ name: "Close roster import" }).click();
   }
 });
@@ -960,7 +949,7 @@ test("Roster bulk edit opens as a right-hand sidebar that stays in view on deskt
   await expect(sidebar.getByLabel("Effective date",{ exact: true })).toHaveCount(0);
   await sidebar.getByRole("button",{ name: "Change effective date" }).click();
   await expect(sidebar.getByLabel("Effective date",{ exact: true })).toBeVisible();
-  await expectResponsiveFit(page);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("Roster quick labels, CSV defaults, and bulk selection preview changes before applying",async ({ page }) => {
@@ -1022,7 +1011,8 @@ test("Roster quick labels, CSV defaults, and bulk selection preview changes befo
   await page.getByLabel("CSV contents").fill("memberId,label\nA-101,Mentor");
   await page.getByRole("button",{ name: "Preview CSV import" }).click();
   await expect(page.getByRole("heading",{ name: "Review dated label changes" })).toBeVisible();
-  expect(labelRequests).toContainEqual([{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "" }]);
+  // The member editor already sent this same change, so only the latest request shows the CSV preview's defaults.
+  expect(labelRequests.at(-1)).toEqual([{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "" }]);
   await page.getByRole("button",{ name: "Back" }).click();
   await page.getByRole("button",{ name: "Close label import" }).click();
   await page.locator(".roster-filters label").filter({ hasText: /^Show/ }).locator("select").selectOption("all");
@@ -1048,8 +1038,9 @@ test("Roster quick labels, CSV defaults, and bulk selection preview changes befo
   await expect(statusPreview).toContainText("Morgan Diaz");
   await expect(statusPreview).toContainText("No change, already inactive");
   await page.getByRole("button",{ name: "Apply to 1 member" }).click();
-  expect(statusApplied).toBe(true);
+  // Read what the routes received only after the page shows their answers: a click returns before its request is sent.
   await expect(page.getByRole("status").filter({ hasText: "1 member deactivated." })).toBeVisible();
+  expect(statusApplied).toBe(true);
   await expect(bulkBar).toContainText("Tick members in the list to edit them together.");
   await page.getByRole("checkbox",{ name: "Select all shown members" }).check();
   await bulkBar.getByRole("button",{ name: "Edit",exact: true }).click();
@@ -1058,9 +1049,9 @@ test("Roster quick labels, CSV defaults, and bulk selection preview changes befo
   await expect(bulkBar.getByRole("button",{ name: "Preview",exact: true })).toBeDisabled();
   await bulkBar.getByRole("combobox",{ name: "Label" }).selectOption("mentor");
   await bulkBar.getByRole("button",{ name: "Preview",exact: true }).click();
-  expect(labelRequests).toContainEqual([{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "" },{ memberId: "A-102",label: "Mentor",action: "add",effectiveDate: "" }]);
   await expect(page.getByRole("region",{ name: "Bulk change preview" })).toContainText("Add Mentor to 2 members, effective");
-  await expectResponsiveFit(page);
+  expect(labelRequests.at(-1)).toEqual([{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "" },{ memberId: "A-102",label: "Mentor",action: "add",effectiveDate: "" }]);
+  await expectResponsiveFit(page, responsiveFit);
 });
 
 test("member labels are edited inside the member editor and Debug mode controls history",async ({ page }) => {
@@ -1173,7 +1164,7 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     await expect(page.getByRole("heading",{ name: "Review Discord role changes" })).toBeVisible();
     await expect(page.getByText("Unpaired · 222222222222222222")).toBeVisible();
     await expectLabelButtonTheme(page,"Confirm full-server sync","primary");
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
     await page.getByRole("button",{ name: "Confirm full-server sync" }).click();
     expect(applied).toEqual({ previewIds: ["preview-1"] });
     if(view.width<800) expect(await table.evaluate((element) => getComputedStyle(element.querySelector("thead")!).position)).toBe("absolute");
@@ -1207,7 +1198,7 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     await page.keyboard.press("Escape");
     await expect(page.getByRole("button",{ name: "Sync to Discord" })).toHaveCount(0);
     await expect(page.getByRole("button",{ name: "Unlink" })).toHaveCount(0);
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
   });
 
   test(`two-way Discord sync starts only after every mismatch is decided and the attendance warning is acknowledged at ${view.width}px in ${view.theme} mode`,async ({ page }) => {
@@ -1263,7 +1254,7 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     await expect(confirm).toBeEnabled();
     const [background,primary]=await confirm.evaluate((element) => { const probe=document.createElement("span"); probe.style.background="var(--primary)"; element.closest(".app")!.append(probe); const expected=getComputedStyle(probe).backgroundColor; probe.remove(); return [getComputedStyle(element).backgroundColor,expected]; });
     expect(background).toBe(primary);
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
     if(view.width<800) await expect(card.locator("thead")).toBeHidden();
     await confirm.click();
     await expect(card.getByRole("status")).toHaveText("Two-way sync is on. Changes are applied, and Discord is checked every 5 minutes.");
@@ -1284,7 +1275,7 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     if(view.width>=800) { expect(after.slot!.left-after.picker!.right).toBeGreaterThanOrEqual(6); expect(after.slot!.left-after.picker!.right).toBeLessThanOrEqual(10); }
     expect(after.moreIsLast).toBe(true);
     expect(after.picker!.right).toBeLessThanOrEqual(after.cellRight+1); expect(after.slot!.right).toBeLessThanOrEqual(after.cellRight+1);
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
   });
 
   test(`a two-way label paused after a restore resumes only through review, or switches to Dashboard to Discord, at ${view.width}px in ${view.theme} mode`,async ({ page }) => {
@@ -1311,7 +1302,7 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     await expect(banner).toContainText("FRC 321: Two-way sync paused after a restore. Review differences to turn it back on.");
     await expect(page.getByRole("button",{ name: "Sync to Discord",exact: true })).toHaveCount(0);
     await expect(page.getByRole("button",{ name: "Sync all linked roles" })).toBeDisabled();
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
 
     // Review differences opens the reconciliation card; confirming turns two-way sync back on.
     await page.getByRole("button",{ name: "Review differences",exact: true }).click();
@@ -1609,7 +1600,7 @@ for (const { theme, width } of pairedViews) {
     }
     expect(editBounds!.width).toBeGreaterThanOrEqual(44);
     expect(editBounds!.height).toBeGreaterThanOrEqual(44);
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
     await page.screenshot({ path: test.info().outputPath("roster-long-identity.png"), fullPage: true });
     await page.goto("/reports");
     const leaderboard = page.getByRole("table", { name: "Attendance leaderboard", exact: true });
@@ -1623,7 +1614,7 @@ for (const { theme, width } of pairedViews) {
     expect(await cells.nth(1).evaluate(element => getComputedStyle(element, "::before").content)).toMatch(/^(none|normal|"")$/);
     await expect(leaderboard).not.toContainText("A-101");
     await expect(leaderboard.getByRole("link", { name: "Avery Stone", exact: true })).toHaveAttribute("href", "/roster/A-101");
-    await expectResponsiveFit(page);
+    await expectResponsiveFit(page, responsiveFit);
     await page.screenshot({ path: test.info().outputPath("leaderboard-compact.png"), fullPage: true });
   });
 }

@@ -1,53 +1,23 @@
-// Real SQLite database with every Core migration, for backup and restore tests through the Worker.
-import { DatabaseSync } from "node:sqlite";
-import { readdirSync, readFileSync } from "node:fs";
+// quick-check: covers apps/api/migrations/**
+// Real SQLite database with every Core migration, the d1_migrations ledger and a seeded installation, for backup and restore
+// tests through the Worker. The database is the canonical TestD1Database (d1-database.ts).
 import { createSessionCodec } from "../../apps/api/src/runtime-security.ts";
+import { InstallationSeed, TestD1Database, attendanceWithOutreachDisabled } from "./d1-database.ts";
 
-const migrations = new URL("../../apps/api/migrations/", import.meta.url);
 export const sessionSecret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-export class BackupDatabase {
-  readonly raw = new DatabaseSync(":memory:");
+/** The installation backup tests start from: two users, one member, Attendance set up and Outreach disabled. */
+export const backupSeed = () => new InstallationSeed("2026-01-01T00:00:00.000Z", { rowsCreatedAt: "2026-01-01" })
+  .users("admin", "operator").members({ id: "member", externalId: "001", firstName: "Synthetic", lastName: "Member" })
+  .organization().hoursEntrySettings().modules(...attendanceWithOutreachDisabled(true))
+  .setupProgress("attendance", 2, ["rules", "meeting", "input"], "2026-01-01T00:00:00.000Z", "admin");
+
+export class BackupDatabase extends TestD1Database {
   batches = 0;
-  constructor() {
-    this.raw.exec("PRAGMA foreign_keys=ON");
-    const applied = readdirSync(migrations).filter((name) => name.endsWith(".sql")).sort();
-    for (const file of applied) this.raw.exec(readFileSync(new URL(file, migrations), "utf8"));
-    // D1 records every applied Core migration in d1_migrations; module reconciliation reads it to accept adopted baselines.
-    this.raw.exec("CREATE TABLE d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
-    const record = this.raw.prepare("INSERT INTO d1_migrations(name) VALUES (?)");
-    for (const file of applied) record.run(file);
-    this.raw.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES ('primary','2026-01-01T00:00:00.000Z','local');
-      INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('admin','primary','admin','admin','2026-01-01'),('operator','primary','operator','operator','2026-01-01');
-      INSERT INTO members(id,installation_id,external_id,first_name,last_name,created_at,attendance_required_from) VALUES ('member','primary','001','Synthetic','Member','2026-01-01','2026-01-01');
-      INSERT INTO organization_settings(installation_id,time_zone) VALUES ('primary','UTC');
-      INSERT INTO hours_entry_settings(installation_id) VALUES ('primary');
-      INSERT INTO platform_module_administration(installation_id,revision,selection_completed) VALUES ('primary',0,1);
-      INSERT INTO platform_module_administration_epochs(installation_id,revision) VALUES ('primary',0);
-      INSERT INTO platform_module_assignment_epochs(installation_id,user_id,revision) SELECT installation_id,id,0 FROM users;
-      INSERT INTO platform_module_assignment_revisions(installation_id,user_id,revision) SELECT installation_id,id,0 FROM users;
-      INSERT INTO platform_module_epochs(installation_id,module_id,generation) VALUES ('primary','attendance',1),('primary','hour-tracking',1);
-      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete) VALUES ('primary','attendance',1,1,'enabled',2,1),('primary','hour-tracking',1,1,'disabled',1,0);
-      INSERT INTO platform_module_setup_progress(installation_id,module_id,step_id,setup_version,outcome,completed_at,completed_by) SELECT 'primary','attendance',value,2,'completed','2026-01-01T00:00:00.000Z','admin' FROM json_each('["rules","meeting","input"]');`);
-  }
-  prepare(sql: string) {
-    let values: unknown[] = []; const raw = this.raw;
-    const statement = {
-      bind(...args: unknown[]) { values = args; return statement; },
-      async first() { return raw.prepare(sql).get(...values as never[]) ?? null; },
-      async all() { return { results: raw.prepare(sql).all(...values as never[]) }; },
-      async run() { const result = raw.prepare(sql).run(...values as never[]); return { success: true, meta: { changes: Number(result.changes) } }; },
-      // In a batch, as in D1, a read returns its rows (module-scoped reads run as guarded batches). It runs synchronously so
-      // concurrent batches never interleave inside one transaction.
-      batchRun() { if (/^\s*(?:SELECT|WITH)\b/i.test(sql)) return { success: true, results: raw.prepare(sql).all(...values as never[]), meta: { changes: 0 } }; const result = raw.prepare(sql).run(...values as never[]); return { success: true, meta: { changes: Number(result.changes) } }; },
-    };
-    return statement;
-  }
-  async batch(statements: { batchRun(): unknown }[]) {
-    this.batches += 1; this.raw.exec("BEGIN");
-    try { const results = []; for (const statement of statements) results.push(statement.batchRun()); this.raw.exec("COMMIT"); return results; }
-    catch (error) { this.raw.exec("ROLLBACK"); throw error; }
-  }
+  // D1 records every applied Core migration in d1_migrations; module reconciliation reads it to accept adopted baselines.
+  constructor() { super({ recordMigrations: true, seed: backupSeed() }); }
+  get raw() { return this.sqlite; }
+  override async batch(statements: Parameters<TestD1Database["batch"]>[0]) { this.batches += 1; return super.batch(statements); }
   rows<T = Record<string, unknown>>(sql: string, ...values: unknown[]) { return this.raw.prepare(sql).all(...values as never[]).map((row) => ({ ...row })) as T[]; }
   count(sql: string, ...values: unknown[]) { return Number((this.raw.prepare(sql).get(...values as never[]) as { n: number }).n); }
 }

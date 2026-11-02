@@ -1,3 +1,4 @@
+// quick-check: covers .node-version .github/workflows/**
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";

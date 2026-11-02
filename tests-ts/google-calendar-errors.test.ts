@@ -1,46 +1,23 @@
+// quick-check: covers apps/api/migrations/**
 // Google Calendar refusals through the real Worker and real SQLite: Admin routes report a specific, handled error instead of a
 // generic 500, 403 causes are told apart from rate limiting, and the operation queue never retries a refusal that needs an Admin.
 // Every person, calendar and credential here is synthetic.
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
-import type { D1Database, D1Result, D1Statement } from "../apps/api/src/d1-usage.ts";
+import type { D1Database } from "../apps/api/src/d1-usage.ts";
+import { TestD1Database } from "./fixtures/d1-database.ts";
 
-class Statement implements D1Statement {
-  readonly db: Database; readonly sql: string; readonly values: unknown[];
-  constructor(db: Database, sql: string, values: unknown[] = []) { this.db = db; this.sql = sql; this.values = values; }
-  bind(...values: unknown[]) { return new Statement(this.db, this.sql, values); }
-  result(): D1Result {
-    const native = this.db.sqlite.prepare(this.sql);
-    return /^\s*SELECT\b/i.test(this.sql) || /\bRETURNING\b/i.test(this.sql)
-      ? { results: native.all(...this.values as []), meta: { changes: 0 } }
-      : { success: true, meta: { changes: Number(native.run(...this.values as []).changes) } };
-  }
-  async first<T>() { return (this.result().results?.[0] as T | undefined) ?? null; }
-  async all<T>() { return this.result() as D1Result<T>; }
-  async run() { return this.result(); }
-}
-class Database implements D1Database {
-  readonly sqlite = new DatabaseSync(":memory:");
+class Database extends TestD1Database {
   constructor() {
-    for (const file of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql")).sort()) this.sqlite.exec(readFileSync(`apps/api/migrations/${file}`, "utf8"));
-    this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode,google_calendar_enabled) VALUES('primary','2026-10-18','both',1);
+    super({ seed: `INSERT INTO installations(id,created_at,auth_mode,google_calendar_enabled) VALUES('primary','2026-10-18','both',1);
       INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');
       INSERT INTO users(id,installation_id,email,local_username,role,created_at) VALUES('admin','primary','test.admin.a@example.test','admin','admin','2026-10-18'),('operator','primary','test.operator.b@example.test',NULL,'operator','2026-10-18');
       INSERT INTO platform_module_administration VALUES('primary',0,1); INSERT INTO platform_module_administration_epochs VALUES('primary',0);
       INSERT INTO platform_module_epochs VALUES('primary','attendance',1);
-      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete,deletion_cursor) VALUES('primary','attendance',1,1,'enabled',2,1,0);`);
-  }
-  prepare(sql: string) { return new Statement(this, sql); }
-  async batch(input: D1Statement[]) {
-    const statements = input as Statement[];
-    this.sqlite.exec("BEGIN IMMEDIATE");
-    try { const results = statements.map(item => item.result()); this.sqlite.exec("COMMIT"); return results; }
-    catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
+      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete,deletion_cursor) VALUES('primary','attendance',1,1,'enabled',2,1,0);` });
   }
   value<T>(sql: string, ...values: unknown[]) { return this.sqlite.prepare(sql).get(...values as []) as T | undefined; }
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createKioskPollClient, createKioskPollScheduler } from "../apps/kiosk/src/kiosk-poll.mjs";
+import { createKioskPollClient, createKioskPollScheduler, pollIntervals } from "../apps/kiosk/src/kiosk-poll.mjs";
 import { createFingerprintVault } from "../apps/kiosk/src/fingerprint-vault.mjs";
 import { createMappingStore } from "../apps/kiosk/src/mapping-store.mjs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -106,6 +106,16 @@ test("scheduler keeps 5/15/60 second cadences and command transport continues du
   assert.equal(commands.length, 13); assert.equal(configurations.length, 2); assert.equal(fingerprints.length, 5);
   assert.deepEqual(calls.filter(value => value.fingerprints).map(value => value.time), [0, 15000, 35000, 45000, 60000]);
   assert.deepEqual(calls.filter(value => value.configuration).map(value => value.time), [0, 60000]);
+});
+
+test("production intervals stay 5/15/60/60 seconds and a shortened set keeps the same cadence ratios", async () => {
+  assert.deepEqual(pollIntervals, { commandsMs: 5000, fingerprintsMs: 15000, configurationMs: 60000, heartbeatMs: 60000 });
+  assert.ok(Object.isFrozen(pollIntervals));
+  let time = 0; const calls = [];
+  const scheduler = createKioskPollScheduler({ now: () => time, intervals: { commandsMs: 1000, fingerprintsMs: 3000, configurationMs: 12000, heartbeatMs: 12000 }, client: { poll: async options => { calls.push({ ...options, time }); return { command: null, fingerprints: {}, configuration: () => ({}) }; } }, commands: async () => {}, configuration: async () => {}, fingerprints: async () => {}, legacy: {}, onError: error => assert.fail(error) });
+  for (time = 0; time <= 12000; time += 1000) { await scheduler.tick(); await settle(); }
+  assert.deepEqual(calls.filter(value => value.fingerprints).map(value => value.time), [0, 3000, 6000, 9000, 12000]);
+  assert.deepEqual(calls.filter(value => value.configuration).map(value => value.time), [0, 12000]);
 });
 
 test("scheduler never overlaps polls, retries due work after failure, and negotiates legacy explicitly", async () => {

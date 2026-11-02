@@ -55,7 +55,7 @@ test("the Roster card adds the first member inline and unlocks Verified attendan
   await page.route("**/admin/members", async (route) => {
     if (route.request().method() === "POST") {
       added = route.request().postDataJSON();
-      members = [{ id: "member-1", memberId: "M-001", firstName: "Ada", lastName: "Lovelace", active: true }];
+      members = [{ id: "member-1", memberId: "M-001", firstName: "Test", lastName: "Student A", active: true }];
       return route.fulfill({ json: { imported: 1, deactivated: 0, warnings: [] } });
     }
     await route.fulfill({ json: { members } });
@@ -67,14 +67,14 @@ test("the Roster card adds the first member inline and unlocks Verified attendan
   await expect(card.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Roster", exact: true })).toHaveCount(0);
   await card.getByRole("textbox", { name: "Member ID" }).fill("M-001");
-  await card.getByRole("textbox", { name: "First name" }).fill("Ada");
-  await card.getByRole("textbox", { name: "Last name" }).fill("Lovelace");
+  await card.getByRole("textbox", { name: "First name" }).fill("Test");
+  await card.getByRole("textbox", { name: "Last name" }).fill("Student A");
   await expect(card.getByRole("textbox", { name: "Email (optional)" })).toBeVisible();
   await expect(card.getByRole("textbox", { name: /Discord/ })).toHaveCount(0);
   await card.getByRole("button", { name: "Add member", exact: true }).click();
   await expect(card.getByText("Roster member added.")).toBeVisible();
-  expect(added).toEqual({ mode: "merge", members: [{ memberId: "M-001", firstName: "Ada", lastName: "Lovelace" }] });
-  await expect(card.getByText("1 active member is on the roster: Ada Lovelace.")).toBeVisible();
+  expect(added).toEqual({ mode: "merge", members: [{ memberId: "M-001", firstName: "Test", lastName: "Student A" }] });
+  await expect(card.getByText("1 active member is on the roster: Test Student A.")).toBeVisible();
   await expect(card.getByText("Complete", { exact: true })).toBeVisible();
   await card.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page.getByRole("heading", { level: 2, name: "Verified attendance input" })).toBeVisible();

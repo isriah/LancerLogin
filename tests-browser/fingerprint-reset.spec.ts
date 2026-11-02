@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
+import { mockSession, mockSetupStatus } from "./api-fixtures";
 
 const endpoint = "**/admin/kiosks/fingerprint-reset";
 const panelFor = (page: Page) => page.getByRole("article", { name: "Fingerprint re-enrollment", exact: true });
@@ -7,8 +8,8 @@ const dialogFor = (page: Page) => page.getByRole("dialog", { name: "Reset all fi
 const confirmation = "RESET ALL FINGERPRINT MAPPINGS";
 
 async function context(page: Page, role = "admin") {
-  await page.route("**/auth/session", route => route.fulfill({ json: { user: { id: "admin-1", role } } }));
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic organization", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark", lateScanMinutes: 30 } } }));
+  await mockSession(page, role, { id: "admin-1" });
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic organization", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark", lateScanMinutes: 30 } });
   await page.route("**/admin/kiosks", route => route.fulfill({ json: { authenticationMethod: "fingerprint", kiosks: [{ id: "kiosk-1", name: "Synthetic kiosk", active: 1, readerOnline: 1, lastSeenAt: new Date().toISOString(), pairedAt: new Date().toISOString(), releaseVersion: "1.2.4" }] } }));
   await page.route(endpoint, route => route.fulfill({ json: { resetCommands: [] } }));
 }

@@ -7,6 +7,8 @@
     "dev": "vite",
     "prebuild": "node ../../scripts/check-module-composition.mjs",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "prebuild:vite": "node ../../scripts/check-module-composition.mjs",
+    "build:vite": "vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

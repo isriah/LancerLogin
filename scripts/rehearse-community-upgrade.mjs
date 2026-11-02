@@ -200,6 +200,9 @@ VALUES('primary','meeting-1','member-1','synthetic-discord-user','synthetic-mess
   }
 }
 
+export const communityBaselines = ["0038_page_walkthroughs.sql", communityMigration, bridgeMigration];
+
+// With no argument, rehearse every baseline in turn; verify-migrations.mjs passes one baseline per process.
 if (process.argv[1]?.endsWith("rehearse-community-upgrade.mjs")) (async () => {
-  for (const boundary of ["0038_page_walkthroughs.sql", communityMigration, bridgeMigration]) console.log(JSON.stringify(await rehearseCommunityUpgrade(undefined, boundary), null, 2));
+  for (const boundary of process.argv[2] ? [process.argv[2]] : communityBaselines) console.log(JSON.stringify(await rehearseCommunityUpgrade(undefined, boundary), null, 2));
 })().catch((error) => { console.error(error instanceof Error ? error.message : "Synthetic Community upgrade rehearsal failed."); process.exitCode = 1; });

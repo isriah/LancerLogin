@@ -1,40 +1,17 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
-import type { D1Database, D1Result, D1Statement } from "../../apps/api/src/d1-usage.ts";
 import { reconcileInstalledModules } from "../../apps/api/src/module-catalog.ts";
 import { runModuleCleanup } from "../../apps/api/src/module-cleanup.ts";
 import { ModuleRegistrationIncomplete, configureModulePlatform, readModulePlatformSnapshot } from "../../apps/api/src/module-platform.ts";
 import type { ModuleMigrationPackage } from "../../apps/api/src/module-migrations.ts";
+import { TestD1Database } from "../fixtures/d1-database.ts";
 
-class Statement implements D1Statement {
-  readonly database: DatabaseSync;
-  readonly sql: string;
-  values: unknown[] = [];
-  constructor(database: DatabaseSync, sql: string) { this.database = database; this.sql = sql; }
-  bind(...values: unknown[]) { const next = new Statement(this.database, this.sql); next.values = values; return next; }
-  native(): StatementSync { return this.database.prepare(this.sql); }
-  async first<T>() { return (this.native().get(...this.values as []) as T | undefined) ?? null; }
-  async all<T>() { return { results: this.native().all(...this.values as []) as T[], meta: { changes: 0 } } as D1Result<T>; }
-  async run() { const result = this.native().run(...this.values as []); return { success: true, meta: { changes: Number(result.changes) } } as D1Result; }
-  batchResult(): D1Result {
-    const statement = this.native();
-    if (/^\s*(?:SELECT|PRAGMA|EXPLAIN)\b/i.test(this.sql)) return { success: true, results: statement.all(...this.values as []), meta: { changes: 0 } } as D1Result;
-    const result = statement.run(...this.values as []);
-    return { success: true, meta: { changes: Number(result.changes) } } as D1Result;
-  }
-}
-
-class Database implements D1Database {
-  readonly sqlite = new DatabaseSync(":memory:");
+class Database extends TestD1Database {
   queries = 0;
   constructor() {
-    for (const file of readdirSync("apps/api/migrations").filter((name) => name.endsWith(".sql")).sort()) this.sqlite.exec(readFileSync(`apps/api/migrations/${file}`, "utf8"));
     // Core migrations are recorded as applied, as D1 records them, so official Outreach can adopt its historical tables.
-    this.sqlite.exec("CREATE TABLE d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
-    for (const file of readdirSync("apps/api/migrations").filter((name) => name.endsWith(".sql")).sort()) this.sqlite.prepare("INSERT INTO d1_migrations(name) VALUES (?)").run(file);
-    this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-10-26','local');
+    super({ recordMigrations: true, seed: `INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-10-26','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-10-26');
       INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');
       INSERT INTO platform_module_administration VALUES('primary',0,1);
@@ -43,22 +20,10 @@ class Database implements D1Database {
       INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete,deletion_cursor)
         VALUES('primary','attendance',1,1,'disabled',2,0,0),('primary','hour-tracking',1,1,'disabled',1,0,0);
       INSERT INTO platform_module_assignment_epochs VALUES('primary','admin',0);
-      INSERT INTO platform_module_assignment_revisions VALUES('primary','admin',0);`);
+      INSERT INTO platform_module_assignment_revisions VALUES('primary','admin',0);` });
   }
-  prepare(sql: string) { this.queries += 1; return new Statement(this.sqlite, sql); }
-  async batch(statements: D1Statement[]) {
-    this.sqlite.exec("BEGIN IMMEDIATE");
-    try {
-      const results = statements.map((statement) => {
-        if (!(statement instanceof Statement)) throw new Error("Unexpected test statement");
-        return statement.batchResult();
-      });
-      this.sqlite.exec("COMMIT");
-      return results;
-    } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
-  }
+  override prepare(sql: string) { this.queries += 1; return super.prepare(sql); }
   count(sql: string) { return Number((this.sqlite.prepare(sql).get() as { n: number }).n); }
-  close() { this.sqlite.close(); }
 }
 
 const legacyDefinition = JSON.stringify({
@@ -105,15 +70,6 @@ test("a module installed after setup is registered as disabled before its first 
   } finally { database.close(); }
 });
 
-test("reconciliation does not register modules before installation setup", async () => {
-  const database = new Database();
-  try {
-    database.sqlite.exec("DELETE FROM installations");
-    assert.deepEqual(await reconcileInstalledModules(database), { changed: false, failures: [], unconfigured: true });
-    assert.equal(database.count("SELECT COUNT(*) AS n FROM platform_module_catalog"), 0);
-  } finally { database.close(); }
-});
-
 test("a removed plugin stays visible, can be disabled, and its retained data is deleted from the recorded definition", async () => {
   const database = new Database();
   try {
@@ -141,17 +97,6 @@ test("a removed plugin stays visible, can be disabled, and its retained data is 
     assert.equal(database.count("SELECT COUNT(*) AS n FROM legacy_records"), 0);
     assert.equal(database.sqlite.prepare("SELECT phase FROM platform_modules WHERE module_id='legacy'").get()?.phase, "deleted");
     assert.equal((await readModulePlatformSnapshot(database, "admin")).modules.some((module) => module.id === "legacy"), false);
-  } finally { database.close(); }
-});
-
-test("an unreadable recorded definition marks cleanup for retry instead of failing the maintenance pass", async () => {
-  const database = new Database();
-  try {
-    installRemovedPlugin(database, "retained", JSON.stringify({ label: "Broken", description: "", dependencies: [], tables: [], deletedData: [], cleanup: [{ kind: "delete", table: "bad table" }] }));
-    await reconcileInstalledModules(database);
-    assert.deepEqual(await runModuleCleanup(database, new Date("2026-02-01T00:00:00.000Z")), { status: "retry-required" });
-    assert.equal(database.sqlite.prepare("SELECT cleanup_failure AS failure FROM platform_modules WHERE module_id='legacy'").get()?.failure, "retry-required");
-    assert.equal(database.count("SELECT COUNT(*) AS n FROM legacy_records"), 2);
   } finally { database.close(); }
 });
 

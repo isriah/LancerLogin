@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
 import { pairedViews } from "./paired-views";
 import { requireOutreachPlugin } from "./outreach-fixtures";
+import { mockSetupStatus } from "./api-fixtures";
 
 requireOutreachPlugin();
 
@@ -12,7 +13,7 @@ async function fixture(page: Page, state: { failPage?: boolean; corrections?: Re
   let currentActivity = { ...activity };
   await page.route("**/platform/modules", (route) => route.fulfill({ json: outreachSnapshot() }));
   await page.route("**/auth/walkthroughs/*", (route) => route.fulfill({ json: { progress: { pageId: "outreach", version: 1, status: "completed", stepId: null } } }));
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Robotics", subtitle: "Member services", logoData: "", primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Robotics", subtitle: "Member services", logoData: "", primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } });
   await page.route(/\/admin\/hours(?:\/.*)?(?:\?.*)?$/, async (route) => {
     const url = new URL(route.request().url()); const path = url.pathname;
     if (path === "/admin/hours/activities") return route.fulfill({ json: { items: [currentActivity], nextCursor: null } });

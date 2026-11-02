@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
 
+// Some route handlers fetch the real response with route.fetch(). Wait for any still running before the context
+// closes; otherwise a poll that started late has its fetched response disposed mid-handler and fails the test.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: "wait" }); });
+
 test("roster requests baseline-filtered attendance directly and retries the same current query", async ({ page }) => {
   const queries: string[] = [];
   let fail = true;

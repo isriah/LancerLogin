@@ -1,22 +1,19 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";
 import { build } from "esbuild";
-import { Miniflare, convertV4MiniflareOptions } from "miniflare";
+import { applyMigration, coreMigrationNames, createMiniflareD1 } from "./fixtures/miniflare-d1.mjs";
 
 test("real D1 indexes, scoped reports and revision cache reduce row reads without changing results", async () => {
   const bundled = await build({ stdin: { contents: `import worker from './apps/api/src/index.ts'; import { measureD1 } from './apps/api/src/d1-usage.ts';
     export default { async fetch(request, env) { const measured = measureD1(env.DB); const result = await worker.fetch(request, {...env, DB: measured.database}); const response = new Response(result.body, result); response.headers.set('x-test-rows-read', String(measured.snapshot().measuredRowsRead)); return response; } };`, resolveDir: process.cwd() }, bundle: true, write: false, format: "esm", platform: "browser" });
   const secret = "A".repeat(43);
-  const runtime = new Miniflare(convertV4MiniflareOptions({ modules: true, script: bundled.outputFiles[0].text, compatibilityDate: "2026-08-01", d1Databases: ["DB"], bindings: { APP_MODE: "configured", ALLOWED_ORIGIN: "https://example.test", SESSION_KEY: secret } }));
+  // 0037 is applied later to measure the read savings; 0082 seeds the kiosk roster revision from its table, so it follows.
+  const deferred = ["0037_report_read_efficiency.sql", "0082_kiosk_roster_revision.sql"];
+  const { runtime, database } = await createMiniflareD1({ script: bundled.outputFiles[0].text, bindings: { APP_MODE: "configured", ALLOWED_ORIGIN: "https://example.test", SESSION_KEY: secret }, migrations: coreMigrationNames().filter((name) => !deferred.includes(name)) });
   try {
-    const database = await runtime.getD1Database("DB");
-    const migrations = (await readdir("apps/api/migrations")).filter((name) => name.endsWith(".sql")).sort();
-    const apply = async (name) => database.exec((await readFile(`apps/api/migrations/${name}`, "utf8")).replace(/^\s*--.*$/gm, "").replace(/\r?\n/g, " "));
-    // 0037 is applied later to measure the read savings; 0082 seeds the kiosk roster revision from its table, so it follows.
-    const deferred = ["0037_report_read_efficiency.sql", "0082_kiosk_roster_revision.sql"];
-    for (const name of migrations.filter((name) => !deferred.includes(name))) await apply(name);
     await database.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES ('primary','2026-01-01','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('admin','primary','admin','admin','2026-01-01');
       INSERT INTO platform_module_administration(installation_id,revision,selection_completed) VALUES ('primary',0,1);
@@ -31,7 +28,7 @@ test("real D1 indexes, scoped reports and revision cache reduce row reads withou
     const source = await readFile("apps/api/src/index.ts", "utf8");
     const attendanceSql = source.match(/db\.prepare\("(SELECT m\.id AS memberId[^"\n]+)"\)\.bind\(meetingId/)[1];
     const before = await database.prepare(attendanceSql).bind("meeting1", "meeting1", "meeting1", "meeting1", 0).all();
-    for (const name of deferred) await apply(name);
+    for (const name of deferred) await applyMigration(database, name);
     const after = await database.prepare(attendanceSql).bind("meeting1", "meeting1", "meeting1", "meeting1", 0).all();
     assert.deepEqual(after.results, before.results);
     assert.ok(after.meta.rows_read < before.meta.rows_read / 10, `before=${before.meta.rows_read}, after=${after.meta.rows_read}`);

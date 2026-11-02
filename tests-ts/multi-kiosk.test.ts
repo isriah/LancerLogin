@@ -1,3 +1,4 @@
+// quick-check: covers apps/api/migrations/**
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -85,10 +86,13 @@ test("cancelled remote enrollment cannot resume and offline kiosks cannot start 
   assert.equal((await call(`/kiosk/enrollment/${session.id}/progress`, { status: "enroll_wait_first" }, device.kioskToken)).status, 409);
 });
 
-type Statement = { execute(): unknown };
+type Statement = { sql: string; execute(): unknown };
+const pairingRead = (sql: string) => sql.includes("SELECT id, kiosk_name AS kioskName FROM pairing_codes WHERE") && sql.includes("purpose = 'hardware'");
 
 // Real SQLite with D1's atomic batch semantics. The optional read barrier makes
 // both requests observe an unredeemed code before either transaction starts.
+// The pairing route reads through the module-scoped database, which sends every
+// read as a guarded batch, so the barrier applies to batches as well as first().
 class Database {
   sqlite = new DatabaseSync(":memory:");
   pairingRace?: { reads: number; ready: Promise<void>; release(): void };
@@ -111,16 +115,11 @@ class Database {
   prepare(sql: string) {
     let params: unknown[] = []; const database = this;
     const statement = {
+      sql,
       bind(...values: unknown[]) { params = values; return this; },
       async first<T>() {
         const row = database.sqlite.prepare(sql).get(...params as []) ?? null;
-        const race = database.pairingRace;
-        if (race && sql.includes("SELECT id, kiosk_name AS kioskName FROM pairing_codes WHERE") && sql.includes("purpose = 'hardware'")) {
-          if (++race.reads === 2) race.release();
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          try { await Promise.race([race.ready, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Pairing race did not reach both reads")), 2_000); })]); }
-          finally { clearTimeout(timer); }
-        }
+        if (pairingRead(sql)) await database.awaitPairingRace();
         return row as T | null;
       },
       async all<T>() { return { results: database.sqlite.prepare(sql).all(...params as []) as T[] }; },
@@ -137,8 +136,20 @@ class Database {
   }
   async batch(statements: Statement[]) {
     this.sqlite.exec("BEGIN");
-    try { const result = statements.map(statement => statement.execute()); this.sqlite.exec("COMMIT"); return result; }
+    let result: unknown[];
+    try { result = statements.map(statement => statement.execute()); this.sqlite.exec("COMMIT"); }
     catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
+    if (statements.some(statement => pairingRead(statement.sql))) await this.awaitPairingRace();
+    return result;
+  }
+  // Called after a pairing read has run: the first read waits until the second has also run.
+  async awaitPairingRace() {
+    const race = this.pairingRace;
+    if (!race) return;
+    if (++race.reads === 2) race.release();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { await Promise.race([race.ready, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Pairing race did not reach both reads")), 2_000); })]); }
+    finally { clearTimeout(timer); }
   }
   racePairingReads() {
     let release!: () => void;
@@ -190,6 +201,8 @@ test("real SQLite concurrent redemption consumes one code even at an identical t
   const { database, call, code } = await fixture(context);
   const key = await code("First entrance"); database.racePairingReads();
   const results = await Promise.all([call("/kiosk/pair", { code: key, kioskName: "First entrance" }), call("/kiosk/pair", { code: key, kioskName: "Second entrance" })]);
+  // Both requests read the unredeemed code before either redeemed it.
+  assert.equal(database.pairingRace?.reads, 2);
   assert.deepEqual(results.map(result => result.status).sort(), [201, 409]);
   assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM kiosks WHERE active = 1").get()?.n, 1);
   assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'kiosk.paired'").get()?.n, 1);
@@ -657,7 +670,9 @@ test("real SQLite member PINs: Require PIN, setup by approval and at the kiosk, 
   context.mock.timers.tick(300_001);
   assert.equal(await pinCode(await call(`/kiosk/pin-requests/${lateId}/pin`, { pin: "2468" }, a.kioskToken)), "pin_request_not_approved");
   assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM member_pins WHERE member_id = 'member'").get()?.n, 0);
-  assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE metadata_json LIKE '%2468%' OR metadata_json LIKE '%1357%' OR metadata_json LIKE '%1111%'").get()?.n, 0, "a PIN is never audited");
+  // Audit metadata carries random kiosk and request UUIDs, which contain a 4-digit PIN by chance roughly once in 200 runs.
+  const audited = database.sqlite.prepare("SELECT metadata_json AS metadata FROM audit_log").all().map(row => String(row.metadata ?? "").replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")).join("\n");
+  assert.doesNotMatch(audited, /2468|1357|1111/, "a PIN is never audited");
 
   // A save that leaves Require PIN out keeps it; turning it off stops PIN data at once.
   assert.equal((await json(await call(`/admin/kiosks/${a.kioskId}/authentication-method`, { authenticationMethod: "member_id", memberLookup: "search" }, undefined, "PATCH"))).requirePin, true);

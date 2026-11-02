@@ -1,7 +1,7 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,13 +9,14 @@ import { createLiveUpgradeIO, executeWebUpgrade, interruptUnchanged, validateUpg
 import { syntheticUpgradeIO } from "../scripts/rehearse-web-upgrade.mjs";
 import { webUpdateStatus } from "../apps/api/src/web-updates.ts";
 import { composedModuleIds, d1Query, provisionModuleRefusal } from "../scripts/check-provision-modules.mjs";
+import { applyCoreMigrations } from "./fixtures/d1-database.ts";
 
 const env = { REPOSITORY_PRIVATE: "true", UPDATE_REPOSITORY: "example/private-install", REQUEST_ID: "11111111-1111-4111-8111-111111111111", RELEASE_TAG: "v2.0.0", RELEASE_SHA: "b".repeat(40), EXECUTOR_RUN_ID: "123", INSTALLATION_SLUG: "example", DATABASE_ID: "22222222-2222-2222-2222-222222222222", API_URL: "https://example-api.account.workers.dev", CLOUDFLARE_ACCOUNT_ID: "a".repeat(32), CLOUDFLARE_API_TOKEN: "cfat_synthetic", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + 86_400_000).toISOString() };
 const context = validateUpgradeEnvironment(env);
 
 function database() {
   const sqlite = new DatabaseSync(":memory:");
-  for (const file of readdirSync("apps/api/migrations").sort()) sqlite.exec(readFileSync(join("apps/api/migrations", file), "utf8"));
+  applyCoreMigrations(sqlite);
   sqlite.exec("INSERT INTO installations (id,created_at,auth_mode) VALUES ('primary','2026-01-01','local')");
   return sqlite;
 }

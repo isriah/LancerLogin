@@ -1,7 +1,7 @@
 // Core without the Outreach plugin, as an installation that opts out of official modules runs it: historical backups that
 // carry Outreach in Core's section stay restorable, retained Outreach data is never orphaned, and Outreach stays out of new
 // backups. The same archives restoring through the composed plugin are covered by tests-ts/outreach-catalogs.test.ts,
-// tests-ts/walkthrough.test.ts and tests-ts/outreach-platform.test.ts.
+// tests-ts/outreach-walkthrough.test.ts and tests-ts/outreach-platform.test.ts.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";

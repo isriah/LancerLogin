@@ -1,3 +1,4 @@
+// quick-check: covers apps/api/migrations/**
 import test from 'node:test';
 import { omitContestResubmissionFields } from '../tests-ts/fixtures/backup-versions.ts';
 import assert from 'node:assert/strict';

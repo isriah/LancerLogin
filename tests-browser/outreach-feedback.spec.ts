@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
 import { pairedViews } from "./paired-views";
 import { requireOutreachPlugin } from "./outreach-fixtures";
+import { chooseClock, mockSetupStatus } from "./api-fixtures";
 
 requireOutreachPlugin();
 
@@ -13,7 +14,7 @@ async function fixture(page: Page) {
   const state = { activity: { ...event }, entries: [entry("entry-a", "09:00", "10:00", 60), entry("entry-b", "11:00", "12:30", 90)], writes: [] as Array<{ path: string; body: Record<string, unknown> }>, windows: [] as Record<string, unknown>[], publication: { activityId: event.id, revision: 0, googleCalendar: true, googleStatus: "delivered", googleAction: "publish", googleExternalId: "synthetic-google-id", googleError: null, discord: false, discordStatus: null, discordAction: null, discordExternalId: null, discordError: null } as Record<string, unknown>, labels: Array.from({ length: 41 }, (_, index) => ({ id: `label-${String(index).padStart(3, "0")}`, name: `Synthetic label ${String(index).padStart(3, "0")}`, archived: index === 40, revision: 0 })), teams: [{ id: "team-1", name: "Synthetic team", number: "101", program: "FTC", archived: false, revision: 0 }] };
   await page.route("**/platform/modules", route => route.fulfill({ json: outreachSnapshot() }));
   await page.route("**/auth/walkthroughs/*", route => route.fulfill({ json: { progress: { pageId: "outreach", version: 1, status: "completed", stepId: null } } }));
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Robotics", subtitle: "Member services", logoData: "", primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Robotics", subtitle: "Member services", logoData: "", primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance: "light", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } });
   await page.route("**/module-setup/hour-tracking/rules", route => route.fulfill({ json: { values: { reportingDays: 2, reopenHours: 24, revision: 0 } } }));
   await page.route(/\/admin\/hours(?:\/.*)?(?:\?.*)?$/, async route => {
     const url = new URL(route.request().url()); const path = url.pathname; const method = route.request().method(); const body = method === "GET" ? undefined : route.request().postDataJSON();
@@ -64,11 +65,6 @@ async function themed(page: Page, control: Locator, tone: "surface" | "primary" 
     probe.style.borderRadius = "var(--radius-control)"; const result = { actual: [actual.backgroundColor, actual.color, actual.borderTopColor], expected: colors.map(resolved), radius: actual.borderRadius, expectedRadius: getComputedStyle(probe).borderRadius, height: element.getBoundingClientRect().height }; probe.remove(); return result;
   }, { tone, textToken });
   expect(style.actual).toEqual(style.expected); expect(style.radius).toBe(style.expectedRadius); expect(style.height).toBeGreaterThanOrEqual(44);
-}
-
-async function chooseClock(page: Page, label: string, hour: number, minute: number, period: "AM" | "PM") {
-  await page.getByRole("button", { name: new RegExp(`^${label}:`) }).click(); const dialog = page.getByRole("dialog", { name: label });
-  await dialog.getByRole("button", { name: `${hour} o'clock`, exact: true }).click(); await dialog.getByRole("button", { name: `${minute} minutes`, exact: true }).click(); await dialog.getByRole("group", { name: "Choose AM or PM" }).getByRole("button", { name: period, exact: true }).click();
 }
 
 test("deleting the last counted participation hides the zero-hour person and retains the entry history", async ({ page }) => {

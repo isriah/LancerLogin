@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { outreachSnapshot } from "./module-fixtures";
 import { requireOutreachPlugin } from "./outreach-fixtures";
+import { mockSession } from "./api-fixtures";
 
 requireOutreachPlugin();
 
@@ -26,7 +27,7 @@ const activity = {
 };
 
 async function routeOutreach(page: Page, role: "admin" | "operator", state: { progress: Progress }) {
-  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: `${role}-1`, role } } }));
+  await mockSession(page, role, { id: `${role}-1` });
   // Debug mode is per device and Admin-only; Operators keep it off even when this browser has it on.
   await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode", "true"));
   await page.route("**/platform/modules", (route) => route.fulfill({ json: outreachSnapshot() }));
@@ -136,7 +137,7 @@ for (const view of [
 
 test("Outreach walkthrough stays unavailable without module workspace access", async ({ page }) => {
   let walkthroughRequests = 0;
-  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: "operator-1", role: "operator" } } }));
+  await mockSession(page, "operator", { id: "operator-1" });
   await page.route("**/platform/modules", (route) => route.fulfill({ json: outreachSnapshot({ access: false }) }));
   await page.route("**/auth/walkthroughs/outreach", async (route) => { walkthroughRequests += 1; await route.fulfill({ json: { error: "Unexpected walkthrough request" }, status: 500 }); });
   await page.goto("/hours");

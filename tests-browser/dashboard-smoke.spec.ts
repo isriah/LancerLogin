@@ -1,5 +1,10 @@
 import { setDashboardTheme } from "./dashboard-theme";
 import { expect, test } from "@playwright/test";
+import { mockSession } from "./api-fixtures";
+
+// Some route handlers fetch the real response with route.fetch(). Wait for any still running before the context
+// closes; otherwise a poll that started late has its fetched response disposed mid-handler and fails the test.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: "wait" }); });
 
 test("Dashboard keeps meetings visible when attendance alerts fail", async ({ page }) => {
   await page.route("**/reports/attendance*", (route) => route.fulfill({ status: 503, json: { error: "Report unavailable" } }));
@@ -119,11 +124,7 @@ test("member detail shows Discord identity only while the integration is enabled
 });
 
 test("Operator can view member Discord identity without Admin member controls", async ({ page }) => {
-  await page.route("**/auth/session", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({ user: { role: "operator" } }),
-  }));
+  await mockSession(page, "operator");
   await page.goto("/roster/A-101");
   await expect(page.getByText("Discord identity", { exact: true })).toBeVisible();
   await expect(page.getByText("123456789012", { exact: true })).toBeVisible();
@@ -387,7 +388,7 @@ test("Kiosks hides routine refresh success and preserves action feedback", async
 });
 
 test("Kiosks keeps pairing actions Admin-only and contained on narrow screens", async ({ page }) => {
-  await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role: "operator" } }) }));
+  await mockSession(page, "operator");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/kiosks");
 

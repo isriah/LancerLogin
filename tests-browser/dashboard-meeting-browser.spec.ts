@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { calendarDay, openActiveMeetingCalendar, selectCalendarDay } from "./meeting-calendar-fixture";
 import { pairedViews } from "./paired-views";
+import { mockSetupStatus } from "./api-fixtures";
 
 test("Dashboard owns meeting navigation and remembers the selected browser", async ({ page }) => {
   await page.goto("/dashboard");
@@ -57,25 +58,17 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     test(`Dashboard meeting selector conforms at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
-      await page.route("**/setup/status", (route) => route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          configured: true,
-          installation: { authMode: "local" },
-          settings: {
-            organizationName: "Reference Arts Collective",
-            subtitle: "Shared operations",
-            logoData: "",
-            primaryColor: dashboardConformanceReferences.brand.primary,
-            secondaryColor: dashboardConformanceReferences.brand.secondary,
-            appearance: theme,
-            logoBackdrop: "auto",
-            lateScanMinutes: 30,
-            discordContestWindowHours: 24,
-          },
-        }),
-      }));
+      await mockSetupStatus(page, { settings: {
+        organizationName: "Reference Arts Collective",
+        subtitle: "Shared operations",
+        logoData: "",
+        primaryColor: dashboardConformanceReferences.brand.primary,
+        secondaryColor: dashboardConformanceReferences.brand.secondary,
+        appearance: theme,
+        logoBackdrop: "auto",
+        lateScanMinutes: 30,
+        discordContestWindowHours: 24,
+      } });
 
       await page.goto("/dashboard");
       await page.getByRole("radio", { name: "Table" }).check();
@@ -168,25 +161,17 @@ for (const { viewport, theme } of pairedViews) {
         localStorage.setItem("lancerlogin-theme", savedTheme);
         localStorage.setItem("lancerlogin-dashboard-meeting-view", savedView);
       }, { savedTheme: theme, savedView: "table" });
-      await page.route("**/setup/status", (route) => route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          configured: true,
-          installation: { authMode: "local" },
-          settings: {
-            organizationName: "Reference Arts Collective",
-            subtitle: "Shared operations",
-            logoData: "",
-            primaryColor: dashboardConformanceReferences.brand.primary,
-            secondaryColor: dashboardConformanceReferences.brand.secondary,
-            appearance: theme,
-            logoBackdrop: "auto",
-            lateScanMinutes: 30,
-            discordContestWindowHours: 24,
-          },
-        }),
-      }));
+      await mockSetupStatus(page, { settings: {
+        organizationName: "Reference Arts Collective",
+        subtitle: "Shared operations",
+        logoData: "",
+        primaryColor: dashboardConformanceReferences.brand.primary,
+        secondaryColor: dashboardConformanceReferences.brand.secondary,
+        appearance: theme,
+        logoBackdrop: "auto",
+        lateScanMinutes: 30,
+        discordContestWindowHours: 24,
+      } });
       await page.route("**/meetings", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ meetings }) }));
 
       await page.goto("/dashboard");

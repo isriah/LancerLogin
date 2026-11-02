@@ -1,5 +1,6 @@
 // Hardware doubles are confined to this child. The production service, timers,
-// controllers, queue and encrypted cloud protocol run unchanged.
+// controllers, queue and encrypted cloud protocol run unchanged. The fast variant
+// only replaces the poll and heartbeat intervals, all from one table.
 import { mock } from "node:test";
 import { once } from "node:events";
 import { readFile, writeFile } from "node:fs/promises";
@@ -11,6 +12,10 @@ mock.module(new URL("../../apps/kiosk/src/unpairing-store.mjs", import.meta.url)
   ...installation,
   createInstallationActivities: () => { activities = installation.createInstallationActivities(); return activities; },
 } });
+if (process.env.SYNTHETIC_POLL_INTERVALS) {
+  const poll = await import("../../apps/kiosk/src/kiosk-poll.mjs");
+  mock.module(new URL("../../apps/kiosk/src/kiosk-poll.mjs", import.meta.url).href, { namedExports: { ...poll, pollIntervals: Object.freeze(JSON.parse(process.env.SYNTHETIC_POLL_INTERVALS)) } });
+}
 const flashPath = join(dirname(process.env.LANCERLOGIN_CONFIG), "synthetic-reader.json");
 const flash = new Map(Object.entries(await readFile(flashPath, "utf8").then(JSON.parse).catch(() => ({}))).map(([slot, value]) => [Number(slot), Buffer.from(value, "base64")]));
 const persist = () => writeFile(flashPath, JSON.stringify(Object.fromEntries([...flash].map(([slot, bytes]) => [slot, bytes.toString("base64")]))), { mode: 0o600 });

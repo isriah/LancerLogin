@@ -1,3 +1,4 @@
+// quick-check: covers apps/api/migrations/**
 // Data-integrity and D1 read-cost behavior of the Worker API on a real migrated SQLite database: meetings restore keeps
 // live calendar links, kiosk roster revisions ignore scans, bounded meeting overlap reads, correction targets, and the
 // restore time-limit error.

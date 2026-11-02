@@ -1,16 +1,13 @@
+// quick-check: covers apps/api/migrations/**
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
-import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { createMiniflareD1 } from './fixtures/miniflare-d1.mjs';
 import worker from '../apps/api/src/index.ts';
 import { createSessionCodec } from '../apps/api/src/runtime-security.ts';
 
 test('local D1 records concurrent status transitions once and restores roster history atomically', { timeout: 60000 }, async () => {
-  const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: 'export default {fetch(){return new Response("fixture")}}', compatibilityDate: '2026-08-01', d1Databases: ['DB'] }));
+  const { runtime: mf, database: db } = await createMiniflareD1();
   try {
-    const db = await mf.getD1Database('DB');
-    const migrations = new URL('../apps/api/migrations/', import.meta.url);
-    for (const name of readdirSync(migrations).filter(n => n.endsWith('.sql')).sort()) await db.exec(readFileSync(new URL(name, migrations), 'utf8').replace(/^\s*--.*$/gm, '').replace(/\r?\n/g, ' '));
     await db.batch([
       db.prepare("INSERT INTO installations(id,created_at,auth_mode) VALUES ('primary','2026-01-01','local')"),
       db.prepare("INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('admin','primary','admin','admin','2026-01-01')"),

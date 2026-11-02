@@ -142,6 +142,33 @@ export async function preflightModules({ pinnedSelectionSha, selectionPath, comp
   return composed;
 }
 
+/** Request states that end it. GitHub's "Re-run" of its workflow run can never claim or retry such a request. */
+export const endedRequestStates = Object.freeze(["succeeded", "failed", "expired", "recovery_required"]);
+/**
+ * Why claim refused, from the request row read after the refusal. A duplicate leaves the run green because the work is
+ * or was done by a run that claimed it: this run on an earlier attempt (unless that attempt ended it unsuccessfully), or
+ * another run still working. Anything else (the request ended, or is bound to another run, or is not ready) means this
+ * run deployed nothing and never will: notClaimable, which fails the run with request_not_claimable.
+ */
+export function unclaimedOutcome(row, runId) {
+  const state = row?.state ?? "missing";
+  const claimedBy = row?.executor_run_id === null || row?.executor_run_id === undefined ? undefined : String(row.executor_run_id);
+  if (claimedBy === String(runId) && !["failed", "expired", "recovery_required"].includes(state)) return { duplicate: true, claimedBy: "this_run", state };
+  if (claimedBy && claimedBy !== String(runId) && !endedRequestStates.includes(state)) return { duplicate: true, claimedBy: "another_run", state };
+  return { notClaimable: true, state };
+}
+const startAgain = "Re-running a workflow run never retries an update: select Apply changes, or start the update again, in the dashboard. That prepares a new request.";
+/** The run log's explanation of a refused claim. Fixed text and request states only. */
+export function unclaimedMessage(outcome) {
+  if (outcome.claimedBy === "this_run") return `This run already claimed the update request on an earlier attempt (state: ${outcome.state}); nothing was deployed again.`;
+  if (outcome.claimedBy === "another_run") return `Another workflow run claimed this update request and is handling it (state: ${outcome.state}); this run deployed nothing.`;
+  if (outcome.state === "succeeded") return "This update request already succeeded in another run; this run deployed nothing. Nothing else is needed.";
+  if (outcome.state === "recovery_required") return "This update request stopped after a deployment step and needs recovery; this run deployed nothing. Follow the recovery steps in the dashboard's update status.";
+  if (outcome.state === "failed" || outcome.state === "expired") return `This update request already ended (state: ${outcome.state}), so this run deployed nothing. ${startAgain}`;
+  if (outcome.state === "missing" || outcome.state === "unknown") return `This run could not find its update request in the installation's database, so it deployed nothing. ${startAgain}`;
+  return `This update request is not ready for this run to claim (state: ${outcome.state}): it belongs to another run, its backup was not exported, or the update track changed. This run deployed nothing. ${startAgain}`;
+}
+
 /**
  * IO abstraction is also used by the no-cloud synthetic failure/recovery rehearsal.
  * progress is shared with the cancellation handler (interruptUnchanged): it records whether the request is claimed and
@@ -152,7 +179,11 @@ export async function executeWebUpgrade(context, io, progress = {}) {
   const at = (value) => { stage = value; progress.stage = value; };
   try {
     await io.preflight(context);
-    if (!await io.claim(context)) return { duplicate: true }; // Includes same-run reruns; no lease expiry.
+    if (!await io.claim(context)) { // No lease expiry: a refused claim never mutates.
+      if (!io.claimStatus) return { duplicate: true };
+      let row; try { row = await io.claimStatus(context); } catch { row = { state: "unknown" }; }
+      return unclaimedOutcome(row, context.runId);
+    }
     claimed = true; progress.claimed = true;
     await io.state("running", "building", 0);
     at("build"); await io.build(context); // API bundle and Pages assets before data/code mutation.
@@ -226,6 +257,35 @@ async function jsonGet(url, headers = {}) {
   if (!response.ok) throw new Error("provider_request_failed");
   return response.json();
 }
+/**
+ * The official release and commit reads that gate an update (validateOfficialSource) are read-only and anonymous in the
+ * --validate step, so a GitHub blip (network error, timeout, 429, 5xx) once failed an update that passed a minute later.
+ * Those reads alone are retried, within budgetMs of waiting and honouring Retry-After inside it; any other status, or an
+ * exhausted budget, stays provider_request_failed. Nothing that writes is retried.
+ */
+export const providerReadRetry = Object.freeze({ delaysMs: Object.freeze([1_000, 4_000, 10_000]), budgetMs: 30_000, timeoutMs: 10_000 });
+/** Retry-After in milliseconds (delta seconds or an HTTP date), or undefined when absent or unreadable. */
+export function retryAfterMs(value, now = Date.now()) {
+  if (!value) return undefined;
+  if (/^\d+$/.test(value.trim())) return Number(value.trim()) * 1000;
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
+}
+export async function jsonGetWithRetry(url, { request = fetch, wait = (ms) => new Promise((done) => setTimeout(done, ms)), policy = providerReadRetry } = {}) {
+  let waited = 0; const started = Date.now();
+  for (let attempt = 0; ; attempt++) {
+    let response;
+    try { response = await request(url, { headers: { "user-agent": "LancerLogin", accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(policy.timeoutMs) }); }
+    catch { response = undefined; } // Network error or timeout: transient.
+    if (response?.ok) return response.json();
+    if (response && response.status !== 429 && response.status < 500) throw new Error("provider_request_failed");
+    try { await response?.body?.cancel(); } catch { /* Discarded body. */ }
+    const delay = Math.max(policy.delaysMs[attempt] ?? Infinity, (response && retryAfterMs(response.headers.get("retry-after"))) ?? 0);
+    if (Math.max(waited, Date.now() - started) + delay > policy.budgetMs) throw new Error("provider_request_failed");
+    waited += delay; await wait(delay);
+  }
+}
+const officialSourceGet = (url) => jsonGetWithRetry(url);
 function command(program, args, cwd, env, { json = false, input } = {}) {
   return new Promise((done, reject) => {
     const child = spawn(program, args, { cwd, env, shell: false, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
@@ -320,7 +380,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
   };
   return {
     async preflight() {
-      await validateOfficialSource(context, jsonGet);
+      await validateOfficialSource(context, officialSourceGet);
       const version = JSON.parse(await readFile(resolve(source, "package.json"), "utf8")).version;
       if (`v${version}` !== context.tag || await command("git", ["rev-parse", "HEAD"], source, processEnvironment) !== context.sha) throw new Error("source_identity_mismatch");
       const token = await cf("/tokens/verify"); if (token.status !== "active") throw new Error("account_token_invalid");
@@ -370,6 +430,10 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
     async claim() {
       const result = await sql(`UPDATE web_update_requests SET executor_run_id = ?, run_id = ?, state = 'running', stage = 'preflight', updated_at = ? WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ? AND backup_exported_at IS NOT NULL AND executor_run_id IS NULL AND state IN ('dispatching','queued','awaiting_approval','running') AND (run_id IS NULL OR run_id = ?)${channelPolicyInstalled ? " AND update_channel = (SELECT update_channel FROM installation_update_settings WHERE installation_id = 'primary')" : ""}`, [context.runId, context.runId, new Date().toISOString(), context.requestId, context.tag, context.sha, context.runId]);
       return result[0]?.meta?.changes === 1;
+    },
+    // Read only after a refused claim, to say why: ended, or claimed by this or another run.
+    async claimStatus() {
+      return (await sql("SELECT state, executor_run_id FROM web_update_requests WHERE installation_id = 'primary' AND id = ? AND release_tag = ? AND release_sha = ?", [context.requestId, context.tag, context.sha]))[0]?.results?.[0];
     },
     state: updateState,
     releaseUnchanged,
@@ -455,11 +519,13 @@ export const upgradeHelp = {
   official_release_required: "The requested release is not a published official LancerLogin release on the installation's update track: start the update again from the dashboard.",
   complete_release_required: "The requested release is missing its kiosk and installer assets: wait for the release to finish publishing, then start the update again.",
   release_commit_mismatch: "The requested release tag no longer points at the commit the dashboard pinned: start the update again from the dashboard.",
+  provider_request_failed: "GitHub did not answer the official release check, even after retrying for about 30 seconds. Nothing changed: start the update again from the dashboard in a few minutes.",
+  request_not_claimable: "This run can no longer claim its update request, which already ended or belongs to another run, so nothing was deployed. Re-running a workflow run never retries an update: select Apply changes, or start the update again, in the dashboard, which prepares a new request.",
 };
 async function main() {
   const validateOnly = process.argv.includes("--validate");
   const context = validateUpgradeEnvironment(process.env, { credentials: !validateOnly });
-  await validateOfficialSource(context, jsonGet);
+  await validateOfficialSource(context, officialSourceGet);
   if (validateOnly) return;
   // The GitHub token is read once for its expiry and never reaches Wrangler, plugin composition or the IO adapter.
   const { LANCERLOGIN_WEB_UPDATE_TOKEN, ...environment } = process.env;
@@ -480,7 +546,8 @@ async function main() {
   };
   process.on("SIGINT", interrupted); process.on("SIGTERM", interrupted);
   const result = await executeWebUpgrade(context, io, progress);
-  if (result.duplicate) console.log("Request already claimed; deployment mutation skipped.");
+  if (result.duplicate) console.log(result.claimedBy ? unclaimedMessage(result) : "Request already claimed; deployment mutation skipped.");
+  if (result.notClaimable) { console.error(unclaimedMessage(result)); throw new Error("request_not_claimable"); }
 }
 if (process.argv[1]?.endsWith("run-web-upgrade.mjs")) main().catch((error) => {
   reportFailure(error, upgradeHelp, "web_upgrade_failed", "The web update stopped: check the update status in the dashboard and the stage named in this run. No automatic D1 restore was attempted.");

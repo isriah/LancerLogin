@@ -25,6 +25,11 @@ jobs:
     if: github.event_name != 'schedule' && github.repository == 'isriah/LancerLogin'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # A plugin pin that can't be fetched fails its tests instead of turning them into skips.
+      LANCERLOGIN_REQUIRE_OUTREACH_PLUGIN: "1"
+      LANCERLOGIN_REQUIRE_CARPOOL_PLUGIN: "1"
+      LANCERLOGIN_REQUIRE_VISITS_PLUGIN: "1"
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
@@ -83,7 +88,7 @@ jobs:
 
             while IFS= read -r file; do
               case "$file" in
-                apps/kiosk/*|packages/shared/*|scripts/package-kiosk.mjs|scripts/install-kiosk.sh|tests/kiosk-runtime.test.mjs|tests/kiosk-artifacts.test.mjs|package.json|package-lock.json)
+                apps/kiosk/*|packages/shared/*|scripts/package-kiosk.mjs|tests/kiosk-runtime.test.mjs|tests/kiosk-artifacts.test.mjs|package.json|package-lock.json)
                   kiosk=true
                   ;;
               esac
@@ -178,7 +183,8 @@ jobs:
   core-browser-shard:
     # The release-gate browser suite runs in three groups from tests-browser/groups.json (scripts/browser-groups.mjs).
     # Core: every core and integration spec, plugin-free. Each part is a set of whole spec files balanced by measured time.
-    # The dashboard is served by the Vite dev server from this checkout, so there is no prebuilt build to share.
+    # Each shard builds the dashboard for production and serves it with vite preview (playwright.config.ts); the build
+    # takes seconds and bakes in the shard's mock API address, so a separate build job would add a job without removing work.
     name: Core browser shard ${{ matrix.shard }}/4
     if: github.event_name == 'workflow_dispatch' && github.repository == 'isriah/LancerLogin'
     runs-on: ubuntu-latest
@@ -211,6 +217,25 @@ jobs:
       - name: Run this core browser shard
         timeout-minutes: 15
         run: npm run test:browser -- --group core --part ${{ matrix.shard }}/4
+      # The gate keeps one retry. List the tests that needed it, so they are recorded and fixed rather than hidden, and keep
+      # the JSON report, which `node scripts/browser-groups.mjs --refresh-seconds` reads to rebalance the parts.
+      - name: List flaky browser tests in the job summary
+        if: ${{ !cancelled() }}
+        run: node scripts/browser-test-summary.mjs playwright-report/browser-results.json "Core browser shard ${{ matrix.shard }}/4" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the browser test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-report-core-${{ matrix.shard }}
+          path: playwright-report/browser-results.json
+          if-no-files-found: ignore
+          retention-days: 30
+      # The production build drops dev-only behaviour such as React StrictMode's double mount, so one shard also runs a
+      # small smoke on the Vite dev server.
+      - name: Run the dashboard smoke on the Vite dev server
+        if: ${{ !cancelled() && matrix.shard == 4 }}
+        timeout-minutes: 5
+        run: npm run test:browser -- --server dev --reporter=github tests-browser/dashboard-smoke.spec.ts tests-browser/ui-foundations.spec.ts
   plugin-browser-shard:
     # Plugin: the specs that need the official Outreach or Carpool plugin, with both composed. Composition fails the job,
     # rather than skipping, when a pin is unreadable, and the runner refuses this group without composition.
@@ -248,6 +273,17 @@ jobs:
           # Optional read access for private plugin repositories pinned by scripts/official-modules.json and tests/fixtures.
           LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}
         run: npm run test:browser -- --group plugin --compose-selection tests/fixtures/carpool.modules.json --part ${{ matrix.shard }}/1
+      - name: List flaky browser tests in the job summary
+        if: ${{ !cancelled() }}
+        run: node scripts/browser-test-summary.mjs playwright-report/browser-results.json "Plugin browser shard ${{ matrix.shard }}/1" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the browser test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-report-plugin-${{ matrix.shard }}
+          path: playwright-report/browser-results.json
+          if-no-files-found: ignore
+          retention-days: 30
   integration-browser-shard:
     # Integration: the Core specs whose behaviour changes when plugins exist (module navigation, Settings > Modules and
     # plugin management, module setup, backup and restore, shell and startup), again with the plugins composed.
@@ -285,6 +321,17 @@ jobs:
           # Optional read access for private plugin repositories pinned by scripts/official-modules.json and tests/fixtures.
           LANCERLOGIN_PLUGIN_TOKEN: ${{ secrets.LANCERLOGIN_PLUGIN_TOKEN }}
         run: npm run test:browser -- --group integration --compose-selection tests/fixtures/carpool.modules.json --part ${{ matrix.shard }}/1
+      - name: List flaky browser tests in the job summary
+        if: ${{ !cancelled() }}
+        run: node scripts/browser-test-summary.mjs playwright-report/browser-results.json "Integration browser shard ${{ matrix.shard }}/1" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the browser test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-report-integration-${{ matrix.shard }}
+          path: playwright-report/browser-results.json
+          if-no-files-found: ignore
+          retention-days: 30
   virtual-kiosk-browser:
     # The real kiosk service with a virtual fingerprint reader, network and system, paired to a local Worker
     # (scripts/virtual-kiosk.mjs), driven by the scenarios in tests-virtual-kiosk. Core only, no plugins.

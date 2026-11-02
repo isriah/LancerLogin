@@ -1,22 +1,22 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
 import { readUpdateChannel, changeUpdateChannel } from "../apps/api/src/update-channel.ts";
 import { prepareWebUpdate, recordUpdateBackup, startWebUpdate, latestUpdate, type WebUpdateEnv } from "../apps/api/src/web-updates.ts";
 import { resolveOfficialRelease, createReleaseDiscovery } from "../apps/api/src/release-discovery.ts";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { createHash } from "node:crypto";
+import { readCoreMigrations } from "./fixtures/d1-database.ts";
 class Database {
   sqlite = new DatabaseSync(":memory:");
   constructor() {
     const seed = () => this.sqlite.exec("INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-01-01','local'); INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-01-01'),('operator','primary','operator','operator','2026-01-01'); INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');");
     let seeded = false;
-    for (const name of readdirSync("apps/api/migrations").sort()) {
+    for (const { name, content } of readCoreMigrations()) {
       if (name === "0039_module_platform.sql") { seed(); seeded = true; }
-      this.sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
+      this.sqlite.exec(content);
     }
     if (!seeded) seed();
   }

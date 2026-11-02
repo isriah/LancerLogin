@@ -1,47 +1,20 @@
+// quick-check: covers apps/api/migrations/**
 // A module whose migrations are refused or fail is recorded for Settings > Modules, and the record clears once the module
 // reconciles. Runs on Core alone: the built-in Attendance module stands in for a plugin with a synthetic migration package.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
-import type { D1Database, D1Result, D1Statement } from "../apps/api/src/d1-usage.ts";
 import { moduleUpdateFailureFor, readModuleUpdateFailures, reconcileInstalledModules } from "../apps/api/src/module-catalog.ts";
 import { ModuleMigrationError, type ModuleMigrationPackage } from "../apps/api/src/module-migrations.ts";
 import { pluginManagementState } from "../apps/api/src/plugin-selection.ts";
+import { TestD1Database } from "./fixtures/d1-database.ts";
 
-class Statement implements D1Statement {
-  readonly database: DatabaseSync;
-  readonly sql: string;
-  values: unknown[] = [];
-  constructor(database: DatabaseSync, sql: string) { this.database = database; this.sql = sql; }
-  bind(...values: unknown[]) { const next = new Statement(this.database, this.sql); next.values = values; return next; }
-  native(): StatementSync { return this.database.prepare(this.sql); }
-  async first<T>() { return (this.native().get(...this.values as []) as T | undefined) ?? null; }
-  async all<T>() { return { results: this.native().all(...this.values as []) as T[], meta: { changes: 0 } } as D1Result<T>; }
-  async run() { const result = this.native().run(...this.values as []); return { success: true, meta: { changes: Number(result.changes) } } as D1Result; }
-  batchResult(): D1Result {
-    if (/^\s*SELECT\b/i.test(this.sql)) return { success: true, results: this.native().all(...this.values as []), meta: { changes: 0 } } as D1Result;
-    return { success: true, meta: { changes: Number(this.native().run(...this.values as []).changes) } } as D1Result;
-  }
-}
 
-class Database implements D1Database {
-  readonly sqlite = new DatabaseSync(":memory:");
+class Database extends TestD1Database {
   constructor() {
-    const files = readdirSync("apps/api/migrations").filter((name) => name.endsWith(".sql")).sort();
-    for (const file of files) this.sqlite.exec(readFileSync(`apps/api/migrations/${file}`, "utf8"));
-    this.sqlite.exec("CREATE TABLE d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
-    for (const file of files) this.sqlite.prepare("INSERT INTO d1_migrations(name) VALUES (?)").run(file);
-    this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-10-26','local');
+    super({ recordMigrations: true, seed: `INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-10-26','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','synthetic-admin','admin','2026-10-26');
       INSERT INTO platform_module_administration VALUES('primary',0,1);
-      INSERT INTO platform_module_administration_epochs VALUES('primary',0);`);
-  }
-  prepare(sql: string) { return new Statement(this.sqlite, sql); }
-  async batch(statements: D1Statement[]) {
-    this.sqlite.exec("BEGIN IMMEDIATE");
-    try { const results = statements.map((statement) => (statement as Statement).batchResult()); this.sqlite.exec("COMMIT"); return results; }
-    catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
+      INSERT INTO platform_module_administration_epochs VALUES('primary',0);` });
   }
   rows(sql: string) { return this.sqlite.prepare(sql).all().map((row) => ({ ...row })); }
 }

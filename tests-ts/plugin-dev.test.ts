@@ -1,3 +1,4 @@
+// quick-check: covers tests/fixtures/module-plugins/** .github/workflows/**
 // Local plugin development (npm run plugins:dev): its guards, its separation from installation builds, and a local
 // folder composed with exactly the checks a pinned plugin receives. Tests compose into temporary output roots and never
 // start the development servers.

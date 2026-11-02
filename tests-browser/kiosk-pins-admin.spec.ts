@@ -1,4 +1,9 @@
-import { expect, test, type Page, type Request, type Route } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+import { mockSession, useScenario as routeScenario } from "./api-fixtures";
+
+// Some route handlers fetch the real response with route.fetch(). Wait for any still running before the context
+// closes; otherwise a poll that started late has its fetched response disposed mid-handler and fails the test.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: "wait" }); });
 
 // Web kiosk phase 3 on the dashboard: Require PIN, PIN requests, the member Kiosk PIN card and the PIN lockout setting,
 // against the dashboard preview API's per-scenario PIN state. Test Student A (A-101) has a PIN; Test Student B (A-102)
@@ -8,18 +13,13 @@ const students: Record<string, { rosterId: string; lastName: string }> = { "A-10
 
 async function useScenario(page: Page, id: string, role: "admin" | "operator" = "admin") {
   const scenario = `kiosk-pins-admin-${id}`;
-  const writes: Request[] = [];
-  const tag = async (route: Route) => {
-    if (route.request().method() !== "GET") writes.push(route.request());
-    await route.continue({ headers: { ...route.request().headers(), "x-preview-scenario": scenario } });
-  };
-  for (const pattern of ["**/admin/kiosks", "**/admin/kiosks/*", "**/admin/kiosks/*/*", "**/admin/pin-requests/*/*", "**/admin/members/*/pin", "**/admin/members/*/pin/unlock", "**/admin/settings/pin-lockout"]) await page.route(pattern, tag);
+  const writes = await routeScenario(page, scenario, ["**/admin/kiosks", "**/admin/kiosks/*", "**/admin/kiosks/*/*", "**/admin/pin-requests/*/*", "**/admin/members/*/pin", "**/admin/members/*/pin/unlock", "**/admin/settings/pin-lockout"]);
   // The preview roster's members get synthetic test names on their member pages.
   for (const [memberId, student] of Object.entries(students)) await page.route(`**/admin/members/${memberId}/history`, async (route) => {
     const response = await route.fetch(); const json = await response.json();
     await route.fulfill({ response, json: { ...json, member: { ...json.member, firstName: "Test", lastName: student.lastName, email: `${student.lastName.toLowerCase().replace(" ", ".")}@example.test` } } });
   });
-  if (role === "operator") await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: "operator-1", role: "operator", debugMode: false } } }));
+  if (role === "operator") await mockSession(page, "operator", { id: "operator-1", debugMode: false });
   /** A kiosk asking for approval, as the web kiosk does when a member without a PIN taps Ask for approval. */
   const askForPin = async (kioskId: string, memberId: keyof typeof students, minutesAgo = 0) => {
     const response = await page.request.post(`${mockApi}/preview/pin-requests`, { headers: { "x-preview-scenario": scenario }, data: { kioskId, memberId: students[memberId]!.rosterId, firstName: "Test", lastName: students[memberId]!.lastName, minutesAgo } });

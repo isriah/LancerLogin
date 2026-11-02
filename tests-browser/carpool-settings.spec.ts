@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { pairedViews } from "./paired-views";
+import { mockSetupStatus } from "./api-fixtures";
 
 requireCarpoolPlugin();
 
@@ -8,7 +9,7 @@ for (const view of pairedViews) test(`Carpool settings securely save defaults an
   await page.setViewportSize(view); await page.addInitScript(theme => localStorage.setItem("lancerlogin-theme", theme), view.theme);
   let saved = { radiusMiles: 12, preferredRadiusMiles: 4, revision: 0, geocodingConfigured: false, canSaveApiKey: true }; const writes: Record<string, unknown>[] = [];
   await page.route("**/platform/modules", route => route.fulfill({ json: carpoolSnapshot() }));
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Robotics", primaryColor: "#6d28d9", secondaryColor: "#0f766e" } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Robotics", primaryColor: "#6d28d9", secondaryColor: "#0f766e" } });
   await page.route("**/admin/carpool/settings", route => {
     if (route.request().method() === "PUT") { const body = route.request().postDataJSON(); writes.push(body); saved = { ...saved, radiusMiles: body.radiusMiles, preferredRadiusMiles: body.preferredRadiusMiles, revision: saved.revision + 1, geocodingConfigured: body.removeApiKey ? false : body.apiKey ? true : saved.geocodingConfigured }; }
     return route.fulfill({ json: saved });

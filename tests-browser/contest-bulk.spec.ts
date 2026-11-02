@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { expectLinkLeftToBrowser, expectOpensRealTab } from "./new-tab";
 
 test("66 selected contests use one acceptance request and one attendance refresh", async ({ page }) => {
   let contests = Array.from({ length: 66 }, (_, index) => ({ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: `synthetic-${index}`, externalId: `SYN-${index}`, firstName: "Synthetic", lastName: `Member ${index}`, status: "open", createdAt: "2026-09-03T20:05:00Z", lifetimeContestCount: 1, hasPartialScan: false, rawScanStatus: "none" }));
@@ -107,7 +108,7 @@ for (const theme of ["light", "dark"]) for (const width of [1280, 390]) {
   });
 }
 
-test("contest review popup links each member to their member page in a new tab without toggling selection", async ({ page, context }) => {
+test("contest review popup links each member to their member page in a new tab without toggling selection", async ({ page }) => {
   const contest = { meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId: "synthetic-internal", externalId: "TEST A/1", firstName: "Test Student", lastName: "A", status: "open", createdAt: "2026-09-03T20:05:00Z", lifetimeContestCount: 1, hasPartialScan: false, rawScanStatus: "none" };
   await page.route(/\/discord\/contests(?:\?.*)?$/, route => route.fulfill({ json: { contests: [contest] } }));
   await page.goto("/dashboard");
@@ -121,14 +122,11 @@ test("contest review popup links each member to their member page in a new tab w
   await expect(link).not.toContainText("↗"); await expect(link.locator(".contest-member-link-cue")).toHaveCount(0);
   const checkbox = dialog.getByRole("checkbox", { name: "Select contest for Test Student A at Build session" });
   await checkbox.focus(); await page.keyboard.press("Tab"); await expect(link).toBeFocused();
-  for (const target of [link.locator("strong").getByText("Test Student A", { exact: false }).first(), link.locator("small")]) {
-    const opened = context.waitForEvent("page");
-    await target.click();
-    const tab = await opened; await tab.waitForLoadState("domcontentloaded");
-    expect(new URL(tab.url()).pathname).toBe("/roster/TEST%20A%2F1");
-    await tab.close();
-    await expect(checkbox).not.toBeChecked();
-    await expect(dialog.getByRole("button", { name: /selected contest/ })).toHaveCount(0);
-  }
+  // Clicking the name opens a real tab; clicking the member ID is checked without one.
+  const unselected = async () => { await expect(checkbox).not.toBeChecked(); await expect(dialog.getByRole("button", { name: /selected contest/ })).toHaveCount(0); };
+  await expectOpensRealTab(page, link.locator("strong").getByText("Test Student A", { exact: false }).first(), /\/roster\/TEST%20A%2F1$/);
+  await unselected();
+  await expectLinkLeftToBrowser(page, link.locator("small"), "/roster/TEST%20A%2F1");
+  await unselected();
   await expect(page).toHaveURL(/\/dashboard$/);
 });

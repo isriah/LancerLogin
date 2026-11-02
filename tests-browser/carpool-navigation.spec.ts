@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { carpoolSnapshot, requireCarpoolPlugin } from "./carpool-fixtures";
 import { setDashboardTheme } from "./dashboard-theme";
 import { pairedViews } from "./paired-views";
+import { mockSetupStatus } from "./api-fixtures";
 
 requireCarpoolPlugin();
 
@@ -10,7 +11,7 @@ for (const { theme, width } of pairedViews) test(`Carpool work areas retain URLs
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
   const plan = { id: "navigation", title: "Synthetic competition", destination: "Synthetic venue", meetingId: null, eventReference: "reference", eventTitleSnapshot: "External title", eventStartsAtSnapshot: null, radiusMiles: 12, preferredRadiusMiles: 4, notes: "", archived: false, revision: 0 };
   await page.route("**/platform/modules", route => route.fulfill({ json: carpoolSnapshot() }));
-  await page.route("**/setup/status", route => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Team", subtitle: "Review", logoData: null, primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: theme, logoBackdrop: "auto", lateScanMinutes: 30 } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Team", subtitle: "Review", logoData: null, primaryColor: "#7c3aed", secondaryColor: "#0f766e", appearance: theme, logoBackdrop: "auto", lateScanMinutes: 30 } });
   await page.route(/\/admin\/carpool\/context(?:\?.*)?$/, route => route.fulfill({ json: { plans: [plan], members: [], importProfiles: [], geocodingConfigured: false, detail: { plan, people: [], assignments: [], unresolved: [] } } }));
   await mockCarpoolShare(page, () => ({ plan, people: [], assignments: [], unresolved: [] }));
   await page.goto("/carpool/plans/navigation?area=groups&direction=return&view=map"); await setDashboardTheme(page, theme);

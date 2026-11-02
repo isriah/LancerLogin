@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "module": "visits",
+  "label": "Guest Visits plugin",
+  "pluginSelection": "tests/fixtures/visits.modules.json",
+  "fast": {
+    "javascript": [],
+    "typescript": [
+      "tests-ts/visits-composed.test.ts",
+      "tests-ts/module-interfaces.test.ts"
+    ],
+    "browser": [],
+    "typecheckWorkspaces": [],
+    "buildWorkspaces": []
+  },
+  "acceptance": {
+    "javascript": [],
+    "typescript": [
+      "tests-ts/visits-composed.test.ts",
+      "tests-ts/module-interfaces.test.ts",
+      "tests-ts/module-interface-worker.test.ts",
+      "tests-ts/module-composition.test.ts",
+      "tests-ts/first-data.test.ts",
+      "tests-ts/module-plugin-worker.test.ts"
+    ],
+    "browser": [],
+    "typecheckWorkspaces": [
+      "@lancerlogin/shared",
+      "@lancerlogin/api",
+      "@lancerlogin/dashboard"
+    ],
+    "buildWorkspaces": [
+      "@lancerlogin/api",
+      "@lancerlogin/dashboard"
+    ]
+  }
+}

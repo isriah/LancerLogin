@@ -18,18 +18,22 @@ export function kioskUpdateTransition(release: Release | undefined, installed: s
 
 export const latestReleaseUrl = `${(import.meta.env?.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/api"}/admin/releases/latest`;
 export const latestReleaseTimeoutMs = 6_000;
-type CheckedRelease = Release & { checkedAt?: number; attemptedAt?: number };
-type Discovery = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; fresh?: boolean; code?: string; error?: string; channel?: UpdateChannel };
+type CheckedRelease = Release & { checkedAt?: number; attemptedAt?: number; checkedAgeMs?: number };
+type Discovery = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; fresh?: boolean; code?: string; error?: string; channel?: UpdateChannel; checkedAgeMs?: number; refreshAfterMs?: number };
+/** Durations from the server, never its clock: a usable value is a finite, non-negative number of milliseconds. */
+const duration = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 
 export async function fetchLatestRelease(
   fetcher: typeof fetch = fetch,
   timeoutMs = latestReleaseTimeoutMs,
   channel: UpdateChannel = "stable",
+  refresh = false,
 ): Promise<CheckedRelease> {
   const controller = new AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetcher(latestReleaseUrl, {
+    // Check for updates asks the server to read GitHub now instead of answering from its 15-minute cache.
+    const response = await fetcher(refresh ? `${latestReleaseUrl}?refresh=now` : latestReleaseUrl, {
       headers: { accept: "application/json" }, credentials: "include", cache: "no-store",
       signal: controller.signal,
     });
@@ -38,7 +42,7 @@ export async function fetchLatestRelease(
     if (!response.ok || result.fresh !== true || !result.release || typeof result.checkedAt !== "number") {
       throw new ReleaseCheckError(discoveryMessage(result.code), response, result);
     }
-    return { ...result.release, ...(channel === "beta" ? { channel } : {}), checkedAt: result.checkedAt, attemptedAt: result.attemptedAt };
+    return { ...result.release, ...(channel === "beta" ? { channel } : {}), checkedAt: result.checkedAt, attemptedAt: result.attemptedAt, ...(duration(result.checkedAgeMs) ? { checkedAgeMs: result.checkedAgeMs } : {}) };
   } catch (error) {
     if (controller.signal.aborted) throw new Error("Latest release check timed out.");
     throw error;
@@ -81,8 +85,9 @@ export const releaseCacheKey = "lancerlogin-release-cache-v3:stable";
 export const releaseCacheKeyForChannel = (channel: UpdateChannel) => releaseCacheKey.replace(/stable$/, channel);
 export const releaseCacheTtlMs = 15 * 60_000;
 export const releaseCacheMaximumRetryMs = 60 * 60_000;
-export type ReleaseSnapshot = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; error?: string; code?: string; checking: boolean; fresh: boolean };
-type Stored = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; failures: number; error?: string; code?: string };
+/** `refreshAt` is when Check for updates may ask the server again during a failure cooldown, if sooner than `retryAt`. */
+export type ReleaseSnapshot = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; refreshAt?: number; error?: string; code?: string; checking: boolean; fresh: boolean };
+type Stored = { release?: Release; checkedAt?: number; attemptedAt?: number; retryAt?: number; refreshAt?: number; failures: number; error?: string; code?: string };
 function discoveryMessage(code?: string) {
   switch (code) {
     case "rate_limited": return "GitHub release discovery is rate limited.";
@@ -114,8 +119,8 @@ function safeRelease(value: unknown, channel: UpdateChannel = "stable"): Release
   }
   return result;
 }
-export function createReleaseCache({ channel = "stable", load = () => fetchLatestRelease(fetch, latestReleaseTimeoutMs, channel), now = Date.now, storage = () => globalThis.localStorage }: {
-  load?: () => Promise<CheckedRelease>; now?: () => number; storage?: () => Pick<Storage, "getItem" | "setItem">;
+export function createReleaseCache({ channel = "stable", load = (refresh) => fetchLatestRelease(fetch, latestReleaseTimeoutMs, channel, refresh), now = Date.now, storage = () => globalThis.localStorage }: {
+  load?: (refresh: boolean) => Promise<CheckedRelease>; now?: () => number; storage?: () => Pick<Storage, "getItem" | "setItem">;
   channel?: UpdateChannel;
 } = {}) {
   const cacheKey = releaseCacheKeyForChannel(channel);
@@ -132,13 +137,14 @@ export function createReleaseCache({ channel = "stable", load = () => fetchLates
       if (raw) {
         const saved = JSON.parse(raw) as Stored;
         if (saved && typeof saved === "object" && Number.isInteger(saved.failures) && saved.failures >= 0 && saved.failures <= 10
-          && [saved.checkedAt, saved.attemptedAt, saved.retryAt].every((value) => value === undefined || timestamp(value))
+          && [saved.checkedAt, saved.attemptedAt, saved.retryAt, saved.refreshAt].every((value) => value === undefined || timestamp(value))
           && (saved.failures === 0 ? saved.retryAt === undefined : Boolean(saved.attemptedAt && saved.retryAt))) {
           const release = safeRelease(saved.release, channel);
           const localNow = now();
           const attemptedAt = saved.attemptedAt ? Math.min(saved.attemptedAt, localNow) : undefined;
           const retryAt = saved.retryAt ? Math.min(saved.retryAt, localNow + releaseCacheMaximumRetryMs) : undefined;
-          data = { failures: saved.failures, attemptedAt, retryAt,
+          const refreshAt = retryAt && saved.refreshAt ? Math.min(saved.refreshAt, retryAt) : undefined;
+          data = { failures: saved.failures, attemptedAt, retryAt, ...(refreshAt ? { refreshAt } : {}),
             ...(release && saved.checkedAt ? { release, checkedAt: Math.min(saved.checkedAt, localNow) } : {}),
             ...(saved.failures ? { code: saved.code, error: discoveryMessage(saved.code) } : {}) };
         }
@@ -149,19 +155,26 @@ export function createReleaseCache({ channel = "stable", load = () => fetchLates
   const snapshot = (): ReleaseSnapshot => ({ ...data, checking: Boolean(inFlight), fresh: Boolean(data.release && data.checkedAt && now() >= data.checkedAt && now() - data.checkedAt < releaseCacheTtlMs && !data.error) });
   function publish() { for (const listener of listeners) listener(); }
   function persist() { try { const raw = JSON.stringify(data); storage().setItem(cacheKey, raw); lastSaved = raw; } catch { /* Storage is optional. */ } }
-  function check(force = false): Promise<Release> {
+  /**
+   * `force` skips this browser's fresh cache. `refresh` (Check for updates) also asks the server to read GitHub now, and may
+   * run during a failure cooldown once the server's `refreshAt` has passed. Automatic checks pass neither.
+   */
+  function check(force = false, refresh = false): Promise<Release> {
     if (inFlight) return inFlight;
     sync();
-    if (data.retryAt && now() < data.retryAt) return Promise.reject(new Error(data.error ?? "Latest release is temporarily unavailable."));
+    const refreshAllowed = refresh && data.refreshAt !== undefined && now() >= data.refreshAt;
+    if (data.retryAt && now() < data.retryAt && !refreshAllowed) return Promise.reject(new Error(data.error ?? "Latest release is temporarily unavailable."));
     if (!force && snapshot().fresh) return Promise.resolve(data.release!);
     data.attemptedAt = now();
-    const request = Promise.resolve().then(load).then((value) => {
+    const request = Promise.resolve().then(() => load(refresh)).then((value) => {
       const release = safeRelease(value, channel);
       if (!release) throw new Error("A compatible stable release could not be confirmed.");
       const receivedAt = now();
-      // The authenticated same-origin response is fresh when received. Browser and
+      // The authenticated same-origin response is fresh when received, less the age the server reports for its cached
+      // answer, so Last successful check shows when GitHub was read. Only that duration crosses over: browser and
       // server wall clocks never participate in cache freshness or cooldown math.
-      data = { release, checkedAt: receivedAt, attemptedAt: receivedAt, failures: 0 };
+      const age = duration(value?.checkedAgeMs) ? Math.min(value.checkedAgeMs, releaseCacheTtlMs) : 0;
+      data = { release, checkedAt: receivedAt - age, attemptedAt: receivedAt, failures: 0 };
       persist(); return release;
     }).catch((error: unknown) => {
       const failures = Math.min(data.failures + 1, 10);
@@ -169,7 +182,10 @@ export function createReleaseCache({ channel = "stable", load = () => fetchLates
       if (error instanceof ReleaseCheckError && error.retryAfterMs) retryAt = Math.max(retryAt, now() + error.retryAfterMs);
       const discovery = error instanceof ReleaseCheckError ? error.discovery : undefined;
       retryAt = Math.min(retryAt, now() + releaseCacheMaximumRetryMs);
-      data = { ...data, failures, retryAt, code: discovery?.code, error: error instanceof Error ? error.message : "Latest release is temporarily unavailable." };
+      // With the web-update credential the server lets Check for updates through sooner than automatic backoff.
+      const refreshAt = duration(discovery?.refreshAfterMs) ? Math.min(now() + discovery.refreshAfterMs, retryAt) : undefined;
+      data = { ...data, failures, retryAt, refreshAt, code: discovery?.code, error: error instanceof Error ? error.message : "Latest release is temporarily unavailable." };
+      if (refreshAt === undefined) delete data.refreshAt;
       const previousRelease = safeRelease(discovery?.release, channel);
       if (previousRelease) data.release = previousRelease;
       persist(); throw error;

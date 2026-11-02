@@ -1,15 +1,11 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { attendanceSnapshot, combinedSnapshot, outreachSetupState, outreachSnapshot, type OutreachSetupState } from "./module-fixtures";
 import { requireOutreachPlugin } from "./outreach-fixtures";
+import { chooseClock, mockSetupStatus } from "./api-fixtures";
 
 requireOutreachPlugin();
 
 type WorkspaceState = { activities: Record<string, unknown>[]; entries: Record<string, unknown>[]; countedMinutes: number; labels?: Record<string, unknown>[]; windows?: Record<string, unknown>[]; corrections?: Record<string, unknown>[]; publications?: Record<string, unknown>[] };
-
-async function chooseClock(page: Page, label: string, hour: number) {
-  await page.getByRole("button", { name: new RegExp(`^${label}:`) }).click(); const dialog = page.getByRole("dialog", { name: label });
-  await dialog.getByRole("button", { name: `${hour} o'clock` }).click(); await dialog.getByRole("button", { name: "0 minutes", exact: true }).click(); await dialog.getByRole("group", { name: "Choose AM or PM" }).getByRole("button", { name: "AM", exact: true }).click();
-}
 
 async function controlAppearance(control: Locator) {
   return control.evaluate((element) => {
@@ -476,7 +472,7 @@ test("Staff handles activity-scoped reporting, corrections, and Event publicatio
 
 test("Member records participation publicly and can retry the exact uncertain submission", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Synthetic Robotics", subtitle: "Member services", logoData: "", primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Synthetic Robotics", subtitle: "Member services", logoData: "", primaryColor: "#6d28d9", secondaryColor: "#0f766e", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, discordContestWindowHours: 24 } });
   await page.route("**/public/hours/context", (route) => route.fulfill({ json: { organizationName: "Synthetic Robotics", timeZone: "America/New_York", today: "2026-09-28", earliestServiceDate: "2026-08-30", reportingDays: 30 } }));
   await page.route(/\/public\/hours\/(?:activities|correction-activities)(?:\?.*)?$/, (route) => route.fulfill({ json: { items: [{ id: "activity-1", categoryId: "other-service", categoryName: "Other Service", title: "Reopened community drive", serviceDate: "2026-08-15", location: "Library", reopened: true }], nextCursor: null } }));
   const submissions: Record<string, unknown>[] = [];

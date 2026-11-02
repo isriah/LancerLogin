@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { browserGroups, defaultSpecSeconds, discoverBrowserSpecs, parsePart, partitionGroup, pluginDependency, readBrowserGroupManifest, specsForGroup, validateBrowserGroups } from "../scripts/browser-groups.mjs";
+import { browserGroups, defaultSpecSeconds, discoverBrowserSpecs, parsePart, partitionGroup, pluginDependency, readBrowserGroupManifest, refreshSpecSeconds, specSecondsFromReport, specsForGroup, validateBrowserGroups } from "../scripts/browser-groups.mjs";
 
 // The release gate runs tests-browser in three groups (tests-browser/groups.json). A spec file that is not assigned,
 // or a plugin spec placed where the plugins are not composed, would silently drop coverage, so both fail here.
@@ -118,4 +118,25 @@ test("parts split a group by whole files, cover it exactly once and balance meas
   specs["a.spec.ts"].seconds = -1;
   writeFileSync(join(root, "tests-browser", "groups.json"), JSON.stringify({ specs }));
   assert.match(validateBrowserGroups(root).join("\n"), /a\.spec\.ts has seconds -1/);
+});
+
+test("measured seconds refresh from Playwright JSON reports, counting first attempts and keeping line endings", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "browser-seconds-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "tests-browser"));
+  const manifestFile = join(root, "tests-browser", "groups.json");
+  const specs = { "a.spec.ts": { group: "core", area: "A", seconds: 10 }, "b.spec.ts": { group: "integration", area: "B", seconds: 20 }, "c.spec.ts": { group: "core", area: "C", seconds: 30 } };
+  writeFileSync(manifestFile, `${JSON.stringify({ description: "kept", specs }, null, 2)}\n`.replaceAll("\n", "\r\n"));
+  const result = (duration, retry = 0) => ({ retry, duration });
+  const spec = (file, ...durations) => ({ file, tests: [{ results: durations.map((duration, retry) => result(duration, retry)) }] });
+  // Core part: a takes 1.2 s + 2.5 s (the retry of the second test is not counted); b 4 s plugin-free.
+  const core = { suites: [{ file: "a.spec.ts", specs: [spec("a.spec.ts", 1200), spec("a.spec.ts", 2500, 9000)], suites: [{ title: "nested", specs: [spec("a.spec.ts", 300)] }] }, { file: "b.spec.ts", specs: [spec("b.spec.ts", 4000)] }] };
+  // Composed run: b takes longer, and a file missing from the manifest is ignored.
+  const integration = { suites: [{ file: "b.spec.ts", specs: [spec("b.spec.ts", 6100)] }, { file: "gone.spec.ts", specs: [spec("gone.spec.ts", 1000)] }] };
+  assert.deepEqual([...specSecondsFromReport(core)], [["a.spec.ts", 4], ["b.spec.ts", 4]]);
+  assert.deepEqual(refreshSpecSeconds([core, integration], root), [{ file: "a.spec.ts", from: 10, to: 4 }, { file: "b.spec.ts", from: 20, to: 7 }]);
+  const written = readFileSync(manifestFile, "utf8");
+  assert.ok(written.endsWith("}\r\n") && !/[^\r]\n/.test(written));
+  assert.deepEqual(JSON.parse(written), { description: "kept", specs: { ...specs, "a.spec.ts": { ...specs["a.spec.ts"], seconds: 4 }, "b.spec.ts": { ...specs["b.spec.ts"], seconds: 7 } } });
+  assert.deepEqual(refreshSpecSeconds([core, integration], root), []);
 });

@@ -1,8 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
+import { mockSetupStatus } from "./api-fixtures";
 async function setup(page: Page, installed = "1.2.6", setting = { channel: "stable", revision: 0 }) {
   const writes: unknown[] = []; const prepares: string[] = [];
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Example team", timeZone: "UTC", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark", logoBackdrop: "auto" } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Example team", timeZone: "UTC", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark", logoBackdrop: "auto" } });
   await page.route("**/admin/update-channel", async (route) => {
     if (route.request().method() === "PUT") { const input = route.request().postDataJSON(); writes.push(input); setting.channel = input.channel; setting.revision++; }
     await route.fulfill({ json: setting });

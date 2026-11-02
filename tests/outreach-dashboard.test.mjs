@@ -10,6 +10,8 @@ const plugin = officialPluginSource("hour-tracking", [
   ...["outreach-catalogs.ts", "outreach-entries.ts", "outreach-public.ts"].map((file) => `src/api/${file}`),
 ]);
 const skip = plugin ? false : officialPluginUnavailable("hour-tracking");
+// CI and verify:module set this so an unreachable plugin fails the run instead of skipping both tests.
+if (skip && process.env.LANCERLOGIN_REQUIRE_OUTREACH_PLUGIN === "1") throw new Error(skip);
 
 test("Outreach dashboard exposes the agreed everyday workflow", { skip }, async () => {
   const [shell, styles, browserFixture, uiStandards, moduleNavigation] = await Promise.all([

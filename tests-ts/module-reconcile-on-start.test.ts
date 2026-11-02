@@ -98,3 +98,39 @@ test("a module migration failure is retried after a minute instead of waiting fo
   await ensureModulesReconciled(db as never, key, async () => false, () => clock, reconcile);
   assert.equal(attempts, 2, "a successful retry marks the isolate done");
 });
+
+test("a reconciliation that never settles (its request was cancelled) blocks later requests only up to the bound", async () => {
+  const key = {}, db = {};
+  let clock = 1_000, attempts = 0, settle = false;
+  const reconcile = (): Promise<{ changed: boolean; failures: [] }> => { attempts += 1; return settle ? Promise.resolve({ changed: true, failures: [] }) : new Promise(() => {}); };
+  const started = Date.now();
+  await Promise.all([
+    ensureModulesReconciled(db as never, key, async () => false, () => clock, reconcile, undefined, 20),
+    ensureModulesReconciled(db as never, key, async () => false, () => clock, reconcile, undefined, 20),
+  ]);
+  assert.equal(attempts, 1, "concurrent requests still share the stuck attempt");
+  assert.ok(Date.now() - started < 1_000, "neither request waits past the bound");
+  await ensureModulesReconciled(db as never, key, async () => false, () => clock, reconcile, undefined, 20);
+  assert.equal(attempts, 1, "an abandoned attempt backs off briefly instead of retrying on every request");
+  clock += 10_000; settle = true;
+  await ensureModulesReconciled(db as never, key, async () => false, () => clock, reconcile, undefined, 20);
+  assert.equal(attempts, 2, "a later request starts a fresh reconciliation in its own context");
+  clock += 120_000;
+  await ensureModulesReconciled(db as never, key, async () => false, () => clock, reconcile, undefined, 20);
+  assert.equal(attempts, 2, "the fresh attempt succeeded, so the isolate is done");
+});
+
+test("a normal reconciliation runs once and is handed to waitUntil so a disconnect cannot cancel it", async () => {
+  const key = {}, db = {}, handed: Promise<unknown>[] = [];
+  let attempts = 0;
+  const reconcile = async () => { attempts += 1; return { changed: true, failures: [] }; };
+  const waitUntil = (promise: Promise<unknown>) => { handed.push(promise); };
+  await Promise.all([
+    ensureModulesReconciled(db as never, key, async () => false, undefined, reconcile, waitUntil),
+    ensureModulesReconciled(db as never, key, async () => false, undefined, reconcile, waitUntil),
+  ]);
+  await ensureModulesReconciled(db as never, key, async () => false, undefined, reconcile, waitUntil);
+  assert.equal(attempts, 1);
+  assert.equal(handed.length, 1, "only the request that starts the attempt registers it");
+  await handed[0];
+});

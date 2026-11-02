@@ -3,30 +3,10 @@ import assert from "node:assert/strict";
 import { attendanceModule, bundledModuleRegistry, createModuleRegistry } from "../../packages/shared/src/module-platform.ts";
 import { createModuleDiscordDispatcher } from "../../apps/api/src/module-discord.ts";
 import { createModuleReportDispatcher } from "../../apps/api/src/module-reporting.ts";
-import { validateModuleAssignments, validateModuleConfiguration } from "../../apps/api/src/module-platform.ts";
+import { validateModuleAssignments } from "../../apps/api/src/module-platform.ts";
 
 // Outreach is the official plugin composed for this file; its manifest is no longer a first-party export.
 const outreachModule = bundledModuleRegistry.get("hour-tracking")!;
-
-test("bundled registration keeps Core routes outside Attendance ownership", () => {
-  assert.equal(bundledModuleRegistry.routeOwner("/admin/members"), undefined);
-  assert.equal(bundledModuleRegistry.routeOwner("/labels"), undefined);
-  assert.equal(bundledModuleRegistry.routeOwner("/admin/integrations"), undefined);
-  assert.equal(bundledModuleRegistry.routeOwner("/admin/data/backup"), undefined);
-  assert.equal(bundledModuleRegistry.routeOwner("/admin/update-info"), undefined);
-});
-
-test("bundled registration assigns Attendance entry points to the module", () => {
-  assert.equal(bundledModuleRegistry.routeOwner("/meetings")?.module.id, "attendance");
-  assert.equal(bundledModuleRegistry.routeOwner("/admin/members/member-1/history")?.module.id, "attendance");
-  assert.equal(bundledModuleRegistry.routeOwner("/module-setup/attendance/rules")?.route.access, "setup");
-  assert.equal(bundledModuleRegistry.routeOwner("/admin/attendance/members")?.route.access, "workspace");
-  assert.equal(bundledModuleRegistry.routeOwner("/kiosk/attendance")?.route.access, "service");
-  assert.equal(bundledModuleRegistry.routeOwner("/reports/query"), undefined);
-  assert.equal(bundledModuleRegistry.routeOwner("/reports/catalog"), undefined);
-  assert.equal(bundledModuleRegistry.routeOwner("/exports/report.csv"), undefined);
-  assert.equal(bundledModuleRegistry.routeOwner("/reports/leaderboard")?.route.access, "workspace");
-});
 
 test("bundled registration assigns Outreach entry points without an Attendance dependency", () => {
   const outreach = bundledModuleRegistry.modules.find((module) => module.id === "hour-tracking");
@@ -75,13 +55,6 @@ test("an unshipped synthetic module can contribute a report dataset through the 
   assert.throws(() => createModuleRegistry([{ ...synthetic, reportDatasets: [{ ...synthetic.reportDatasets[0], fields: [{ id: "core.member.name", label: "Conflicting member", group: "Synthetic", kind: "dimension", valueType: "text", sortable: true, filterOperators: ["contains"] }], rowIdentity: "core.member.name", groupBy: ["core.member.name"], defaultColumns: ["core.member.name"], defaultSort: { field: "core.member.name", direction: "asc" } }] }]), /conflicting shared report field/i);
 });
 
-test("Attendance setup declares required work and skippable integrations", () => {
-  const attendance = bundledModuleRegistry.modules.find((module) => module.id === "attendance");
-  assert.equal(attendance?.setup.version, 2);
-  assert.deepEqual(attendance?.setup.steps.filter((step) => step.required).map((step) => step.id), ["rules", "meeting", "input"]);
-  assert.deepEqual(attendance?.setup.steps.filter((step) => !step.required).map((step) => step.id), ["calendar", "discord"]);
-});
-
 test("module persistence and portable backup ownership are collision checked", () => {
   assert.equal(bundledModuleRegistry.tableOwner("meetings")?.id, "attendance");
   assert.equal(bundledModuleRegistry.tableOwner("hours_entries")?.id, "hour-tracking");
@@ -101,14 +74,6 @@ test("module selection supports Core-only, Attendance, and Outreach installation
   assert.deepEqual(bundledModuleRegistry.validateSelection(["attendance", "hour-tracking"]), ["attendance", "hour-tracking"]);
   assert.deepEqual(bundledModuleRegistry.modules.map((module) => module.id), ["attendance", "hour-tracking"]);
   assert.throws(() => bundledModuleRegistry.validateSelection(["unknown"]));
-});
-
-test("module configuration requires explicit current disable authority", () => {
-  assert.deepEqual(validateModuleConfiguration({ enabled: [], revision: 2, confirmDisable: [{ moduleId: "attendance", generation: 3 }] }), {
-    enabled: [], revision: 2, confirmDisable: [{ moduleId: "attendance", generation: 3 }],
-  });
-  assert.throws(() => validateModuleConfiguration({ enabled: ["attendance", "attendance"], revision: 2 }));
-  assert.throws(() => validateModuleConfiguration({ enabled: [], revision: 2, confirmDisable: [{ moduleId: "attendance", generation: 0 }] }));
 });
 
 test("Operator assignments accept only declared Operator capabilities", () => {

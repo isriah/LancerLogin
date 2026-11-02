@@ -6,7 +6,14 @@ import { mkdtemp, mkdir, readFile, writeFile, rm, chmod, readdir } from "node:fs
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
+import { pollIntervals } from "../apps/kiosk/src/kiosk-poll.mjs";
 import { createKioskPollCloud } from "./fixtures/kiosk-poll-cloud.mjs";
+
+// npm test runs the services with every poll and heartbeat interval a quarter as long. CI and verify:kiosk
+// (npm run test:kiosk) also run them on the unmodified production timers.
+const quarter = Object.fromEntries(Object.entries(pollIntervals).map(([name, ms]) => [name, ms / 4]));
+const variants = [{ name: "quarter-length timers", intervals: quarter }];
+if (process.env.CI || process.env.npm_lifecycle_event === "test:kiosk") variants.push({ name: "production timers", intervals: pollIntervals });
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, timeout = 20000, description = "runtime condition", diagnostics) {
@@ -14,9 +21,9 @@ async function until(check, timeout = 20000, description = "runtime condition", 
   while (Date.now() < deadline) { if (await check()) return; await wait(100); }
   assert.fail(`Timed out waiting for ${description}${diagnostics ? ": " + JSON.stringify(await diagnostics()) : ""}`);
 }
-async function startKiosk(root, device, apiUrl) {
+async function startKiosk(root, device, apiUrl, intervals) {
   const directory = join(root, device); await mkdir(directory, { recursive: true, mode: 0o700 }); await chmod(directory, 0o700);
-  const env = { ...process.env, NODE_ENV: "development", LANCERLOGIN_KIOSK_PORT: "0", LANCERLOGIN_KIOSK_HOST: "127.0.0.1", LANCERLOGIN_SENSOR_PATH: "synthetic" };
+  const env = { ...process.env, NODE_ENV: "development", LANCERLOGIN_KIOSK_PORT: "0", LANCERLOGIN_KIOSK_HOST: "127.0.0.1", LANCERLOGIN_SENSOR_PATH: "synthetic", ...(intervals === pollIntervals ? {} : { SYNTHETIC_POLL_INTERVALS: JSON.stringify(intervals) }) };
   for (const [key, name] of Object.entries({ CONFIG: "pairing.json", NETWORK_PIN: "network-pin.json", QUEUE: "attendance-queue.json", MAPPINGS: "slot-mappings.json", BRANDING: "branding.json", AUTHENTICATION: "authentication.json", CREDENTIAL_MAPPINGS: "credential-mappings.json", ROSTER_CACHE: "roster-cache.json", FINGERPRINT_SYNC: "fingerprint-sync", FINGERPRINT_VAULT: "fingerprint-vault", FINGERPRINT_RESET: "fingerprint-reset", FINGERPRINT_REVIEW: "fingerprint-review" })) env[`LANCERLOGIN_${key}`] = join(directory, name);
   await writeFile(env.LANCERLOGIN_CONFIG, JSON.stringify({ apiUrl, kioskId: device, pairingId: device, kioskToken: device, kioskName: `Synthetic ${device}` }), { mode: 0o600 });
   await createNetworkPinStore(env.LANCERLOGIN_NETWORK_PIN).set("123456");
@@ -41,14 +48,14 @@ async function startKiosk(root, device, apiUrl) {
   } catch (error) { await kiosk.stop(); throw error; }
 }
 
-test("two real services preserve timers, encrypted transfer, offline scans, commands and reset across a planned drained restart", { timeout: 150000 }, async t => {
+for (const { name, intervals } of variants) test(`two real services preserve timers, encrypted transfer, offline scans, commands and reset across a planned drained restart (${name})`, { timeout: 150000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), "kiosk-poll-service-")), cloud = await createKioskPollCloud(), kiosks = [];
   t.after(async () => { for (const kiosk of kiosks) await kiosk.stop(); await cloud.close(); await rm(root, { recursive: true, force: true }); });
   for (const [path, body] of [["/admin/kiosks/fingerprint-vault", { enabled: true, confirmation: "ENABLE CLOUD FINGERPRINT STORAGE" }]]) {
     const result = await cloud.admin(path, body, "PATCH"); assert.equal(result.status, 200, await result.text());
   }
-  const one = await startKiosk(root, "one", cloud.apiUrl); kiosks.push(one);
-  const two = await startKiosk(root, "two", cloud.apiUrl); kiosks.push(two);
+  const one = await startKiosk(root, "one", cloud.apiUrl, intervals); kiosks.push(one);
+  const two = await startKiosk(root, "two", cloud.apiUrl, intervals); kiosks.push(two);
   const started = Date.now();
   for (const kiosk of kiosks) {
     assert.equal((await kiosk.request("/network/unlock", { pin: "123456" })).status, 200);
@@ -76,7 +83,7 @@ test("two real services preserve timers, encrypted transfer, offline scans, comm
   await until(async () => (await (await one.request("/health")).json()).fingerprintSync.vault.state === "unavailable", 18000, "isolated unavailable vault section");
   cloud.offline.delete("two");
   await cloud.db.prepare("UPDATE kiosk_fingerprint_vault_settings SET key_id=?").bind(originalKey.keyId).run();
-  // Heartbeat and configuration have independent sixty-second timers. Wait
+  // Heartbeat and configuration have independent sixty-second timers (fifteen in the fast variant). Wait
   // for both observable results; a heartbeat does not prove a poll has run.
   await until(() => ["one", "two"].every(device =>
     cloud.records.filter(record => record.device === device && record.path === "/kiosk/heartbeat" && record.status === 200).length >= 2
@@ -86,8 +93,8 @@ test("two real services preserve timers, encrypted transfer, offline scans, comm
   assert.equal((await cloud.db.prepare("SELECT count(*) AS n FROM attendance_events WHERE source='kiosk'").first()).n, 1);
   for (const device of ["one", "two"]) {
     const calls = cloud.records.filter(record => record.device === device && record.path === "/kiosk/poll");
-    assert.ok(calls.length >= 13, `${device} must poll commands every five seconds`);
-    for (let n = 1; n < calls.length; n++) assert.ok(calls[n].time - calls[n - 1].time < 7000, `${device} command cadence must survive section failures`);
+    assert.ok(calls.length >= 13, `${device} must poll commands every ${intervals.commandsMs} ms`);
+    for (let n = 1; n < calls.length; n++) assert.ok(calls[n].time - calls[n - 1].time < intervals.commandsMs + 2000, `${device} command cadence must survive section failures`);
     assert.ok(calls.filter(record => record.fingerprints).length >= 5);
     assert.ok(calls.filter(record => record.configuration).length >= 2);
     assert.equal(cloud.records.filter(record => record.device === device && ["/kiosk/commands", "/kiosk/config", "/kiosk/fingerprint-reset/commands"].includes(record.path)).length, 0);
@@ -97,10 +104,10 @@ test("two real services preserve timers, encrypted transfer, offline scans, comm
   for (const kiosk of kiosks) { assert.deepEqual(await kiosk.mappings(), {}); assert.deepEqual((await kiosk.reader()).occupied, [0]); }
   assert.equal((await two.reader({ quiesce: true })).quiesced, true, "Planned restart must finish local reset work after the cloud acknowledgement");
   if (process.platform !== "linux") assert.deepEqual((await readdir(two.directory, { recursive: true })).filter(name => name.endsWith(".lock")), [], "Planned restart must close marker locks without deleting them");
-  await two.stop(); const restarted = await startKiosk(root, "two", cloud.apiUrl); kiosks.push(restarted);
+  await two.stop(); const restarted = await startKiosk(root, "two", cloud.apiUrl, intervals); kiosks.push(restarted);
   await until(async () => (await (await restarted.request("/health")).json()).fingerprintSync.reset.state === "ready", 5000, "restart reset recovery", async () => ({ reset: (await (await restarted.request("/health")).json()).fingerprintSync.reset, unfinishedState: (await readdir(restarted.directory, { recursive: true })).filter(name => /\.(lock|tmp)$/.test(name)), recentRequests: cloud.records.filter(record => record.device === "two").slice(-6).map(({ path, status, fingerprints, configuration }) => ({ path, status, fingerprints, configuration })) }));
   assert.deepEqual(await restarted.mappings(), {}); assert.deepEqual((await restarted.reader()).occupied, [0]);
   assert.equal((await cloud.db.prepare("SELECT count(*) AS n FROM attendance_events WHERE source='kiosk'").first()).n, 1);
   assert.deepEqual(cloud.records.filter(record => record.path.startsWith("/kiosk/fingerprint-sync")), [], "Production services must not register or transfer through retired peer routes");
-  console.log(JSON.stringify({ evidence: "two_production_kiosk_services_real_worker_d1", elapsedMs: Date.now() - started, requests: cloud.records.length, reads: cloud.records.reduce((n, record) => n + (record.reads ?? 0), 0), writes: cloud.records.reduce((n, record) => n + (record.writes ?? 0), 0), timers: "unmodified 5/15/60 seconds", hardware: "synthetic reader only", restart: "planned after installation activity drainage; no abrupt-death claim" }));
+  console.log(JSON.stringify({ evidence: "two_production_kiosk_services_real_worker_d1", elapsedMs: Date.now() - started, requests: cloud.records.length, reads: cloud.records.reduce((n, record) => n + (record.reads ?? 0), 0), writes: cloud.records.reduce((n, record) => n + (record.writes ?? 0), 0), timers: intervals === pollIntervals ? "unmodified 5/15/60 seconds" : `shortened ${Object.values(intervals).join("/")} ms`, hardware: "synthetic reader only", restart: "planned after installation activity drainage; no abrupt-death claim" }));
 });

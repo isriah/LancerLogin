@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dashboardConformanceReferences } from "../apps/dashboard/src/design-conformance";
 import { discovered } from "./release-discovery";
 import type { UpdateSetup, WebUpdateRequest } from "../apps/dashboard/src/web-update";
+import { mockSetupStatus } from "./api-fixtures";
 
 // Match the actual JavaScript bundle at every release, including future majors.
 const bundledVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version as string;
@@ -151,7 +152,7 @@ test("missing workflow and stalled backup cannot duplicate or start an update", 
 
 test("prepared backup confirmation follows native keyboard, branded theme and responsive UI standards", async ({ page }, testInfo) => {
   await setup(page, pinned({ backupExported: true, releaseNotes: "Long pinned release notes.\n".repeat(100) }));
-  await page.route("**/setup/status", (route) => route.fulfill({ json: { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Reference Arts Collective", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark" } } }));
+  await mockSetupStatus(page, { settings: { organizationName: "Reference Arts Collective", primaryColor: dashboardConformanceReferences.brand.primary, secondaryColor: dashboardConformanceReferences.brand.secondary, appearance: "dark" } });
   for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
     await page.setViewportSize({ width, height: width === 1280 ? 900 : 844 }); await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme", theme), theme);
     await page.goto("/settings/updates"); await expect(page.locator(".app")).toHaveAttribute("data-theme", theme);

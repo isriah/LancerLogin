@@ -4,11 +4,15 @@ import { credentialRejected, credentialUsable, observeCredentialResponse } from 
 export const officialReleaseUrl = "https://api.github.com/repos/isriah/LancerLogin/releases/latest";
 export const discoveryTtlMs = 15 * 60_000;
 export const discoveryMaximumRetryMs = 60 * 60_000;
+/** A manual "Check for updates" reaches GitHub at most this often per isolate, and only with the web-update credential. */
+export const discoveryForcedFloorMs = 60_000;
 export type DiscoveryRelease = { tag_name: string; html_url: string; body: string; draft: false; prerelease: boolean };
 export type DiscoveryCode = "rate_limited" | "timeout" | "network" | "provider_unavailable" | "invalid_release";
 export type DiscoverySnapshot = {
   release?: DiscoveryRelease; checkedAt?: number; attemptedAt?: number; retryAt?: number;
   error?: string; code?: DiscoveryCode; fresh: boolean;
+  /** How long ago, by this server's clock, GitHub last answered successfully. A duration, so browsers never compare clocks. */
+  checkedAgeMs?: number;
 };
 export type ReleaseCredential = { WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string };
 const messages: Record<DiscoveryCode, string> = {
@@ -67,17 +71,24 @@ export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeou
   let data: DiscoverySnapshot = { fresh: false };
   let failures = 0;
   let inFlight: Promise<DiscoverySnapshot> | undefined;
+  // GitHub's own Retry-After or rate-limit reset from the last failure. Unlike local backoff, a forced check never skips it.
+  let providerRetryAt: number | undefined;
   const snapshot = (): DiscoverySnapshot => ({ ...data, fresh: Boolean(data.release && data.checkedAt !== undefined
-    && now() >= data.checkedAt && now() - data.checkedAt < discoveryTtlMs && !data.error) });
+    && now() >= data.checkedAt && now() - data.checkedAt < discoveryTtlMs && !data.error),
+    ...(data.checkedAt !== undefined ? { checkedAgeMs: Math.max(0, now() - data.checkedAt) } : {}) });
+  const authenticated = (credential?: ReleaseCredential) => releaseRequestHeaders(credential, now()).has("authorization");
+  const refreshAt = () => Math.max(data.attemptedAt === undefined ? 0 : data.attemptedAt + discoveryForcedFloorMs, providerRetryAt ?? 0);
   function fail(code: DiscoveryCode, response?: Response) {
     failures = Math.min(failures + 1, 6);
     let retryAt = now() + Math.max(code === "rate_limited" ? 60_000 : 30_000, Math.min(30_000 * 2 ** (failures - 1), discoveryTtlMs));
+    providerRetryAt = undefined;
     if (response) {
       const after = response.headers.get("retry-after");
       const delay = after && /^\d+$/.test(after.trim()) ? now() + Number(after) * 1000 : after ? Date.parse(after) : NaN;
-      if (Number.isSafeInteger(delay) && delay > now()) retryAt = Math.max(retryAt, Math.min(delay, now() + discoveryMaximumRetryMs));
+      if (Number.isSafeInteger(delay) && delay > now()) providerRetryAt = Math.min(delay, now() + discoveryMaximumRetryMs);
       const reset = Number(response.headers.get("x-ratelimit-reset")) * 1000;
-      if (response.headers.get("x-ratelimit-remaining") === "0" && Number.isSafeInteger(reset) && reset > now()) retryAt = Math.max(retryAt, Math.min(reset, now() + discoveryMaximumRetryMs));
+      if (response.headers.get("x-ratelimit-remaining") === "0" && Number.isSafeInteger(reset) && reset > now()) providerRetryAt = Math.max(providerRetryAt ?? 0, Math.min(reset, now() + discoveryMaximumRetryMs));
+      if (providerRetryAt !== undefined) retryAt = Math.max(retryAt, providerRetryAt);
     }
     retryAt = Math.min(retryAt, now() + discoveryMaximumRetryMs);
     data = { ...data, fresh: false, code, error: messages[code], retryAt };
@@ -100,20 +111,29 @@ export function createReleaseDiscovery({ fetcher = fetch, now = Date.now, timeou
       if (failure) return failure;
       if (!release) return fail("invalid_release");
       data = { release: { tag_name: release.tag, html_url: `https://github.com/isriah/LancerLogin/releases/tag/${release.tag}`, body: release.notes, draft: false, prerelease: release.prerelease }, checkedAt: now(), attemptedAt: data.attemptedAt, fresh: true };
-      failures = 0;
+      failures = 0; providerRetryAt = undefined;
       return snapshot();
     } catch {
       return fail(controller.signal.aborted ? "timeout" : "network");
     } finally { clearTimeout(timer); }
   }
-  function check(credential?: ReleaseCredential): Promise<DiscoverySnapshot> {
+  /**
+   * Automatic checks reuse a fresh answer for 15 minutes and wait out failure backoff. A forced check (an Admin pressing
+   * Check for updates) skips both, but only when the web-update credential would be sent, at most once per
+   * discoveryForcedFloorMs, and never before GitHub's own Retry-After or rate-limit reset. Anonymous reads share the
+   * Cloudflare egress IP's 60 requests an hour, so without the credential a forced check behaves like an automatic one.
+   */
+  function check(credential?: ReleaseCredential, { force = false }: { force?: boolean } = {}): Promise<DiscoverySnapshot> {
     if (inFlight) return inFlight;
-    if (snapshot().fresh || data.retryAt && now() < data.retryAt) return Promise.resolve(snapshot());
+    const wait = force && authenticated(credential) ? now() < refreshAt() : snapshot().fresh || Boolean(data.retryAt && now() < data.retryAt);
+    if (wait) return Promise.resolve(snapshot());
     const tracked = load(credential).finally(() => { inFlight = undefined; });
     inFlight = tracked;
     return tracked;
   }
-  return { check, snapshot };
+  /** When a forced check could next reach GitHub, or undefined when forcing is unavailable because the credential would not be sent. */
+  function forcedRefreshAt(credential?: ReleaseCredential) { return authenticated(credential) ? refreshAt() : undefined; }
+  return { check, snapshot, forcedRefreshAt };
 }
 export const releaseDiscovery = createReleaseDiscovery({ fetcher: (...args) => fetch(...args) });
 export const betaReleaseDiscovery = createReleaseDiscovery({ channel: "beta", fetcher: (...args) => fetch(...args) });

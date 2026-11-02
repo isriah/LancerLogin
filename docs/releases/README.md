@@ -11,6 +11,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 ## LancerLogin 2 beta releases
 
+- [v2.1.0-beta.6](v2.1.0-beta.6.md) - Check for updates reads GitHub straight away, Try again when the dashboard cannot reach its server, and steadier updates
 - [v2.1.0-beta.5](v2.1.0-beta.5.md) - Settings > Modules shows Admins a module update that did not finish
 - [v2.1.0-beta.4](v2.1.0-beta.4.md) - Outreach Team support and Other service logging, FIRST checks for new teams and required plugin upgrade paths
 - [v2.1.0-beta.3](v2.1.0-beta.3.md) - Web kiosks with member search and PINs, FIRST team lookup, and the browser simulator removed

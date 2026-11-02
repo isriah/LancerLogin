@@ -1,47 +1,24 @@
+// quick-check: covers apps/api/migrations/**
 // Integration setup through the real Worker and real SQLite: Google emails on users, the exact URLs status reports, loopback
 // previews, Admin-only Google verification, friendly OAuth errors, Calendar scopes and re-authorization, and Resend error text.
 // Every person, address and credential here is synthetic.
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { encryptIntegration, decryptIntegration } from "../apps/api/src/integration-crypto.ts";
-import type { D1Database, D1Result, D1Statement } from "../apps/api/src/d1-usage.ts";
+import type { D1Database } from "../apps/api/src/d1-usage.ts";
 import { fllSearchUrl } from "../apps/api/src/first-fll-search.ts";
+import { TestD1Database } from "./fixtures/d1-database.ts";
 
-class Statement implements D1Statement {
-  readonly db: Database; readonly sql: string; readonly values: unknown[];
-  constructor(db: Database, sql: string, values: unknown[] = []) { this.db = db; this.sql = sql; this.values = values; }
-  bind(...values: unknown[]) { return new Statement(this.db, this.sql, values); }
-  result(): D1Result {
-    const native = this.db.sqlite.prepare(this.sql);
-    return /^\s*SELECT\b/i.test(this.sql) || /\bRETURNING\b/i.test(this.sql)
-      ? { results: native.all(...this.values as []), meta: { changes: 0 } }
-      : { success: true, meta: { changes: Number(native.run(...this.values as []).changes) } };
-  }
-  async first<T>() { return (this.result().results?.[0] as T | undefined) ?? null; }
-  async all<T>() { return this.result() as D1Result<T>; }
-  async run() { return this.result(); }
-}
-class Database implements D1Database {
-  readonly sqlite = new DatabaseSync(":memory:");
+class Database extends TestD1Database {
   constructor() {
-    for (const file of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql")).sort()) this.sqlite.exec(readFileSync(`apps/api/migrations/${file}`, "utf8"));
-    this.sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode,google_calendar_enabled) VALUES('primary','2026-10-18','both',1);
+    super({ seed: `INSERT INTO installations(id,created_at,auth_mode,google_calendar_enabled) VALUES('primary','2026-10-18','both',1);
       INSERT INTO organization_settings(installation_id,time_zone) VALUES('primary','UTC');
       INSERT INTO users(id,installation_id,email,local_username,role,created_at) VALUES('admin','primary','test.admin.a@example.test','admin','admin','2026-10-18'),('operator','primary','test.operator.b@example.test',NULL,'operator','2026-10-18'),('local','primary',NULL,'local-op','operator','2026-10-18');
       INSERT INTO platform_module_administration VALUES('primary',0,1); INSERT INTO platform_module_administration_epochs VALUES('primary',0);
       INSERT INTO platform_module_epochs VALUES('primary','attendance',1);
-      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete,deletion_cursor) VALUES('primary','attendance',1,1,'enabled',2,1,0);`);
-  }
-  prepare(sql: string) { return new Statement(this, sql); }
-  async batch(input: D1Statement[]) {
-    const statements = input as Statement[];
-    this.sqlite.exec("BEGIN IMMEDIATE");
-    try { const results = statements.map(item => item.result()); this.sqlite.exec("COMMIT"); return results; }
-    catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
+      INSERT INTO platform_modules(installation_id,module_id,contract_version,generation,phase,setup_version,setup_complete,deletion_cursor) VALUES('primary','attendance',1,1,'enabled',2,1,0);` });
   }
   value<T>(sql: string, ...values: unknown[]) { return this.sqlite.prepare(sql).get(...values as []) as T | undefined; }
 }
@@ -282,21 +259,21 @@ test("Settings > Integrations > FIRST is Admin only, checks a credential with FI
   context.mock.method(globalThis, "fetch", async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = String(input); const authorization = new Headers(init.headers).get("authorization"); requests.push({ url, authorization });
     // FIRST's public FLL search, faked: one synthetic Explore team, sent no credential.
-    if (url === fllSearchUrl) return Response.json({ results: authorization === null && String(init.body).includes('"ff_team_type":"JFLL"') ? [{ team_number_yearly: "321", ff_team_type: "JFLL", team_nickname: "Test Explorers", team_city: "Testville ", team_stateprov: "PA", team_country: "USA", profile_year: "2025", flag_current_season: "1" }] : [] });
+    if (url === fllSearchUrl) return Response.json({ results: authorization === null && String(init.body).includes('"ff_team_type":"JFLL"') ? [{ team_number_yearly: "99901", ff_team_type: "JFLL", team_nickname: "Test Explorers", team_city: "Testville ", team_stateprov: "PA", team_country: "USA", profile_year: "2025", flag_current_season: "1" }] : [] });
     if (!url.startsWith("https://frc-api.firstinspires.org/v3.0/")) throw new Error(`Unexpected request to ${url}`);
     if (authorization !== valid) return new Response("", { status: 401 });
-    if (url.includes("/teams?teamNumber=321")) return Response.json({ teams: [{ teamNumber: 321, nameShort: "Test Robotics A", city: "Testville", stateProv: "PA", country: "USA" }] });
+    if (url.includes("/teams?teamNumber=99901")) return Response.json({ teams: [{ teamNumber: 99901, nameShort: "Test Robotics A", city: "Testville", stateProv: "PA", country: "USA" }] });
     if (url.includes("/teams?")) return new Response("", { status: 404 });
     return Response.json({ currentSeason: 2026 });
   });
-  for (const [path, method, body] of [["/admin/integrations/first", "GET"], ["/admin/integrations/first", "PUT", { program: "FRC", username: "u", token: "t" }], ["/admin/integrations/first?program=FRC", "DELETE"], ["/admin/integrations/first/lookup", "POST", { program: "FRC", number: "321" }], ["/admin/integrations/first/clear-cache", "POST", {}]] as const) {
+  for (const [path, method, body] of [["/admin/integrations/first", "GET"], ["/admin/integrations/first", "PUT", { program: "FRC", username: "u", token: "t" }], ["/admin/integrations/first?program=FRC", "DELETE"], ["/admin/integrations/first/lookup", "POST", { program: "FRC", number: "99901" }], ["/admin/integrations/first/clear-cache", "POST", {}]] as const) {
     assert.equal((await call(env, path, { method, body })).status, 401, `${method} ${path} needs a session`);
     assert.equal((await call(env, path, { method, body, cookie: await sessionFor("operator", "operator") })).status, 403, `${method} ${path} is Admin only`);
   }
   assert.equal(requests.length, 0);
   const empty = await call(env, "/admin/integrations/first", { cookie: admin });
   assert.deepEqual(await empty.json(), { programs: { FRC: { saved: false, username: "", checkedAt: null, readable: false }, FTC: { saved: false, username: "", checkedAt: null, readable: false } }, fll: { available: true }, encryption: true });
-  assert.deepEqual(await (await call(env, "/admin/integrations/first/lookup", { body: { program: "FRC", number: "321" }, cookie: admin })).json(), { status: "unavailable", reason: "not-configured" });
+  assert.deepEqual(await (await call(env, "/admin/integrations/first/lookup", { body: { program: "FRC", number: "99901" }, cookie: admin })).json(), { status: "unavailable", reason: "not-configured" });
 
   const refused = await call(env, "/admin/integrations/first", { method: "PUT", body: { program: "FRC", username: "test-frc-user", token: "wrong-token" }, cookie: admin });
   assert.equal(refused.status, 400);
@@ -310,10 +287,10 @@ test("Settings > Integrations > FIRST is Admin only, checks a credential with FI
   assert.equal(db.value<{ n: number }>("SELECT COUNT(*) AS n FROM first_requests")?.n, 0, "the Admin's check counts toward no limit");
   assert.equal(db.value<{ n: number }>("SELECT COUNT(*) AS n FROM audit_log WHERE action='integration.saved' AND target_id='first:FRC'")?.n, 1);
 
-  const lookup = await call(env, "/admin/integrations/first/lookup", { body: { program: "FRC", number: "321" }, cookie: admin });
-  assert.deepEqual(await lookup.json(), { status: "found", team: { program: "FRC", number: "321", name: "Test Robotics A", location: "Testville, PA", season: 2026, source: "events-api" } });
-  assert.deepEqual(await (await call(env, "/admin/integrations/first/lookup", { body: { program: "Explore", number: "321" }, cookie: admin })).json(), { status: "found", team: { program: "Explore", number: "321", name: "Test Explorers", location: "Testville, PA", season: 2025, source: "first-search" } });
-  assert.deepEqual(await (await call(env, "/admin/integrations/first/lookup", { body: { program: "Challenge", number: "321" }, cookie: admin })).json(), { status: "not-found" });
+  const lookup = await call(env, "/admin/integrations/first/lookup", { body: { program: "FRC", number: "99901" }, cookie: admin });
+  assert.deepEqual(await lookup.json(), { status: "found", team: { program: "FRC", number: "99901", name: "Test Robotics A", location: "Testville, PA", season: 2026, source: "events-api" } });
+  assert.deepEqual(await (await call(env, "/admin/integrations/first/lookup", { body: { program: "Explore", number: "99901" }, cookie: admin })).json(), { status: "found", team: { program: "Explore", number: "99901", name: "Test Explorers", location: "Testville, PA", season: 2025, source: "first-search" } });
+  assert.deepEqual(await (await call(env, "/admin/integrations/first/lookup", { body: { program: "Challenge", number: "99901" }, cookie: admin })).json(), { status: "not-found" });
   assert.equal((await call(env, "/admin/integrations/first/lookup", { body: { program: "FRC", number: "abc" }, cookie: admin })).status, 400);
   assert.equal(db.value<{ n: number }>("SELECT COUNT(*) AS n FROM first_requests WHERE bucket LIKE 'visitor:%'")?.n, 0, "an Admin's test lookup counts only toward the installation limit");
   assert.equal(db.value<{ n: number }>("SELECT COUNT(*) AS n FROM first_team_cache")?.n, 3);
@@ -333,5 +310,5 @@ test("a FIRST credential saved under another integration key reads as saved but 
   db.sqlite.prepare("INSERT INTO first_credentials(installation_id,program,username,ciphertext,iv,checked_at,updated_at) VALUES('primary','FTC','test-ftc-user',?,?,'2026-10-18T00:00:00.000Z','2026-10-18T00:00:00.000Z')").run(encrypted.ciphertext, encrypted.iv);
   const status = await (await call(env, "/admin/integrations/first", { cookie: await sessionFor("admin", "admin") })).json() as { programs: Record<string, unknown> };
   assert.deepEqual(status.programs.FTC, { saved: true, username: "test-ftc-user", checkedAt: "2026-10-18T00:00:00.000Z", readable: false });
-  assert.deepEqual(await (await call(env, "/admin/integrations/first/lookup", { body: { program: "FTC", number: "321" }, cookie: await sessionFor("admin", "admin") })).json(), { status: "unavailable", reason: "not-configured" });
+  assert.deepEqual(await (await call(env, "/admin/integrations/first/lookup", { body: { program: "FTC", number: "99901" }, cookie: await sessionFor("admin", "admin") })).json(), { status: "unavailable", reason: "not-configured" });
 });

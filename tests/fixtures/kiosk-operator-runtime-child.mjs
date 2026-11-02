@@ -20,13 +20,19 @@ mock.module(new URL("../../apps/kiosk/src/attendance-clock.mjs", import.meta.url
   }),
 } });
 let present = true, slot = 0, enrollCalls = 0, holdEnrollment = false, releaseEnrollment;
+// Observation counters let the tests wait for what the service has seen instead of sleeping:
+// reads that found no finger, and runs of its 250 ms capture-permission and finger-removal timer.
+let noFingerReads = 0, captureTicks = 0;
+const read = () => { if (!present) noFingerReads++; return present; };
+const nativeSetInterval = globalThis.setInterval;
+globalThis.setInterval = (callback, delay, ...rest) => nativeSetInterval(delay === 250 ? (...args) => { captureTicks++; return callback(...args); } : callback, delay, ...rest);
 let holdIdentity = false, identityCalls = 0, releaseIdentity;
 const occupied = new Set([0]);
 const sensor = {
   status: async () => ({ connected: true, templateCount: occupied.size }),
   occupiedSlots: async () => [...occupied],
-  fingerPresent: async () => present,
-  scan: async () => present ? { status: "match", slot, score: 100 } : { status: "no_finger" },
+  fingerPresent: async () => read(),
+  scan: async () => read() ? { status: "match", slot, score: 100 } : { status: "no_finger" },
   led: async () => {},
   deleteTemplate: async slot => { occupied.delete(slot); },
   enroll: async (nextSlot, { onProgress, checkActive = () => {}, beforeStore = async () => {} }) => {
@@ -58,7 +64,7 @@ process.on("message", message => {
   if (message.releaseEnrollment) { releaseEnrollment?.(); releaseEnrollment = undefined; }
   if (message.holdIdentity !== undefined) holdIdentity = message.holdIdentity;
   if (message.releaseIdentity) { releaseIdentity?.(); releaseIdentity = undefined; }
-  process.send({ id: message.id, enrollCalls, present, slot, identityCalls, occupied: [...occupied].sort((a, b) => a - b) });
+  process.send({ id: message.id, enrollCalls, present, slot, identityCalls, noFingerReads, captureTicks, occupied: [...occupied].sort((a, b) => a - b) });
 });
 const { server } = await import("../../apps/kiosk/src/service.mjs");
 if (!server.listening) await once(server, "listening");

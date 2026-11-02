@@ -1,13 +1,15 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { attendanceModule, bundledModuleRegistry, createModuleRegistry } from "../packages/shared/src/module-platform.ts";
+import { applyCoreMigrations } from "./fixtures/d1-database.ts";
 
 function fixture() {
   const db = new DatabaseSync(":memory:");
-  for (const name of readdirSync("apps/api/migrations").filter((name) => name.endsWith(".sql")).sort()) db.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
+  applyCoreMigrations(db);
   db.exec(`
     INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-01-01','local');
     INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','admin','admin','2026-01-01');

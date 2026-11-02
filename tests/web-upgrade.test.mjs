@@ -1,3 +1,4 @@
+// quick-check: covers apps/api/migrations/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, readdir, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
@@ -5,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { validateUpgradeEnvironment, validateOfficialSource, validateMigrationPolicy, executeWebUpgrade, createLiveUpgradeIO, retainedDashboardOrigin, controllerCredentialMinimumValidityMs, pluginCompositionEnvironment, composeUpdateModules, verifyPinnedSelection, gitBlobSha, absentSelectionSha, verifyControllerCredential, retainedWorkerSecrets, upgradeHelp } from "../scripts/run-web-upgrade.mjs";
+import { validateUpgradeEnvironment, validateOfficialSource, validateMigrationPolicy, executeWebUpgrade, createLiveUpgradeIO, retainedDashboardOrigin, controllerCredentialMinimumValidityMs, pluginCompositionEnvironment, composeUpdateModules, verifyPinnedSelection, gitBlobSha, absentSelectionSha, verifyControllerCredential, retainedWorkerSecrets, upgradeHelp, jsonGetWithRetry, providerReadRetry, retryAfterMs, unclaimedOutcome, unclaimedMessage } from "../scripts/run-web-upgrade.mjs";
 import { verifyDispatchCredential, verifyCredentialTarget, verifySelectionCredential, parseTokenExpiration, credentialSecrets, credentialHelp } from "../scripts/refresh-web-update-credential.mjs";
 import { errorAnnotation, safeErrorCode } from "../scripts/workflow-annotations.mjs";
 import { vaultHelp } from "../scripts/ensure-fingerprint-vault-key.mjs";
@@ -214,6 +215,65 @@ test("official stable source is pinned once and requires all release assets", as
   await validateOfficialSource(context, async (url) => url.includes("/commits/") ? { sha: context.sha } : release);
   await assert.rejects(validateOfficialSource(context, async (url) => url.includes("/commits/") ? { sha: "c".repeat(40) } : release), /release_commit_mismatch/);
   await assert.rejects(validateOfficialSource(context, async () => ({ ...release, prerelease: true })), /official_release_required/);
+});
+test("the official release check retries transient GitHub failures within a bounded budget", async () => {
+  // Scripted responses per call; waits are recorded, never slept.
+  const scripted = (...responses) => { const calls = []; const waits = [];
+    return { calls, waits, get: (url) => jsonGetWithRetry(url, { request: async (target, init) => { calls.push({ target, init }); const next = responses[calls.length - 1]; if (next instanceof Error) throw next; return next(); }, wait: async (ms) => { waits.push(ms); } }) }; };
+  const ok = () => Response.json({ sha: "b".repeat(40) });
+  const status = (code, headers) => () => new Response("synthetic", { status: code, headers });
+  let run = scripted(status(503), ok);
+  assert.deepEqual(await run.get("https://api.github.com/repos/isriah/LancerLogin/commits/v1.0.0"), { sha: "b".repeat(40) });
+  assert.equal(run.calls.length, 2); assert.deepEqual(run.waits, [providerReadRetry.delaysMs[0]]);
+  assert.equal(run.calls[0].init.redirect, "error"); assert.equal(run.calls[0].init.method, undefined);
+  run = scripted(new TypeError("fetch failed"), status(502), ok);
+  assert.ok(await run.get("https://api.github.com/x")); assert.equal(run.calls.length, 3);
+  // 429 honours Retry-After when it is longer than the backoff and fits the budget.
+  run = scripted(status(429, { "retry-after": "7" }), ok);
+  assert.ok(await run.get("https://api.github.com/x")); assert.deepEqual(run.waits, [7_000]);
+  // A Retry-After beyond the budget gives up at once instead of stalling the run.
+  run = scripted(status(429, { "retry-after": "120" }), ok);
+  await assert.rejects(run.get("https://api.github.com/x"), { message: "provider_request_failed" }); assert.equal(run.calls.length, 1);
+  for (const code of [404, 401, 403, 422]) {
+    run = scripted(status(code), ok);
+    await assert.rejects(run.get("https://api.github.com/x"), { message: "provider_request_failed" }); assert.equal(run.calls.length, 1, String(code));
+  }
+  run = scripted(status(503), status(503), status(500), status(503), ok);
+  await assert.rejects(run.get("https://api.github.com/x"), { message: "provider_request_failed" });
+  assert.equal(run.calls.length, providerReadRetry.delaysMs.length + 1);
+  assert.ok(run.waits.reduce((sum, ms) => sum + ms, 0) <= providerReadRetry.budgetMs);
+  assert.equal(retryAfterMs("Thu, 01 Jan 2099 00:00:10 GMT", Date.parse("Thu, 01 Jan 2099 00:00:00 GMT")), 10_000);
+  assert.equal(retryAfterMs("soon"), undefined);
+  // Only the read-only official source checks use it; Cloudflare, D1 and claim calls are never retried.
+  const source = await readFile("scripts/run-web-upgrade.mjs", "utf8");
+  assert.equal(source.match(/validateOfficialSource\(context, officialSourceGet\)/g)?.length, 2);
+  assert.equal(source.match(/officialSourceGet/g)?.length, 3); assert.equal(source.match(/jsonGetWithRetry\(/g)?.length, 2);
+});
+test("a refused claim says whether the request ended or another attempt already did the work", async () => {
+  const { io, installation } = syntheticUpgradeIO();
+  const context = { runId: "123", tag: "v1.0.0" };
+  // The re-run of a run whose request the Worker already failed: nothing deployed, red with its own code.
+  const ended = await executeWebUpgrade(context, { ...io, claim: async () => false, claimStatus: async () => ({ state: "failed", executor_run_id: null }) });
+  assert.deepEqual(ended, { notClaimable: true, state: "failed" }); assert.equal(installation.mutations, 0);
+  assert.match(unclaimedMessage(ended), /already ended \(state: failed\)[\s\S]*never retries an update[\s\S]*Apply changes/);
+  assert.equal(unclaimedOutcome({ state: "expired", executor_run_id: null }, "123").notClaimable, true);
+  assert.equal(unclaimedOutcome({ state: "succeeded", executor_run_id: "999" }, "123").notClaimable, true);
+  assert.equal(unclaimedOutcome({ state: "recovery_required", executor_run_id: "123" }, "123").notClaimable, true);
+  assert.equal(unclaimedOutcome({ state: "failed", executor_run_id: 123 }, "123").notClaimable, true);
+  assert.equal(unclaimedOutcome({ state: "queued", executor_run_id: null }, "123").notClaimable, true);
+  assert.equal(unclaimedOutcome(undefined, "123").state, "missing");
+  assert.match(upgradeHelp.request_not_claimable, /never retries an update/);
+  // A genuine duplicate stays green: this run claimed it earlier (D1 may return the ID as a number), or another run is working.
+  assert.deepEqual(unclaimedOutcome({ state: "succeeded", executor_run_id: 123 }, "123"), { duplicate: true, claimedBy: "this_run", state: "succeeded" });
+  assert.deepEqual(unclaimedOutcome({ state: "running", executor_run_id: "456" }, "123"), { duplicate: true, claimedBy: "another_run", state: "running" });
+  assert.match(unclaimedMessage(unclaimedOutcome({ state: "succeeded", executor_run_id: "123" }, "123")), /already claimed the update request on an earlier attempt/);
+  // An unreadable request after a refused claim is reported as not claimable, never as a claim or a stage failure.
+  assert.deepEqual(await executeWebUpgrade(context, { ...io, claim: async () => false, claimStatus: async () => { throw new Error("database_request_failed"); } }), { notClaimable: true, state: "unknown" });
+  // An IO without the status read keeps the old duplicate result.
+  assert.equal((await executeWebUpgrade(context, io)).succeeded, true);
+  assert.deepEqual(await executeWebUpgrade(context, io), { duplicate: true }); assert.equal(installation.mutations, 3);
+  const source = await readFile("scripts/run-web-upgrade.mjs", "utf8");
+  assert.match(source, /if \(result\.notClaimable\) \{ console\.error\(unclaimedMessage\(result\)\); throw new Error\("request_not_claimable"\); \}/);
 });
 test("migration review hashes are portable across LF/CRLF and unknown schemas fail closed", async () => {
   const directory = "apps/api/migrations"; const names = (await readdir(directory)).sort();

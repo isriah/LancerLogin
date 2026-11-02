@@ -1,6 +1,7 @@
 import { setDashboardTheme } from "./dashboard-theme";
 import { openActiveMeetingCalendar } from "./meeting-calendar-fixture";
 import { expect, test } from "@playwright/test";
+import { mockSession } from "./api-fixtures";
 
 test("canonical meeting routes, legacy redirects, switching, and browser history stay synchronized", async ({ page }) => {
   await openActiveMeetingCalendar(page);
@@ -240,14 +241,18 @@ test("attendance refreshes manually and every 30 seconds only while its window i
   await page.route(/\/attendance\?meetingId=active-meeting$/, async (route) => { activeRequests += 1; await route.continue(); });
   await page.route(/\/attendance\?meetingId=past-regular$/, async (route) => { pastRequests += 1; await route.continue(); });
 
+  // The 30-second poll starts only once the page has loaded the meeting, after its first attendance response: moving
+  // the clock as soon as that request is sent can run past a poll that isn't scheduled yet.
   await page.goto("/meetings/active-meeting");
-  await expect.poll(() => activeRequests).toBe(1);
+  await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
+  expect(activeRequests).toBe(1);
   await page.clock.fastForward(30_000);
   await expect.poll(() => activeRequests).toBe(2);
   await expect(page.getByRole("button", { name: "Refresh attendance" })).toHaveCount(0);
 
   await page.goto("/meetings/past-regular");
-  await expect.poll(() => pastRequests).toBe(1);
+  await expect(page.getByRole("heading", { name: "Completed build session" })).toBeVisible();
+  expect(pastRequests).toBe(1);
   await page.clock.fastForward(60_000);
   expect(pastRequests).toBe(1);
 });
@@ -283,7 +288,7 @@ test("meeting attendance preserves member-local corrections and Admin-only clear
   await expect(avery.getByRole("status")).toHaveText("Attendance records cleared.");
   expect(cleanup).toEqual({ memberId: "member-1", meetingId: "active-meeting", confirmation: "CLEAR ATTENDANCE" });
 
-  await page.route("**/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user: { role: "operator" } }) }));
+  await mockSession(page, "operator");
   await page.goto("/meetings/active-meeting");
   await page.getByRole("button", { name: "Adjust attendance for Avery Stone" }).click();
   await expect(page.getByRole("button", { name: "Clear" })).toHaveCount(0);

@@ -7,11 +7,15 @@
 // A process composes once: import one fixture (carpool-plugin.ts or outreach-plugin.ts) first, then import test bodies and
 // application modules dynamically. When a plugin source is unavailable (for example a private plugin without
 // LANCERLOGIN_PLUGIN_TOKEN or a local plugin checkout, or no network), `available` is false and callers register a skipped test that names the reason; the named environment switch fails instead.
+// Test processes share compositions through a cache in the OS temp folder (see compositionCacheKey and cachedDirectory), so a
+// test run composes each set of pins once. Set LANCERLOGIN_TEST_COMPOSITION_CACHE=0 to compose afresh in every process.
+// quick-check: covers apps/api/migrations/**
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { prepareTestComposition, unreachablePinAdvice } from "../../scripts/test-plugin-sources.mjs";
 
@@ -64,14 +68,100 @@ function compose(selection: readonly Pin[], name: string): ComposedPlugins {
   // anonymously, which is enough for public plugins (see scripts/test-plugin-sources.mjs). A failure names what is missing.
   const prepared = prepareTestComposition({ modules: selection, scratch });
   if ("reason" in prepared) return { available: false, reason: prepared.reason as string };
-  const output = join(scratch, "output");
-  mkdirSync(join(output, "apps/dashboard/src"), { recursive: true });
-  writeFileSync(join(output, "apps/dashboard/src/module-contributions.ts"), "export type DashboardModuleContribution = unknown;\n");
-  const result = spawnSync(process.execPath, ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", join(coreRoot, "scripts/compose-modules.mjs"), ...prepared.args, "--output-root", output, "--work-directory", join(scratch, "plugins")], { cwd: coreRoot, encoding: "utf8", env: prepared.env });
-  if (result.status !== 0) {
-    const remote = (prepared.modules as Pin[]).filter((pin) => pin.source.startsWith("https:")).map((pin) => unreachablePinAdvice(pin));
-    throw new Error(`Plugin composition failed: ${result.stderr}${result.stdout}${remote.length ? `\n${remote.join("\n")}` : ""}`);
-  }
   const modules = prepared.modules as Pin[];
-  return { available: true, output, roots: Object.fromEntries(modules.map((pin) => [pin.id, join(scratch, "plugins", pin.id)])), modules };
+  const build = (directory: string) => {
+    const output = join(directory, "output");
+    mkdirSync(join(output, "apps/dashboard/src"), { recursive: true });
+    writeFileSync(join(output, "apps/dashboard/src/module-contributions.ts"), "export type DashboardModuleContribution = unknown;\n");
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", join(coreRoot, "scripts/compose-modules.mjs"), ...prepared.args, "--output-root", output, "--work-directory", join(directory, "plugins")], { cwd: coreRoot, encoding: "utf8", env: prepared.env });
+    if (result.status !== 0) {
+      const remote = modules.filter((pin) => pin.source.startsWith("https:")).map((pin) => unreachablePinAdvice(pin));
+      throw new Error(`Plugin composition failed: ${result.stderr}${result.stdout}${remote.length ? `\n${remote.join("\n")}` : ""}`);
+    }
+  };
+  // Generated files import plugin files by relative path, so a composition stays valid when its directory moves as a whole.
+  const complete = (directory: string) => existsSync(join(directory, "output/apps/api/src/generated/external-modules.ts")) && modules.every((pin) => existsSync(join(directory, "plugins", pin.id, "package.json")));
+  let directory = join(scratch, "composed");
+  if (process.env[compositionCacheVariable] === "0") build(directory);
+  else {
+    // The selection files prepareTestComposition wrote hold the effective pins; key on their content, not their scratch path.
+    const args = (prepared.args as string[]).map((arg) => arg.startsWith(scratch) ? readFileSync(arg, "utf8") : arg);
+    directory = cachedDirectory({ root: compositionCacheRoot(), key: compositionCacheKey(args), build, complete });
+  }
+  return { available: true, output: join(directory, "output"), roots: Object.fromEntries(modules.map((pin) => [pin.id, join(directory, "plugins", pin.id)])), modules };
+}
+
+export const compositionCacheVariable = "LANCERLOGIN_TEST_COMPOSITION_CACHE";
+export const compositionCacheRoot = () => join(tmpdir(), "lancerlogin-test-compositions");
+
+/**
+ * Core files whose content decides what composition produces or refuses, besides the pins: the composer and its import
+ * closure (including the first-party module registry it validates against), the Core migrations plugin tables are checked
+ * against, the package files that give Core's version and the peer versions it provides, and this fixture.
+ */
+export function composerInputs(root = coreRoot): string[] {
+  const files = new Set<string>();
+  const queue = ["scripts/compose-modules.mjs", "scripts/inspect-module-plugin.mjs", "scripts/test-plugin-sources.mjs", relative(coreRoot, fileURLToPath(import.meta.url))].map((path) => resolve(root, path));
+  while (queue.length) {
+    const file = queue.pop()!;
+    if (files.has(file) || !existsSync(file)) continue;
+    files.add(file);
+    for (const match of readFileSync(file, "utf8").matchAll(/(?:\bfrom|\bimport\s*\(?)\s*["'](\.{1,2}\/[^"'\s]+\.(?:mjs|js|ts))["']/g)) queue.push(resolve(dirname(file), match[1]!));
+  }
+  const migrations = join(root, "apps/api/migrations");
+  for (const name of readdirSync(migrations)) files.add(join(migrations, name));
+  for (const path of ["package.json", "package-lock.json", "packages/module-sdk/package.json", "apps/api/package.json", "apps/dashboard/package.json"]) if (existsSync(join(root, path))) files.add(join(root, path));
+  return [...files].sort();
+}
+
+/** The cache key for a composition: the composer arguments (with the effective pins) and the content of every composer input. */
+export function compositionCacheKey(args: readonly string[], root = coreRoot): string {
+  const hash = createHash("sha256").update(JSON.stringify({ format: 1, args }));
+  for (const file of composerInputs(root)) hash.update(`\0${relative(root, file).replaceAll("\\", "/")}\0`).update(readFileSync(file));
+  return hash.digest("hex");
+}
+
+const markerName = "lancerlogin-composition.json";
+const day = 24 * 60 * 60 * 1000;
+
+/**
+ * The directory cached under `key` in `root`, built first when it is missing or incomplete. `build` fills a fresh staging
+ * directory beside the entry, which is then renamed into place, so readers never see a partial build. Processes that miss
+ * at the same time each build; the first rename wins and the others discard their copy. A broken entry (for example one a
+ * temp cleaner emptied) is moved aside and rebuilt. Entries unused for two weeks are removed when a new one is built.
+ */
+export function cachedDirectory(input: { readonly root: string; readonly key: string; readonly build: (directory: string) => void; readonly complete: (directory: string) => boolean }): string {
+  const entry = join(input.root, input.key.slice(0, 32));
+  const usable = () => {
+    try { if ((JSON.parse(readFileSync(join(entry, markerName), "utf8")) as { key?: string }).key !== input.key || !input.complete(entry)) return false; }
+    catch { return false; }
+    try { const now = new Date(); utimesSync(join(entry, markerName), now, now); } catch { /* last-use time is advisory */ }
+    return true;
+  };
+  if (usable()) return entry;
+  mkdirSync(input.root, { recursive: true });
+  prune(input.root);
+  const staging = mkdtempSync(`${entry}.building-`);
+  try { input.build(staging); writeFileSync(join(staging, markerName), `${JSON.stringify({ key: input.key })}\n`); }
+  catch (error) { rmSync(staging, { recursive: true, force: true }); throw error; }
+  if (existsSync(entry) && !usable()) {
+    const aside = `${entry}.broken-${randomBytes(4).toString("hex")}`;
+    try { renameSync(entry, aside); rmSync(aside, { recursive: true, force: true }); } catch { /* another process moved it first */ }
+  }
+  try { renameSync(staging, entry); }
+  catch { /* another process renamed its build first, or the entry is in use and cannot be replaced */ }
+  if (usable()) { rmSync(staging, { recursive: true, force: true }); return entry; }
+  // The entry could not be placed: use this process's own build, removed when the process exits.
+  process.on("exit", () => rmSync(staging, { recursive: true, force: true }));
+  return staging;
+}
+
+function prune(root: string): void {
+  for (const name of readdirSync(root)) {
+    const path = join(root, name);
+    try {
+      const used = /\.(building|broken)-/.test(name) ? statSync(path).mtimeMs + day : statSync(join(path, markerName)).mtimeMs + 14 * day;
+      if (used < Date.now()) rmSync(path, { recursive: true, force: true });
+    } catch { /* an entry without a marker is a build in progress or already removed */ }
+  }
 }

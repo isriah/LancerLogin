@@ -1,3 +1,4 @@
+// quick-check: covers tests/fixtures/module-plugins/**
 // End to end: compose the unshipped Example plugin from a pinned git commit, then run it through the real Worker.
 // Composition runs in a child process, and this process redirects Core's generated plugin files to its output
 // before importing any application module, exactly as a composed build would bundle them.

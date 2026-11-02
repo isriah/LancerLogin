@@ -12,6 +12,10 @@ import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { for (let n = 0; n < 100; n++) { if (await check()) return; await wait(30); } assert.fail("Synthetic runtime condition did not become true"); }
+// Wait for what the service has observed instead of a fixed sleep: a reader read with the finger lifted
+// (which releases a finger-removal gate), or runs of its 250 ms capture-permission and finger-removal timer.
+async function fingerLifted(runtime) { const { noFingerReads } = await runtime.reader({ present: false }); await until(async () => (await runtime.reader()).noFingerReads > noFingerReads); }
+async function captureTicks(runtime, count = 2) { const { captureTicks: start } = await runtime.reader(); await until(async () => (await runtime.reader()).captureTicks >= start + count); }
 async function fixture(t, { method = "fingerprint", modern = false, holdConfiguration = false, holdCommand = false, enrollment = false, confirmClock = true, reviewUnavailable = false, minimumScore, reenrollScore, refuseAttendance = false, commandType, enrollmentReports = "modern" } = {}) {
   const root = await mkdtemp(join(tmpdir(), "kiosk-operator-service-")); await chmod(root, 0o700);
   let rosterMode = "valid", heartbeats = 0, configurationStarted = false, commandStarted = false, releaseConfiguration, releaseCommand;
@@ -125,7 +129,7 @@ test("orderly restart recovery renews the existing attendance page without enter
   const renewed = await renewal.json();
   assert.equal(renewed.generation, page.generation);
   assert.equal(renewed.captureSuspended, false);
-  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+  await fingerLifted(runtime); await runtime.reader({ present: true });
   await until(() => f.attendance.length === 1);
   await assert.rejects(readFile(join(f.root, "pairing.json.presence-restart.json")), { code: "ENOENT" });
 });
@@ -145,7 +149,7 @@ test("orderly restart recovery keeps maintenance capture blocked when attendance
   assert.equal((await (await runtime.request("/maintenance/session")).json()).authorized, false);
   assert.equal((await runtime.request("/sensor/test", {})).status, 403);
   assert.equal((await runtime.request("/attendance", { memberId: "synthetic-member" })).status, 400);
-  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true }); await wait(350);
+  await runtime.reader({ present: false }); await captureTicks(runtime); await runtime.reader({ present: true }); await captureTicks(runtime);
   assert.equal(f.attendance.length, 0);
   const maintenanceRenewal = await runtime.request("/operator-presence", { action: "renew", pageId: maintenance.pageId, generation: maintenance.generation, mode: "maintenance" });
   assert.equal(maintenanceRenewal.status, 200);
@@ -161,7 +165,7 @@ test("unexpected stop recovery has no checkpoint and rejects the old page genera
   runtime = await f.start({ initializeClock: false });
   assert.equal((await runtime.request("/operator-presence", { action: "renew", pageId: page.pageId, generation: page.generation, mode: "attendance" })).status, 409);
   assert.equal((await runtime.request("/attendance", { memberId: "synthetic-member" })).status, 400);
-  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true }); await wait(350);
+  await runtime.reader({ present: false }); await captureTicks(runtime); await runtime.reader({ present: true }); await captureTicks(runtime);
   assert.equal(f.attendance.length, 0);
 });
 
@@ -202,7 +206,7 @@ test("an older review API leaves attendance delivery active and reports review s
 test("a real kiosk pauses scans until the operator confirms the offline boot clock", { timeout: 15000 }, async t => {
   const f = await fixture(t, { confirmClock: false }), runtime = await f.start();
   let presence = await runtime.presence("attendance");
-  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true }); await wait(350);
+  await runtime.reader({ present: false }); await captureTicks(runtime); await runtime.reader({ present: true }); await captureTicks(runtime);
   assert.equal(f.attendance.length, 0);
   assert.equal((await (await runtime.request("/display-state")).json()).display.id, "clock_required");
   assert.equal((await runtime.request("/maintenance/clock", { currentTime: new Date().toISOString() })).status, 403);
@@ -210,7 +214,7 @@ test("a real kiosk pauses scans until the operator confirms the offline boot clo
   await runtime.request("/network/unlock", { pin: "123456" });
   assert.equal((await runtime.request("/maintenance/clock", { currentTime: new Date().toISOString() })).status, 200);
   await runtime.presence("attendance", presence);
-  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+  await fingerLifted(runtime); await runtime.reader({ present: true });
   await until(() => f.attendance.length === 1);
   assert.equal((await (await runtime.request("/display-state")).json()).clock.source, "operator");
 });
@@ -239,11 +243,11 @@ test("real service starts sync immediately, persists name, and gates held finger
   assert.deepEqual(Object.keys(health.fingerprintSync).sort(), ["reset", "vault"]);
   assert.doesNotMatch(JSON.stringify(health.fingerprintSync), /synthetic-token|synthetic-pairing|synthetic-member|resetEpoch|privateKey/);
   assert.equal(JSON.parse(await readFile(join(f.root,"pairing.json"),"utf8")).kioskName,"Dashboard configured name");
-  await runtime.presence("attendance"); await wait(350); assert.equal(f.attendance.length,0);
-  await runtime.reader({present:false}); await wait(350); await runtime.reader({present:true}); await until(()=>f.attendance.length===1);
+  await runtime.presence("attendance"); await captureTicks(runtime); assert.equal(f.attendance.length,0);
+  await fingerLifted(runtime); await runtime.reader({present:true}); await until(()=>f.attendance.length===1);
   const done=once(runtime.child,"exit");runtime.child.kill();await done;
-  runtime=await f.start();await runtime.presence("attendance");await wait(350);assert.equal(f.attendance.length,1);
-  await runtime.reader({present:false});await wait(350);await runtime.reader({present:true});await until(()=>f.attendance.length===2);
+  runtime=await f.start();await runtime.presence("attendance");await captureTicks(runtime);assert.equal(f.attendance.length,1);
+  await fingerLifted(runtime); await runtime.reader({present:true});await until(()=>f.attendance.length===2);
 });
 
 test("real service verifies roster before enrollment, preserves replacement, and isolates operator scans", {timeout:20000}, async t => {
@@ -262,10 +266,10 @@ test("real service verifies roster before enrollment, preserves replacement, and
   assert.equal((await runtime.request("/sensor/test",{})).status,409);
   await runtime.reader({releaseEnrollment:true});const result=await enrollment;assert.equal(result.status,201);assert.equal((await result.json()).fingerRemovalRequired,true);
   assert.equal(JSON.parse(await readFile(join(f.root,"slot-mappings.json"),"utf8"))[1].rosterId,"synthetic-roster");
-  await wait(350);assert.equal(f.attendance.length,0);
+  await captureTicks(runtime);assert.equal(f.attendance.length,0);
   assert.equal((await runtime.request("/attendance",{memberId:"synthetic-member"})).status,400);
-  presence=await runtime.presence("attendance",presence);await wait(350);assert.equal(f.attendance.length,0);
-  await runtime.reader({present:false});await wait(350);await runtime.reader({present:true});await until(()=>f.attendance.length===1);
+  presence=await runtime.presence("attendance",presence);await captureTicks(runtime);assert.equal(f.attendance.length,0);
+  await fingerLifted(runtime); await runtime.reader({present:true});await until(()=>f.attendance.length===1);
   assert.equal((await runtime.request("/operator-presence",{action:"enter",pageId:"cross-origin-page",mode:"attendance"},{origin:"https://untrusted.example"})).status,403);
 });
 
@@ -293,14 +297,14 @@ test("real desktop exit is authenticated, instance-bound and leaves capture disa
   assert.equal(polled.action, "exit"); assert.equal(polled.requestId, result.requestId);
   const renewed = await (await runtime.request("/operator-presence", { action: "renew", ...background, generation: oldAttendance.generation })).json();
   assert.equal(renewed.captureSuspended, true);
-  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true }); await wait(350);
+  await runtime.reader({ present: false }); await captureTicks(runtime); await runtime.reader({ present: true }); await captureTicks(runtime);
   assert.equal(f.attendance.length, 0);
   assert.equal((await runtime.request("/desktop/launcher/ack", { instanceId, requestId: randomUUID() }, headers)).status, 409);
   assert.equal((await runtime.request("/desktop/launcher/ack", { instanceId, requestId: result.requestId }, headers)).status, 200);
   await runtime.request("/desktop/launcher/detach", { instanceId }, headers);
   assert.equal((await runtime.request("/desktop/launcher/poll", { instanceId }, headers)).status, 410);
-  presence = await runtime.presence("attendance"); await wait(350); assert.equal(f.attendance.length, 0);
-  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true }); await until(() => f.attendance.length === 1);
+  presence = await runtime.presence("attendance"); await captureTicks(runtime); assert.equal(f.attendance.length, 0);
+  await fingerLifted(runtime); await runtime.reader({ present: true }); await until(() => f.attendance.length === 1);
 });
 
 test("an identity still resolving cannot cross an operator transition into resumed attendance", {timeout:20000}, async t => {
@@ -341,8 +345,8 @@ test("a real kiosk records the match score with each scan and asks for a rescan 
   for (const minimumScore of [undefined, 100, 150]) {
     const f = await fixture(t, { minimumScore }), runtime = await f.start();
     await until(() => f.heartbeats() > 0);
-    await runtime.presence("attendance"); await wait(350);
-    await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+    await runtime.presence("attendance"); await captureTicks(runtime);
+    await fingerLifted(runtime); await runtime.reader({ present: true });
     if (minimumScore === 150) {
       await until(async () => (await (await runtime.request("/display-state")).json()).display.message === "Try again");
       await wait(500);
@@ -361,8 +365,8 @@ test("a real kiosk records a weakly reading accepted scan and adds the re-enroll
   for (const reenrollScore of [80, 120]) {
     const f = await fixture(t, { minimumScore: 60, reenrollScore }), runtime = await f.start();
     await until(() => f.heartbeats() > 0);
-    await runtime.presence("attendance"); await wait(350);
-    await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+    await runtime.presence("attendance"); await captureTicks(runtime);
+    await fingerLifted(runtime); await runtime.reader({ present: true });
     await until(() => f.attendance.length === 1);
     await until(async () => (await (await runtime.request("/display-state")).json()).display.id === "welcome");
     const { display } = await (await runtime.request("/display-state")).json();
@@ -376,8 +380,8 @@ test("a real kiosk records a weakly reading accepted scan and adds the re-enroll
 test("a real kiosk asks for a rescan when the Worker refuses a possible wrong match, without queueing it for review", { timeout: 20000 }, async t => {
   const f = await fixture(t, { refuseAttendance: true }), runtime = await f.start();
   await until(() => f.heartbeats() > 0);
-  await runtime.presence("attendance"); await wait(350);
-  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+  await runtime.presence("attendance"); await captureTicks(runtime);
+  await fingerLifted(runtime); await runtime.reader({ present: true });
   await until(async () => (await (await runtime.request("/display-state")).json()).display.id === "rescan");
   const { display } = await (await runtime.request("/display-state")).json();
   assert.deepEqual([display.message, display.tone], ["Scan again", "notice"]);
@@ -430,8 +434,8 @@ test("an older Worker without the endpoint parks enrollment reports without hold
   assert.equal((await runtime.request("/network/unlock", { pin: "123456" })).status, 200);
   assert.equal((await runtime.request("/enroll", { memberId: "synthetic-member", slot: 1 })).status, 201);
   await until(() => f.enrollmentReportRequests.length === 1);
-  presence = await runtime.presence("attendance", presence); await wait(350);
-  await runtime.reader({ present: false }); await wait(350); await runtime.reader({ present: true });
+  presence = await runtime.presence("attendance", presence); await captureTicks(runtime);
+  await fingerLifted(runtime); await runtime.reader({ present: true });
   await until(() => f.attendance.length === 1);
   await runtime.stop();
   const parked = await createFileQueue(join(f.root, "local-enrollment-reports.json")).pending();

@@ -1,10 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import { attendanceSetupState, attendanceSnapshot } from "./module-fixtures";
 import { pairedViews } from "./paired-views";
+import { mockSession } from "./api-fixtures";
 
 type Progress = { pageId: string; version: number; status: string; stepId: string | null };
 async function account(page: Page, state: { progress: Progress; fail?: boolean }, role = "admin", debugMode = false) {
-  await page.route("**/auth/session", (route) => route.fulfill({ json: { user: { id: `${role}-1`, role } } }));
+  await mockSession(page, role, { id: `${role}-1` });
   if (debugMode) await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode", "true"));
   await page.route("**/auth/walkthroughs/dashboard", async (route) => {
     if (route.request().method() === "PATCH") {
